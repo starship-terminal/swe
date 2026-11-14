@@ -159,6 +159,36 @@ class ClaudeTests(_Home):
         result = self.run_pass()
         self.assertEqual(result.files, 0)
 
+    def test_an_account_whose_id_is_subagents_is_indexed(self):
+        # `~/.swe/accounts/claude/subagents/home`: the folder named
+        # `subagents` is the account's id, above the transcript root, so
+        # its sessions are indexed like any other home's (#1946).
+        account = self.home / ".swe" / "accounts" / "claude" / "subagents" / "home" / "projects" / "-work-acct"
+        (account / "sess-acct" / "subagents").mkdir(parents=True)
+        session = self.write(account / "sess-acct.jsonl",
+                             claude_line("user", "quokka account plan", session="sess-acct"))
+        # A real subagent transcript in that account is still left out.
+        self.write(account / "sess-acct" / "subagents" / "agent-a1.jsonl",
+                   claude_line("user", "wombat delegation chatter", session="sess-acct", isSidechain=True))
+        result = self.run_pass()
+        self.assertEqual((result.files, result.indexed), (1, 1))
+        self.assertEqual([r[0] for r in self.db().execute("SELECT path FROM files")], [session])
+        self.assertEqual([h.session_id for h in search_index.search(self.home, "quokka")], ["sess-acct"])
+        self.assertEqual(search_index.search(self.home, "wombat"), [])
+
+    def test_only_folders_below_the_transcript_root_count(self):
+        root = "/h/.swe/accounts/claude/subagents/home/projects"
+        self.assertTrue(writer.should_index(root + "/-p/s.jsonl", root))
+        self.assertFalse(writer.should_index(root + "/-p/s/subagents/a.jsonl", root))
+        self.assertFalse(writer.should_index(root + "/subagents/a.jsonl", root))
+        self.assertFalse(writer.should_index(root + "/-p/subagents/deeper/a.jsonl", root))
+        # Outside the root (a linked file's target elsewhere): the walk
+        # already decided, by the folders it entered.
+        self.assertTrue(writer.should_index("/elsewhere/subagents/a.jsonl", root))
+        self.assertTrue(writer.should_index(root + "-other/subagents/a.jsonl", root))
+        # A file named `subagents` is no folder.
+        self.assertTrue(writer.should_index(root + "/-p/subagents", root))
+
     def test_unchanged_file_is_current_on_the_next_pass(self):
         self.write(self.projects / "a.jsonl", claude_line("user", "hello"))
         self.assertEqual(self.run_pass().indexed, 1)
@@ -821,7 +851,8 @@ class WriterFailureTests(_Home):
         indexer, _store, conn = self.indexer()
         (self.projects / "s1" / "subagents").mkdir(parents=True)
         path = self.write(self.projects / "s1" / "subagents" / "a.jsonl", claude_line("user", "hi"))
-        self.assertEqual(indexer.index_file(path, "claude"), writer.SKIP)
+        root = str(self.projects.parent)
+        self.assertEqual(indexer.index_file(path, "claude", root=root), writer.SKIP)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM files").fetchone()[0], 0)
 
     def test_an_unfinished_oversized_last_line_waits(self):

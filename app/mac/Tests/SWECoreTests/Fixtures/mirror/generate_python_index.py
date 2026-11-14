@@ -27,6 +27,11 @@ MTIME = 1_790_000_000
 A = "11111111-2222-3333-4444-555555555555"
 B = "22222222-2222-3333-4444-555555555555"
 C = "33333333-2222-3333-4444-555555555555"
+# A session in an SWE account whose id is `subagents` (#1946): the folder
+# above its transcript root is no subagent folder, so it is indexed, while
+# the subagent transcript beside it is not.
+D = "44444444-2222-3333-4444-555555555555"
+ACCOUNT = ".swe/accounts/claude/subagents/home"
 STEM = "rollout-2026-09-01T10-00-00-0199aaaa-bbbb-cccc-dddd-eeeeffff0001"
 
 
@@ -94,6 +99,9 @@ def main() -> None:
         place(home, "claude-live.jsonl", f".claude/projects/-work-proj/{B}.jsonl", MTIME)
         grown = place(home, "claude-grown.jsonl", f".claude/projects/-work-other/{C}.jsonl", MTIME)
         codex = place(home, "codex-pruned.jsonl", f".codex/sessions/2026/09/01/{STEM}.jsonl", MTIME)
+        place(home, "claude-account.jsonl", f"{ACCOUNT}/projects/-work-acct/{D}.jsonl", MTIME)
+        place(home, "claude-account-subagent.jsonl",
+              f"{ACCOUNT}/projects/-work-acct/{D}/subagents/agent-a1.jsonl", MTIME)
         # 1. Mirror everything, prune two sessions the index never read.
         swe(home, "mirror")
         pruned.unlink()

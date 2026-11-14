@@ -16,6 +16,10 @@ import Testing
     static let a = "11111111-2222-3333-4444-555555555555"
     static let b = "22222222-2222-3333-4444-555555555555"
     static let c = "33333333-2222-3333-4444-555555555555"
+    /// A session in an SWE account whose id is `subagents` (#1946), with a
+    /// subagent transcript beside it: the session is indexed, the
+    /// subagent transcript is not, on both sides.
+    static let d = "44444444-2222-3333-4444-555555555555"
 
     private func fixture(_ name: String) throws -> URL {
         let base = try #require(Bundle.module.url(forResource: "Fixtures", withExtension: nil))
@@ -34,10 +38,15 @@ import Testing
     /// scan.
     private func replay(at home: URL? = nil) async throws -> H {
         let h = try H(at: home)
+        let account = h.account("claude", "subagents")
+        h.claudeAccounts = [account]
         let pruned = try place(h, "claude-pruned.jsonl", ".claude/projects/-work-proj/\(Self.a).jsonl")
         try place(h, "claude-live.jsonl", ".claude/projects/-work-proj/\(Self.b).jsonl")
         let grown = try place(h, "claude-grown.jsonl", ".claude/projects/-work-other/\(Self.c).jsonl")
         let codex = try place(h, "codex-pruned.jsonl", ".codex/sessions/2026/09/01/\(H.stem).jsonl")
+        let acct = ".swe/accounts/claude/subagents/home/projects/-work-acct"
+        try place(h, "claude-account.jsonl", "\(acct)/\(Self.d).jsonl")
+        try place(h, "claude-account-subagent.jsonl", "\(acct)/\(Self.d)/subagents/agent-a1.jsonl")
         try h.mirrorPass()
         try FileManager.default.removeItem(at: pruned)
         try FileManager.default.removeItem(at: codex)
@@ -123,6 +132,7 @@ import Testing
     func scanAFolderSweIndexed() async throws {
         let folder = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SWE_MIRROR_SWE_HOME"]!)
         let h = try H(at: folder)
+        h.claudeAccounts = [h.account("claude", "subagents")]
         let before = try canonical(dump(h))
         let report = try await h.scan()
         #expect(report.filesIndexed == 0)

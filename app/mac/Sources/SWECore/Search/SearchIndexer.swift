@@ -140,23 +140,68 @@ public final class SearchIndexer: @unchecked Sendable {
         self.bufferBudget = bufferBudget
     }
 
-    /// Paths that never enter the index: Claude `subagents/` transcripts are
-    /// a session's internal delegation chatter (Orca skips them too). The
-    /// ledger still counts their tokens.
-    public func shouldIndex(path: String) -> Bool {
-        !path.contains("/subagents/")
+    /// The folder Claude Code keeps a session's subagent transcripts in.
+    static let subagentFolder = "subagents"
+
+    /// Whether `path`, found under the transcript root `root` (both spelled
+    /// alike), is a session rather than a Claude subagent transcript: a
+    /// session's internal delegation chatter, which never enters the index
+    /// (Orca skips them too; the ledger still counts their tokens). swe's
+    /// `should_index`, case for case.
+    ///
+    /// Only a folder named `subagents` below `root` counts, at any depth:
+    /// the folders swe's walk prunes. One above it never does, so a home
+    /// whose own path holds one (an SWE account whose id is `subagents`)
+    /// is indexed like any other (#1946). A path outside `root` (a linked
+    /// file's target elsewhere) is left to the walk (`Root.indexes`).
+    public static func shouldIndex(path: String, root: String) -> Bool {
+        guard path.hasPrefix(root + "/") else { return true }
+        return !path.dropFirst(root.count + 1).split(separator: "/", omittingEmptySubsequences: false)
+            .dropLast().contains { $0 == subagentFolder }
+    }
+
+    /// A transcript root a scan walks (Claude's `<home>/projects`, Codex's
+    /// `<home>/sessions`, ...), in each spelling a path found under it can
+    /// take: as given, `realpath` (the enumerator's) and
+    /// `resolvingSymlinksInPath` (the index's, which drops `/private`).
+    /// Resolved once per root, not once per file.
+    public struct Root: Sendable {
+        let spellings: [String]
+
+        public init(_ url: URL) {
+            var spellings = [url.standardizedFileURL.path, url.resolvingSymlinksInPath().path]
+            if let real = TranscriptMirror.realPath(url.path) { spellings.append(real) }
+            self.spellings = Array(Set(spellings)).sorted()
+        }
+
+        /// Whether `file`, as a scan enumerated it under this root, is a
+        /// session the index reads: no `subagents` folder below the root
+        /// on the way to it (the folders swe's `_walk` prunes), nor, for a
+        /// linked file, in its target's path below the root (swe's
+        /// `should_index` on the resolved path it files the session under).
+        public func indexes(_ file: URL) -> Bool {
+            guard allows(file.path) else { return false }
+            guard (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+            else { return true }
+            return allows(file.resolvingSymlinksInPath().path)
+        }
+
+        func allows(_ path: String) -> Bool {
+            spellings.allSatisfy { SearchIndexer.shouldIndex(path: path, root: $0) }
+        }
     }
 
     /// What the next read of `path` owes the index. `ledgerOffset` is where
     /// the ledger's own cursor sits, or nil when the ledger never read this
     /// file — index-pure sources (devin transcripts) pass nil. `harness`
     /// gates `.append` to `appendableHarnesses`; without it the answer can
-    /// never be `.append`.
+    /// never be `.append`. Whether `path` is a session at all (not a
+    /// subagent transcript) is the scan's call, made against the root it
+    /// found the file under (`Root.indexes`), as swe's pass makes it.
     public func readNeed(
         path: String, stat: SearchFileStat, ledgerOffset: UInt64?,
         harness: SearchDecoder.Harness? = nil
     ) -> SearchReadNeed {
-        guard shouldIndex(path: path) else { return .skip }
         guard let row = try? store.fileRow(for: path) else { return .whole }
         // Held out: failed enough times at exactly this stat. Only a change
         // to the stat itself releases it — a file nobody touches is never
@@ -665,7 +710,6 @@ public final class SearchIndexer: @unchecked Sendable {
             }
             pending = nil
         }
-        guard shouldIndex(path: path) else { return }
         try? store.setFileState(path, .failed, atMtimeMs: mtimeMs)
     }
 

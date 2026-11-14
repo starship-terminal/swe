@@ -55,10 +55,14 @@ final class MirrorHome: @unchecked Sendable {
         accountsRoot.appending(path: "\(vendor)/\(id)/home")
     }
 
+    /// Account Claude homes the scan reads as well, as if a profile
+    /// registered them (`account(_:_:)` makes the path). None by default.
+    var claudeAccounts: [URL] = []
+
     /// The roots a scan reads; `withMirror: false` is a writer that knows
     /// nothing about the mirror (the Swift writer before #1918).
     func roots(withMirror: Bool = true) -> LedgerRoots {
-        LedgerRoots(claudeHomes: [claudeHome], codexHomes: [codexHome],
+        LedgerRoots(claudeHomes: [claudeHome] + claudeAccounts, codexHomes: [codexHome],
                     mirror: withMirror ? mirror : nil)
     }
 
