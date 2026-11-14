@@ -2021,7 +2021,7 @@ const SessionChat = (() => {
       </div>
       <div class="chat-badges">${status}${tmuxChip}</div>
       ${r.mirrored ? "" : '<span class="chat-conn" id="chat-conn"><span class="dot"></span><span class="caption" id="chat-conn-label"></span></span>'}
-      ${r.ownership === "attached" ? `<button type="button" class="icon-button" id="chat-detach" aria-label="Detach" title="Detach, or keep it running in tmux">
+      ${r.ownership === "attached" && !r.mirrored ? `<button type="button" class="icon-button" id="chat-detach" aria-label="Detach" title="Detach, or keep it running in tmux">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg></button>` : ""}
       ${chat.row && typeof openSessionMenu === "function" ? `<button type="button" class="icon-button" id="chat-more"
         aria-label="More actions" aria-haspopup="menu" title="Pin, rename or fork">${MORE_ICON}</button>` : ""}
@@ -2071,7 +2071,9 @@ const SessionChat = (() => {
     const row = chat.row;
     const input = $("chat-text");
     if (!input) return;
-    const observed = !row || row.ownership !== "attached";
+    // A mirrored copy is read-only even if the supervisor still holds an
+    // attached entry for it: mirrored overrides ownership.
+    const observed = !row || row.ownership !== "attached" || !!row.mirrored;
     // The composer always renders: on observed sessions it's disabled so
     // it still shows where typing will happen once attached.
     input.disabled = !chat.rowKnown || observed;
@@ -2123,7 +2125,7 @@ const SessionChat = (() => {
     const kept = !!r.kept;
     // A detach that waits out the turn: say it's pending, with a way to
     // keep the session attached instead.
-    if (chat.detaching && r.ownership === "attached") {
+    if (chat.detaching && r.ownership === "attached" && !r.mirrored) {
       banner.innerHTML = `<div class="chat-banner-text"><p>Detaches when this turn ends.</p></div>
         <div class="chat-banner-actions"><button type="button" class="tab" id="chat-detach-cancel">Stay attached</button></div>`;
       $("chat-detach-cancel").onclick = cancelDetach;
@@ -3482,16 +3484,27 @@ const SessionChat = (() => {
     loadRail(gen);
     // The / menu's list is warmed now, not on the first /, so the menu
     // opens filled; a kept list shows at once and is still refreshed.
-    if (!isMirrored()) warmCommands();
+    // Opened with no row (a fresh URL): the row is read first, below, and
+    // only then do the commands, approval and queue reads start.
+    const rowGiven = !!chat.row;
+    if (rowGiven && !isMirrored()) warmCommands();
     // The catalog is read after the backfill, never before: an attach or a
     // status change journaled before the backfill's last message is then
     // already in the row, and one after it comes with the stream.
     const logStatus = await backfill(gen);
     if (gen !== chat.gen) return;
     // A mirrored copy has no approval, send queue or live stream to read.
-    const [rowStatus, waiting] = logStatus === 401 ? [401, ""]
-      : isMirrored() ? [await loadRow(gen), ""]
-      : await Promise.all([loadRow(gen), pendingApproval(gen), loadQueue(gen)]);
+    let rowStatus = 401, waiting = "";
+    if (logStatus !== 401 && rowGiven && !isMirrored()) {
+      [rowStatus, waiting] = await Promise.all([loadRow(gen), pendingApproval(gen), loadQueue(gen)]);
+    } else if (logStatus !== 401) {
+      rowStatus = await loadRow(gen);
+      if (gen !== chat.gen) return;
+      if (!rowGiven && !isMirrored() && rowStatus === 200) {
+        warmCommands();
+        [waiting] = await Promise.all([pendingApproval(gen), loadQueue(gen)]);
+      }
+    }
     if (gen !== chat.gen) return;
     if (rowStatus === 401 || logStatus === 401) {
       gate();
@@ -4469,7 +4482,7 @@ const SessionChat = (() => {
       sendBtn.textContent = t.editingId ? (t.savingEdit ? "Saving…" : "Save") : "Send";
       if (t.savingEdit) sendBtn.disabled = true;
       // Send still waits for uploads in flight; an edit takes no files.
-      else if (chat.rowKnown && chat.row && chat.row.ownership === "attached") sendBtn.disabled = !t.editingId && uploading();
+      else if (chat.rowKnown && chat.row && chat.row.ownership === "attached" && !chat.row.mirrored) sendBtn.disabled = !t.editingId && uploading();
     }
   }
 
@@ -5022,7 +5035,7 @@ const SessionChat = (() => {
       mentionToken, insertMention, splitPath, filesError, files, FILES, searchFiles, trackMenus, menu,
       echoes, sendsToTray, mergeQueue, queueNote, trayHtml, posted, takeQueued, echoLeavesTray, sendText,
       sendNow, removeQueued, removeAllQueued, beginEdit, cancelEdit, saveEdit, loadQueue, commandResult, appendMessage,
-      backfill, showLive, cancelDetach, loadRail, attach, paintBanner, settleMirroredLog, isMirrored, MIRRORED_NOTE, MIRRORED_EMPTY,
+      backfill, showLive, cancelDetach, loadRail, attach, paintTray, paintBanner, settleMirroredLog, isMirrored, MIRRORED_NOTE, MIRRORED_EMPTY,
       replyStreams, receiveDelta, paintStreams, clearStreams, revealNext, enqueue, STREAM_MS, mdStream, renderMd },
   };
 })();

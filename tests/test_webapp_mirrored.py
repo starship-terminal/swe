@@ -193,7 +193,9 @@ class TestMirroredChat(unittest.TestCase):
 
     def run_js(self, body):
         source = CHAT_JS.read_text(encoding="utf-8")
-        script = (PRELUDE + source + "\nconst T = SessionChat._test;\n"
+        script = (PRELUDE + "globalThis.Fmt = { logo: () => '', harnessName: (h) => h, modelName: (m) => m || '', copyIcon: () => '', shellWord: String, copyTick() {} };\n"
+                  "globalThis.icon = () => ''; globalThis.Sk = new Proxy({}, { get: () => () => '' });\n"
+                  + source + "\nconst T = SessionChat._test;\n"
                   "ids['chat-loading'] = el('p'); ids['chat-loading'].className = 'empty';\n"
                   "T.chat.key = 'claude:s1'; T.chat.gen = 1; T.chat.rowKnown = true;\n"
                   "const banner = () => ({ html: ids['chat-banner'].innerHTML, hidden: ids['chat-banner'].classList.contains('hidden'),\n"
@@ -287,6 +289,56 @@ class TestMirroredChat(unittest.TestCase):
             return [missing, ids['chat-loading'].outerHTML];""")
         self.assertIn("No transcript for this session.", out[0])
         self.assertIn("No messages yet.", out[1])
+
+    def test_a_mirrored_session_that_is_still_attached_stays_read_only(self):
+        # The supervisor can keep a headless entry after the transcript is
+        # pruned: mirrored overrides ownership wherever controls enable.
+        out = self.run_js("""
+            ids['chat-clip'] = el('button'); ids['chat-bar'] = el('div');
+            T.chat.row = { mirrored: true, ownership: "attached", attachable: true };
+            T.updateOwnership();
+            const lock = { text: ids['chat-text'].disabled, send: ids['chat-send'].disabled,
+              stop: ids['chat-stop'].disabled, clip: ids['chat-clip'].disabled,
+              mode: ids['chat-mode'].classList.contains('hidden'), detach: ids['chat-bar'].innerHTML.includes('chat-detach') };
+            // The queued tray repaint must not re-enable Send either.
+            T.paintTray();
+            lock.sendAfterTray = ids['chat-send'].disabled;
+            T.chat.row = { ownership: "attached" };
+            T.updateOwnership();
+            lock.liveDetach = ids['chat-bar'].innerHTML.includes('chat-detach');
+            lock.liveText = ids['chat-text'].disabled;
+            return lock;""")
+        self.assertEqual({k: out[k] for k in ("text", "send", "stop", "clip", "mode", "detach", "sendAfterTray")},
+                         {"text": True, "send": True, "stop": True, "clip": True, "mode": True,
+                          "detach": False, "sendAfterTray": True})
+        self.assertTrue(out["liveDetach"])
+        self.assertFalse(out["liveText"])
+
+    def test_open_from_a_fresh_url_reads_the_row_before_starting_other_requests(self):
+        out = self.run_js("""
+            const asked = [];
+            const row = { key: "claude:s1", mirrored: true, ownership: "observed", last_active_at: 1 };
+            globalThis.api = async (path) => {
+              asked.push(path);
+              if (path.includes("/messages")) return { status: 404, data: null };
+              if (path.startsWith("/v1/sessions?")) return { status: 200, data: { sessions: [row] } };
+              return { status: 200, data: { sends: [], items: [], commands: [] } };
+            };
+            globalThis.fetch = async (u) => { asked.push("stream " + u); return { status: 404 }; };
+            globalThis.authHeaders = () => ({});
+            for (const id of ["panel", "chat-bar", "chat-rail", "chat-announce", "chat-files", "chat-menu", "chat-clip", "chat-file", "chat-composer", "cr-list", "chat-error", "chat-conn", "chat-conn-label"]) ids[id] = el("div");
+            // Any element the shell paints exists in this stub.
+            const fake = (e) => Object.assign(e, { addEventListener() {}, removeEventListener() {}, setAttribute() {},
+              getAttribute: () => null, closest: () => null, getBoundingClientRect: () => ({}) });
+            for (const id in ids) fake(ids[id]);
+            document.getElementById = (id) => ids[id] || (ids[id] = fake(el("div")));
+            document.body = { classList: { add() {}, remove() {} } };
+            await SessionChat.open("claude:s1");
+            await tick();
+            return asked;""")
+        self.assertTrue(any("/messages" in a for a in out), out)
+        for unused in ("/queue", "/v1/inbox", "/commands", "stream "):
+            self.assertFalse(any(unused in a for a in out), (unused, out))
 
     def test_attach_does_nothing_for_a_mirrored_session(self):
         out = self.run_js("""
