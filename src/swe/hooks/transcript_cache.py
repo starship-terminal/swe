@@ -26,10 +26,9 @@ time, never change an answer. ``SWE_HOOK_CACHE=0`` turns it off.
 
 from __future__ import annotations
 
-import marshal
+import json
 import os
 import sqlite3
-import sys
 import time
 import zlib
 from pathlib import Path
@@ -46,6 +45,10 @@ _FINGERPRINT_MODULES = (
     "swe.hooks.shim_runtime",
 )
 CAP_BYTES = 64 * 1024 * 1024
+# New parses are written, trimmed and their pages given back once this
+# much is waiting, so one cold read of a whole library never grows the
+# file past CAP_BYTES + BATCH_BYTES (plus SQLite's own pages).
+BATCH_BYTES = 8 * 1024 * 1024
 _OFF_VALUES = ("0", "off", "false", "no")
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (
@@ -68,26 +71,84 @@ def cache_file_for(home: Path) -> Path:
 
 
 def _version() -> str:
-    """The deciding modules' digest, plus the Python that wrote the rows:
-    they are ``marshal`` data, whose format is Python's own."""
     from swe.sessions.parse_cache import _modules_digest
 
-    return (f"{_modules_digest(_FINGERPRINT_MODULES)}:"
-            f"py{sys.version_info[0]}.{sys.version_info[1]}")
+    return _modules_digest(_FINGERPRINT_MODULES)
 
 
 def _pack(events: list[dict]) -> bytes:
-    """Rows as columns: the keys once, then one tuple of values per event
-    (plain strings, numbers, booleans and None only), marshalled and
-    compressed. Reading back is several times faster than JSON."""
+    """Compressed JSON, one entry per field instead of per run: a value
+    every run shares is stored once (``c``), a column of repeated strings
+    as the distinct strings and an index per run (``d``/``i``), anything
+    else as the list of values (``v``). A transcript's runs share their
+    harness, session, folder and branch and repeat a few commands, so this
+    reads back in a fraction of the time of a list of objects, and JSON's
+    decoder raises on any bad byte rather than trusting the file."""
     keys = sorted({k for e in events for k in e})
-    rows = [tuple(e.get(k) for k in keys) for e in events]
-    return zlib.compress(marshal.dumps((tuple(keys), rows)), 1)
+    columns = []
+    for key in keys:
+        values = [e.get(key) for e in events]
+        first = values[0] if values else None
+        if all(v == first and type(v) is type(first) for v in values):
+            columns.append({"c": first})
+            continue
+        if all(v is None or isinstance(v, str) for v in values):
+            distinct = list(dict.fromkeys(values))
+            if len(distinct) * 2 <= len(values):
+                where = {v: n for n, v in enumerate(distinct)}
+                columns.append({"d": distinct, "i": [where[v] for v in values]})
+                continue
+        columns.append({"v": values})
+    return zlib.compress(json.dumps(
+        {"n": len(events), "k": keys, "c": columns},
+        separators=(",", ":")).encode("utf-8"), 1)
+
+
+class BadRow(ValueError):
+    """A stored row that is not what ``_pack`` wrote."""
+
+
+def _column(spec, n: int) -> list:
+    if not isinstance(spec, dict) or len(spec) not in (1, 2):
+        raise BadRow("column")
+    if "c" in spec and len(spec) == 1:
+        return [spec["c"]] * n
+    if "v" in spec and len(spec) == 1:
+        values = spec["v"]
+        if not isinstance(values, list) or len(values) != n:
+            raise BadRow("column length")
+        return values
+    distinct, index = spec.get("d"), spec.get("i")
+    if not isinstance(distinct, list) or not isinstance(index, list) \
+            or len(index) != n:
+        raise BadRow("dictionary column")
+    if index and not (all(type(i) is int for i in index)
+                      and 0 <= min(index) and max(index) < len(distinct)):
+        raise BadRow("dictionary index")
+    return [distinct[i] for i in index]
 
 
 def _unpack(blob: bytes) -> list[dict]:
-    keys, rows = marshal.loads(zlib.decompress(blob))
-    return [dict(zip(keys, row)) for row in rows]
+    """``_pack``'s events back; ``BadRow`` (or the decoder's own error) for
+    anything else, so a damaged row is a miss and never a wrong answer."""
+    data = json.loads(zlib.decompress(blob))
+    if not isinstance(data, dict):
+        raise BadRow("not an object")
+    n, keys, specs = data.get("n"), data.get("k"), data.get("c")
+    if type(n) is not int or n < 0 or not isinstance(keys, list) \
+            or not all(isinstance(k, str) for k in keys) \
+            or not isinstance(specs, list) or len(specs) != len(keys):
+        raise BadRow("no columns")
+    if n == 0:
+        # Most transcripts hold no hook run at all: that is an answer too.
+        return []
+    columns = dict(zip(keys, (_column(spec, n) for spec in specs)))
+    ts = columns.get("ts")
+    command = columns.get("_command", ())
+    if ts is None or not all(type(t) in (int, float) for t in ts) \
+            or not all(isinstance(c, str) for c in command):
+        raise BadRow("field type")
+    return [dict(zip(keys, row)) for row in zip(*(columns[k] for k in keys))]
 
 
 def _signature(st: os.stat_result) -> tuple[int, int, int, int]:
@@ -103,6 +164,7 @@ class TranscriptCache:
         self.version = _version()
         self._db: sqlite3.Connection | None = None
         self._pending: list[tuple] = []
+        self._pending_bytes = 0
         self._hits: list[str] = []
         if os.environ.get("SWE_HOOK_CACHE", "").strip().lower() in _OFF_VALUES:
             return
@@ -113,9 +175,20 @@ class TranscriptCache:
             db = sqlite3.connect(str(self.path), timeout=2.0,
                                  isolation_level=None)
             db.execute("PRAGMA busy_timeout = 2000")
+            # Set before the first table exists, it lets a trim hand freed
+            # pages back to the disk (``PRAGMA incremental_vacuum``).
+            db.execute("PRAGMA auto_vacuum = INCREMENTAL")
             db.execute("PRAGMA journal_mode = WAL")
             db.execute("PRAGMA synchronous = NORMAL")
             db.execute(_SCHEMA)
+            if db.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
+                # A store made before auto-vacuum was set: the setting only
+                # takes with a rebuild. Busy (another reader) leaves it for
+                # a later read.
+                try:
+                    db.execute("VACUUM")
+                except sqlite3.Error:
+                    pass
             self._db = db
         except (OSError, sqlite3.Error):
             self._db = None
@@ -142,7 +215,7 @@ class TranscriptCache:
                     found = _unpack(row[4])
                     self._hits.append(path)
                     return found
-                except (ValueError, TypeError, EOFError, zlib.error):
+                except Exception:  # noqa: BLE001 - any damage is a miss
                     pass
         found = parse(path)
         if found is not None and self._db is not None:
@@ -150,33 +223,57 @@ class TranscriptCache:
                 blob = _pack(found)
             except (TypeError, ValueError):
                 return found
-            self._pending.append((self.version, path, *sig, blob, len(blob)))
+            # ``used`` orders rows by when they were read, newest last, so a
+            # trim inside one large read drops its oldest parses first.
+            self._pending.append(
+                (self.version, path, *sig, blob, len(blob), time.time()))
+            self._pending_bytes += len(blob)
+            if self._pending_bytes >= BATCH_BYTES:
+                self._flush(self._db)
         return found if found is not None else []
 
-    def close(self) -> None:
-        """Store the new parses, mark the hits as read, trim to the cap."""
-        db, self._db = self._db, None
-        if db is None:
-            return
+    def _flush(self, db: sqlite3.Connection) -> None:
+        """Write the waiting parses and the hits, trim to the cap and give
+        the freed pages back, in one transaction. Fails to a no-op."""
+        pending, self._pending, self._pending_bytes = self._pending, [], 0
+        hits, self._hits = self._hits, []
         try:
             now = time.time()
             db.execute("BEGIN IMMEDIATE")
             db.executemany(
                 "INSERT OR REPLACE INTO files (version, path, size, mtime_ns, "
                 "ctime_ns, inode, events, bytes, used) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [row + (now,) for row in self._pending])
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", pending)
             db.executemany(
                 "UPDATE files SET used = ? WHERE version = ? AND path = ?",
-                [(now, self.version, p) for p in self._hits])
-            if self._pending:
+                [(now, self.version, p) for p in hits])
+            if pending:
                 self._trim(db)
+                # It frees one page per step: run it to the end.
+                db.execute("PRAGMA incremental_vacuum").fetchall()
             db.execute("COMMIT")
         except sqlite3.Error:
             try:
                 db.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+
+    def close(self) -> None:
+        """Store the new parses, mark the hits as read, trim to the cap and
+        fold the write-ahead log back so the file shrinks."""
+        db, self._db = self._db, None
+        if db is None:
+            return
+        try:
+            wrote = bool(self._pending)
+            self._flush(db)
+            if wrote:
+                try:
+                    # Another reader may hold the log; then it shrinks on a
+                    # later close instead.
+                    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.Error:
+                    pass
         finally:
             db.close()
 

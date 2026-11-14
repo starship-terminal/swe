@@ -592,6 +592,34 @@ class KnowableVariablesTest(_IdentityHome):
         self.assertEqual((row["fires"], row["scripts"], row["source_paths"]),
                          (2, [os.path.realpath(script)], []))
 
+    def test_a_plugin_folder_with_quotes_and_spaces_keeps_its_path(self):
+        # The install folder is substituted into the parsed path, never
+        # into the command text: its quotes, spaces, $ and backslashes stay.
+        folder = self.home / ".claude" / "plugins" / "cache" / 'my "odd" $x\\dir'
+        (folder / "hooks").mkdir(parents=True)
+        script = folder / "hooks" / "on-stop.sh"
+        script.write_text("#!/bin/sh\n")
+        (folder / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": self.PLUGIN}]}]}}))
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        record.write_text(json.dumps({"plugins": {"odd@mk": [{
+            "scope": "user", "installPath": str(folder)}]}}))
+        self.ran(self.PLUGIN, HOUR)
+        (row,) = self.stats()["hooks"]
+        self.assertEqual(row["scripts"], [os.path.realpath(script)])
+
+    def test_a_project_folder_with_quotes_keeps_its_path(self):
+        project = self.home / "work" / 'My "Demo" App $1'
+        hook = project / ".claude" / "hooks" / "check.py"
+        hook.parent.mkdir(parents=True)
+        hook.write_text("print(1)\n")
+        cmd = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/check.py"'
+        self.lines.append(_rec(self.now - 3 * HOUR, "user", cwd=str(project),
+                               message={"role": "user", "content": "hi"}))
+        self.ran(cmd, HOUR)
+        (row,) = self.stats()["hooks"]
+        self.assertEqual(row["scripts"], [os.path.realpath(hook)])
+
     def test_two_plugins_with_one_command_stay_unknowable(self):
         self.install_plugin("x", [self.PLUGIN])
         self.install_plugin("y", [self.PLUGIN])
@@ -672,6 +700,25 @@ class VanishedGeneratedFolderTest(_IdentityHome):
         self.logged("gone", HOUR, script=str(self.home / ".swe/hooks/shared/gone.py"))
         self.ran(cmd, HOUR - 0.5)
         self.assertEqual(self.stats()["totals"]["fires"], 2)
+
+
+class StopErrorTest(_IdentityHome):
+    """A Stop summary's error names one command; it is that hook's only."""
+
+    def test_an_error_goes_to_its_exact_command_not_its_namesakes(self):
+        a = self.foreign("plugins/a/guard.py")
+        b = self.foreign("plugins/b/guard.py")
+        self.declare(f"python3 {a}")
+        self.declare(f"python3 {b}")
+        self.lines.append(_rec(self.now - HOUR, "system", sessionId="s1",
+                               subtype="stop_hook_summary",
+                               hookInfos=[{"command": f"python3 {a}"},
+                                          {"command": f"python3 {b}"}],
+                               hookErrors=[f"[python3 {a}]: a failed"]))
+        self._write_transcript()
+        data = self.stats()
+        self.assertEqual(self.counted(str(a), data)["errors"], 1)
+        self.assertEqual(self.counted(str(b), data)["errors"], 0)
 
 
 class ResolverTest(_IdentityHome):

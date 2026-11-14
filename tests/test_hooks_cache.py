@@ -65,6 +65,15 @@ class TranscriptCacheTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(second), 3)
 
+    def test_a_transcript_with_no_hook_runs_is_cached_too(self):
+        quiet = self.path.with_name("quiet.jsonl")
+        quiet.write_text(_rec(self.now, "user", message={
+            "role": "user", "content": "no hooks here"}) + "\n")
+        self.read()
+        with self.parses() as spy:
+            self.read()
+        self.assertEqual(spy.call_count, 0)
+
     def test_a_changed_transcript_is_parsed_again(self):
         self.read()
         self.write(5)
@@ -160,6 +169,90 @@ class TranscriptCacheTest(unittest.TestCase):
             self.assertIsNone(row["script"])
             self.assertIsNone(row["repo"])
             self.assertEqual(row["_command"], self.command)
+
+    def test_corrupt_or_truncated_rows_read_as_a_miss(self):
+        self.read()
+        db = sqlite3.connect(transcript_cache.cache_file_for(self.home),
+                             isolation_level=None)
+        (good,) = db.execute("SELECT events FROM files").fetchone()
+        import zlib
+        bad_rows = [
+            good[: len(good) // 2],                          # truncated
+            b"\xff" * 64,                                    # not zlib
+            zlib.compress(b"{not json"),                      # not JSON
+            zlib.compress(b'{"n": 2, "k": ["ts"], "c": [{"v": [1]}]}'),  # short
+            zlib.compress(b'{"n": 1, "k": ["ts"], "c": [{"v": ["noon"]}]}'),  # type
+            zlib.compress(b'{"n": 2, "k": ["ts", "x"], "c": [{"c": 1}, '
+                          b'{"d": ["a"], "i": [0, -1]}]}'),   # bad index
+            zlib.compress(b'{"n": 1, "k": ["ts"], "c": [{"c": 1}, {"c": 2}]}'),
+            zlib.compress(b"[1, 2, 3]"),                      # wrong shape
+            zlib.compress(b"\xe3\x01\x00\x00\x00" * 50),     # marshal-ish
+        ]
+        for blob in bad_rows:
+            db.execute("UPDATE files SET events = ?", (blob,))
+            with self.parses() as spy:
+                self.assertEqual(len(self.read()), 3, blob[:12])
+            self.assertEqual(spy.call_count, 1, blob[:12])
+
+    def big_library(self):
+        import random
+        rng = random.Random(7)
+        project = self.path.parent
+        noise = lambda: "".join(rng.choice("abcdefghijklmnop") for _ in range(180))
+        for n in range(60):
+            (project / f"big-{n}.jsonl").write_text("\n".join(
+                _rec(self.now - i, "attachment", attachment={
+                    "type": "hook_success", "hookName": "Stop",
+                    "hookEvent": "Stop", "command": f"python3 /x/{noise()}.py",
+                    "exitCode": 0, "durationMs": 5, "stderr": noise(),
+                    "stdout": ""}) for i in range(200)) + "\n")
+
+    def store_size(self) -> int:
+        db = transcript_cache.cache_file_for(self.home)
+        return sum(p.stat().st_size for p in db.parent.glob(db.name + "*"))
+
+    def test_freed_pages_go_back_to_the_disk(self):
+        # One batch far over the cap: everything is written, then trimmed,
+        # and the trimmed pages must leave the file.
+        self.big_library()
+        cap = 256 * 1024
+        with mock.patch.object(transcript_cache, "CAP_BYTES", cap), \
+                mock.patch.object(transcript_cache, "BATCH_BYTES", 1 << 40):
+            self.read()
+        self.assertLess(self.store_size(), cap + 128 * 1024)
+
+    def test_a_store_made_without_auto_vacuum_is_rebuilt_with_it(self):
+        db = transcript_cache.cache_file_for(self.home)
+        db.parent.mkdir(parents=True)
+        old = sqlite3.connect(db)
+        old.execute(transcript_cache._SCHEMA)
+        old.commit()
+        self.assertEqual(old.execute("PRAGMA auto_vacuum").fetchone()[0], 0)
+        old.close()
+        self.read()
+        self.assertEqual(sqlite3.connect(db).execute(
+            "PRAGMA auto_vacuum").fetchone()[0], 2)
+
+    def test_the_file_comes_back_under_its_bound_after_a_big_read(self):
+        self.big_library()
+        cap, batch = 256 * 1024, 128 * 1024
+        with mock.patch.object(transcript_cache, "CAP_BYTES", cap), \
+                mock.patch.object(transcript_cache, "BATCH_BYTES", batch):
+            self.read()
+        db = transcript_cache.cache_file_for(self.home)
+        rows = sqlite3.connect(db).execute(
+            "SELECT SUM(bytes), COUNT(*) FROM files").fetchone()
+        written = sum(len(transcript_cache._pack(transcripts._raw_file(str(p))))
+                      for p in self.path.parent.glob("*.jsonl"))
+        size = sum(p.stat().st_size for p in db.parent.glob(db.name + "*"))
+        # The parses were several times the cap; the file (with its log) is
+        # back under the cap plus one write batch plus SQLite's own pages.
+        self.assertGreater(written, 4 * cap)
+        self.assertLess(size, cap + batch + 128 * 1024)
+        self.assertLessEqual(rows[0], cap)
+        self.assertGreater(rows[1], 0)
+        rows = sqlite3.connect(db).execute("SELECT SUM(bytes) FROM files")
+        self.assertLessEqual(rows.fetchone()[0], cap)
 
     def test_the_fingerprint_names_the_modules_that_decide_a_row(self):
         self.assertEqual(set(transcript_cache._FINGERPRINT_MODULES), {

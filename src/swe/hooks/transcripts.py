@@ -267,13 +267,14 @@ def _stop_summary(record: dict, ts: float) -> list[dict]:
         decision, reason = "allow", ""
         for error in errors:
             # An error counts against a hook only when it names that
-            # hook's command: ``[<command>]: <stderr>``. One that names
-            # nothing is left to the run's own attachment.
+            # hook's exact command: ``[<command>]: <stderr>``. Never by
+            # name: ``/a/guard.py`` and ``/b/guard.py`` share one, and
+            # Claude Code writes the command as declared (every named
+            # error in a real library matched its hook's command exactly).
+            # One that names nothing is left to the run's own attachment.
             named = re.match(r"^\[(?P<command>.*?)\]:\s*(?P<rest>.*)\Z",
                              error.strip(), re.DOTALL)
-            if named and (named.group("command") == info["command"]
-                          or command_hook(named.group("command"))
-                          == command_hook(command)):
+            if named and named.group("command") == command:
                 decision, reason = "error", named.group("rest")
                 break
         event = _event(record, ts, command, "Stop", decision, reason,

@@ -223,17 +223,21 @@ class Resolver:
             hit = self._cache[key] = self._resolve(command, key[1])
         return hit
 
-    def _expand(self, command: str, project: str | None) -> str:
+    def _variables(self, command: str, project: str | None) -> dict[str, str]:
+        """The hook variables knowable for ``command``: given to the
+        resolver as values for its parsed tokens, never spliced into the
+        command text (a folder named ``My "Demo" App`` would be re-read
+        as shell)."""
+        out: dict[str, str] = {}
         if _PLUGIN_ROOT.search(command):
             if self._plugins is None:
                 self._plugins = plugin_roots(self.home)
             roots = self._plugins.get(command, set())
             if len(roots) == 1:
-                root = next(iter(roots))
-                command = _PLUGIN_ROOT.sub(lambda _m: root, command)
+                out["CLAUDE_PLUGIN_ROOT"] = next(iter(roots))
         if project and _PROJECT_DIR.search(command):
-            command = _PROJECT_DIR.sub(lambda _m: project, command)
-        return command
+            out["CLAUDE_PROJECT_DIR"] = project
+        return out
 
     def _resolve(self, command: str,
                  project: str | None) -> tuple[tuple[str, bool], ...]:
@@ -242,8 +246,9 @@ class Resolver:
         try:
             # A run's script may be gone since (a pruned wrapper): its
             # path still names it.
-            found = _executed_scripts(_splice(self._expand(command, project)),
-                                      self.home, must_exist=False)
+            found = _executed_scripts(
+                _splice(command), self.home, must_exist=False,
+                variables=self._variables(command, project))
         except Exception:  # noqa: BLE001 - an odd command has no script
             return ()
         out = []
