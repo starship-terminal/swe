@@ -165,12 +165,15 @@ def _int(value) -> int | None:
     return int(value)
 
 
-def _event(record: dict, ts: float, hook: tuple[str, str | None], name: str,
+def _event(record: dict, ts: float, command: str, name: str,
            decision: str, reason: str, duration, exit_code,
            tool_use_id) -> dict:
+    """One run as the file's bytes say it. ``hook`` and ``script`` are
+    filled by ``finish`` from ``_command``, since what a command runs is
+    the disk's to say, not the transcript's (and so is never cached)."""
     return {
         "ts": ts,
-        "hook": hook[0],
+        "hook": None,
         "harness": "claude",
         "event": name,
         "session_id": record.get("sessionId")
@@ -186,7 +189,8 @@ def _event(record: dict, ts: float, hook: tuple[str, str | None], name: str,
         "exit_code": _int(exit_code),
         "stop_hook_active": None,
         "source": "transcript",
-        "script": hook[1],
+        "script": None,
+        "_command": command,
         # Used by the in-file merge below and dropped before returning.
         "_tool_use_id": tool_use_id if isinstance(tool_use_id, str) else None,
         "_kind": "",
@@ -206,7 +210,7 @@ def _text_of(content) -> str:
     return ""
 
 
-def _attachment(record: dict, ts: float, ident) -> list[dict]:
+def _attachment(record: dict, ts: float) -> list[dict]:
     att = record.get("attachment")
     if not isinstance(att, dict):
         return []
@@ -218,9 +222,9 @@ def _attachment(record: dict, ts: float, ident) -> list[dict]:
     if not isinstance(command, str) and isinstance(att.get("blockingError"),
                                                    dict):
         command = att["blockingError"].get("command")
-    hook = ident(command or "")
+    command = command or ""
     name = att.get("hookName") or att.get("hookEvent")
-    if not hook[0] or not isinstance(name, str):
+    if not command_hook(command) or not isinstance(name, str):
         return []
     stderr = att.get("stderr")
     if not isinstance(stderr, str) or not stderr.strip():
@@ -239,14 +243,14 @@ def _attachment(record: dict, ts: float, ident) -> list[dict]:
         stdout = att.get("stdout") if isinstance(att.get("stdout"), str) else ""
         decision = "error"
         reason = stderr or stdout or f"exit {att.get('exitCode')}"
-    event = _event(record, ts, hook, name, decision, reason,
+    event = _event(record, ts, command, name, decision, reason,
                    att.get("durationMs"), att.get("exitCode"),
                    att.get("toolUseID"))
     event["_kind"] = "attachment"
     return [event]
 
 
-def _stop_summary(record: dict, ts: float, ident) -> list[dict]:
+def _stop_summary(record: dict, ts: float) -> list[dict]:
     infos = record.get("hookInfos")
     if not isinstance(infos, list):
         return []
@@ -257,28 +261,30 @@ def _stop_summary(record: dict, ts: float, ident) -> list[dict]:
         if not isinstance(info, dict) or not isinstance(info.get("command"),
                                                         str):
             continue
-        hook = ident(info["command"])
-        if not hook[0]:
+        command = info["command"]
+        if not command_hook(command):
             continue
         decision, reason = "allow", ""
         for error in errors:
             # An error counts against a hook only when it names that
-            # hook's command: ``[<command>]: <stderr>``. One that names
-            # nothing is left to the run's own attachment.
+            # hook's exact command: ``[<command>]: <stderr>``. Never by
+            # name: ``/a/guard.py`` and ``/b/guard.py`` share one, and
+            # Claude Code writes the command as declared (every named
+            # error in a real library matched its hook's command exactly).
+            # One that names nothing is left to the run's own attachment.
             named = re.match(r"^\[(?P<command>.*?)\]:\s*(?P<rest>.*)\Z",
                              error.strip(), re.DOTALL)
-            if named and (named.group("command") == info["command"]
-                          or ident(named.group("command")) == hook):
+            if named and named.group("command") == command:
                 decision, reason = "error", named.group("rest")
                 break
-        event = _event(record, ts, hook, "Stop", decision, reason,
+        event = _event(record, ts, command, "Stop", decision, reason,
                        info.get("durationMs"), None, record.get("toolUseID"))
         event["_kind"] = "summary"
         out.append(event)
     return out
 
 
-def _feedback(record: dict, ts: float, text: str, ident) -> list[dict]:
+def _feedback(record: dict, ts: float, text: str) -> list[dict]:
     match = _FEEDBACK.match(text.strip())
     if not match:
         return []
@@ -287,16 +293,16 @@ def _feedback(record: dict, ts: float, text: str, ident) -> list[dict]:
     for i, mark in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else None
         message = match.group("body")[mark.end():end]
-        hook = ident(mark.group("command"))
-        if hook[0]:
-            event = _event(record, ts, hook, match.group("event"), "block",
+        command = mark.group("command")
+        if command_hook(command):
+            event = _event(record, ts, command, match.group("event"), "block",
                            message, None, 2, None)
             event["_kind"] = "feedback"
             out.append(event)
     return out
 
 
-def _tool_results(record: dict, ts: float, ident) -> list[dict]:
+def _tool_results(record: dict, ts: float) -> list[dict]:
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, list):
@@ -308,9 +314,9 @@ def _tool_results(record: dict, ts: float, ident) -> list[dict]:
         match = _TOOL_BLOCK.match(_text_of(item.get("content")).strip())
         if not match:
             continue
-        hook = ident(match.group("command"))
-        if hook[0]:
-            event = _event(record, ts, hook,
+        command = match.group("command")
+        if command_hook(command):
+            event = _event(record, ts, command,
                            f"{match.group('event')}:{match.group('tool')}",
                            "block", match.group("message"), None, 2,
                            item.get("tool_use_id"))
@@ -320,18 +326,51 @@ def _tool_results(record: dict, ts: float, ident) -> list[dict]:
 
 
 def parse_lines(lines, resolver: Resolver | None = None) -> list[dict]:
-    """Hook events in one transcript's lines (bytes or str), file order.
+    """Hook events in one transcript's lines (bytes or str), file order,
+    each with its ``hook`` name and ``script`` (``finish``). ``resolver``
+    reads each command's script (one per read; a fresh one for this home
+    when not given)."""
+    return finish(parse_raw(lines), resolver or Resolver(Path.home()))
+
+
+def finish(raw: list[dict], resolver: Resolver) -> list[dict]:
+    """``parse_raw``'s events named and given their scripts: the part of a
+    parse that depends on the disk (what a command runs today, which
+    plugin a ``${CLAUDE_PLUGIN_ROOT}`` command came from) and so is done
+    on every read, never cached. Returns new dicts."""
+    out = []
+    for event in raw:
+        event = dict(event)
+        command = event.pop("_command", "") or ""
+        project = event.pop("_project", None)
+        event["hook"], event["script"] = resolver.name(command, project)
+        out.append(event)
+    return out
+
+
+def parse_raw(lines) -> list[dict]:
+    """Hook events in one transcript's lines (bytes or str), file order,
+    from the file's bytes alone: each carries its ``_command`` and the
+    session's ``_project`` (the first ``cwd`` the file records, which is
+    what Claude Code sets ``$CLAUDE_PROJECT_DIR`` to), and no name yet.
+    This is what the parse cache keeps.
 
     Runs that two records describe become one: a block's tool result
     absorbs the attachment with the same tool use id, and a Stop feedback
-    message absorbs the nearest stop summary for the same hook.
-    ``resolver`` reads each command's script (one per read; a fresh one
-    for this home when not given).
+    message absorbs the nearest stop summary for the same command.
     """
-    ident = (resolver or Resolver(Path.home())).name
     found: list[dict] = []
+    project: str | None = None
     for line in lines:
         raw = line if isinstance(line, bytes) else line.encode("utf-8")
+        if project is None and b'"cwd"' in raw:
+            try:
+                first = json.loads(raw)
+            except ValueError:
+                first = None
+            if isinstance(first, dict) and isinstance(first.get("cwd"), str) \
+                    and first["cwd"]:
+                project = first["cwd"]
         if not any(needle in raw for needle in _NEEDLES):
             continue
         try:
@@ -345,11 +384,11 @@ def parse_lines(lines, resolver: Resolver | None = None) -> list[dict]:
             continue
         kind = record.get("type")
         if kind == "attachment":
-            found += _attachment(record, ts, ident)
+            found += _attachment(record, ts)
         elif kind == "system" and record.get("subtype") == "stop_hook_summary":
-            found += _stop_summary(record, ts, ident)
+            found += _stop_summary(record, ts)
         elif kind == "user":
-            found += _tool_results(record, ts, ident)
+            found += _tool_results(record, ts)
             message = record.get("message")
             content = message.get("content") if isinstance(
                 message, dict) else None
@@ -357,8 +396,11 @@ def parse_lines(lines, resolver: Resolver | None = None) -> list[dict]:
             if not text and isinstance(record.get("content"), str):
                 text = record["content"]
             if record.get("isMeta") and "hook feedback" in text:
-                found += _feedback(record, ts, text, ident)
-    return _collapse(found)
+                found += _feedback(record, ts, text)
+    events = _collapse(found)
+    for event in events:
+        event["_project"] = project
+    return events
 
 
 _ATTACH_WINDOW = 5.0
@@ -368,15 +410,15 @@ def _pair(events, one_kind: str, other_kind: str, window: float,
           same_tool_use: bool = False):
     """(one index, other index) pairs: the same run seen in two records.
 
-    ``other`` is the nearest unused record of the same hook (name and
-    script: two scripts that share a name are two hooks), session and
+    ``other`` is the nearest unused record of the same command (the very
+    string: two scripts that share a name are two hooks), session and
     event name within ``window`` seconds (or with the same tool use id);
     each record pairs at most once. Records are bucketed first, because a
     long transcript holds thousands of hook records.
     """
     def key(event):
         tail = event["_tool_use_id"] if same_tool_use else event["event"]
-        return (event["hook"], event["script"], event["session_id"], tail)
+        return (event["_command"], event["session_id"], tail)
 
     buckets: dict[tuple, list[int]] = {}
     for j, other in enumerate(events):
@@ -451,15 +493,24 @@ def _collapse(events: list[dict]) -> list[dict]:
     return kept
 
 
-def parse_file(path: str, since: float | None = None,
-               resolver: Resolver | None = None) -> list[dict]:
-    """Hook events in one transcript file; unreadable files give none."""
+def _raw_file(path: str) -> list[dict] | None:
+    """``parse_raw`` of one file; None when it cannot be read."""
     try:
         with open(path, "rb") as handle:
-            events = parse_lines(handle, resolver)
+            return parse_raw(handle)
     except OSError:
-        return []
-    return [e for e in events if since is None or e["ts"] >= since]
+        return None
+
+
+def parse_file(path: str, since: float | None = None,
+               resolver: Resolver | None = None, cache=None) -> list[dict]:
+    """Hook events in one transcript file; unreadable files give none.
+    ``cache`` (``transcript_cache.TranscriptCache``) answers for a file
+    that has not changed since it was last parsed."""
+    raw = cache.events(path, _raw_file) if cache is not None \
+        else (_raw_file(path) or [])
+    raw = [e for e in raw if since is None or e["ts"] >= since]
+    return finish(raw, resolver or Resolver(Path.home()))
 
 
 def _subagent_transcripts(main: list[str]) -> list[str]:
@@ -516,10 +567,16 @@ def backfill(home: Path, since: float | None = None,
 
     ``repo`` is filled from each event's cwd (one lookup per folder).
     """
+    from swe.hooks.transcript_cache import TranscriptCache
+
     resolver = resolver or Resolver(home)
     events: list[dict] = []
-    for path in claude_transcripts(home, since):
-        events += parse_file(path, since, resolver)
+    cache = TranscriptCache(home)
+    try:
+        for path in claude_transcripts(home, since):
+            events += parse_file(path, since, resolver, cache)
+    finally:
+        cache.close()
     repos: dict[str, str | None] = {}
     for event in events:
         cwd = event["cwd"]
