@@ -233,9 +233,18 @@ HELP = {
   {c('cyan', 'swe session index --on|--off')} Whether the remote hub keeps the index current
   {c('cyan', 'swe session index --status')}   What the index holds, without a pass
   {c('cyan', 'swe session mirror')}           Copy Claude Code and Codex transcripts into ~/.swe so they outlive
-                                            the harnesses' 30-day pruning (nothing is ever deleted)
+                                            the harnesses' 30-day pruning (a pass never deletes a copy)
   {c('cyan', 'swe session mirror --on|--off')} Whether the hub and swe session index keep mirroring (default on)
   {c('cyan', 'swe session mirror --status')}  What the mirror holds, without a pass
+  {c('cyan', 'swe session mirror --purge=<id>')} Delete one mirrored session's copies, backups and manifest
+                                            entries, by session id or Codex thread id (never a #); lists the
+                                            files and asks first (--yes skips the prompt). An id in two
+                                            homes takes --account=<id|default> (the account's id in
+                                            ~/.swe/accounts/<vendor>/<id>/home, or its account_home path)
+  {c('cyan', 'swe session mirror --sweep-tmp')} Remove temp files a crashed copy or restore left over a day ago
+  {c('cyan', 'swe session restore <N|id>')}   Put a mirrored transcript back where its harness kept it, so the
+                                            session resumes again; never overwrites an existing file
+                                            (an id in two homes takes --account=<id|default>)
 
 {c('bold', 'Flags')}
   {c('cyan', '--agent=<name>')}               Filter by agent (claude, codex, opencode, droid, ...)
@@ -265,7 +274,9 @@ HELP = {
   swe session --search=login
   swe session 30 -q refactor
   swe session index --on
-  swe session mirror --json"""
+  swe session mirror --json
+  swe session restore 3
+  swe session mirror --purge=11111111-2222-3333-4444-555555555555"""
     ),
     "report": (
         "Summarize coding sessions and manage follow-ups",
