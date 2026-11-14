@@ -10,6 +10,7 @@ import Foundation
 /// Layout, as swe writes it:
 ///
 ///     transcripts/claude/<project-slug>/<uuid>.jsonl
+///     transcripts/claude/<project-slug>/<uuid>/subagents/<agent>.jsonl
 ///     transcripts/codex/<path under sessions/ or archived_sessions/>
 ///     transcripts/accounts/<vendor>/<account id>/<same, per SWE account home>
 ///     transcripts/manifest.json   {version, files: {<rel>: {harness, source, account_home, ...}}}
@@ -66,7 +67,24 @@ public struct TranscriptMirror: Sendable, Equatable {
         public var path: String
         /// Its path under the root (the manifest's key).
         public var rel: String
+
+        /// A Claude subagent transcript (`<uuid>/subagents/<agent>.jsonl`):
+        /// the ledger reads it, search never indexes it, as neither treats
+        /// a live one as a session of its own. Exactly the copies the
+        /// search walk prunes (`walk`, swe's `_walk(subagents=False)`): a
+        /// folder named `subagents` below the copy's tree (`claude/`,
+        /// `codex/` or `accounts/<harness>/<id>/`). The tree is never one,
+        /// so an account whose id is `subagents` keeps its own copies.
+        public var isSubagent: Bool {
+            var parts = rel.split(separator: "/", omittingEmptySubsequences: false)
+            parts.removeLast()  // the file name
+            parts.removeFirst(min(parts.count, parts.first == "accounts" ? 3 : 1))
+            return parts.contains { $0 == TranscriptMirror.subagents }
+        }
     }
+
+    /// The folder Claude Code keeps a session's subagent transcripts in.
+    static let subagents = "subagents"
 
     /// The harnesses whose transcripts swe mirrors (`MIRRORED`).
     public static let harnesses = ["claude", "codex"]
@@ -252,10 +270,11 @@ public struct TranscriptMirror: Sendable, Equatable {
     /// Every copy under the root, in swe's walk order (`_copy_trees`, then
     /// `_walk`): each harness's own folder, then each account folder under
     /// `accounts/<harness>/`. Hidden names and `subagents/` folders are
-    /// pruned, a linked folder is not entered (a linked tree, or one under
-    /// a linked `accounts/`, is not read at all), and a copy outside the
-    /// root (a link pointing elsewhere) is left out.
-    public func copies() -> [Copy] {
+    /// pruned (`subagents: true` keeps those, for the ledger), a linked
+    /// folder is not entered (a linked tree, or one under a linked
+    /// `accounts/`, is not read at all), and a copy outside the root (a
+    /// link pointing elsewhere) is left out.
+    public func copies(subagents: Bool = false) -> [Copy] {
         guard let real = resolvedRoot else { return [] }
         var trees: [(String, String)] = Self.harnesses.map { ($0, real + "/" + $0) }
         for harness in Self.harnesses {
@@ -271,7 +290,7 @@ public struct TranscriptMirror: Sendable, Equatable {
         // `_copy_trees` and the listing read it: a link must never file
         // one account's copies twice.
         for (harness, tree) in trees where Self.resolved(URL(fileURLWithPath: tree)) == tree {
-            for path in Self.walk(tree) where path.hasPrefix(real + "/") {
+            for path in Self.walk(tree, subagents: subagents) where path.hasPrefix(real + "/") {
                 out.append(Copy(harness: harness, path: path, rel: String(path.dropFirst(real.count + 1))))
             }
         }
@@ -300,8 +319,9 @@ public struct TranscriptMirror: Sendable, Equatable {
     }
 
     /// `*.jsonl` files under `directory`: a folder's files by name, then
-    /// its subfolders by name.
-    static func walk(_ directory: String) -> [String] {
+    /// its subfolders by name. `subagents` keeps `subagents/` folders,
+    /// which are pruned otherwise (swe's `_walk(subagents=)`).
+    static func walk(_ directory: String, subagents: Bool = false) -> [String] {
         var found: [String] = []
         func visit(_ directory: String) {
             var subdirs: [String] = []
@@ -309,7 +329,7 @@ public struct TranscriptMirror: Sendable, Equatable {
                 let path = directory + "/" + name
                 switch kind(path) {
                 case .directory:
-                    if !name.hasPrefix("."), name != "subagents" { subdirs.append(path) }
+                    if !name.hasPrefix("."), subagents || name != Self.subagents { subdirs.append(path) }
                 case .linkedDirectory:
                     continue
                 case .file where name.hasSuffix(".jsonl") && !name.hasPrefix("."):
@@ -348,15 +368,17 @@ public struct TranscriptMirror: Sendable, Equatable {
     /// `homes` leaves out (one no profile registers). The scan never reads
     /// such a home but swe's pass does, so its sessions are live for
     /// `pruned`. Each is walked as swe walks a home (`_walk` over its
-    /// resolved `projects/`, `sessions/` and `archived_sessions/`).
-    func liveInUnlistedHomes() -> Set<SessionIdentity> {
+    /// resolved `projects/`, `sessions/` and `archived_sessions/`;
+    /// `subagents` keeps Claude's `subagents/` folders, as the ledger's
+    /// live walk does).
+    func liveInUnlistedHomes(subagents: Bool = false) -> Set<SessionIdentity> {
         var live = Set<SessionIdentity>()
         for harness in Self.harnesses {
             let listed = Set(homes.filter { $0.harness == harness }.map { Self.resolved($0.home) })
             let subdirs = harness == "claude" ? ["projects"] : ["sessions", "archived_sessions"]
             for home in accountHomes(harness) where !listed.contains(Self.resolved(home)) {
                 for sub in subdirs {
-                    for path in Self.walk(Self.resolved(home.appending(path: sub))) {
+                    for path in Self.walk(Self.resolved(home.appending(path: sub)), subagents: subagents) {
                         live.insert(SessionIdentity(harness: harness, path: path))
                     }
                 }
@@ -407,11 +429,18 @@ public struct TranscriptMirror: Sendable, Equatable {
     /// session is dropped before any lookup (a copy keeps its source's
     /// file name), then again once its source path is known. A copy with
     /// no known source, or one that points inside the root, is left alone.
-    public func pruned(live: Set<SessionIdentity>, known: (String) -> Bool = { _ in false }) -> [Pruned] {
+    ///
+    /// `subagents` also returns the copies of Claude subagent transcripts
+    /// (`Copy.isSubagent`), for the ledger, which counts their usage under
+    /// the parent session from the lines themselves. A subagent file's
+    /// name holds no session uuid, so its identity is its own path: its
+    /// copy is a candidate only while that file is gone.
+    public func pruned(live: Set<SessionIdentity>, known: (String) -> Bool = { _ in false },
+                       subagents: Bool = false) -> [Pruned] {
         guard let real = resolvedRoot else { return [] }
-        let found = copies()
+        let found = copies(subagents: subagents)
         guard !found.isEmpty else { return [] }
-        let live = live.union(liveInUnlistedHomes())
+        let live = live.union(liveInUnlistedHomes(subagents: subagents))
         let manifest = manifest()
         // swe records `realpath` forms, which keep `/private`; the app's
         // resolution drops it. A key inside the root in either form is the

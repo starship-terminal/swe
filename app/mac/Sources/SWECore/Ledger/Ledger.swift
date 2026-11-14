@@ -466,13 +466,19 @@ public actor Ledger {
             // manifest lost has two possible sources; the one the index
             // already holds a row for is preferred, as swe prefers it.
             let store = self.store
+            // Claude subagent transcripts come too: their usage counts
+            // under the parent session while they are live (every line
+            // carries its `sessionId`), so their copies are read under the
+            // same rule. Search never indexes a live one, so it never sees
+            // their copies either.
             let pruned = mirror.pruned(live: live, known: { [indexer] path in
                 if let indexer { return (try? indexer.store.fileRow(for: path)) != nil }
                 return (try? store.cursor(for: path)) != nil
-            })
+            }, subagents: true)
             try await scanCopies(pruned, mirror: mirror, seen: &seen, report: &report)
             if let indexer {
-                let counts = SearchMirror.indexCopies(indexer: indexer, pruned: pruned,
+                let counts = SearchMirror.indexCopies(indexer: indexer,
+                                                      pruned: pruned.filter { !$0.copy.isSubagent },
                                                       shouldStop: { Task.isCancelled })
                 report.filesIndexed += counts.indexed
                 // As a live file's failed index read does.

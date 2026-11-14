@@ -342,9 +342,13 @@ def _scan_copies(store: LedgerStore, home: Path, live: set[tuple[str, str]],
 
     # The walk search's copy pass makes (``_copy_trees``, ``_walk``): each
     # harness's tree then each account's, linked trees left out, hidden
-    # names and ``subagents/`` pruned, linked files resolved.
+    # names pruned, linked files resolved. Unlike search it keeps
+    # ``subagents/``: a Claude subagent transcript's usage is counted, under
+    # its parent session (every line carries the parent's ``sessionId``),
+    # while it is live, so its copy is read under the same rule. A subagent
+    # file's name holds no session uuid, so its identity is its own path.
     for harness, tree in search_writer._copy_trees(real_root):
-        for path in search_writer._walk(Path(tree)):
+        for path in search_writer._walk(Path(tree), subagents=True):
             # A copy keeps its source's file name, so a session id in it
             # settles liveness before any lookup.
             if (not path.startswith(real_root + os.sep)

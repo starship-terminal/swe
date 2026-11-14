@@ -1344,9 +1344,11 @@ def _resolved(real_dir: str, entry: os.DirEntry) -> str:
     return os.path.join(real_dir, entry.name)
 
 
-def _walk(root: Path, suffix: str = ".jsonl") -> list[str]:
+def _walk(root: Path, suffix: str = ".jsonl", *, subagents: bool = False) -> list[str]:
     """Resolved ``*<suffix>`` paths under ``root``: hidden entries and
     ``subagents`` directories pruned, as the Swift source table does.
+    ``subagents`` keeps those directories: the ledger reads the mirror's
+    copies of Claude subagent transcripts, which search never indexes.
 
     ``os.walk``'s order and rules: a directory's files by name, then its
     subdirectories by name; a symlinked directory is listed but not
@@ -1362,7 +1364,7 @@ def _walk(root: Path, suffix: str = ".jsonl") -> list[str]:
             except OSError:
                 is_dir = False
             if is_dir:
-                if not entry.name.startswith(".") and entry.name != "subagents":
+                if not entry.name.startswith(".") and (subagents or entry.name != "subagents"):
                     subdirs.append(entry)
             elif entry.name.endswith(suffix) and not entry.name.startswith("."):
                 found.append(_resolved(real_dir, entry))
