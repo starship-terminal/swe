@@ -471,9 +471,18 @@ Examples
   swe session index --on|--off Whether the remote hub keeps the index current
   swe session index --status   What the index holds, without a pass
   swe session mirror           Copy Claude Code and Codex transcripts into ~/.swe so they outlive
-                                            the harnesses' 30-day pruning (nothing is ever deleted)
+                                            the harnesses' 30-day pruning (a pass never deletes a copy)
   swe session mirror --on|--off Whether the hub and swe session index keep mirroring (default on)
   swe session mirror --status  What the mirror holds, without a pass
+  swe session mirror --purge=&lt;id&gt; Delete one mirrored session's copies, backups and manifest
+                                            entries, by session id or Codex thread id (never a #); lists the
+                                            files and asks first (--yes skips the prompt). An id in two
+                                            homes takes --account=&lt;id|default&gt; (the account's id in
+                                            ~/.swe/accounts/&lt;vendor&gt;/&lt;id&gt;/home, or its account_home path)
+  swe session mirror --sweep-tmp Remove temp files a crashed copy or restore left over a day ago
+  swe session restore &lt;N|id&gt;   Put a mirrored transcript back where its harness kept it, so the
+                                            session resumes again; never overwrites an existing file
+                                            (an id in two homes takes --account=&lt;id|default&gt;)
 
 Flags
   --agent=&lt;name&gt;               Filter by agent (claude, codex, opencode, droid, ...)
@@ -504,6 +513,8 @@ Examples
   swe session 30 -q refactor
   swe session index --on
   swe session mirror --json
+  swe session restore 3
+  swe session mirror --purge=11111111-2222-3333-4444-555555555555
 </code></pre>
 <h3 id="swe-report"><a class="anchor" href="#swe-report"></a><code>swe report</code></h3>
 <p><em>Summarize coding sessions and manage follow-ups</em></p>

@@ -12,6 +12,8 @@ Three source kinds cover every parser the registry knows:
 
 - ``JsonlTailSource`` — incremental byte-offset reads over a transcript
   file (claude, codex, pi, cursor, droid, grok, freebuff).
+  ``MirrorCopySource`` reads swe's mirror copy the same way when the
+  harness deleted the transcript, and never tails it.
 - ``OpencodeSource`` — SQLite ``part`` rows with a ``time_created``
   cursor, plus opencode 2.x ``session_message`` rows with a ``seq``
   cursor (opencode, kilo share the drizzle schema).
@@ -936,6 +938,45 @@ class JsonlTailSource:
         return size
 
 
+class MirrorCopySource(JsonlTailSource):
+    """The chat of a session whose harness deleted its transcript, read
+    from swe's mirror copy (``sessions/transcript_mirror.py``).
+
+    Read-only: it reads what the copy held when the source was made and
+    then nothing more, so nothing is ever tailed from it, and the session
+    has no resume flags, so no writer attaches. A restored session moves
+    to its live file through ``TailManager._reresolve``, continuing after
+    the last line this source read."""
+
+    read_only = True
+
+    def __init__(self, path: Path, tool_name: str) -> None:
+        super().__init__(path, tool_name)
+        try:
+            self._end = path.stat().st_size
+        except OSError:
+            self._end = 0
+
+    def poll(self) -> list[dict]:
+        if self.offset >= self._end:
+            return []
+        return super().poll()
+
+
+def mirror_copy_path(session: Session) -> Path | None:
+    """The mirror copy a read of ``session`` falls back to, by the rule
+    ``reports.transcripts.read_transcript`` uses (``find_copy``). Only for
+    reads: callers asking about the live transcript (attach, adoption,
+    activity times) use ``resolve_jsonl_path``, which never returns a
+    copy."""
+    from swe.sessions import transcript_mirror
+
+    if session.tool_name not in transcript_mirror.MIRRORED:
+        return None
+    return transcript_mirror.find_copy(
+        session.tool_name, session.session_id, session.account_home)
+
+
 def _completed(data: dict) -> bool:
     """Whether an opencode 2.x assistant row has finished streaming."""
     times = data.get("time")
@@ -1565,10 +1606,15 @@ def _devin_token(session_id: str) -> tuple | None:
 
 
 def make_source(session: Session) -> "JsonlTailSource | OpencodeSource | SnapshotSource | None":
-    """A live source for ``session``, or None when nothing is readable."""
+    """A live source for ``session``, or None when nothing is readable.
+    A transcript the harness deleted reads from swe's mirror copy,
+    read-only (``MirrorCopySource``)."""
     path = resolve_jsonl_path(session)
     if path is not None:
         return JsonlTailSource(path, session.tool_name)
+    copy = mirror_copy_path(session)
+    if copy is not None:
+        return MirrorCopySource(copy, session.tool_name)
     db = _OPENCODE_DBS.get(session.tool_name)
     if db is not None and session.session_id:
         db_path = expand_user(db)
@@ -1587,8 +1633,11 @@ def _cursor_path(cursors_dir: Path, key: str) -> Path:
 
 
 def _resolve_stamp(session: Session) -> tuple:
-    """What a transcript path was resolved from; see ``_may_have_moved``."""
-    return (session.session_id, session.account_home, session.timestamp)
+    """What a transcript path was resolved from; see ``_may_have_moved``.
+    ``mirrored`` is in it so a restore (the flag clears, nothing else
+    moves) re-resolves to the live file at once."""
+    return (session.session_id, session.account_home, session.timestamp,
+            bool(getattr(session, "mirrored", False)))
 
 
 class Tailer:
@@ -1935,7 +1984,10 @@ class TailManager:
             return False
         path = self._source_path(tailer.source)
         same_file = stamp[:2] == tailer.resolved_stamp[:2]
-        if session.tool_name == "claude" and same_file and path is not None:
+        # A mirror copy keeps its source's mtime, so its stat would say
+        # "nothing moved" right after a restore.
+        if session.tool_name == "claude" and same_file and path is not None \
+                and not getattr(tailer.source, "read_only", False):
             try:
                 if path.stat().st_mtime * 1000 >= session.timestamp:
                     tailer.resolved_stamp = stamp

@@ -6,9 +6,9 @@ import Testing
 /// transcript the harness pruned from swe's read-only copy, marked
 /// `mirrored`. `swe-session-mirrored.json` is real `swe session 5 --json`
 /// output from a throwaway HOME (one live session, one mirrored, its source
-/// deleted after `swe session mirror`). `swe-session-restore.json` is built
-/// to the shape docs/json-contracts.md gives `swe session restore --json`
-/// in the restore PR, since the command is not merged yet.
+/// deleted after `swe session mirror`). `swe-session-restore.json` is real
+/// `swe session restore <id> --account=default --json` output from the
+/// same kind of home, its temp path replaced by `/tmp/swe-fixture-home`.
 @Suite struct SessionMirroredTests {
     private func client(_ name: String) throws -> (SweClient, FakeRunner) {
         let runner = FakeRunner(.init(status: 0, stdout: try fixture(name), stderr: ""))
@@ -76,13 +76,16 @@ import Testing
         #expect(SessionRestore.success(restored).hasPrefix("Restored the transcript to "))
     }
 
+    /// What swe printed for a second restore of the same session (its
+    /// transcript is live again), exit 1 and stdout empty.
     @Test func aRefusalSaysWhatSweSaid() async throws {
-        let runner = FakeRunner(.init(status: 1, stdout: Data(),
-                                      stderr: "\u{1B}[31mNot restored: a file already sits at the target\u{1B}[0m\n"))
+        let said = "Claude Code session 11111111-2222-3333-4444-555555555555 is not mirrored: its harness "
+            + "still has the transcript, so there is nothing to restore."
+        let runner = FakeRunner(.init(status: 1, stdout: Data(), stderr: "\u{1B}[31m\(said)\u{1B}[0m\n"))
         await #expect {
             _ = try await SweClient(runner: runner).restoreSession(id: "s", accountHome: nil)
         } throws: { error in
-            SessionRestore.failure(error) == "Couldn't restore: Not restored: a file already sits at the target"
+            SessionRestore.failure(error) == "Couldn't restore: \(said)"
         }
     }
 

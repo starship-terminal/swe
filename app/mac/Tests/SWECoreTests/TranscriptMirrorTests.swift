@@ -76,6 +76,18 @@ import Testing
                 == ["claude/-p/a.jsonl", "codex/2026/09/01/r.jsonl", "accounts/claude/work/-q/e.jsonl"])
     }
 
+    /// swe's `_copy_trees`: a tree behind a link reads as absent, so one
+    /// account's copies are never filed twice.
+    @Test func aLinkedAccountsFolderIsNotRead() throws {
+        let h = try H()
+        let elsewhere = h.temp.path("elsewhere")
+        try h.write("{}\n", to: elsewhere.appending(path: "claude/work/-q/e.jsonl"))
+        try h.write("{}\n", to: h.mirrorRoot.appending(path: "claude/-p/a.jsonl"))
+        try FileManager.default.createSymbolicLink(at: h.mirrorRoot.appending(path: "accounts"),
+                                                   withDestinationURL: elsewhere)
+        #expect(h.mirror.copies().map(\.rel) == ["claude/-p/a.jsonl"])
+    }
+
     @Test func onlyCopiesOfGoneSourcesNoLiveFileCarriesArePruned() throws {
         let h = try H()
         let live = try h.claude(H.claudeID, "a")

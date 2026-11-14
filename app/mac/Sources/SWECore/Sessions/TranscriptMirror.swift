@@ -243,8 +243,9 @@ public struct TranscriptMirror: Sendable, Equatable {
     /// Every copy under the root, in swe's walk order (`_copy_trees`, then
     /// `_walk`): each harness's own folder, then each account folder under
     /// `accounts/<harness>/`. Hidden names and `subagents/` folders are
-    /// pruned, a linked folder is not entered, and a copy outside the root
-    /// (a link pointing elsewhere) is left out.
+    /// pruned, a linked folder is not entered (a linked tree, or one under
+    /// a linked `accounts/`, is not read at all), and a copy outside the
+    /// root (a link pointing elsewhere) is left out.
     public func copies() -> [Copy] {
         guard let real = resolvedRoot else { return [] }
         var trees: [(String, String)] = Self.harnesses.map { ($0, real + "/" + $0) }
@@ -257,7 +258,10 @@ public struct TranscriptMirror: Sendable, Equatable {
             }
         }
         var out: [Copy] = []
-        for (harness, tree) in trees {
+        // A linked tree, or one behind a link, reads as absent, as swe's
+        // `_copy_trees` and the listing read it: a link must never file
+        // one account's copies twice.
+        for (harness, tree) in trees where Self.resolved(URL(fileURLWithPath: tree)) == tree {
             for path in Self.walk(tree) where path.hasPrefix(real + "/") {
                 out.append(Copy(harness: harness, path: path, rel: String(path.dropFirst(real.count + 1))))
             }
