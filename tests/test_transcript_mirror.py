@@ -775,8 +775,9 @@ class ReadTests(MirrorCase):
 
 
 class SearchTests(MirrorCase):
-    """The mirror leaves the search index exactly as it was: it writes no
-    row for a copy and removes none because of one."""
+    """The mirror's side of search: no row ever names a copy, and a lost
+    manifest changes no row. The copy rule itself is pinned in
+    ``tests/test_search_mirror.py``."""
 
     def rows(self) -> list[tuple]:
         import sqlite3
@@ -826,12 +827,13 @@ class SearchTests(MirrorCase):
         self.assertEqual(self.rows(), before)
         self.assertEqual(len(list(self.mirror_root.rglob("*.jsonl"))), 1)
 
-    def test_a_copy_of_a_session_the_index_never_read_is_not_indexed(self):
+    def test_a_copy_of_a_session_the_index_never_read_is_indexed_under_its_source(self):
         claude = self.claude()
         mirror.run_pass(self.home)
         claude.unlink()
         writer.run_pass(self.home)
-        self.assertEqual(self.sessions_count(), 0)
+        self.assertEqual(self.sessions_count(), 1)
+        self.assertEqual([r[0] for r in self.rows()], [str(claude)])
 
     def test_the_index_schema_is_untouched(self):
         self.claude()
