@@ -22,6 +22,7 @@ Every test runs in a throwaway HOME, with clones off so the streamed copy
 path is what runs everywhere.
 """
 
+import functools
 import json
 import os
 import shutil
@@ -43,6 +44,7 @@ THREAD = "0199aaaa-bbbb-cccc-dddd-eeeeffff0001"
 STEM = f"rollout-2026-09-01T10-00-00-{THREAD}"
 LATER_STEM = f"rollout-2026-09-03T10-00-00-{THREAD}"
 MTIME = 1_790_000_000
+INDEXER = writer.Indexer  # the class, before small_buffer swaps in a partial
 
 
 def claude_lines(session_id, *prompts, start=0):
@@ -326,10 +328,18 @@ class LiveSessionsTests(MirrorSearchCase):
                    mtime=MTIME + 9)
 
     def view(self, live: set[str]):
-        files = [r for r in self.files() if r[0] in live]
-        text = [r for r in self.messages_text() if r[0] in live]
+        """Everything filed for a live session, under any path: its rows,
+        text and hits. A row a copy put in for a live session under some
+        other path shows here too."""
+        ids = {(h, writer.transcript_identity(h, p)) for p in live
+               for h in ("claude", "codex") if f"/.{h}/" in p}
+
+        def mine(path):
+            return any((h, writer.transcript_identity(h, path)) in ids for h in ("claude", "codex"))
+        files = [r for r in self.files() if mine(r[0])]
+        text = [r for r in self.messages_text() if mine(r[0])]
         hits = {q: sorted((h.session_id, h.file_path, h.snippet)
-                          for h in search_index.search(self.home, q) if h.file_path in live)
+                          for h in search_index.search(self.home, q) if mine(h.file_path))
                 for q in self.QUERIES}
         return files, text, hits
 
@@ -572,6 +582,279 @@ class ForgetTests(MirrorSearchCase):
     def test_it_never_creates_an_index(self):
         self.assertEqual(writer.forget_session(self.home, "claude", CLAUDE_ID), 0)
         self.assertFalse(search_index.index_path(self.home).exists())
+
+
+class _Boundaries:
+    """Records what a reader sees after every commit a pass makes: the
+    session rows of one identity and whether a word is still found."""
+
+    COMMITS = ("commit_file", "stage_messages", "retire", "remove_rows", "remove_file")
+
+    def __init__(self, case, word, agent="claude"):
+        self.case, self.word, self.agent, self.seen = case, word, agent, []
+        self.patches = []
+        for name in self.COMMITS:
+            real = getattr(writer.Store, name, None)
+            if real is None:
+                continue
+            self.patches.append(mock.patch.object(writer.Store, name, self._wrap(real)))
+
+    def _wrap(self, real):
+        def call(store, *args, **kwargs):
+            out = real(store, *args, **kwargs)
+            self.look()
+            return out
+        return call
+
+    def look(self):
+        conn = sqlite3.connect(search_index.index_path(self.case.home))
+        try:
+            count = conn.execute("SELECT count(*) FROM sessions WHERE agent = ?",
+                                 (self.agent,)).fetchone()[0]
+        finally:
+            conn.close()
+        self.seen.append((count, bool(search_index.search(self.case.home, self.word))))
+
+    def __enter__(self):
+        for patch in self.patches:
+            patch.start()
+        return self
+
+    def __exit__(self, *exc):
+        for patch in self.patches:
+            patch.stop()
+
+
+def small_buffer(budget=60):
+    """Passes whose whole reads commit every ``budget`` characters, as a
+    transcript of hundreds of MB does at the real 32 MiB budget."""
+    return mock.patch.object(writer, "Indexer", functools.partial(writer.Indexer,
+                                                                  buffer_budget=budget))
+
+
+class StagedReadTests(MirrorSearchCase):
+    """A copy read in many commits never shows a second session or a
+    prefix in place of a complete row, at any commit boundary or after
+    the read dies (review thread 4574590429)."""
+
+    # The old row's last words: a prefix in its place would lose them.
+    PROMPTS = tuple(f"kestrel question {n} " + "x" * 40 for n in range(11)) + (
+        "kittiwake last old words",)
+
+    def indexed_then_grown_and_pruned(self):
+        source = self.claude(CLAUDE_ID, *self.PROMPTS)
+        self.index()
+        self.grow(source, CLAUDE_ID, *(f"pelican reply {n} " + "y" * 40 for n in range(12)),
+                  mtime=MTIME + 100)
+        self.mirror_only()
+        source.unlink()
+        return source
+
+    def live_messages(self) -> int:
+        return self.db().execute(
+            "SELECT count(*) FROM messages m JOIN sessions s ON s.id = m.session_row_id"
+        ).fetchone()[0]
+
+    def test_replacing_a_complete_row_shows_one_complete_session_at_every_commit(self):
+        self.indexed_then_grown_and_pruned()
+        with small_buffer(), _Boundaries(self, "kittiwake") as seen:
+            self.index()
+        self.assertGreater(len(seen.seen), 2)  # it really committed in pieces
+        self.assertTrue(all(state == (1, True) for state in seen.seen), seen.seen)
+        self.assertEqual(self.hits("pelican"), [CLAUDE_ID])
+        self.assertEqual(self.session_rows()[0][3], 48)
+        self.assertEqual(self.live_messages(), 48)
+
+    def test_a_newer_copy_in_another_folder_never_shows_beside_the_old_row(self):
+        older = self.claude(CLAUDE_ID, *self.PROMPTS, folder="-work-a")
+        self.index()
+        newer = write_jsonl(self.home / ".claude/projects/-work-b" / f"{CLAUDE_ID}.jsonl",
+                            claude_lines(CLAUDE_ID, *self.PROMPTS, "pelican tail"), MTIME + 100)
+        self.mirror_only()
+        older.unlink(), newer.unlink()
+        with small_buffer(), _Boundaries(self, "kittiwake") as seen:
+            self.index()
+        self.assertGreater(len(seen.seen), 2)
+        self.assertTrue(all(state == (1, True) for state in seen.seen), seen.seen)
+        self.assertEqual([r[2] for r in self.session_rows()], [str(newer)])
+
+    def test_a_read_that_dies_midway_leaves_the_old_row_as_it_was(self):
+        self.indexed_then_grown_and_pruned()
+        before, text = self.files(), self.messages_text()
+        real = INDEXER._flush
+        calls = []
+
+        def dying(indexer, pending, stat):
+            calls.append(1)
+            if len(calls) == 3:
+                raise KeyboardInterrupt  # the hub stopped mid-file
+            return real(indexer, pending, stat)
+        with small_buffer(), mock.patch.object(INDEXER, "_flush", dying):
+            with self.assertRaises(KeyboardInterrupt):
+                self.index()
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.messages_text(), text)
+        # The next pass finishes it, with no message read twice.
+        with small_buffer():
+            self.index()
+        self.assertEqual(self.hits("pelican"), [CLAUDE_ID])
+        self.assertEqual(self.live_messages(), 48)
+
+    def test_a_source_restored_mid_read_stops_the_read(self):
+        # The transcript comes back while its copy is being read: the copy
+        # no longer speaks for it, so nothing the read did may land.
+        source = self.indexed_then_grown_and_pruned()
+        copy = self.mirror_root / "claude/-work-proj" / source.name
+        before, text = self.files(), self.messages_text()
+        real = INDEXER._flush
+        calls = []
+
+        def restoring(indexer, pending, stat):
+            calls.append(1)
+            if len(calls) == 2:
+                shutil.copy2(copy, source)
+            return real(indexer, pending, stat)
+        with small_buffer(), mock.patch.object(INDEXER, "_flush", restoring), \
+                mock.patch.object(writer, "sources", return_value=[]):
+            self.index()
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.messages_text(), text)
+
+    def test_pieces_left_by_a_killed_pass_are_never_counted(self):
+        # A kill gives no chance to clean up: the staged pieces stay, and
+        # the next whole read must not count them.
+        self.indexed_then_grown_and_pruned()
+        real = INDEXER._flush
+        calls = []
+
+        def killed(indexer, pending, stat):
+            calls.append(1)
+            if len(calls) == 3:
+                raise SystemExit
+            return real(indexer, pending, stat)
+        with small_buffer(), mock.patch.object(INDEXER, "_flush", killed), \
+                mock.patch.object(writer.Store, "discard_staged", create=True,
+                                  side_effect=lambda *a: None):
+            with self.assertRaises(SystemExit):
+                self.index()
+        self.assertEqual(len(self.session_rows()), 1)
+        with small_buffer():
+            self.index()
+        self.assertEqual(self.session_rows()[0][3], 48)
+        self.assertEqual(self.live_messages(), 48)
+
+
+class MovedSessionTests(MirrorSearchCase):
+    """A session read from a copy at one path that comes back live at
+    another is counted once (review thread 4574590435)."""
+
+    def copy_row_at_a(self):
+        a = self.claude(CLAUDE_ID, "first question", folder="-work-a")
+        self.mirror_only()
+        a.unlink()
+        self.index()
+        self.assertEqual([r[2] for r in self.session_rows()], [str(a)])
+        return a
+
+    def resumed_at_b(self):
+        return write_jsonl(self.home / ".claude/projects/-work-b" / f"{CLAUDE_ID}.jsonl",
+                           claude_lines(CLAUDE_ID, "first question", "plover resumed"),
+                           MTIME + 100)
+
+    def test_a_live_read_retires_the_copy_row_in_the_same_commit(self):
+        self.copy_row_at_a()
+        b = self.resumed_at_b()
+        with _Boundaries(self, "first") as seen:
+            self.index()
+        self.assertTrue(seen.seen)
+        self.assertTrue(all(state == (1, True) for state in seen.seen), seen.seen)
+        self.assertEqual([r[2] for r in self.session_rows()], [str(b)])
+
+    def test_a_row_the_mirror_blind_writer_added_retires_the_copy_row_next_pass(self):
+        self.copy_row_at_a()
+        b = self.resumed_at_b()
+        self.index_live_only()
+        self.assertEqual(len(self.session_rows()), 2)  # the Swift writer's double
+        self.index()
+        self.assertEqual([r[2] for r in self.session_rows()], [str(b)])
+        self.assertEqual(writer.status(self.home)["sessions_by_agent"], {"claude": 1})
+
+    def test_the_double_is_gone_after_the_second_path_is_pruned_too(self):
+        self.copy_row_at_a()
+        b = self.resumed_at_b()
+        self.index_live_only()
+        self.mirror_only()
+        b.unlink()
+        self.index()
+        self.assertEqual([r[2] for r in self.session_rows()], [str(b)])
+        self.assertEqual(self.hits("plover"), [CLAUDE_ID])
+        self.index()
+        self.assertEqual(len(self.session_rows()), 1)
+
+    def test_a_row_read_from_a_live_file_is_never_retired_by_a_live_sibling(self):
+        # Never worse than no mirror: with no mirror at all the old row
+        # under the pruned path stays beside the live one, so it stays.
+        a = self.claude(CLAUDE_ID, "first question", folder="-work-a")
+        self.index()
+        a.unlink()
+        self.resumed_at_b()
+        self.index()
+        self.assertEqual(len(self.session_rows()), 2)
+
+
+class ForgetRaceTests(MirrorSearchCase):
+    def copy_row(self):
+        source = self.claude(CLAUDE_ID, "first question")
+        self.mirror_only()
+        copy = self.mirror_root / "claude/-work-proj" / source.name
+        source.unlink()
+        self.index()
+        return source, copy
+
+    def forget_while(self, act):
+        """``forget_session`` with ``act`` run right after it first finds
+        the row's path gone, before its delete, as the Mac writer (which
+        takes no index.lock) or a restore can."""
+        real = os.path.lexists
+        done = []
+
+        def interleaved(path):
+            out = real(path)
+            if not out and not done and CLAUDE_ID in str(path):
+                done.append(1)
+                act()
+            return out
+        with mock.patch.object(writer.os.path, "lexists", interleaved):
+            return writer.forget_session(self.home, "claude", CLAUDE_ID)
+
+    def test_a_transcript_restored_and_reindexed_meanwhile_keeps_its_row(self):
+        source, copy = self.copy_row()
+
+        def restore_grown():
+            shutil.copy2(copy, source)
+            self.grow(source, CLAUDE_ID, "plover restored", mtime=MTIME + 100)
+            self.index_live_only()
+        self.assertEqual(self.forget_while(restore_grown), 0)
+        self.assertEqual(self.hits("plover"), [CLAUDE_ID])
+
+    def test_a_transcript_restored_meanwhile_keeps_its_row_even_unchanged(self):
+        source, copy = self.copy_row()
+        self.assertEqual(self.forget_while(lambda: shutil.copy2(copy, source)), 0)
+        self.assertEqual(self.hits("first"), [CLAUDE_ID])
+
+
+class ForgetByPathTests(MirrorSearchCase):
+    def test_a_transcript_named_without_a_session_id_is_forgotten_by_its_path(self):
+        notes = write_jsonl(self.home / ".codex/sessions/2026/09/01/notes.jsonl",
+                            codex_lines("", "redshank notes"))
+        self.mirror_only()
+        notes.unlink()
+        self.index()
+        self.assertEqual(len(self.hits("redshank")), 1)
+        self.assertEqual(writer.forget_session(self.home, "codex", "notes"), 0)
+        self.assertEqual(writer.forget_session(self.home, "codex", "notes",
+                                               source_path=str(notes)), 1)
+        self.assertEqual(self.hits("redshank"), [])
 
 
 class CostTests(MirrorSearchCase):

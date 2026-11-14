@@ -49,6 +49,14 @@ the same row to either writer. The rule, in short:
   (mtime and size at least the copy's), and only when it holds at least
   as much as every row it would stand beside; those rows are dropped in
   the same commit. Anything else leaves the index as it is.
+- A read in pieces is staged on the session search already shows and
+  switched in its final commit, so no commit shows two sessions or a
+  prefix in place of a complete row.
+- A live file's read retires the rows a copy put in for its session under
+  other, gone paths (``mirror_copy:`` marks in ``meta``); rows the index
+  read from live files are never retired that way.
+- Every delete re-checks, inside its transaction, that each row is
+  unchanged and its path still gone: the Mac writer takes no lock.
 """
 
 from __future__ import annotations
@@ -96,6 +104,13 @@ LOCK_FILE = "index.lock"
 # skips is unchanged. Written only under ``index.lock``.
 PRINTS_FILE = "prints.json"
 PRINT_SAMPLE = 4096
+# ``meta`` key prefix marking a ``files`` row a mirror copy put in:
+# ``mirror_copy:<path>`` = ``"<agent> <session row id>"`` (#1918).
+COPY_MARK = "mirror_copy:"
+
+
+def copy_mark_key(path: str) -> str:
+    return COPY_MARK + path
 
 TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -248,6 +263,11 @@ def _empty_database(path: Path) -> None:
             with conn:
                 for name in names:
                     conn.execute(f'DELETE FROM "{name}"')
+                # Marks of rows a mirror copy put in name rows now gone.
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                                " AND name = 'meta'").fetchone() is not None:
+                    conn.execute("DELETE FROM meta WHERE key >= ? AND key < ?",
+                                 (COPY_MARK, COPY_MARK[:-1] + chr(ord(COPY_MARK[-1]) + 1)))
         finally:
             conn.close()
     except sqlite3.Error:
@@ -439,7 +459,10 @@ class Store:
                     session_row_id: int | None = None,
                     mark: tuple[str, "containers.DevinMark"] | None = None,
                     expected_mtime: float | None = None,
-                    drop: "list[FileRow] | None" = None) -> bool:
+                    drop: "list[FileRow] | None" = None,
+                    adopt: tuple[int, int] | None = None,
+                    gone: tuple[str, ...] = (),
+                    copy_mark: str | None = None) -> bool:
         """``SearchStore.commitFile``: one transaction, fenced on the
         ``files`` row. False (and nothing written) when the row moved.
         ``mark`` is a Devin session's ``(meta key, mark)``, stored under
@@ -449,7 +472,14 @@ class Store:
         ``drop`` are other files' rows of the same session, read before the
         commit: each is fenced like ``path`` (session, offset and mtime) and
         deleted with its session once the new rows are in, so search never
-        sees the session twice or not at all."""
+        sees the session twice or not at all. ``adopt`` is ``(host, first
+        id)``: messages a staged read parked on the session ``host``
+        (:meth:`stage_messages`) move to the new session here. ``gone``
+        are paths that must still be absent from disk, checked inside the
+        transaction. ``copy_mark`` is the agent of a row read from a mirror
+        copy: the commit records ``mirror_copy:<path>`` so a later live
+        read of the same session elsewhere can retire it; any other commit
+        clears that key, since the row is then the file's own."""
         conn = self.conn
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -459,13 +489,9 @@ class Store:
             ).fetchone() != (expected_mtime,)):
                 conn.execute("ROLLBACK")
                 return False
-            for gone in drop or ():
-                if conn.execute(
-                        "SELECT session_row_id, byte_offset, mtime_ms FROM files WHERE path = ?",
-                        (gone.path,)).fetchone() != (gone.session_row_id, gone.byte_offset,
-                                                     gone.mtime_ms):
-                    conn.execute("ROLLBACK")
-                    return False
+            if not self._unchanged(drop or ()) or any(os.path.lexists(p) for p in gone):
+                conn.execute("ROLLBACK")
+                return False
             if kind == NONE:
                 target = None
             elif kind == EXISTING:
@@ -476,6 +502,9 @@ class Store:
                 # sees the file without a session.
                 if kind == REPLACE and actual is not None and actual[0] is not None:
                     self._delete_session(actual[0])
+            if adopt is not None and target is not None:
+                conn.execute("UPDATE messages SET session_row_id = ?"
+                             " WHERE session_row_id = ? AND id >= ?", (target,) + tuple(adopt))
             if target is not None:
                 for row in rows:
                     cur = conn.execute(
@@ -505,10 +534,16 @@ class Store:
                 " state = 'current', fail_count = 0, failed_mtime_ms = NULL",
                 (path, stat.ino, byte_offset, stat.mtime_ms, stat.size, target),
             )
-            for gone in drop or ():
-                if gone.session_row_id is not None and gone.session_row_id != target:
-                    self._delete_session(gone.session_row_id)
-                conn.execute("DELETE FROM files WHERE path = ?", (gone.path,))
+            for old in drop or ():
+                if old.session_row_id is not None and old.session_row_id != target:
+                    self._delete_session(old.session_row_id)
+                conn.execute("DELETE FROM files WHERE path = ?", (old.path,))
+                conn.execute("DELETE FROM meta WHERE key = ?", (copy_mark_key(old.path),))
+            if copy_mark is not None and target is not None:
+                conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                             (copy_mark_key(path), f"{copy_mark} {target}"))
+            else:
+                conn.execute("DELETE FROM meta WHERE key = ?", (copy_mark_key(path),))
             if mark is not None and mark[1] is None:
                 conn.execute("DELETE FROM meta WHERE key = ?", (mark[0],))
             elif mark is not None and target is not None:
@@ -554,6 +589,130 @@ class Store:
                 " WHERE s.agent IN (" + ",".join("?" for _ in names) + ")", names):
             file_row = FileRow(*row[:9])
             out.setdefault((row[9], transcript_identity(row[9], file_row.path)), []).append(file_row)
+        return out
+
+    def _unchanged(self, rows) -> bool:
+        """Inside a transaction: every row in ``rows`` still holds the
+        session, offset and mtime it was read with."""
+        return all(self.conn.execute(
+            "SELECT session_row_id, byte_offset, mtime_ms FROM files WHERE path = ?",
+            (row.path,)).fetchone() == (row.session_row_id, row.byte_offset, row.mtime_ms)
+            for row in rows)
+
+    def stage_messages(self, path: str, expected: tuple | None, drop, gone: tuple[str, ...],
+                       host: int, rows: list[decode.Row]) -> int | None:
+        """Park part of a staged whole read on ``host``, a session already
+        visible for the same session identity, leaving every ``files`` row
+        as it is. Search keeps seeing one session holding at least what it
+        held. Fenced like :meth:`commit_file` (``path``'s row, ``drop``,
+        ``gone``, and the host still there). Returns the first message id
+        written, or None (nothing written) when anything moved."""
+        conn = self.conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if (self.fence(path) != expected or not self._unchanged(drop)
+                    or any(os.path.lexists(p) for p in gone)
+                    or conn.execute("SELECT 1 FROM sessions WHERE id = ?",
+                                    (host,)).fetchone() is None):
+                conn.execute("ROLLBACK")
+                return None
+            first = None
+            for row in rows:
+                cur = conn.execute(
+                    "INSERT INTO messages(session_row_id, role, ts) VALUES (?, ?, ?)",
+                    (host, row.role, row.ts))
+                conn.execute(
+                    "INSERT INTO messages_fts(rowid, user_text, assistant_text,"
+                    " tool_text, identifiers) VALUES (?, ?, ?, ?, ?)",
+                    (cur.lastrowid, row.user_text, row.assistant_text,
+                     row.tool_text, row.identifiers))
+                first = cur.lastrowid if first is None else first
+            conn.execute("COMMIT")
+            return first
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def discard_staged(self, host: int, first: int) -> None:
+        """Take back what a staged read that will not finish parked on
+        ``host``. Only its own messages: ids from ``first`` on, on that
+        session, which no other writer adds to."""
+        conn = self.conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            ids = [r[0] for r in conn.execute(
+                "SELECT id FROM messages WHERE session_row_id = ? AND id >= ?", (host, first))]
+            for message_id in ids:
+                conn.execute("DELETE FROM messages_fts WHERE rowid = ?", (message_id,))
+                conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def retire(self, keep: FileRow, rows: list[FileRow]) -> bool:
+        """Delete ``rows`` (other files' rows of one session, each under a
+        path gone from disk) because ``keep`` stands for the session. One
+        transaction: ``keep`` and every row must be unchanged since they
+        were read and the paths still gone, or nothing is deleted."""
+        conn = self.conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if (keep.session_row_id is None or not self._unchanged([keep, *rows])
+                    or any(os.path.lexists(r.path) for r in rows)):
+                conn.execute("ROLLBACK")
+                return False
+            for row in rows:
+                if row.session_row_id is not None and row.session_row_id != keep.session_row_id:
+                    self._delete_session(row.session_row_id)
+                conn.execute("DELETE FROM files WHERE path = ?", (row.path,))
+                conn.execute("DELETE FROM meta WHERE key = ?", (copy_mark_key(row.path),))
+            conn.execute("COMMIT")
+            return True
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def remove_rows(self, rows: list[FileRow]) -> int:
+        """Delete each of ``rows`` that, inside one transaction, still holds
+        what it was read with and whose path is still gone; a row another
+        writer replaced meanwhile (a restore it indexed) stays. Returns
+        how many went."""
+        conn = self.conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            removed = 0
+            for row in rows:
+                if not self._unchanged([row]) or os.path.lexists(row.path):
+                    continue
+                if row.session_row_id is not None:
+                    self._delete_session(row.session_row_id)
+                conn.execute("DELETE FROM files WHERE path = ?", (row.path,))
+                conn.execute("DELETE FROM meta WHERE key = ?", (copy_mark_key(row.path),))
+                removed += 1
+            conn.execute("COMMIT")
+            return removed
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def copy_marks(self) -> "dict[tuple[str, str], list[tuple[str, int]]]":
+        """The rows a mirror copy put in (``mirror_copy:<path>`` = ``"<agent>
+        <session row>"``), by session identity: a range seek on ``meta``.
+        A mark speaks only while its session is still the row's."""
+        out: dict[tuple[str, str], list[tuple[str, int]]] = {}
+        for key, value in self.conn.execute(
+                "SELECT key, value FROM meta WHERE key >= ? AND key < ?",
+                (COPY_MARK, COPY_MARK[:-1] + chr(ord(COPY_MARK[-1]) + 1))):
+            agent, _, session = str(value).partition(" ")
+            if agent in mirror.MIRRORED and session.isdigit():
+                path = key[len(COPY_MARK):]
+                out.setdefault((agent, transcript_identity(agent, path)), []).append(
+                    (path, int(session)))
         return out
 
     def remove_file(self, path: str) -> None:
@@ -695,8 +854,18 @@ class _Pending:
     expected: tuple | None = None
     has_expected: bool = False
     # Rows of the same session under other paths, dropped by the final
-    # commit (a mirror copy standing for them, ``index_copy``).
+    # commit (a mirror copy or a live file standing for them).
     drop: list = field(default_factory=list)
+    # Paths that must still be gone at every commit (a copy's source path
+    # and the dropped rows' paths).
+    gone: tuple = ()
+    # The agent, when the bytes come from a mirror copy (``copy_mark``).
+    copy_agent: str | None = None
+    # A staged read parks its pieces on ``host``, a session already visible
+    # for this session identity, from message id ``staged_from`` on, and
+    # switches sessions only in its final commit.
+    host: int | None = None
+    staged_from: int | None = None
 
     def fence(self) -> tuple | None:
         if self.has_expected:
@@ -772,7 +941,7 @@ class Indexer:
 
     def index_file(self, path: str, harness: str, *, document: bool = False,
                    session_id: str | None = None, meta_path: str | None = None,
-                   pair: str | None = None) -> str:
+                   pair: str | None = None, drop: list[FileRow] | None = None) -> str:
         """Read one transcript into the index. Returns what happened:
         ``skip``, ``current``, ``indexed``, ``moved`` (another writer won the
         fence) or ``failed``. ``document`` reads the file as one JSON value
@@ -780,7 +949,10 @@ class Indexer:
         Cursor chat's ``meta.json``: its mtime blends into the stat and its
         fields fill what the transcript never records. ``pair`` is a
         manifest's streamed sidecar (Kiro's ``<uuid>.jsonl``, Grok's
-        ``chat_history.jsonl``): the two read as one, their stat combined."""
+        ``chat_history.jsonl``): the two read as one, their stat combined.
+        ``drop`` are rows a mirror copy put in for this file's session under
+        other, gone paths: they go in the commit that reads this file, or
+        on their own once this file's row is current."""
         if not should_index(path):
             return SKIP
         stat = file_stat(path)
@@ -798,6 +970,11 @@ class Indexer:
         row = self.store.file_row(path)
         need = read_need(row, stat)
         if need in (SKIP, CURRENT):
+            if drop and need == CURRENT and row is not None and row.session_row_id is not None:
+                try:
+                    self.store.retire(row, drop)
+                except sqlite3.Error:
+                    pass  # the next pass tries again
             return need
         # An appended span bigger than the buffer is read whole instead,
         # where mid-read flushes bound the memory it takes. Only the
@@ -812,7 +989,8 @@ class Indexer:
             elif document:
                 committed = self._read_document(path, harness, stat, row, session_id)
             else:
-                committed = self._read(path, harness, stat, row, appending, session_id, overlay)
+                committed = self._read(path, harness, stat, row, appending, session_id, overlay,
+                                       drop=drop)
         except _Moved:
             return "moved"
         except (OSError, sqlite3.Error, ValueError, RecursionError):
@@ -832,14 +1010,16 @@ class Indexer:
         """Read the mirror copy ``copy`` into the index under ``path``, the
         transcript it was copied from, whose file is gone. ``stat`` is the
         copy's and is what the ``files`` row records, so an unchanged copy
-        reads as current next pass. Always a whole read. ``drop`` are the
-        session's rows under other paths, removed in the final commit.
+        reads as current next pass. Always a whole read, staged when it
+        commits in pieces (:meth:`_read`). ``drop`` are the session's rows
+        under other paths, removed in the final commit.
         Returns what :meth:`index_file` returns."""
         need = read_need(row, stat)
         if need in (SKIP, CURRENT):
             return need
         try:
-            committed = self._read(path, harness, stat, row, False, read_path=copy, drop=drop)
+            committed = self._read(path, harness, stat, row, False, read_path=copy, drop=drop,
+                                   copy_agent=harness)
         except _Moved:
             return "moved"
         except (OSError, sqlite3.Error, ValueError, RecursionError):
@@ -933,9 +1113,26 @@ class Indexer:
     def _read(self, path: str, harness: str, stat: FileStat,
               row: FileRow | None, appending: bool, session_id: str | None = None,
               overlay: SessionFields | None = None, read_path: str | None = None,
-              drop: list[FileRow] | None = None) -> bool:
+              drop: list[FileRow] | None = None, copy_agent: str | None = None) -> bool:
         """``read_path``, when given, is the file the bytes come from (a
-        mirror copy); ``path`` stays the key every row is filed under."""
+        mirror copy); ``path`` stays the key every row is filed under.
+
+        A read that drops other rows, or reads a copy, and already has a
+        visible session for its identity (this path's, else a dropped
+        row's) is staged: a piece committed mid-file goes onto that
+        session, every ``files`` row stays as it is, and only the final
+        commit mints the new session, moves the pieces to it and deletes
+        the old rows. So at every commit search sees one session holding
+        at least what it held, and a read that dies leaves exactly that
+        (its pieces are taken back when it can; a kill leaves them on a
+        session the next whole read deletes)."""
+        drop = list(drop or ())
+        host = None
+        if drop or copy_agent is not None:
+            candidates = ([row.session_row_id] if row is not None else []) + [
+                d.session_row_id for d in drop]
+            host = next((c for c in candidates if c is not None), None)
+        gone = ((path,) if copy_agent is not None else ()) + tuple(d.path for d in drop)
         decoder = decode.Decoder(harness)
         with open(read_path or path, "rb") as handle:
             start = 0
@@ -963,16 +1160,26 @@ class Indexer:
                             break
             pending = _Pending(path=path, harness=harness, appending=appending,
                                row=row, decoder=decoder, session_id_hint=session_id,
-                               overlay=overlay, drop=list(drop or ()))
-            end_offset = start
-            for line, end_offset in _lines(handle, start):
-                if not line or not decoder.wants(line):
-                    continue
-                obj = _parse(line)
-                if obj is None:
-                    continue
-                self._record(pending, *decoder.decode_object(obj), stat)
-            committed = self._finish(pending, stat, end_offset)
+                               overlay=overlay, drop=drop, gone=gone, copy_agent=copy_agent,
+                               host=None if appending else host)
+            committed = False
+            try:
+                end_offset = start
+                for line, end_offset in _lines(handle, start):
+                    if not line or not decoder.wants(line):
+                        continue
+                    obj = _parse(line)
+                    if obj is None:
+                        continue
+                    self._record(pending, *decoder.decode_object(obj), stat)
+                committed = self._finish(pending, stat, end_offset)
+            finally:
+                if not committed and pending.staged_from is not None:
+                    # Its pieces would only add to the old session's text;
+                    # take them back. A kill skips this, and the next whole
+                    # read deletes the session they sit on.
+                    with contextlib.suppress(sqlite3.Error):
+                        self.store.discard_staged(pending.host, pending.staged_from)
             # A print proves a prefix of the file at ``path``; a copy's
             # bytes prove nothing about it.
             if committed and read_path is None:
@@ -999,6 +1206,17 @@ class Indexer:
         sentinel so a pass that dies mid-file re-reads it whole."""
         if not pending.messages:
             return
+        if pending.host is not None:
+            first = self.store.stage_messages(
+                pending.path, pending.fence(), pending.drop, pending.gone, pending.host,
+                decode.message_rows(pending.messages))
+            if first is None:
+                raise _Moved()
+            if pending.staged_from is None:
+                pending.staged_from = first
+            pending.messages = []
+            pending.buffered = 0
+            return
         if pending.flushed_session is not None:
             kind = EXISTING
         elif pending.row is not None and pending.row.session_row_id is not None:
@@ -1008,7 +1226,8 @@ class Indexer:
         ok = self.store.commit_file(
             pending.path, pending.fence(), stat, PARTIAL_OFFSET, kind,
             pending.fields(), decode.message_rows(pending.messages),
-            session_row_id=pending.flushed_session)
+            session_row_id=pending.flushed_session, gone=pending.gone,
+            copy_mark=pending.copy_agent)
         if not ok:
             raise _Moved()
         pending.flushed_session = self.store.last_session_row_id
@@ -1025,6 +1244,10 @@ class Indexer:
                        or pending.session_id_hint is not None or pending.decoded > 0)
         fence = pending.fence()
         old = pending.row
+        # Other rows of the session go only with a commit that leaves it a
+        # session here: a read that found none keeps them.
+        keep = {"gone": pending.gone, "copy_mark": pending.copy_agent}
+        extra = {**keep, "drop": pending.drop or None}
         if pending.appending and old is not None:
             if old.session_row_id is not None:
                 existing = store.session(old.session_row_id)
@@ -1040,24 +1263,29 @@ class Indexer:
                     )
                 return store.commit_file(pending.path, fence, stat, end_offset, EXISTING,
                                          None, rows, updating=fields,
-                                         session_row_id=old.session_row_id)
+                                         session_row_id=old.session_row_id, **extra)
             if not has_session:
-                return store.commit_file(pending.path, fence, stat, end_offset, NONE, None, [])
-            return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows)
-        # Other rows of the session go only with a commit that leaves it a
-        # session here: a read that found none keeps them.
-        drop = pending.drop or None
+                return store.commit_file(pending.path, fence, stat, end_offset, NONE, None, [],
+                                         **keep)
+            return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows,
+                                     **extra)
+        if pending.staged_from is not None:
+            # The switch: a new session takes the parked pieces and the
+            # rest, and every old row of the session goes, in one commit.
+            kind = REPLACE if old is not None and old.session_row_id is not None else FRESH
+            return store.commit_file(pending.path, fence, stat, end_offset, kind, fields, rows,
+                                     adopt=(pending.host, pending.staged_from), **extra)
         if pending.flushed_session is not None:
             return store.commit_file(pending.path, fence, stat, end_offset, EXISTING,
                                      None, rows, updating=fields,
-                                     session_row_id=pending.flushed_session, drop=drop)
+                                     session_row_id=pending.flushed_session, **extra)
         if old is not None and old.session_row_id is not None:
             return store.commit_file(pending.path, fence, stat, end_offset, REPLACE, fields,
-                                     rows, drop=drop)
+                                     rows, **extra)
         if not has_session:
-            return store.commit_file(pending.path, fence, stat, end_offset, NONE, None, [])
+            return store.commit_file(pending.path, fence, stat, end_offset, NONE, None, [], **keep)
         return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows,
-                                 drop=drop)
+                                 **extra)
 
     def drain(self) -> int:
         total = 0
@@ -1439,6 +1667,12 @@ def _dominates(stat: FileStat, row: FileRow) -> bool:
     return stat.mtime_ms >= row.mtime_ms and stat.size >= size
 
 
+def _row_stat(row: FileRow) -> FileStat:
+    """What a row was read from, as a stat :func:`_dominates` compares."""
+    size = row.size_bytes if row.size_bytes is not None else max(row.byte_offset, 0)
+    return FileStat(ino=row.ino, mtime_ms=row.mtime_ms, size=size)
+
+
 def _copy_trees(real_root: str) -> list[tuple[str, str]]:
     """``(harness, directory)`` for every tree of copies under the mirror
     root: each mirrored harness's own, then each account's."""
@@ -1478,19 +1712,25 @@ def _index_copies(indexer: "Indexer", home: Path, listed: list[Source], result: 
 
     1. Candidates are its copies whose source path is gone from disk and
        known; the newest (mtime, then path) is the one used.
-    2. Its row under that path covering the copy (:func:`_covers`, which an
-       unchanged copy's own row does) settles it: nothing is read.
-    3. Otherwise every row of the session is fetched (one query per pass).
-       A row at a path that exists means the session is live where this
-       pass does not look: left alone. A row covering the copy: left
-       alone. A row the copy does not dominate (:func:`_dominates`): left
-       alone, since the copy cannot stand for it and both would count.
-    4. Otherwise the copy is read whole under its source path, and the
-       session's rows under other paths are dropped in the same commit.
+    2. Every row of the session (one query per pass, read once). A row at
+       a path that exists means the session is live where this pass does
+       not look: left alone.
+    3. A row covering the copy (:func:`_covers`, which an unchanged copy's
+       own row does) settles it: nothing is read, and the session's other
+       rows that keeper dominates (:func:`_dominates`) are retired in one
+       fenced commit, so a session that came back at another path and was
+       pruned again counts once.
+    4. A row the copy does not dominate: left alone, since the copy cannot
+       stand for it and both would count.
+    5. Otherwise the copy is read whole under its source path, staged when
+       it commits in pieces (:meth:`Indexer._read`), and the session's
+       rows under other paths go in the final commit.
 
-    No row is removed unless a copy at least as new and as long replaces
+    No row is removed unless one at least as new and as long stands for
     it in that commit, so a lost manifest, a stale copy or a failed read
-    can only leave the index as it was."""
+    can only leave the index as it was. The live side lives in
+    :func:`_pass`: a live file's read retires rows a copy put in for its
+    session under other, gone paths (``mirror_copy:`` marks)."""
     root = transcripts_dir_for(home)
     if not root.is_dir():
         return
@@ -1519,7 +1759,9 @@ def _index_copies(indexer: "Indexer", home: Path, listed: list[Source], result: 
                 continue
             groups.setdefault(identity, []).append(_Copy(
                 path=path, key=key, stat=file_stat_of(st), mtime_ns=st.st_mtime_ns))
-    rows_by_identity = None
+    if not groups:
+        return
+    rows_by_identity = indexer.store.session_rows(mirror.MIRRORED)
     for identity in sorted(groups):
         if should_stop is not None and should_stop():
             return
@@ -1527,17 +1769,51 @@ def _index_copies(indexer: "Indexer", home: Path, listed: list[Source], result: 
         best = max(groups[identity], key=lambda c: (c.mtime_ns, c.path))
         result.files += 1
         row = indexer.store.file_row(best.key)
-        if _covers(row, best.stat) or (row is not None and read_need(row, best.stat) == CURRENT):
+        rows = rows_by_identity.get(identity, [])
+        if any(os.path.lexists(r.path) for r in rows):
+            continue  # live where this pass does not look
+        keeper = max((r for r in rows if _covers(r, best.stat)),
+                     key=lambda r: (r.mtime_ms, r.size_bytes or 0, r.path), default=None)
+        if keeper is not None:
+            # Nothing to read. Rows of the session the keeper holds at
+            # least as much as (a session that came back at another path
+            # and was pruned again) go, so it is not counted twice.
+            spare = [r for r in rows if r is not keeper and _dominates(_row_stat(keeper), r)]
+            if spare:
+                with contextlib.suppress(sqlite3.Error):
+                    indexer.store.retire(keeper, spare)
             result.count(CURRENT)
             continue
-        if rows_by_identity is None:
-            rows_by_identity = indexer.store.session_rows(mirror.MIRRORED)
-        others = [r for r in rows_by_identity.get(identity, []) if r.path != best.key]
-        if (any(os.path.lexists(r.path) for r in others)
-                or any(_covers(r, best.stat) or not _dominates(best.stat, r) for r in others)
-                or (row is not None and not _dominates(best.stat, row))):
+        if row is not None and read_need(row, best.stat) == CURRENT:
+            result.count(CURRENT)  # the copy holds no session to file
             continue
+        others = [r for r in rows if r.path != best.key]
+        if (any(not _dominates(best.stat, r) for r in others)
+                or (row is not None and not _dominates(best.stat, row))):
+            continue  # the copy cannot stand for a row it does not hold
         result.count(indexer.index_copy(best.key, best.path, harness, best.stat, row, others))
+
+
+def _copied_rows(store: Store, copied: dict, source: Source) -> list[FileRow] | None:
+    """The rows a mirror copy put in for ``source``'s session under other
+    paths that are gone, while their mark still names their session. A
+    copy never speaks for a session a live file carries, so the live
+    file's commit takes them out (never worse than no mirror, where they
+    would not exist). A row the index read from a live file has no mark
+    and is never in this list."""
+    if not copied or source.harness not in mirror.MIRRORED:
+        return None
+    marks = copied.get((source.harness, transcript_identity(source.harness, source.path)))
+    if not marks:
+        return None
+    out = []
+    for path, session in marks:
+        if path == source.path:
+            continue
+        row = store.file_row(path)
+        if row is not None and row.session_row_id == session and not os.path.lexists(path):
+            out.append(row)
+    return out or None
 
 
 @dataclass
@@ -1641,29 +1917,41 @@ def clear_index(home: Path | None = None) -> None:
         _update_state(home, wipe)
 
 
-def forget_session(home: Path | None, harness: str, session_id: str) -> int:
+def forget_session(home: Path | None, harness: str, session_id: str,
+                   source_path: str | None = None) -> int:
     """Remove the search rows of one Claude Code or Codex session that sit
     under paths no longer on disk, and return how many went. For a
-    deliberate purge of the session's mirror copies: rows a copy put in
-    would otherwise keep a purged session searchable, and no pass removes
-    them on its own (a missing copy proves nothing; see
-    :func:`_index_copies`). A live transcript's rows stay. Never creates
-    the index; raises :class:`IndexBusy` while a pass holds the lock and
+    deliberate purge of the session's mirror copies, called after the
+    copies are unlinked: rows a copy put in would otherwise keep a purged
+    session searchable, and no pass removes them on its own (a missing
+    copy proves nothing; see :func:`_index_copies`). A live transcript's
+    rows stay.
+
+    ``session_id`` is the Claude session id or the Codex thread uuid (or
+    a rollout stem holding it). A transcript whose file name carries no
+    session uuid is its own identity, its source path, so it can only be
+    named by ``source_path`` (the manifest's ``source``); when given,
+    ``source_path`` decides the identity.
+
+    Each row is deleted only if, inside the delete's transaction, it still
+    holds what it was read with and its path is still gone: a transcript
+    restored meanwhile, and indexed by the Mac (which takes no
+    ``index.lock``), keeps its row. Never creates the index; raises
+    :class:`IndexBusy` while a pass holds the lock and
     :class:`IndexUnavailable` for an index at another schema version."""
     home = Path(home) if home is not None else Path.home()
     path = search_index_for(home)
-    if harness not in mirror.MIRRORED or not session_id or not path.exists():
+    name = source_path or session_id
+    if harness not in mirror.MIRRORED or not name or not path.exists():
         return 0
-    identity = (harness, transcript_identity(harness, session_id))
+    identity = (harness, transcript_identity(harness, name))
     with _Lock(path.parent / LOCK_FILE):
         conn = open_index(path)
         try:
             store = Store(conn)
-            gone = [row.path for row in store.session_rows((harness,)).get(identity, [])
+            gone = [row for row in store.session_rows((harness,)).get(identity, [])
                     if not os.path.lexists(row.path)]
-            for row_path in gone:
-                store.remove_file(row_path)
-            return len(gone)
+            return store.remove_rows(gone) if gone else 0
         finally:
             conn.close()
 
@@ -1713,6 +2001,9 @@ def _pass(home: Path, path: Path, should_stop) -> PassResult:
     prints = _load_prints(prints_path)
     try:
         indexer = Indexer(Store(conn), prints=prints)
+        # Rows a mirror copy put in, by session: a live file of one of
+        # these sessions retires them in the commit that reads it.
+        copied = indexer.store.copy_marks()
         for source in listed:
             if should_stop is not None and should_stop():
                 break
@@ -1721,7 +2012,8 @@ def _pass(home: Path, path: Path, should_stop) -> PassResult:
                                             document=source.document,
                                             session_id=source.session_id,
                                             meta_path=source.meta_path,
-                                            pair=source.pair))
+                                            pair=source.pair,
+                                            drop=_copied_rows(indexer.store, copied, source)))
         # After the live files, so a session they carry is never read
         # from a copy (copies are used whether mirroring is on or off,
         # as the listing and reads use them).
