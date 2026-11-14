@@ -1,7 +1,7 @@
 import Foundation
 
 // Kept identical in app/ios/Sources/SWERemote/Hub/ReplyStreams.swift
-// and ported to pages/chat.js's `replyStreams` (FEATURES.md, ported logic).
+// and ported to pages/chat.js's `replyStreams` (docs/ported-logic.md).
 
 /// One `message.delta`'s `data` (#1444): live text for a reply still
 /// being written. The envelope carries no journal seq; `seq` here counts

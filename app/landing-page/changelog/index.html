@@ -213,6 +213,8 @@ rules are unchanged.</p>
 </ul>
 <h3 id="changed"><a class="anchor" href="#changed"></a>Changed</h3>
 <ul>
+<li><p><strong>FEATURES.md is now a feature inventory.</strong> The cross-client matrix became <code>## &lt;Area&gt;</code> sections with one line per feature per surface (CLI, web, iOS, macOS, API or job), each giving its status (<code>stable</code>, <code>beta</code> or <code>planned</code>), entry point and the tests behind it, so QA checks can map onto it. Each client's notes and what it still owes moved onto its own line, and <code>tests/test_features_inventory.py</code> checks the line format and that every test path exists. The table of logic ported between Swift and Python moved to <code>docs/ported-logic.md</code>, and the README links FEATURES.md.</p>
+</li>
 <li><p><strong>Mac Accounts now groups accounts into horizontally scrolling provider columns.</strong>
 Narrow cards keep the plan visible, with usage rings and settings beneath. Click a
 card to smoothly expand its readings; drag provider columns horizontally to save their order.

@@ -16,6 +16,7 @@ The core CLI is stdlib-only with no runtime dependencies. Optional extras: `serv
 | [docs/testing.md](docs/testing.md) | every test suite, coverage, fixtures, the end-to-end checks CI runs |
 | [docs/data-model.md](docs/data-model.md), [docs/json-contracts.md](docs/json-contracts.md) | any store, cache, schema or `--json` shape |
 | [docs/remote-control.md](docs/remote-control.md), [docs/web-app.md](docs/web-app.md) | `swe remote`, the hub, the web app |
+| [FEATURES.md](FEATURES.md), [docs/ported-logic.md](docs/ported-logic.md) | any user-facing feature, or logic written in both Swift and Python |
 | [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md) | the PR process and the changelog |
 
 ## State arrows (status indicators)
@@ -29,7 +30,7 @@ The quiver arrows are the standard status indicator anywhere a state fits the ma
 | green | fully operational |
 | grey | interrupted, maintenance, or unknown |
 
-The canonical mapping lives in the FEATURES.md ported-logic table (`SWECore/Swe/StateArrows.swift` on Mac, `StatusDot` on iOS, `HEALTH_ARROW`/`COMPONENT_ARROW`/`STATUS_ARROW` in `src/swe/webapp/static/`). Each client ships its own copy of the four `state-<color>.svg` files: `app/mac/Sources/SWECore/Resources/`, `app/ios/Assets.xcassets/States/`, `src/swe/webapp/static/`. Keep every copy in step when an arrow changes.
+The canonical mapping lives in the [ported-logic table](docs/ported-logic.md) (`SWECore/Swe/StateArrows.swift` on Mac, `StatusDot` on iOS, `HEALTH_ARROW`/`COMPONENT_ARROW`/`STATUS_ARROW` in `src/swe/webapp/static/`). Each client ships its own copy of the four `state-<color>.svg` files: `app/mac/Sources/SWECore/Resources/`, `app/ios/Assets.xcassets/States/`, `src/swe/webapp/static/`. Keep every copy in step when an arrow changes.
 
 [assets/swe-arrows/](assets/swe-arrows/) holds the source set: `manifest.json` catalogs the normal and pixel arrows, PNG sizes, preview and the original export script. Pair the arrows with text or an accessible description rather than color alone. The preserved export script needs its original workspace and font paths adapted before running locally.
 
@@ -45,10 +46,11 @@ The web app stays inside the Python package because pipx installs and the `swe` 
 
 ### Keeping the clients in step
 
-[FEATURES.md](FEATURES.md) is the cross-client matrix: one row per feature, one column per client, plus the table of logic ported between Swift and Python.
+[FEATURES.md](FEATURES.md) is the feature inventory QA bots map their checks to: `## <Area>` sections of one line per feature per surface, `- **<Name>**: <what the user can do>. Status: stable|beta|planned. Surface: CLI|web|iOS|macOS|API|job. Entry point: <command, route, screen or file>. Tests: <paths, or none>.` [docs/ported-logic.md](docs/ported-logic.md) is the table of logic ported between Swift and Python. `tests/test_features_inventory.py` enforces the line shape, the enums and the test paths.
 
-- A change that adds, ships or drops a user-facing feature updates its row in the same change. Differences between clients go in the row's Notes.
-- Before calling a fix done, check whether the same bug exists on the other clients. Anything in the ported-logic table has the same bug twice by default: fix both in one change, or write what is still owed in the row's Notes.
+- A change that adds, ships or drops a user-facing feature updates its lines in the same change, with real test paths. A feature on several clients gets one line per surface; one missing from a client has no line there, and its other lines say whether that is by design ("Mac-only by design") or not built yet ("No iOS version yet").
+- Status: `stable` is shipped and working; `beta` is shipped with a documented slice missing, named after "Owed:" on the line; `planned` is on a roadmap, not built. Mark anything uncertain with "guessing:" in the description, Entry point or Tests, never in Status or Surface.
+- Before calling a fix done, check whether the same bug exists on the other clients. Anything in the ported-logic table has the same bug twice by default: fix both in one change, or write what is still owed in that row's Notes and as "Owed:" on the feature's line.
 - Per-client build order stays in `app/mac/ROADMAP.md`, `app/ios/ROADMAP.md` and `docs/web-app.md`. FEATURES.md records where each feature stands, not when it was built.
 
 ### The macOS app
@@ -127,7 +129,7 @@ If it works with `PYTHONPATH=src python3 -m swe.cli` but not with `swe`, the ins
 - `harness/registry.py` is the only module that touches `harness.json`. `harness/stars.py` and `harness/archive.py` are compatibility shims: add no state to them.
 - **Code never hardcodes what `harness.json` can say.** `HARNESS_ROOTS` and `PLUGIN_FALLBACK` are read-only fallbacks for harnesses the registry has never heard of; a harness's `capabilities` entry always wins.
 - Within `github/`, only `gh.py` spawns `gh`.
-- `ledger/`, `status/` and the search index writer are ports of `SWECore` Swift code. Keep their rules in step with the Swift side, per the ported-logic table in FEATURES.md.
+- `ledger/`, `status/` and the search index writer are ports of `SWECore` Swift code. Keep their rules in step with the Swift side, per the ported-logic table in [docs/ported-logic.md](docs/ported-logic.md).
 
 ## Conventions
 
