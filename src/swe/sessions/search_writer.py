@@ -34,10 +34,21 @@ written by the app, are never touched.
 
 The same enumeration feeds the transcript mirror
 (:mod:`swe.sessions.transcript_mirror`): the pass hands it :func:`sources`
-before it reads anything. The index itself is untouched by the mirror: no
-mirror copy is read, and no row is written or removed because of one.
-Searching copies of pruned sessions the index never read is a follow-up
-(it needs a rule that cannot double count or leave stale rows).
+before it reads anything, and after the live transcripts it reads the
+copies of sessions the harness pruned (:func:`_index_copies`), so such a
+session stays searchable. A copy's rows are filed under the path its
+source had, never the copy's, so the index still holds one key per
+transcript and a source that comes back (a restore, a backup) reads as
+the same row to either writer. The rule, in short:
+
+- A copy is used only when no live source carries its session (a Claude
+  file's name, a Codex rollout's thread uuid) and its source path is gone.
+- Per session, the newest copy (mtime, then path) is the candidate, as the
+  listing and ``read_transcript`` choose.
+- It is read only when no row of that session already holds as much
+  (mtime and size at least the copy's), and only when it holds at least
+  as much as every row it would stand beside; those rows are dropped in
+  the same commit. Anything else leaves the index as it is.
 """
 
 from __future__ import annotations
@@ -54,7 +65,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from swe.paths import locked_beside, swe_dir_for, search_index_for
+from swe.paths import locked_beside, swe_dir_for, search_index_for, transcripts_dir_for
 from swe.sessions import search_containers as containers
 from swe.sessions import transcript_mirror as mirror
 from swe.sessions import search_decode as decode
@@ -333,6 +344,10 @@ def file_stat(path: str) -> FileStat | None:
         st = os.stat(path)
     except OSError:
         return None
+    return file_stat_of(st)
+
+
+def file_stat_of(st: os.stat_result) -> FileStat:
     sec, nsec = divmod(st.st_mtime_ns, 1_000_000_000)
     # Double(tv_sec) + Double(tv_nsec) / 1e9, then * 1000: the same float
     # Swift stores, so an unchanged file compares equal on both sides.
@@ -423,13 +438,18 @@ class Store:
                     rows: list[decode.Row], updating: SessionFields | None = None,
                     session_row_id: int | None = None,
                     mark: tuple[str, "containers.DevinMark"] | None = None,
-                    expected_mtime: float | None = None) -> bool:
+                    expected_mtime: float | None = None,
+                    drop: "list[FileRow] | None" = None) -> bool:
         """``SearchStore.commitFile``: one transaction, fenced on the
         ``files`` row. False (and nothing written) when the row moved.
         ``mark`` is a Devin session's ``(meta key, mark)``, stored under
         the session the commit lands on; a None mark deletes the key. ``expected_mtime`` also fences on
         the row's ``mtime_ms``: an append keeps the session and the offset,
-        so without it an older read could commit over a newer one."""
+        so without it an older read could commit over a newer one.
+        ``drop`` are other files' rows of the same session, read before the
+        commit: each is fenced like ``path`` (session, offset and mtime) and
+        deleted with its session once the new rows are in, so search never
+        sees the session twice or not at all."""
         conn = self.conn
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -439,6 +459,13 @@ class Store:
             ).fetchone() != (expected_mtime,)):
                 conn.execute("ROLLBACK")
                 return False
+            for gone in drop or ():
+                if conn.execute(
+                        "SELECT session_row_id, byte_offset, mtime_ms FROM files WHERE path = ?",
+                        (gone.path,)).fetchone() != (gone.session_row_id, gone.byte_offset,
+                                                     gone.mtime_ms):
+                    conn.execute("ROLLBACK")
+                    return False
             if kind == NONE:
                 target = None
             elif kind == EXISTING:
@@ -478,6 +505,10 @@ class Store:
                 " state = 'current', fail_count = 0, failed_mtime_ms = NULL",
                 (path, stat.ino, byte_offset, stat.mtime_ms, stat.size, target),
             )
+            for gone in drop or ():
+                if gone.session_row_id is not None and gone.session_row_id != target:
+                    self._delete_session(gone.session_row_id)
+                conn.execute("DELETE FROM files WHERE path = ?", (gone.path,))
             if mark is not None and mark[1] is None:
                 conn.execute("DELETE FROM meta WHERE key = ?", (mark[0],))
             elif mark is not None and target is not None:
@@ -509,6 +540,21 @@ class Store:
         return [row[0] for row in self.conn.execute(
             "SELECT path FROM files WHERE path >= ? AND path < ? || char(1114111)"
             " ORDER BY path", (prefix, prefix))]
+
+    def session_rows(self, agents) -> "dict[tuple[str, str], list[FileRow]]":
+        """Every ``files`` row with a session of one of ``agents``, by
+        ``(agent, transcript_identity(agent, path))``: one read of the
+        table, for the copies whose own row did not settle them."""
+        names = list(agents)
+        out: dict[tuple[str, str], list[FileRow]] = {}
+        for row in self.conn.execute(
+                "SELECT f.path, f.ino, f.byte_offset, f.mtime_ms, f.size_bytes,"
+                " f.session_row_id, f.state, f.fail_count, f.failed_mtime_ms, s.agent"
+                " FROM files f JOIN sessions s ON s.id = f.session_row_id"
+                " WHERE s.agent IN (" + ",".join("?" for _ in names) + ")", names):
+            file_row = FileRow(*row[:9])
+            out.setdefault((row[9], transcript_identity(row[9], file_row.path)), []).append(file_row)
+        return out
 
     def remove_file(self, path: str) -> None:
         """``removeFile``: the row and the session it points at, for a
@@ -648,6 +694,9 @@ class _Pending:
     flushed_session: int | None = None
     expected: tuple | None = None
     has_expected: bool = False
+    # Rows of the same session under other paths, dropped by the final
+    # commit (a mirror copy standing for them, ``index_copy``).
+    drop: list = field(default_factory=list)
 
     def fence(self) -> tuple | None:
         if self.has_expected:
@@ -778,6 +827,29 @@ class Indexer:
             return "failed"
         return "indexed" if committed else "moved"
 
+    def index_copy(self, path: str, copy: str, harness: str, stat: FileStat,
+                   row: FileRow | None, drop: list[FileRow]) -> str:
+        """Read the mirror copy ``copy`` into the index under ``path``, the
+        transcript it was copied from, whose file is gone. ``stat`` is the
+        copy's and is what the ``files`` row records, so an unchanged copy
+        reads as current next pass. Always a whole read. ``drop`` are the
+        session's rows under other paths, removed in the final commit.
+        Returns what :meth:`index_file` returns."""
+        need = read_need(row, stat)
+        if need in (SKIP, CURRENT):
+            return need
+        try:
+            committed = self._read(path, harness, stat, row, False, read_path=copy, drop=drop)
+        except _Moved:
+            return "moved"
+        except (OSError, sqlite3.Error, ValueError, RecursionError):
+            try:
+                self.store.mark_failed(path, stat.mtime_ms)
+            except sqlite3.Error:
+                pass
+            return "failed"
+        return "indexed" if committed else "moved"
+
     def _read_document(self, path: str, harness: str, stat: FileStat,
                        row: FileRow | None, session_id: str | None) -> bool:
         """One whole JSON document, fed to the decoder as one "line"; the
@@ -860,9 +932,12 @@ class Indexer:
 
     def _read(self, path: str, harness: str, stat: FileStat,
               row: FileRow | None, appending: bool, session_id: str | None = None,
-              overlay: SessionFields | None = None) -> bool:
+              overlay: SessionFields | None = None, read_path: str | None = None,
+              drop: list[FileRow] | None = None) -> bool:
+        """``read_path``, when given, is the file the bytes come from (a
+        mirror copy); ``path`` stays the key every row is filed under."""
         decoder = decode.Decoder(harness)
-        with open(path, "rb") as handle:
+        with open(read_path or path, "rb") as handle:
             start = 0
             if appending:
                 # Only a prefix this side read and fingerprinted, still
@@ -888,7 +963,7 @@ class Indexer:
                             break
             pending = _Pending(path=path, harness=harness, appending=appending,
                                row=row, decoder=decoder, session_id_hint=session_id,
-                               overlay=overlay)
+                               overlay=overlay, drop=list(drop or ()))
             end_offset = start
             for line, end_offset in _lines(handle, start):
                 if not line or not decoder.wants(line):
@@ -898,7 +973,9 @@ class Indexer:
                     continue
                 self._record(pending, *decoder.decode_object(obj), stat)
             committed = self._finish(pending, stat, end_offset)
-            if committed:
+            # A print proves a prefix of the file at ``path``; a copy's
+            # bytes prove nothing about it.
+            if committed and read_path is None:
                 self.prints[path] = {"offset": end_offset,
                                      "hash": fingerprint(handle, end_offset)}
         return committed
@@ -967,15 +1044,20 @@ class Indexer:
             if not has_session:
                 return store.commit_file(pending.path, fence, stat, end_offset, NONE, None, [])
             return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows)
+        # Other rows of the session go only with a commit that leaves it a
+        # session here: a read that found none keeps them.
+        drop = pending.drop or None
         if pending.flushed_session is not None:
             return store.commit_file(pending.path, fence, stat, end_offset, EXISTING,
                                      None, rows, updating=fields,
-                                     session_row_id=pending.flushed_session)
+                                     session_row_id=pending.flushed_session, drop=drop)
         if old is not None and old.session_row_id is not None:
-            return store.commit_file(pending.path, fence, stat, end_offset, REPLACE, fields, rows)
+            return store.commit_file(pending.path, fence, stat, end_offset, REPLACE, fields,
+                                     rows, drop=drop)
         if not has_session:
             return store.commit_file(pending.path, fence, stat, end_offset, NONE, None, [])
-        return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows)
+        return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows,
+                                 drop=drop)
 
     def drain(self) -> int:
         total = 0
@@ -1308,6 +1390,156 @@ def _index_container(indexer: "Indexer", db_path: Path, entries, result: "PassRe
         conn.close()
 
 
+# -- mirror copies of pruned transcripts (#1918) -------------------------
+
+# A session uuid. In a Codex rollout's name the first one is the thread id
+# (``parsers.codex_thread_id``, kept here to spare this module the
+# listing's imports).
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                   re.IGNORECASE)
+
+
+def transcript_identity(harness: str, path: str) -> str:
+    """The session a Claude Code or Codex transcript belongs to, from its
+    file name alone, so a live source, an index row and a mirror copy all
+    key the same way without a read: a Claude file is named
+    ``<session uuid>.jsonl``, and every rollout of one Codex thread carries
+    the thread uuid in its name (the first uuid). Lower-cased. A name with
+    no session uuid stands only for its own file: the identity is ``path``
+    itself, so two such files are never taken for one session."""
+    stem = os.path.basename(path)
+    if stem.endswith(".jsonl"):
+        stem = stem[:-len(".jsonl")]
+    match = _UUID.search(stem) if harness == "codex" else _UUID.fullmatch(stem)
+    return match.group(0).lower() if match else path
+
+
+@dataclass(frozen=True)
+class _Copy:
+    path: str  # the copy, resolved
+    key: str  # the gone source path its rows are filed under
+    stat: FileStat
+    mtime_ns: int
+
+
+def _covers(row: FileRow | None, stat: FileStat) -> bool:
+    """Whether ``row`` already holds at least what a file at ``stat``
+    would give: a whole read of a session, of a file at least as new and
+    as long."""
+    return (row is not None and row.state == "current" and row.session_row_id is not None
+            and row.byte_offset != PARTIAL_OFFSET
+            and row.mtime_ms >= stat.mtime_ms and (row.size_bytes or 0) >= stat.size)
+
+
+def _dominates(stat: FileStat, row: FileRow) -> bool:
+    """Whether a file at ``stat`` holds at least what ``row`` was read
+    from: as new and as long. Transcripts only grow; a file that is newer
+    but shorter was rewritten, and stands for nothing it lost."""
+    size = row.size_bytes if row.size_bytes is not None else max(row.byte_offset, 0)
+    return stat.mtime_ms >= row.mtime_ms and stat.size >= size
+
+
+def _copy_trees(real_root: str) -> list[tuple[str, str]]:
+    """``(harness, directory)`` for every tree of copies under the mirror
+    root: each mirrored harness's own, then each account's."""
+    out = [(h, os.path.join(real_root, h)) for h in mirror.MIRRORED]
+    for harness in mirror.MIRRORED:
+        for entry in _scan(os.path.join(real_root, "accounts", harness)):
+            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                out.append((harness, entry.path))
+    return out
+
+
+def _copy_key(rel: str, harness: str, manifest: dict, table, store: Store) -> str | None:
+    """The source path a copy's rows are filed under: the manifest's
+    record, else the layout's answer (``source_candidates``), preferring a
+    candidate the index already has a row for. None when neither knows."""
+    entry = manifest.get(rel)
+    if isinstance(entry, dict) and entry.get("harness") == harness and isinstance(
+            entry.get("source"), str) and entry["source"]:
+        return entry["source"]
+    candidates = mirror.source_candidates(rel, table)
+    if len(candidates) > 1:
+        for candidate in candidates:
+            if store.file_row(candidate) is not None:
+                return candidate
+    return candidates[0] if candidates else None
+
+
+def _index_copies(indexer: "Indexer", home: Path, listed: list[Source], result: "PassResult",
+                  should_stop) -> None:
+    """Make the sessions the harnesses pruned searchable from their mirror
+    copies, without ever counting one twice or losing a row.
+
+    Inputs: ``listed`` (this pass's live sources), one walk of the mirror
+    root, the manifest (only to name a copy's source path; the layout
+    answers when it is lost). Per session identity
+    (:func:`transcript_identity`) no live source carries:
+
+    1. Candidates are its copies whose source path is gone from disk and
+       known; the newest (mtime, then path) is the one used.
+    2. Its row under that path covering the copy (:func:`_covers`, which an
+       unchanged copy's own row does) settles it: nothing is read.
+    3. Otherwise every row of the session is fetched (one query per pass).
+       A row at a path that exists means the session is live where this
+       pass does not look: left alone. A row covering the copy: left
+       alone. A row the copy does not dominate (:func:`_dominates`): left
+       alone, since the copy cannot stand for it and both would count.
+    4. Otherwise the copy is read whole under its source path, and the
+       session's rows under other paths are dropped in the same commit.
+
+    No row is removed unless a copy at least as new and as long replaces
+    it in that commit, so a lost manifest, a stale copy or a failed read
+    can only leave the index as it was."""
+    root = transcripts_dir_for(home)
+    if not root.is_dir():
+        return
+    real_root = os.path.realpath(root)
+    live = {(s.harness, transcript_identity(s.harness, s.path))
+            for s in listed if s.harness in mirror.MIRRORED}
+    manifest = mirror.load_manifest(home)
+    table = mirror.roots(home)
+    groups: dict[tuple[str, str], list[_Copy]] = {}
+    for harness, tree in _copy_trees(real_root):
+        for path in _walk(Path(tree)):
+            # A copy keeps its source's file name, so a session id in it
+            # settles liveness before any lookup.
+            if ((harness, transcript_identity(harness, path)) in live
+                    or not path.startswith(real_root + os.sep)):
+                continue
+            key = _copy_key(path[len(real_root) + 1:], harness, manifest, table, indexer.store)
+            if key is None or key.startswith(real_root + os.sep) or os.path.lexists(key):
+                continue  # nowhere known to file it, or its source is still on disk
+            identity = (harness, transcript_identity(harness, key))
+            if identity in live:
+                continue
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            groups.setdefault(identity, []).append(_Copy(
+                path=path, key=key, stat=file_stat_of(st), mtime_ns=st.st_mtime_ns))
+    rows_by_identity = None
+    for identity in sorted(groups):
+        if should_stop is not None and should_stop():
+            return
+        harness = identity[0]
+        best = max(groups[identity], key=lambda c: (c.mtime_ns, c.path))
+        result.files += 1
+        row = indexer.store.file_row(best.key)
+        if _covers(row, best.stat) or (row is not None and read_need(row, best.stat) == CURRENT):
+            result.count(CURRENT)
+            continue
+        if rows_by_identity is None:
+            rows_by_identity = indexer.store.session_rows(mirror.MIRRORED)
+        others = [r for r in rows_by_identity.get(identity, []) if r.path != best.key]
+        if (any(os.path.lexists(r.path) for r in others)
+                or any(_covers(r, best.stat) or not _dominates(best.stat, r) for r in others)
+                or (row is not None and not _dominates(best.stat, row))):
+            continue
+        result.count(indexer.index_copy(best.key, best.path, harness, best.stat, row, others))
+
+
 @dataclass
 class PassResult:
     files: int = 0
@@ -1409,6 +1641,33 @@ def clear_index(home: Path | None = None) -> None:
         _update_state(home, wipe)
 
 
+def forget_session(home: Path | None, harness: str, session_id: str) -> int:
+    """Remove the search rows of one Claude Code or Codex session that sit
+    under paths no longer on disk, and return how many went. For a
+    deliberate purge of the session's mirror copies: rows a copy put in
+    would otherwise keep a purged session searchable, and no pass removes
+    them on its own (a missing copy proves nothing; see
+    :func:`_index_copies`). A live transcript's rows stay. Never creates
+    the index; raises :class:`IndexBusy` while a pass holds the lock and
+    :class:`IndexUnavailable` for an index at another schema version."""
+    home = Path(home) if home is not None else Path.home()
+    path = search_index_for(home)
+    if harness not in mirror.MIRRORED or not session_id or not path.exists():
+        return 0
+    identity = (harness, transcript_identity(harness, session_id))
+    with _Lock(path.parent / LOCK_FILE):
+        conn = open_index(path)
+        try:
+            store = Store(conn)
+            gone = [row.path for row in store.session_rows((harness,)).get(identity, [])
+                    if not os.path.lexists(row.path)]
+            for row_path in gone:
+                store.remove_file(row_path)
+            return len(gone)
+        finally:
+            conn.close()
+
+
 def run_pass(home: Path | None = None, *, should_stop=None) -> PassResult:
     """Index every source under ``home`` once.
 
@@ -1463,6 +1722,11 @@ def _pass(home: Path, path: Path, should_stop) -> PassResult:
                                             session_id=source.session_id,
                                             meta_path=source.meta_path,
                                             pair=source.pair))
+        # After the live files, so a session they carry is never read
+        # from a copy (copies are used whether mirroring is on or off,
+        # as the listing and reads use them).
+        if should_stop is None or not should_stop():
+            _index_copies(indexer, home, listed, result, should_stop)
         for db, entries in ((DEVIN_DB, _devin_entries), (OPENCODE_DB, _opencode_entries)):
             if should_stop is not None and should_stop():
                 break
