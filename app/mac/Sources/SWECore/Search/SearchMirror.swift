@@ -9,8 +9,9 @@ import Foundation
 /// Python side by `tests/test_search_mirror.py`; `SearchMirrorTests` is its
 /// Swift twin. In short:
 ///
-/// - A copy is used only when no live source carries its session and its
-///   source path is gone. Its rows are filed under that source path, never
+/// - A copy is used only when no live source carries its session (in any
+///   home swe lists, an account home no profile registers included) and
+///   its source path is gone. Its rows are filed under that source path, never
 ///   the copy's, and every commit records `mirror_copy:<path>`.
 /// - Per session the newest copy (mtime, then path) is the candidate.
 /// - It is read only when no row of the session already holds as much,
@@ -103,7 +104,9 @@ enum SearchMirror {
     /// Makes the sessions the harnesses pruned searchable from their mirror
     /// copies, without ever counting one twice or losing a row (swe's
     /// `_index_copies`, step by step). `live` is every `(harness, identity)`
-    /// this scan's Claude and Codex enumeration carries.
+    /// this scan's Claude and Codex enumeration carries; `mirror.pruned`
+    /// adds the sessions of account homes no profile registers, which swe
+    /// lists and this scan does not.
     ///
     /// Per session identity no live source carries:
     /// 1. candidates are its copies whose source path is gone and known;

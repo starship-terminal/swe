@@ -40,8 +40,19 @@ final class MirrorHome: @unchecked Sendable {
     var codexHome: URL { home.appending(path: ".codex") }
     var mirrorRoot: URL { home.appending(path: ".swe/data/transcripts") }
 
+    /// SWE's accounts root. No profile is registered here, so a home
+    /// under it is one the scan never reads (`account(_:_:)`).
+    var accountsRoot: URL { home.appending(path: ".swe/accounts") }
+
     var mirror: TranscriptMirror {
-        .standard(root: mirrorRoot, claudeHomes: [claudeHome], codexHomes: [codexHome])
+        .standard(root: mirrorRoot, claudeHomes: [claudeHome], codexHomes: [codexHome],
+                  accounts: accountsRoot)
+    }
+
+    /// An account home on disk that no profile names, as swe finds it
+    /// (`accounts/<vendor>/<id>/home`).
+    func account(_ vendor: String, _ id: String) -> URL {
+        accountsRoot.appending(path: "\(vendor)/\(id)/home")
     }
 
     /// The roots a scan reads; `withMirror: false` is a writer that knows

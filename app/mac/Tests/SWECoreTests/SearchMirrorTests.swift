@@ -141,6 +141,44 @@ import Testing
         #expect(try h.files().map(\.path) == [h.rel(live.path)])
     }
 
+    /// A session live only in an account home no profile names still
+    /// carries its session. The scan never reads that home, but swe's
+    /// pass lists every `accounts/<vendor>/*/home` on disk, so the copy
+    /// from a home the scan reads is never read by either writer.
+    @Test func aSessionLiveOnlyInAnUnregisteredAccountHomeIsNeverReadFromItsCopy() async throws {
+        let h = try H()
+        let gone = try h.claude(H.claudeID, "kestrel", folder: "-a")
+        // A session live nowhere is still found through its copy.
+        let pruned = try h.claude(H.otherID, "osprey", folder: "-a")
+        try h.mirrorPass()
+        try FileManager.default.removeItem(at: gone)
+        try FileManager.default.removeItem(at: pruned)
+        try h.write(H.claudeLines(H.claudeID, ["kestrel"]),
+                    to: h.account("claude", "spare").appending(path: "projects/-b/\(H.claudeID).jsonl"))
+        try await h.scan()
+        #expect(try h.hits("kestrel").isEmpty)
+        #expect(try h.hits("osprey") == [H.otherID])
+        #expect(try h.files().map(\.path) == [h.rel(pruned.path)])
+    }
+
+    /// The same through a linked account folder, which swe's glob follows.
+    @Test func aRolloutLiveOnlyInALinkedUnregisteredAccountHomeIsNeverReadFromItsCopy() async throws {
+        let h = try H()
+        let gone = try h.codex(H.stem, "kestrel")
+        try h.mirrorPass()
+        try FileManager.default.removeItem(at: gone)
+        let elsewhere = h.temp.path("elsewhere")
+        try h.write(H.codexLines(H.thread, ["kestrel"]),
+                    to: elsewhere.appending(path: "home/sessions/2026/09/03/\(H.laterStem).jsonl"))
+        try FileManager.default.createDirectory(at: h.accountsRoot.appending(path: "codex"),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: h.accountsRoot.appending(path: "codex/linked"),
+                                                   withDestinationURL: elsewhere)
+        try await h.scan()
+        #expect(try h.hits("kestrel").isEmpty)
+        #expect(try h.files().isEmpty)
+    }
+
     // MARK: 2. One session, one set of rows
 
     @Test func aRolloutMirroredThenArchivedBeforeAnyPassIsOneSession() async throws {
