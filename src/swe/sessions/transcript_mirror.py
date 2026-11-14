@@ -927,31 +927,51 @@ def purge(home: Path | None, plan: dict) -> dict:
                 continue
             removed.append(path)
         raw, entries, corrupt = _read_manifest_full(manifest_path(home))
+        purged = [entries[rel] for rel in again["entries"] if rel in entries]
         if not corrupt:
             before = dict(entries)
             for rel in again["entries"]:
                 entries.pop(rel, None)
             _write_manifest(home, entries, raw, before)
-    return {**again, "removed": removed, "search": _forget_searched(home, again)}
+    return {**again, "removed": removed, "search": _forget_searched(home, again, purged)}
 
 
-def _forget_searched(home: Path, plan: dict) -> str:
+def _search_identity(harness: str, name: str) -> str:
+    """The id the search index files a transcript under: the Codex thread
+    uuid every rollout of a thread carries, else the file's stem (the
+    Claude session id, or a name with no session uuid such as ``notes``)."""
+    stem = Path(name).stem
+    if harness == "codex":
+        return _thread_of_name(stem) or stem
+    return stem
+
+
+def _forget_searched(home: Path, plan: dict, purged: list[dict]) -> str:
     """Drop the purged session from the search index once its copies are
-    gone (copies first, or a pass in between reads them again). A search
-    writer without ``forget_session`` (it indexes no copies) has nothing
-    to forget. Returns ``"forgotten"``, ``"none"`` or the reason it could
-    not; a purge never fails over it."""
+    gone (copies first, or a pass in between reads them again): one
+    ``forget_session(home, harness, id, source_path=source)`` per purged
+    manifest entry, so a transcript whose name holds no session uuid is
+    found by its source path. An older three-argument ``forget_session``
+    is called once per id instead, and a search writer without one (it
+    indexes no copies) has nothing to forget. Returns ``"forgotten"``,
+    ``"none"`` or the reason it could not; a purge never fails over it."""
     from swe.sessions import search_writer  # function-local: it imports this module
 
     forget = getattr(search_writer, "forget_session", None)
     if forget is None:
         return "none"
-    # The index keys a session by (harness, identity): the Claude session
-    # id, or the Codex thread uuid every rollout of the thread carries.
-    stem = Path(plan["session_id"]).stem
-    identity = (_thread_of_name(stem) or stem) if plan["harness"] == "codex" else stem
+    calls = [(entry["harness"], _search_identity(entry["harness"], entry["source"]),
+              entry["source"]) for entry in purged]
+    if not calls:
+        calls = [(plan["harness"], _search_identity(plan["harness"], plan["session_id"]), None)]
     try:
-        forget(home, plan["harness"], identity)
+        try:
+            for harness, identity, source in calls:
+                forget(home, harness, identity, source_path=source)
+        except TypeError:
+            # A forget_session that takes no source_path: once per id.
+            for harness, identity in dict.fromkeys((h, i) for h, i, _s in calls):
+                forget(home, harness, identity)
     except Exception as exc:  # IndexBusy, IndexUnavailable, a broken index
         return f"not removed from search: {exc}"
     return "forgotten"

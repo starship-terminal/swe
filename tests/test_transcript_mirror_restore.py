@@ -571,6 +571,7 @@ class PurgeTests(PurgeCase):
                        session_id=CLAUDE_ID, tool_name="claude", mirrored=True)
 
     def test_search_forgets_the_session_after_its_copies_are_gone(self):
+        # A three-argument forget_session (an older search writer) still works.
         from swe.sessions import search_writer
 
         source = self.mirrored_claude()
@@ -600,6 +601,41 @@ class PurgeTests(PurgeCase):
                                side_effect=lambda h, harness, sid: calls.append((harness, sid))):
             mirror.purge(self.home, mirror.purge_plan(self.home, session))
         self.assertEqual(calls, [("codex", CODEX_UUID)])
+
+    def test_search_is_told_each_purged_entry_and_its_source(self):
+        from swe.sessions import search_writer
+
+        calls = []
+
+        def forget(home, harness, session_id, source_path=None):
+            calls.append((harness, session_id, source_path))
+            return 0
+
+        claude = self.mirrored_claude()
+        first = self.codex()
+        resumed = self.codex(stem=f"rollout-2026-09-03T10-00-00-{CODEX_UUID}")
+        notes = write_jsonl(self.home / ".codex/archived_sessions/notes.jsonl",
+                            codex_records(prompt="loose notes"), MTIME + 7)
+        self.sync()
+        for path in (first, resumed, notes):
+            path.unlink()
+        sessions = {
+            "claude": Session(timestamp=1.0, agent="Claude Code", path="/work/proj",
+                              session_id=CLAUDE_ID, tool_name="claude", mirrored=True),
+            "thread": Session(timestamp=1.0, agent="Codex CLI", path="/work/other",
+                              session_id=resumed.stem, tool_name="codex", mirrored=True),
+            "notes": Session(timestamp=1.0, agent="Codex CLI", path="/work/other",
+                             session_id="notes", tool_name="codex", mirrored=True),
+        }
+        with mock.patch.object(search_writer, "forget_session", forget, create=True):
+            for session in sessions.values():
+                mirror.purge(self.home, mirror.purge_plan(self.home, session))
+        self.assertEqual(sorted(calls), sorted([
+            ("claude", CLAUDE_ID, str(claude)),
+            ("codex", CODEX_UUID, str(first)),
+            ("codex", CODEX_UUID, str(resumed)),
+            ("codex", "notes", str(notes)),
+        ]))
 
     def test_a_busy_index_does_not_undo_the_purge(self):
         from swe.sessions import search_writer
