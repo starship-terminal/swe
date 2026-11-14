@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "data": {
+    "window": "7d",
+    "since": 1794056463.366297,
+    "until": 1794661263.366297,
+    "filters": {
+      "hook": null,
+      "harness": null,
+      "repo": null
+    },
+    "sources": {
+      "helper": 16,
+      "transcript": 2,
+      "duplicates": 0,
+      "backfill": true
+    },
+    "totals": {
+      "fires": 18,
+      "blocks": 7,
+      "warns": 1,
+      "errors": 1,
+      "allows": 9,
+      "recovered": 0,
+      "block_rate": 0.3889,
+      "last_fired": 1794657261.611072,
+      "last_block": 1794657261.611072,
+      "avg_duration_ms": 38,
+      "hooks": 5
+    },
+    "hooks": [
+      {
+        "hook": "no-sleep-poll",
+        "harness": "claude",
+        "fires": 4,
+        "blocks": 4,
+        "warns": 0,
+        "errors": 0,
+        "allows": 0,
+        "recovered": 0,
+        "block_rate": 1.0,
+        "last_fired": 1794657261.611072,
+        "last_block": 1794657261.611072,
+        "avg_duration_ms": 40,
+        "top_reasons": [
+          {
+            "decision": "block",
+            "reason": "sleep loop in foreground",
+            "count": 4
+          }
+        ]
+      },
+      {
+        "hook": "prose-guard",
+        "harness": "claude",
+        "fires": 6,
+        "blocks": 2,
+        "warns": 1,
+        "errors": 0,
+        "allows": 3,
+        "recovered": 0,
+        "block_rate": 0.3333,
+        "last_fired": 1794653661.611072,
+        "last_block": 1794617661.611072,
+        "avg_duration_ms": 40,
+        "top_reasons": [
+          {
+            "decision": "block",
+            "reason": "done-followups: missing Follow-ups",
+            "count": 2
+          },
+          {
+            "decision": "warn",
+            "reason": "long paragraph",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "hook": "prose-guard",
+        "harness": "codex",
+        "fires": 3,
+        "blocks": 1,
+        "warns": 0,
+        "errors": 0,
+        "allows": 2,
+        "recovered": 0,
+        "block_rate": 0.3333,
+        "last_fired": 1794642861.611072,
+        "last_block": 1794570861.611072,
+        "avg_duration_ms": 40,
+        "top_reasons": [
+          {
+            "decision": "block",
+            "reason": "em dash found",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "hook": "command_guard",
+        "harness": "claude",
+        "fires": 3,
+        "blocks": 0,
+        "warns": 0,
+        "errors": 0,
+        "allows": 3,
+        "recovered": 0,
+        "block_rate": 0.0,
+        "last_fired": 1794650061.611072,
+        "last_block": null,
+        "avg_duration_ms": 40,
+        "top_reasons": []
+      },
+      {
+        "hook": "claude-plugin/on-stop",
+        "harness": "claude",
+        "fires": 2,
+        "blocks": 0,
+        "warns": 0,
+        "errors": 1,
+        "allows": 1,
+        "recovered": 0,
+        "block_rate": 0.0,
+        "last_fired": 1794646857.0,
+        "last_block": null,
+        "avg_duration_ms": 20,
+        "top_reasons": [
+          {
+            "decision": "error",
+            "reason": "hook crashed",
+            "count": 1
+          }
+        ]
+      }
+    ]
+  }
+}

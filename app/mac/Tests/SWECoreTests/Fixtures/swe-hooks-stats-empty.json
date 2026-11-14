@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "data": {
+    "window": "7d",
+    "since": 1794056463.767843,
+    "until": 1794661263.767843,
+    "filters": {
+      "hook": "nothing",
+      "harness": null,
+      "repo": null
+    },
+    "sources": {
+      "helper": 16,
+      "transcript": 2,
+      "duplicates": 0,
+      "backfill": true
+    },
+    "totals": {
+      "fires": 0,
+      "blocks": 0,
+      "warns": 0,
+      "errors": 0,
+      "allows": 0,
+      "recovered": 0,
+      "block_rate": 0.0,
+      "last_fired": null,
+      "last_block": null,
+      "avg_duration_ms": null,
+      "hooks": 0
+    },
+    "hooks": []
+  }
+}
