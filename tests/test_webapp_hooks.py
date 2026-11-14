@@ -3,6 +3,8 @@ declarations, the check findings, swe init run for it, and swe hooks new."""
 
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -445,6 +447,363 @@ process.stdout.write(JSON.stringify([
             "x at /Users/kb/y",
             "/backup/Users/k/s.json",
         ])
+
+
+# -- run stats ---------------------------------------------------------------
+
+HOUR, DAY = 3600, 86400
+
+
+def _event(now, ago, hook, decision, harness="claude", **extra) -> dict:
+    """One line of ~/.swe/cache/hooks/events.jsonl (docs/data-model.md)."""
+    row = {"v": 1, "ts": now - ago, "hook": hook, "harness": harness,
+           "event": "Stop", "session_id": "s1", "cwd": "/w/app",
+           "repo": "/w/app", "git_branch": "main", "decision": decision,
+           "reason": "", "duration_ms": 10, "exit_code": 0,
+           "stop_hook_active": False}
+    row.update(extra)
+    return row
+
+
+def _write_events(home: Path, rows: list) -> None:
+    from swe import paths
+
+    path = paths.hook_events_file_for(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+class _StatsHome(unittest.TestCase):
+    """A throwaway home, an empty stats cache and no transcripts."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.home = Path(self._tmp.name)
+        self.now = __import__("time").time()
+        page._STATS.clear()
+        self.addCleanup(page._STATS.clear)
+        for target in (patch("pathlib.Path.home", return_value=self.home),
+                       patch("swe.hooks.transcripts.backfill", return_value=[])):
+            target.start()
+            self.addCleanup(target.stop)
+
+    def payload(self, window="7d"):
+        return page.build_stats_payload(self.home, window, self.now)
+
+    def row(self, payload, hook):
+        return {r["hook"]: r for r in payload["hooks"]}[hook]
+
+
+class TestStatsNumbers(_StatsHome):
+    def test_a_hook_is_summed_across_harnesses(self):
+        _write_events(self.home, [
+            _event(self.now, HOUR, "prose-guard", "block", reason="no em dash"),
+            _event(self.now, 2 * HOUR, "prose-guard", "allow"),
+            _event(self.now, 3 * HOUR, "prose-guard", "allow", harness="codex"),
+            _event(self.now, 4 * HOUR, "command_guard", "allow"),
+        ])
+        out = self.payload()
+        row = self.row(out, "prose-guard")
+        self.assertEqual((row["fires"], row["blocks"], row["block_rate"]), (3, 1, 0.3333))
+        self.assertEqual(row["harnesses"], ["claude", "codex"])
+        self.assertNotIn("harness", row)
+        self.assertEqual({r["hook"] for r in out["hooks"]}, {"prose-guard", "command_guard"})
+        self.assertEqual((out["state"], out["window"], out["totals"]["fires"]), ("ready", "7d", 4))
+
+    def test_zero_blocks_and_no_runs(self):
+        _write_events(self.home, [_event(self.now, HOUR, "pr-behind-main", "allow")])
+        out = self.payload()
+        row = self.row(out, "pr-behind-main")
+        self.assertEqual((row["fires"], row["blocks"], row["block_rate"], row["last_block"]),
+                         (1, 0, 0.0, None))
+        # A hook with no runs has no row at all: the page shows dashes.
+        self.assertNotIn("no-sleep-poll", {r["hook"] for r in out["hooks"]})
+        empty = page.build_stats_payload(self.home / "nobody", "7d", self.now)
+        self.assertEqual((empty["hooks"], empty["totals"]["fires"]), ([], 0))
+
+    def test_the_window_picks_which_runs_count(self):
+        _write_events(self.home, [
+            _event(self.now, 2 * HOUR, "g", "block", reason="a"),
+            _event(self.now, 3 * DAY, "g", "block", reason="b"),
+            _event(self.now, 20 * DAY, "g", "block", reason="c"),
+            _event(self.now, 40 * DAY, "g", "block", reason="d"),
+        ])
+        fires = {w: self.row(self.payload(w), "g")["fires"] for w in ("24h", "7d", "30d")}
+        self.assertEqual(fires, {"24h": 1, "7d": 2, "30d": 3})
+
+    def test_detail_reasons_and_recent_runs(self):
+        rows = [_event(self.now, i * HOUR, "g", "allow", git_branch=f"b{i}") for i in range(1, 8)]
+        rows += [_event(self.now, 9 * HOUR, "g", "block", reason="no em dash", repo="/w/api"),
+                 _event(self.now, 10 * HOUR, "g", "block", reason="no em dash"),
+                 _event(self.now, 11 * HOUR, "g", "warn", reason="long reply")]
+        _write_events(self.home, rows)
+        row = self.row(self.payload(), "g")
+        self.assertEqual(row["top_reasons"], [
+            {"decision": "block", "reason": "no em dash", "count": 2},
+            {"decision": "warn", "reason": "long reply", "count": 1}])
+        # Five newest runs, newest first, as `swe hooks log --json` shows them.
+        self.assertEqual([r["git_branch"] for r in row["recent"]], ["b1", "b2", "b3", "b4", "b5"])
+        self.assertEqual(set(row["recent"][0]) >= {"ts", "decision", "repo", "cwd", "git_branch", "harness"}, True)
+        self.assertEqual(row["last_block"], self.now - 9 * HOUR)
+
+    def test_transcript_runs_join_the_log(self):
+        _write_events(self.home, [_event(self.now, HOUR, "g", "block", reason="x", session_id="a")])
+        transcript = dict(_event(self.now, 2 * HOUR, "g", "block", reason="y", session_id="b"),
+                          source="transcript")
+        with patch("swe.hooks.transcripts.backfill", return_value=[transcript]):
+            out = self.payload()
+        self.assertEqual(self.row(out, "g")["fires"], 2)
+        self.assertEqual((out["sources"]["helper"], out["sources"]["transcript"]), (1, 1))
+
+    def test_the_numbers_match_the_cli(self):
+        """The page reads what `swe hooks stats --json` prints."""
+        from swe.hooks import events as hook_events
+        from swe.hooks import stats_commands
+
+        _write_events(self.home, [
+            _event(self.now, HOUR, "g", "block", reason="a"),
+            _event(self.now, 2 * HOUR, "g", "allow", harness="codex")])
+        data = stats_commands.collect(self.home, self.now - 7 * DAY, True, self.now)
+        cli = hook_events.build_stats(data["events"])["totals"]
+        out = self.payload()
+        self.assertEqual({k: out["totals"][k] for k in ("fires", "blocks", "block_rate")},
+                         {k: cli[k] for k in ("fires", "blocks", "block_rate")})
+
+
+class TestStatsRead(_StatsHome):
+    """The read runs off the request and is cached."""
+
+    def setUp(self):
+        super().setUp()
+        _write_events(self.home, [_event(self.now, HOUR, "g", "block", reason="a")])
+        patcher = patch.object(page, "FIRST_WAIT_S", 5.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_view_answers_ready_and_is_cached(self):
+        real = page.build_stats_payload
+        with patch.object(page, "build_stats_payload", side_effect=real) as built:
+            first = page.get(SimpleNamespace(home=self.home), {"stats": "7d"})
+            second = page.get(SimpleNamespace(home=self.home), {"stats": "7d"})
+        self.assertEqual((first["state"], first["hooks"][0]["hook"]), ("ready", "g"))
+        self.assertIs(first, second)
+        self.assertEqual(built.call_count, 1)
+
+    def test_a_bad_window_is_422(self):
+        for bad in ("1y", "all", "7d;", "../x"):
+            with self.assertRaises(PageError) as ctx:
+                page.get(SimpleNamespace(home=self.home), {"stats": bad})
+            self.assertEqual((ctx.exception.status, ctx.exception.code), (422, "bad_window"))
+
+    def test_a_slow_read_never_blocks_the_list_or_the_request(self):
+        gate, started = threading.Event(), threading.Event()
+        real = page.build_stats_payload
+        calls = []
+
+        def slow(home, window, now=None):
+            calls.append(window)
+            started.set()
+            self.assertTrue(gate.wait(10))
+            return real(home, window, now)
+
+        ctx = SimpleNamespace(home=self.home, machine={"name": "hub-box"})
+        with patch.object(page, "FIRST_WAIT_S", 0.05), patch.object(page, "build_stats_payload", side_effect=slow):
+            self.assertEqual(page.get(ctx, {"stats": "7d"}), {"state": "loading", "window": "7d"})
+            self.assertTrue(started.wait(5))
+            # The list reads while the stats read is still stuck.
+            self.assertEqual(page.get(ctx, {})["machine"], "hub-box")
+            # A second ask joins the read in flight: it does not start another.
+            self.assertEqual(page.get(ctx, {"stats": "7d"})["state"], "loading")
+            self.assertEqual(calls, ["7d"])
+            # Another window is its own read, also off the request.
+            self.assertEqual(page.get(ctx, {"stats": "24h"})["state"], "loading")
+            threads = [e["thread"] for e in page._STATS.values() if "thread" in e]
+            gate.set()
+            for thread in threads:
+                thread.join(10)
+            self.assertEqual(page.get(ctx, {"stats": "7d"})["state"], "ready")
+            self.assertEqual(sorted(calls), ["24h", "7d"])
+
+    def test_a_failed_read_is_a_503_and_retried_after_its_ttl(self):
+        real = page.build_stats_payload
+        with patch.object(page, "build_stats_payload", side_effect=OSError("disk gone")):
+            with self.assertRaises(PageError) as ctx:
+                page.get(SimpleNamespace(home=self.home), {"stats": "7d"})
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (503, "stats_unavailable"))
+        self.assertIn("disk gone", ctx.exception.message)
+        # Within the error TTL the failure stands; past it the read runs again.
+        with patch.object(page, "STATS_ERROR_TTL_S", 0.0), \
+                patch.object(page, "build_stats_payload", side_effect=real):
+            self.assertEqual(page.get(SimpleNamespace(home=self.home), {"stats": "7d"})["state"], "ready")
+
+    def test_an_old_answer_is_served_while_the_next_read_runs(self):
+        ctx = SimpleNamespace(home=self.home)
+        first = page.get(ctx, {"stats": "7d"})
+        gate = threading.Event()
+        real = page.build_stats_payload
+
+        def slow(home, window, now=None):
+            gate.wait(10)
+            return real(home, window, now)
+
+        with patch.object(page, "STATS_TTL_S", 0.0), patch.object(page, "build_stats_payload", side_effect=slow):
+            self.assertIs(page.get(ctx, {"stats": "7d"}), first)
+            thread = page._STATS[(str(self.home), "7d")]["thread"]
+            gate.set()
+            thread.join(10)
+
+
+class TestStatsRoute(HubBase):
+    def setUp(self):
+        super().setUp()
+        page._STATS.clear()
+        self.addCleanup(page._STATS.clear)
+        self.srv.home.joinpath(".swe").mkdir(exist_ok=True)
+        _write_events(self.srv.home, [
+            _event(__import__("time").time(), HOUR, "guard", "block", reason="no em dash"),
+            _event(__import__("time").time(), 2 * HOUR, "guard", "allow", harness="codex")])
+        for target in (patch.object(page, "FIRST_WAIT_S", 10.0),
+                       patch("swe.hooks.transcripts.backfill", return_value=[])):
+            target.start()
+            self.addCleanup(target.stop)
+
+    def test_stats_need_a_device(self):
+        self.assertEqual(self.srv.request("GET", "/v1/app/hooks?stats=7d")[0], 401)
+
+    def test_stats_for_a_window(self):
+        status, data = self.srv.request("GET", "/v1/app/hooks?stats=7d", headers=self.auth())
+        self.assertEqual(status, 200, data)
+        body = json.loads(data)
+        self.assertEqual(body["state"], "ready")
+        self.assertEqual([(h["hook"], h["fires"], h["blocks"]) for h in body["hooks"]], [("guard", 2, 1)])
+
+    def test_a_bad_window_is_422(self):
+        status, data = self.srv.request("GET", "/v1/app/hooks?stats=9y", headers=self.auth())
+        self.assertEqual(status, 422)
+        self.assertEqual(json.loads(data)["error"]["code"], "bad_window")
+
+
+@unittest.skipUnless(shutil.which("node"), "node is not installed")
+class TestStatsMarkup(unittest.TestCase):
+    """hooks.js's number columns and detail card, run under node with the
+    page's own helpers stubbed."""
+
+    STUBS = """
+const registerPage = () => {};
+const Sk = { num: (w) => `<i class="skel"></i>`, bar: () => `<i class="skel"></i>` };
+const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const Fmt = { ago: (t) => `ago${t}` };
+let stored = null;
+const localStorage = { getItem: () => { if (stored === "throw") throw new Error("off"); return stored; },
+                       setItem: (k, v) => { stored = v; } };
+"""
+
+    def run_js(self, body: str):
+        js = (Path(page.__file__).resolve().parents[1] / "static/pages/hooks.js").read_text(encoding="utf-8")
+        done = subprocess.run(["node", "-e", self.STUBS + js + "\n" + body],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout)
+
+    ROWS = """
+const row = (o) => Object.assign({ hook: "g", fires: 12, blocks: 3, warns: 1, errors: 0, block_rate: 0.25,
+  last_block: 1000, top_reasons: [], recent: [] }, o);
+const ready = (rows) => ({ state: "ready", rows, at: Date.now() });
+"""
+
+    def test_a_script_name_loses_its_extension(self):
+        out = self.run_js('process.stdout.write(JSON.stringify(["prose-guard.py", "command_guard.sh", "/h/x/no-sleep-poll.py", "plain", ".py", "a.b.py"].map(hkStem)));')
+        self.assertEqual(out, ["prose-guard", "command_guard", "no-sleep-poll", "plain", ".py", "a.b"])
+
+    def test_the_three_columns_per_state(self):
+        out = self.run_js(self.ROWS + """
+const cells = (html) => (html.match(/<span class="hk-num[^"]*">.*?<\\/span>/g) || []).map((c) => c.replace(/<[^>]+>/g, "") + "|" + (c.match(/hk-(bad|zero)/) || [""])[0]);
+hooksPage.window = "7d";
+const w = hkWindow();
+const out = {};
+hooksPage.statsBy[w] = ready({ g: row({}), calm: row({ hook: "calm", fires: 5, blocks: 0, block_rate: 0 }),
+  tiny: row({ hook: "tiny", fires: 400, blocks: 1, block_rate: 0.0025 }), idle: row({ hook: "idle", fires: 0, blocks: 0 }) });
+out.busy = cells(hkNumsHtml("g.py"));
+out.calm = cells(hkNumsHtml("calm.sh"));
+out.tiny = cells(hkNumsHtml("tiny.py"));
+out.idle = cells(hkNumsHtml("idle.py"));
+out.none = cells(hkNumsHtml("never-ran.py"));
+hooksPage.statsBy[w] = { state: "error", rows: {}, at: 0 };
+out.error = cells(hkNumsHtml("g.py"));
+hooksPage.statsBy[w] = { state: "loading", rows: {}, at: 0 };
+out.loading = hkNumsHtml("g.py");
+out.header = hkColsHeader().replace(/<[^>]+>/g, " ").trim().split(/\\s+/);
+process.stdout.write(JSON.stringify(out));
+""")
+        self.assertEqual(out["busy"], ["12|", "3|hk-bad", "25%|hk-bad"])
+        self.assertEqual(out["calm"], ["5|", "0|hk-zero", "0%|hk-zero"])
+        self.assertEqual(out["tiny"], ["400|", "1|hk-bad", "&lt;1%|hk-bad"])
+        dashes = ["–|hk-zero"] * 3
+        self.assertEqual((out["idle"], out["none"], out["error"]), (dashes, dashes, dashes))
+        # Loading keeps three cells too, each holding a placeholder.
+        self.assertEqual(out["loading"].count('class="hk-num"'), 3)
+        self.assertEqual(out["loading"].count("skel"), 3)
+        self.assertEqual(out["header"], ["Fires", "Blocks", "Rate"])
+
+    def test_the_picker_offers_three_windows_and_remembers_one(self):
+        out = self.run_js("""
+const out = {};
+out.first = hkWindow();
+out.options = [...hkWindowSelect().matchAll(/<option value="(\\w+)"( selected)?>([^<]*)/g)].map((m) => [m[1], !!m[2], m[3]]);
+hooksPage.window = null; stored = "30d"; out.saved = hkWindow();
+hooksPage.window = null; stored = "bogus"; out.bogus = hkWindow();
+hooksPage.window = null; stored = "throw"; out.blocked = hkWindow();
+process.stdout.write(JSON.stringify(out));
+""")
+        self.assertEqual(out["first"], "7d")
+        self.assertEqual(out["options"], [["24h", False, "Last 24 hours"], ["7d", True, "Last 7 days"],
+                                          ["30d", False, "Last 30 days"]])
+        self.assertEqual((out["saved"], out["bogus"], out["blocked"]), ("30d", "7d", "7d"))
+
+    def test_the_detail_card(self):
+        out = self.run_js(self.ROWS + """
+const text = (html) => html.replace(/<[^>]+>/g, "|").replace(/\\s*\\|\\s*/g, "|").replace(/\\|+/g, "|");
+const out = {};
+hooksPage.window = "7d";
+const runs = Array.from({ length: 7 }, (_, i) => ({ ts: 2000 - i, decision: i ? "allow" : "block", repo: "/w/api", cwd: "/w/api", git_branch: `b${i}` }));
+hooksPage.statsBy["7d"] = ready({ g: row({ top_reasons: [
+  { decision: "block", reason: "no em dash", count: 2 }, { decision: "warn", reason: "long reply", count: 1 },
+  { decision: "error", reason: "boom", count: 4 }], recent: runs }) });
+out.full = text(hkDetailStatsInner("g.py"));
+out.recentRows = (hkDetailStatsInner("g.py").match(/hk-line-row/g) || []).length;
+out.blocksBad = /hk-tile-value hk-bad">3</.test(hkDetailStatsInner("g.py"));
+out.noRuns = text(hkDetailStatsInner("other.py"));
+hooksPage.window = "24h"; hooksPage.statsBy["24h"] = ready({});
+out.noRuns24 = text(hkDetailStatsInner("g.py"));
+hooksPage.statsBy["24h"] = ready({ g: row({ blocks: 0, last_block: null, block_rate: 0 }) });
+out.never = text(hkDetailStatsInner("g.py"));
+hooksPage.statsBy["24h"] = { state: "error", rows: {}, at: 0 };
+out.error = text(hkDetailStatsInner("g.py"));
+process.stdout.write(JSON.stringify(out));
+""")
+        full = out["full"]
+        for want in ("Fires|12", "Blocks|3", "Last block|ago1000", "Top reasons", "no em dash|2 blocks",
+                     "long reply|1 warn", "boom|4 errors", "Recent runs", "block|· api · b0|ago2000",
+                     "allow|· api · b4|ago1996"):
+            self.assertIn(want, full)
+        self.assertNotIn("b5", full)       # five runs at most
+        self.assertEqual(out["recentRows"], 3 + 5)
+        self.assertTrue(out["blocksBad"])
+        self.assertIn("No runs in the last 7 days.", out["noRuns"])
+        self.assertNotIn("Top reasons", out["noRuns"])
+        self.assertIn("No runs in the last 24 hours.", out["noRuns24"])
+        self.assertIn("Last block|–", out["never"])
+        self.assertIn("not available", out["error"])
+
+    def test_phone_width_keeps_the_columns_and_truncates_the_name(self):
+        css = (Path(page.__file__).resolve().parents[1] / "static/pages/hooks.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.hk-row \.hk-title \.name \{[^}]*text-overflow: ellipsis")
+        self.assertRegex(css, r"\.hk-num \{[^}]*width: 46px")
+        self.assertRegex(css, r"@media \(max-width: 480px\) \{ \.hk-num \{ width: 40px; \} \}")
+        self.assertRegex(css, r"@media \(prefers-reduced-motion: reduce\) \{ \.hk-fresh \{ animation: none; \} \}")
+        # Numbers never wrap or collapse: the name gives way, not them.
+        self.assertRegex(css, r"\.hk-nums \{[^}]*flex: none")
 
 
 if __name__ == "__main__":

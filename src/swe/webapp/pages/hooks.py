@@ -26,11 +26,23 @@ page shares the one-fix lock (409 ``busy``). ``POST /v1/app/hooks/new``
 settings file, so the reply carries the stanza to paste. ``harness`` of
 ``shared`` is ``swe hooks new shared``; anything else resolves through
 the registry's aliases first. Everything else is a 404.
+
+``GET /v1/app/hooks?stats=<24h|7d|30d>`` is what the hooks did in that
+window: ``swe hooks stats --json`` and ``swe hooks log --json`` read in
+process (``hooks/stats_commands.py::collect``), one row per hook script
+summed across harnesses, each with its top reasons and its five newest
+runs. The read can take seconds on a large transcript library (it
+backfills from Claude Code's transcripts), so no request runs it: a
+background thread does, its answer is cached for ``STATS_TTL_S``, and a
+request that finds nothing ready answers ``{"state": "loading"}`` after
+at most ``FIRST_WAIT_S`` for the client to ask again. The list and detail
+reads above never touch it.
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 from swe.webapp.pages import PageError, home_path
@@ -44,6 +56,8 @@ _WRITE_LOCK = threading.Lock()
 
 def get(ctx, args: dict) -> dict:
     home = home_path(ctx)
+    if args.get("stats"):
+        return stats_view(home, args["stats"])
     if args.get("hook"):
         return detail(ctx, home, args)
     return listing(ctx, home)
@@ -271,4 +285,113 @@ def _new_shared(name: str, home: Path, registry: dict) -> dict:
         "commands": commands,
         "deploys_to": sorted(commands),
         "stanza": stanza,
+    }
+
+
+# -- run stats --------------------------------------------------------------
+
+# The windows the page offers: the CLI's ``--since`` spelling.
+STATS_WINDOWS = ("24h", "7d", "30d")
+# A finished read answers every request for this long.
+STATS_TTL_S = 30.0
+# A failed read is remembered this long, so a broken log is not re-read on
+# every poll.
+STATS_ERROR_TTL_S = 5.0
+# How long a request waits for the first read before it answers "loading":
+# a small library finishes inside it, a large one is polled for.
+FIRST_WAIT_S = 0.25
+RECENT_RUNS = 5
+
+_STATS_LOCK = threading.Lock()
+# (home, window) -> {"payload", "error", "at", "thread"}: the last good
+# payload, the last failure, when the last read ended, and the read in
+# flight, if any.
+_STATS: dict[tuple[str, str], dict] = {}
+
+
+def stats_view(home: Path, window: str) -> dict:
+    """``GET ?stats=<window>``: the payload, or ``{"state": "loading"}``
+    while the first read runs. A request never runs the read itself, and
+    at most one runs per (home, window)."""
+    if window not in STATS_WINDOWS:
+        raise PageError(422, "bad_window",
+                        f"window must be one of {', '.join(STATS_WINDOWS)}.")
+    key = (str(home), window)
+    with _STATS_LOCK:
+        entry = _STATS.setdefault(key, {})
+        thread = entry.get("thread")
+        running = thread is not None and thread.is_alive()
+        ttl = STATS_TTL_S if "error" not in entry else STATS_ERROR_TTL_S
+        fresh = "at" in entry and time.monotonic() - entry["at"] < ttl
+        if not fresh and not running:
+            thread = threading.Thread(
+                target=_stats_worker, args=(key, home, window),
+                name="hooks-stats", daemon=True)
+            entry["thread"] = thread
+            thread.start()
+            running = True
+        has_payload = "payload" in entry
+    # Only a read with nothing to show yet is waited for: once there are
+    # numbers, a refresh runs behind them and they are served meanwhile.
+    if running and not has_payload:
+        thread.join(FIRST_WAIT_S)
+    with _STATS_LOCK:
+        entry = _STATS.get(key, {})
+        if "payload" in entry:
+            return entry["payload"]
+        if "error" in entry:
+            raise PageError(503, "stats_unavailable", entry["error"])
+    return {"state": "loading", "window": window}
+
+
+def _stats_worker(key: tuple[str, str], home: Path, window: str) -> None:
+    try:
+        payload, error = build_stats_payload(home, window), None
+    except Exception as exc:  # noqa: BLE001 - kept for the page, never raised
+        payload, error = None, str(exc) or type(exc).__name__
+    with _STATS_LOCK:
+        entry = _STATS.setdefault(key, {})
+        if error is None:
+            entry["payload"] = payload
+            entry.pop("error", None)
+        else:
+            entry["error"] = error
+        entry["at"] = time.monotonic()
+        entry.pop("thread", None)
+
+
+def build_stats_payload(home: Path, window: str, now: float | None = None) -> dict:
+    """What ``swe hooks stats --json`` and ``swe hooks log --json`` show
+    for ``window``, one row per hook script with the harnesses summed:
+    the counts, the top reasons and the newest runs of each."""
+    from swe.hooks import events as _events
+    from swe.hooks import stats_commands as _stats
+
+    now = time.time() if now is None else now
+    since = _events.parse_since(window, now)
+    data = _stats.collect(home, since, True, now)
+    events = data["events"]
+    # Blank the harness so build_stats folds each hook into one row.
+    merged = _events.build_stats([{**e, "harness": ""} for e in events])
+    harnesses: dict[str, set] = {}
+    newest: dict[str, list] = {}
+    for event in sorted(events, key=lambda e: e["ts"], reverse=True):
+        harnesses.setdefault(event["hook"], set()).add(event["harness"])
+        runs = newest.setdefault(event["hook"], [])
+        if len(runs) < RECENT_RUNS:
+            runs.append(_stats._event_json(event))
+    rows = []
+    for row in merged["hooks"]:
+        row = {k: v for k, v in row.items() if k != "harness"}
+        row["harnesses"] = sorted(h for h in harnesses.get(row["hook"], ()) if h)
+        row["recent"] = newest.get(row["hook"], [])
+        rows.append(row)
+    return {
+        "state": "ready",
+        "window": window,
+        "since": since,
+        "until": now,
+        "sources": data["sources"],
+        "totals": merged["totals"],
+        "hooks": rows,
     }

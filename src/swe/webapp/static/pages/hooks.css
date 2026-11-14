@@ -95,3 +95,45 @@ dialog.hk-new-sheet { width: min(480px, calc(100vw - 32px)); }
 .hk-new-field { display: flex; flex-direction: column; gap: 4px; }
 .hk-new-label { font-size: 12px; color: var(--text-secondary); }
 .hk-stanza .hk-text { padding-right: 38px; }
+
+/* Run counts: three right-aligned number columns on every row, labelled by
+ * a header row in each card. Loading, error and no-runs cells keep the
+ * column width, so the numbers landing moves nothing. */
+.hk-statsbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hk-statsbar .caption { flex: 1 1 200px; min-width: 0; }
+select.field.hk-window { flex: 0 0 auto; }
+.hk-nums { display: flex; flex: none; }
+.hk-num {
+  width: 46px; display: flex; justify-content: flex-end; align-items: center;
+  font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.hk-cols {
+  display: flex; align-items: center; gap: 10px; padding: 0 6px 6px; margin: 0 -6px;
+  font-size: 12px; color: var(--text-secondary);
+}
+.hk-cols-gap { flex: 1 1 auto; min-width: 0; }
+.hk-chevron { width: 10px; text-align: center; }
+.hk-bad { color: var(--danger-text); }
+.hk-warn { color: var(--warning-text); }
+.hk-zero { color: var(--text-muted); }
+.hk-row .hk-title .name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-fresh { animation: hk-fade-in .18s ease-out; }
+@keyframes hk-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .hk-fresh { animation: none; } }
+@media (max-width: 480px) { .hk-num { width: 40px; } }
+
+/* The detail page's stats card. */
+.hk-stats-card { display: flex; flex-direction: column; gap: 12px; }
+.hk-stats-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hk-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.hk-tile {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--block-radius); background: var(--subtle);
+}
+.hk-tile-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-sub { display: flex; flex-direction: column; }
+.hk-sub > .caption { padding-bottom: 4px; }
+.hk-line-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--row-divider); font-size: 13px; }
+.hk-line-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-line-side { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hk-none { margin: 0; }

@@ -40,6 +40,27 @@ that is not editable — any source that does not resolve inside
 `~/.swe/hooks` — gets the lock note instead of pretending it could be
 edited; a missing or directory source gets a note rather than a preview.
 
+**Run counts** sit on every row: three right-aligned columns, `Fires`,
+`Blocks` and `Rate`, labelled by a header row in each card, with every
+harness's runs of the script added up (a row is matched by its file name
+without the extension: `prose-guard.py` is `prose-guard`). Blocks and
+rate read in the danger colour above zero and muted at zero, rate is a
+whole percent (`<1%` when blocks round to none), and a hook with no runs
+in the window shows a dash in all three. A picker above the cards
+(Last 24 hours, Last 7 days, Last 30 days; default 7 days) sets the
+window and is kept per browser in `localStorage` as `swe.hooks.window`.
+The columns hold their width while loading (placeholders), on an error
+(dashes, with a note beside the picker; the rest of the page works) and
+at phone width, where the name truncates instead. The numbers fade in
+when they arrive, not under reduced motion.
+
+The detail view (`#/hooks?hook=...`) gains a Runs card for the same
+window: `Fires`, `Blocks` and `Last block` tiles, `Top reasons` (the
+reason, and "N blocks", "N warns" or "N errors"; up to five) and `Recent
+runs` (decision, repo folder and branch, with the age on the right; up
+to five), or one muted line, "No runs in the last 7 days.", when the
+window holds none.
+
 **New hook** is `swe hooks new`: a sheet with the harness picker (every
 non-archived registry name plus every name the inventory rows carry,
 plus "shared") and the name field live-checked against
@@ -84,6 +105,21 @@ tier: "shared", commands, deploys_to[], stanza}` for a shared one, the
 same fields `swe hooks new --json` emits. Bad names are 422 `bad_hook`;
 any other action is a 404.
 
+`GET /v1/app/hooks?stats=<24h|7d|30d>` is the run counts: what `swe
+hooks stats --json` and `swe hooks log --json` print, built in process
+(`hooks/stats_commands.py::collect` and `events.build_stats`), one row per
+script with the harnesses added up, each with `top_reasons`, `harnesses`
+and `recent` (five `HookEvent`s). The shape is in
+[json-contracts.md](../json-contracts.md#swe-hooks-stats-shape). The read
+backfills from Claude Code transcripts, which takes seconds on a large
+library, so the list never waits for it and no request runs it: the page
+asks for the list and the counts as two requests, a background thread (one
+per window) does the read, and the answer is kept 30 seconds. A request
+that finds nothing ready answers `{state: "loading"}` after a quarter of a
+second and the page asks again every 1.5 seconds; an older answer is served
+while the next read runs. A bad window is 422 `bad_window`, a failed read
+503 `stats_unavailable`.
+
 ## Differences from the Mac app
 
 - Script editing is Mac-only: the InstructionEditor, the per-hook drafts
@@ -91,6 +127,10 @@ any other action is a 404.
   preview here is read-only and `editable` only decides the lock note's
   wording.
 - "Show in Finder" has no web equivalent.
+- The Mac page shows counts on a per-harness timeline of events; this
+  page has no timeline, so the columns sit on the grouped rows and the
+  window picker above them. A script shared by several harnesses shows the
+  same summed counts on each of its rows.
 - The rest of `swe hooks` — `delete`, `disable`, `enable`, `sync` and
   `edit` — is not exposed; linking and replacing go through `swe init`
   like the app's strip, and `new` through the POST above.
