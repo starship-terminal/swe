@@ -21,6 +21,18 @@ connection and says yes only for the Tailscale daemon:
 Anything else, or any failure to tell, is "no". The request is then
 read as the loopback peer it is: it loses the tailnet identity and
 keeps everything a bearer credential gives.
+
+The lookup can be blind (#1944). On macOS 27 a process that is
+ad-hoc signed, or has a live ad-hoc-signed ancestor, sees an empty TCP
+table: ``netstat -anv`` prints no sockets, so no peer is ever placed.
+Homebrew's Python and Nix's shells are ad-hoc signed; a
+Developer-ID-signed Python, such as python.org's, started by launchd or
+a signed shell sees the table. A blind hub still fails closed: tailscaled
+is never recognised, and every request through ``tailscale serve``
+reads as loopback. ``owner_lookup_works`` tells a blind host apart so
+``swe remote serve`` can say so at start; it never changes what
+``is_proxy`` accepts, and an empty table is never read as anything but
+"can't tell".
 """
 
 from __future__ import annotations
@@ -33,6 +45,7 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 Addr = tuple[str, int]
 
@@ -182,10 +195,52 @@ def app_store_binary(path: str, app: str = _TAILSCALE_APP) -> bool:
             and not (bundle.st_mode & 0o022) and not (exe.st_mode & 0o022))
 
 
+def _darwin_pid(server: Addr, peer: Addr) -> int | None:
+    """The pid behind ``peer`` from a fresh ``netstat -anv -p tcp``."""
+    return netstat_pid(server, peer, _run([_NETSTAT, "-anv", "-p", "tcp"]))
+
+
 def _darwin_is_proxy(server: Addr, peer: Addr) -> bool:
-    pid = netstat_pid(server, peer, _run([_NETSTAT, "-anv", "-p", "tcp"]))
+    pid = _darwin_pid(server, peer)
     if pid is None or pid == os.getpid():
         return False
     if _pid_uid(pid) == 0:
         return True
     return app_store_binary(_pid_path(pid))
+
+
+# -- Can the lookup see anything? ---------------------------------------
+
+
+def owner_lookup_works(lookup: Callable[[Addr, Addr], int | None] | None = None,
+                       me: int | None = None) -> bool:
+    """True when this host's socket-owner lookup names this process as
+    the owner of a loopback connection it holds itself.
+
+    The lookup ``is_proxy`` relies on (``netstat`` on macOS, compared
+    with this pid; ``/proc/net/tcp`` on Linux, compared with this uid)
+    is asked about a connection opened here for the purpose. False means
+    the lookup is blind on this host (see the module docstring) or can't
+    be run: ``is_proxy`` then says no to every peer, tailscaled's
+    included. Costs one socket pair
+    and one lookup; never raises. Tests pass ``lookup`` and ``me``.
+    Only a warning and a test skip read the answer.
+    """
+    try:
+        if lookup is None:
+            if sys.platform.startswith("linux"):
+                lookup, me = linux_uid, os.getuid()
+            elif sys.platform == "darwin":
+                lookup, me = _darwin_pid, os.getpid()
+            else:
+                return False
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            listener.settimeout(3)
+            server = listener.getsockname()[:2]
+            with socket.create_connection(server, timeout=3) as client:
+                conn, _ = listener.accept()
+                with conn:
+                    found = lookup(server, client.getsockname()[:2])
+        return me is not None and found == me
+    except Exception:  # noqa: BLE001 - a probe that fails is "can't see"
+        return False
