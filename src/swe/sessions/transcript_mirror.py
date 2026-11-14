@@ -421,8 +421,18 @@ def _copy(source: str, dest: Path, root: Path, *,
             existing = existing.parent
         if not _resolves_to_itself(str(existing)):
             raise OSError(errno.ELOOP, "a folder on the way is a symlink", str(existing))
+    elif not _resolves_to_itself(str(root)) or not _under(str(dest), str(root)):
+        raise OSError(errno.EINVAL, "a mirror copy goes under the mirror's real root", str(dest))
+    else:
+        # Forward: no folder between the root and the copy may be a link,
+        # or the copy could replace a file in another account's folder.
+        existing = dest.parent
+        while not os.path.lexists(existing) and existing != root:
+            existing = existing.parent
+        if not _resolves_to_itself(str(existing)):
+            raise OSError(errno.ELOOP, "a mirror folder is a symlink", str(existing))
     _ensure_dir(dest.parent, root)
-    if exclusive and not _resolves_to_itself(str(dest.parent)):
+    if not _resolves_to_itself(str(dest.parent)):
         raise OSError(errno.ELOOP, "a folder on the way is a symlink", str(dest.parent))
     # A name nothing has created: clonefile refuses an existing target.
     tmp = str(dest.parent / f".{dest.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp")
@@ -491,6 +501,10 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
     root = transcripts_dir_for(home)
     table = roots(home)
     _ensure_dir(root, root.parent)
+    # Copies are written under the root's real path, so the check in
+    # ``_copy`` can tell a linked folder inside the mirror (which could
+    # land a copy on another account's) from the root's own spelling.
+    root = Path(os.path.realpath(root))
     with _pass_lock(home, wait):
         raw, entries, corrupt = _read_manifest_full(manifest_path(home))
         before = dict(entries)
@@ -660,16 +674,46 @@ def _inside(path: str, root: str) -> bool:
             and _resolves_to_itself(path))
 
 
+def _group_rel(harness: str, account_home: str) -> str:
+    """The mirror folder, relative to the root, that holds ``harness``
+    copies for an account home (``""`` for the harness's own)."""
+    if account_home:
+        return f"accounts/{harness}/{Path(account_home).parent.name}"
+    return harness
+
+
+def _group_dir(home: Path | None, harness: str, account_home: str) -> str | None:
+    """The real path of a session's account folder in the mirror, spelled
+    from the real root and checked before anything is resolved through
+    it: None when there is none, :class:`Refused` when it is a link (or
+    sits behind one), which could lead into another account's copies."""
+    if harness not in MIRRORED:
+        return None
+    path = os.path.join(_real_root(home), _group_rel(harness, account_home))
+    if not os.path.lexists(path):
+        return None
+    if not _resolves_to_itself(path) or not os.path.isdir(path):
+        raise Refused(f"{path} is a link or not a folder; swe will not follow it, since it "
+                      "could lead to another account's copies")
+    return path
+
+
+def _same_account(entry: dict, account_home: str) -> bool:
+    return os.path.normpath(entry.get("account_home") or "") == \
+        os.path.normpath(account_home or "")
+
+
 def _session_rels(entries: dict, session, home: Path | None) -> tuple[list[str], list[str]]:
     """``(main, extra)`` mirror-relative paths the manifest ties to
     ``session``: its own transcript copies (several for a Claude session
     resumed from another folder, every rollout for a Codex thread) and
-    the subagent transcripts in the folder Claude keeps beside one."""
-    base = mirror_dir(session.tool_name, session.account_home, home)
-    if base is None:
+    the subagent transcripts in the folder Claude keeps beside one. Only
+    entries recorded for the session's own account home count, inside
+    its account folder, which must not be a link (:func:`_group_dir`)."""
+    group = _group_dir(home, session.tool_name, session.account_home)
+    if group is None:
         return [], []
     root = _real_root(home)
-    group = os.path.realpath(base)
     stem = Path(session.session_id).stem
     thread = ""
     if session.tool_name == "codex":
@@ -678,7 +722,8 @@ def _session_rels(entries: dict, session, home: Path | None) -> tuple[list[str],
         thread = codex_thread_id(stem)
     main: list[str] = []
     for rel, entry in entries.items():
-        if entry.get("harness") != session.tool_name:
+        if entry.get("harness") != session.tool_name \
+                or not _same_account(entry, session.account_home):
             continue
         path = os.path.join(root, rel)
         if os.path.normpath(path) != path or not _under(path, group):
@@ -699,6 +744,7 @@ def _session_rels(entries: dict, session, home: Path | None) -> tuple[list[str],
         folders = tuple(f"{rel[:-len('.jsonl')]}/" for rel in main)
         extra = [rel for rel, entry in entries.items()
                  if rel not in main and entry.get("harness") == "claude"
+                 and _same_account(entry, session.account_home)
                  and rel.startswith(folders)] if folders else []
     return sorted(main), sorted(extra)
 
@@ -729,20 +775,8 @@ def restore(home: Path | None, session) -> dict:
     list). Never overwrites: see ``_copy(exclusive=True)``. Raises
     :class:`MirrorBusy` while a pass runs."""
     home = Path(home) if home is not None else Path(os.path.expanduser("~"))
-    copy = find_copy(session.tool_name, session.session_id, session.account_home, home)
-    if copy is None:
-        raise Refused("swe has no mirror copy of this session")
     root = _real_root(home)
-    # The path as found, never resolved first: a resolved folder would
-    # hide a link inside the mirror and could select another account's
-    # entry. Only the root's own spelling is mapped to its real path.
-    copy_path = str(copy)
-    spelled = str(transcripts_dir_for(home))
-    if not _under(copy_path, root) and _under(copy_path, spelled):
-        copy_path = root + copy_path[len(spelled):]
-    if not _inside(copy_path, root):
-        raise Refused(f"the mirror copy {copy} is not a plain file inside {root} "
-                      "(a symlink, or behind one)")
+    copy_path = _listed_copy(home, session)
     rel = copy_path[len(root) + 1:]
     with _pass_lock(home, wait=False):
         raw, entries, _corrupt = _read_manifest_full(manifest_path(home))
@@ -752,8 +786,13 @@ def restore(home: Path | None, session) -> dict:
                           "where to put it back")
         entry = entries.get(rel)
         if entry is None:
-            raise Refused(f"the manifest has no record of where {rel} was copied from, "
-                          "so swe cannot tell where to put it back")
+            raise Refused(f"the copy the listing shows, {copy_path}, has no manifest record of "
+                          "where it was copied from, so swe cannot tell where to put it back "
+                          "(and will not restore an older copy in its place)")
+        if entry.get("harness") != session.tool_name \
+                or not _same_account(entry, session.account_home):
+            raise Refused(f"the manifest records {rel} for another harness or account home, "
+                          "so swe will not restore it for this session")
         target = entry.get("source")
         if not isinstance(target, str) or not os.path.isabs(target) \
                 or os.path.normpath(target) != target:
@@ -778,6 +817,30 @@ def restore(home: Path | None, session) -> dict:
     return {"harness": session.tool_name, "session_id": session.session_id,
             "account_home": session.account_home or None, "copy": copy_path,
             "target": target, "bytes": written, "how": how}
+
+
+def _listed_copy(home: Path, session) -> str:
+    """The copy the listing shows for ``session``: among the plain files
+    named ``<session id>.jsonl`` in its account folder, tracked by the
+    manifest or not, the newest by mtime (the listing's own rule). Found
+    by walking the checked folder without following links, so a newer
+    copy a crash left untracked is the one chosen, and restore then
+    refuses it rather than bring back older history."""
+    group = _group_dir(home, session.tool_name, session.account_home)
+    if group is None or not session.session_id:
+        raise Refused("swe has no mirror copy of this session")
+    root = _real_root(home)
+    name = f"{Path(session.session_id).stem}.jsonl"
+    found = []
+    for folder, _dirs, files in os.walk(group):
+        if name in files:
+            path = os.path.join(folder, name)
+            if _inside(path, root):
+                found.append(path)
+    if not found:
+        raise Refused("swe has no mirror copy of this session (a copy that is a symlink, "
+                      "or behind one, is never used)")
+    return max(found, key=lambda p: (os.lstat(p).st_mtime_ns, p))
 
 
 def _restore_stop(home: Path, harness: str, target: str) -> Path:
@@ -872,11 +935,11 @@ def purge_plan(home: Path | None, session) -> dict:
                     (files if _inside(backup, root) else skipped).append(backup)
     known = {os.path.join(root, rel) for rel in entries}
     untracked = []
-    base = mirror_dir(session.tool_name, session.account_home, home)
-    if base is not None:
+    group = _group_dir(home, session.tool_name, session.account_home)
+    if group is not None:
         names = {os.path.basename(rel) for rel in main}
         thread = _thread_of(session)
-        for folder, _dirs, names_here in os.walk(os.path.realpath(base)):
+        for folder, _dirs, names_here in os.walk(group):
             for name in names_here:
                 path = os.path.join(folder, name)
                 if path in known or not name.endswith(".jsonl"):
@@ -1155,6 +1218,12 @@ def find_copy(harness: str, session_id: str, account_home: str = "",
     (a lost manifest)."""
     base = mirror_dir(harness, account_home, home)
     if base is None or not session_id:
+        return None
+    # A linked account folder could lead into another account's copies:
+    # it is read as if absent.
+    expected = os.path.join(os.path.realpath(transcripts_dir_for(home)),
+                            _group_rel(harness, account_home))
+    if os.path.realpath(base) != expected or os.path.islink(expected):
         return None
     name = f"{Path(session_id).stem}.jsonl"
     found: list[Path] = []

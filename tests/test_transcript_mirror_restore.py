@@ -744,6 +744,104 @@ class MalformedManifestTests(PurgeCase):
         self.assert_bad_entries_kept()
 
 
+class ChosenCopyTests(PurgeCase):
+    """Restore and purge act only on the copy the listing shows and only on
+    entries tied to the chosen account, never on what a folder or a link
+    happens to hold."""
+
+    def stale_then_untracked_newer(self):
+        older = write_jsonl(self.home / ".claude/projects/-a-older" / f"{CLAUDE_ID}.jsonl",
+                            claude_records("older text"), MTIME)
+        self.sync()
+        older.unlink()
+        # A crash left a newer copy the manifest never recorded.
+        newer = write_jsonl(self.mirror_root / "claude/-z-newer" / f"{CLAUDE_ID}.jsonl",
+                            claude_records("newer text"), MTIME + 50)
+        self.assertEqual(self.row()["title"], "newer text")
+        return older, newer
+
+    def default_session(self):
+        return Session(timestamp=1.0, agent="Claude Code", path="/work/proj",
+                       session_id=CLAUDE_ID, tool_name="claude", mirrored=True)
+
+    def test_restore_refuses_when_the_listed_copy_is_untracked(self):
+        older, newer = self.stale_then_untracked_newer()
+        result = self.restore(CLAUDE_ID)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("-z-newer", result.stdout + result.stderr)
+        self.assertFalse(older.exists())
+        self.assertTrue(newer.is_file())
+
+    def test_purge_names_an_untracked_newer_claude_copy(self):
+        _older, newer = self.stale_then_untracked_newer()
+        result = self.purge(f"--purge={CLAUDE_ID}", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("-z-newer", result.stdout)
+        self.assertIn("keep listing", result.stdout)
+        self.assertTrue(newer.is_file())
+
+    def linked_default_group(self):
+        account = self.home / ".swe/accounts/claude/work/home"
+        source = write_jsonl(account / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
+                             claude_records("account text"))
+        self.sync()
+        source.unlink()
+        work = self.mirror_root / "accounts/claude/work"
+        (self.mirror_root / "claude").symlink_to(work)
+        return source, work / f"-work-proj/{CLAUDE_ID}.jsonl"
+
+    def test_purge_refuses_a_linked_group_folder(self):
+        _source, work_copy = self.linked_default_group()
+        with self.assertRaises(mirror.Refused):
+            mirror.purge_plan(self.home, self.default_session())
+        result = self.purge(f"--purge={CLAUDE_ID}", "--account=default", "--yes")
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(work_copy.is_file())
+        self.assertEqual(len(mirror.load_manifest(self.home)), 1)
+
+    def test_restore_refuses_a_linked_group_folder(self):
+        source, work_copy = self.linked_default_group()
+        with self.assertRaises(mirror.Refused):
+            mirror.restore(self.home, self.default_session())
+        self.assertFalse(source.exists())
+        self.assertTrue(work_copy.is_file())
+
+    def entry_of_another_account(self):
+        source = self.mirrored_claude()
+        rel = f"claude/-work-proj/{source.name}"
+        manifest = json.loads(mirror.manifest_path(self.home).read_text())
+        manifest["files"][rel]["account_home"] = str(self.home / ".swe/accounts/claude/work/home")
+        mirror.manifest_path(self.home).write_text(json.dumps(manifest))
+        return source, self.mirror_root / rel
+
+    def test_purge_skips_an_entry_recorded_for_another_account(self):
+        _source, copy = self.entry_of_another_account()
+        with self.assertRaises(mirror.Refused):
+            mirror.purge_plan(self.home, self.default_session())
+        self.assertTrue(copy.is_file())
+
+    def test_restore_refuses_an_entry_recorded_for_another_account(self):
+        source, _copy = self.entry_of_another_account()
+        with self.assertRaises(mirror.Refused):
+            mirror.restore(self.home, self.default_session())
+        self.assertFalse(source.exists())
+
+    def test_a_pass_never_writes_through_a_linked_group(self):
+        _source, work_copy = self.linked_default_group()
+        before = work_copy.read_bytes()
+        # The default home now has a live transcript at the same relative
+        # path, which the link would land on the work account's only copy.
+        write_jsonl(self.home / ".claude/projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
+                    claude_records("default home text"), MTIME + 5)
+        result = self.sync()
+        self.assertEqual(work_copy.read_bytes(), before)
+        self.assertEqual(result.failed, 1)
+
+    def test_reads_never_follow_a_linked_group_into_another_account(self):
+        self.linked_default_group()
+        self.assertIsNone(mirror.find_copy("claude", CLAUDE_ID, "", self.home))
+
+
 class SweepTests(PurgeCase):
     def temp(self, folder: Path, name: str, age: float) -> Path:
         folder.mkdir(parents=True, exist_ok=True)
