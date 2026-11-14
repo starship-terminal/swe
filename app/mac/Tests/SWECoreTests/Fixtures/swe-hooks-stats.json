@@ -1,0 +1,207 @@
+{
+  "schema": 1,
+  "data": {
+    "window": "7d",
+    "since": 1794061314.2293959,
+    "until": 1794666114.2293959,
+    "filters": {
+      "hook": null,
+      "harness": null,
+      "repo": null,
+      "source": null
+    },
+    "sources": {
+      "helper": 6,
+      "transcript": 14,
+      "duplicates": 3,
+      "backfill": true
+    },
+    "totals": {
+      "fires": 20,
+      "blocks": 5,
+      "warns": 1,
+      "errors": 0,
+      "allows": 14,
+      "recovered": 0,
+      "block_rate": 0.25,
+      "last_fired": 1794664193.906,
+      "last_block": 1794664193.906,
+      "avg_duration_ms": 28,
+      "hooks": 7
+    },
+    "hooks": [
+      {
+        "hook": "prose-guard",
+        "harness": "claude",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/prose-guard.py"
+        ],
+        "scripts": [
+          "/private/tmp/swe-fixture-home/.swe/hooks/claude/prose-guard.py"
+        ],
+        "fires": 6,
+        "blocks": 2,
+        "warns": 1,
+        "errors": 0,
+        "allows": 3,
+        "recovered": 0,
+        "block_rate": 0.3333,
+        "last_fired": 1794662393.906,
+        "last_block": 1794658793.906,
+        "avg_duration_ms": 25,
+        "top_reasons": [
+          {
+            "decision": "block",
+            "reason": "done-followups: missing Follow-ups",
+            "count": 2
+          },
+          {
+            "decision": "warn",
+            "reason": "long paragraph",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "hook": "bundle",
+        "harness": "claude",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/bundle"
+        ],
+        "scripts": [
+          "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/check.py",
+          "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/scripts/on-stop.sh"
+        ],
+        "fires": 5,
+        "blocks": 2,
+        "warns": 0,
+        "errors": 0,
+        "allows": 3,
+        "recovered": 0,
+        "block_rate": 0.4,
+        "last_fired": 1794664193.906,
+        "last_block": 1794664193.906,
+        "avg_duration_ms": 25,
+        "top_reasons": [
+          {
+            "decision": "block",
+            "reason": "no force push",
+            "count": 1
+          },
+          {
+            "decision": "block",
+            "reason": "stop-rule: tests not run",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "hook": "notify",
+        "harness": "codex",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py"
+        ],
+        "scripts": [
+          "/private/tmp/swe-fixture-home/.swe/hooks/shared/notify.py"
+        ],
+        "fires": 2,
+        "blocks": 1,
+        "warns": 0,
+        "errors": 0,
+        "allows": 1,
+        "recovered": 0,
+        "block_rate": 0.5,
+        "last_fired": 1794661493.906,
+        "last_block": 1794661493.906,
+        "avg_duration_ms": 35,
+        "top_reasons": [
+          {
+            "decision": "block",
+            "reason": "notify: codex said wait",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "hook": "notify",
+        "harness": "claude",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py"
+        ],
+        "scripts": [
+          "/private/tmp/swe-fixture-home/.swe/hooks/shared/notify.py"
+        ],
+        "fires": 3,
+        "blocks": 0,
+        "warns": 0,
+        "errors": 0,
+        "allows": 3,
+        "recovered": 0,
+        "block_rate": 0.0,
+        "last_fired": 1794662093.906,
+        "last_block": null,
+        "avg_duration_ms": 40,
+        "top_reasons": []
+      },
+      {
+        "hook": "guard",
+        "harness": "claude",
+        "source_paths": [
+          "/tmp/swe-fixture-home/plugins/a/guard.sh"
+        ],
+        "scripts": [
+          "/private/tmp/swe-fixture-home/plugins/a/guard.sh"
+        ],
+        "fires": 2,
+        "blocks": 0,
+        "warns": 0,
+        "errors": 0,
+        "allows": 2,
+        "recovered": 0,
+        "block_rate": 0.0,
+        "last_fired": 1794658673.906,
+        "last_block": null,
+        "avg_duration_ms": 25,
+        "top_reasons": []
+      },
+      {
+        "hook": "claude-plugin/on-stop",
+        "harness": "claude",
+        "source_paths": [],
+        "scripts": [],
+        "fires": 1,
+        "blocks": 0,
+        "warns": 0,
+        "errors": 0,
+        "allows": 1,
+        "recovered": 0,
+        "block_rate": 0.0,
+        "last_fired": 1794651593.906,
+        "last_block": null,
+        "avg_duration_ms": 25,
+        "top_reasons": []
+      },
+      {
+        "hook": "guard",
+        "harness": "codex",
+        "source_paths": [],
+        "scripts": [],
+        "fires": 1,
+        "blocks": 0,
+        "warns": 0,
+        "errors": 0,
+        "allows": 1,
+        "recovered": 0,
+        "block_rate": 0.0,
+        "last_fired": 1794644393.9062662,
+        "last_block": null,
+        "avg_duration_ms": 9,
+        "top_reasons": []
+      }
+    ],
+    "uncertain": [
+      "/tmp/swe-fixture-home/plugins/a/guard.sh",
+      "/tmp/swe-fixture-home/plugins/b/guard.sh"
+    ]
+  }
+}

@@ -328,13 +328,16 @@ _COMMAND_FLAGS: dict[str, list[tuple[str, str]]] = {
     "hooks stats": [
         ("--since=", "Window to count: 90m, 24h, 7d, 2w or all (default 7d)"),
         ("--hook=", "Only one hook"),
+        ("--source=", "Only the hook whose list source_path this is"),
         ("--harness=", "Only one harness"),
         ("--repo=", "Only runs in one repository"),
         ("--no-backfill", "Skip the Claude Code transcripts"),
+        ("--sum-harnesses", "One row per hook, every harness folded in"),
         ("--json", "Per-hook counts, rates and reasons as JSON"),
     ],
     "hooks log": [
         ("--since=", "Window to read: 90m, 24h, 7d, 2w or all (default 7d)"),
+        ("--source=", "The hook whose list source_path this is, not a name"),
         ("--harness=", "Only one harness"),
         ("--repo=", "Only runs in one repository"),
         ("--decision=", "Only block, warn, allow or error runs"),

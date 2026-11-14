@@ -533,6 +533,9 @@ final class AppModel {
     /// states and the check's findings. It asks for the current swe per
     /// call, so a path change needs no rebuild here.
     let hooks: HooksModel
+    /// The Hooks page's run counts (`swe hooks stats`), kept per window so
+    /// a trip to another page shows the last numbers at once.
+    let hookStats = HookStatsModel()
     /// The Worktrees page's list, from `swe wt list`. A debug build started
     /// with `SWE_WT_FIXTURE` answers from `WorktreesFixture` instead.
     let worktrees: WorktreesModel

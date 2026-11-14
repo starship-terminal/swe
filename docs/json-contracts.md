@@ -25,15 +25,15 @@ and the fixture that pins the shape. Fixtures live under
 | `swe setup [--hub=<url>] [--apply] --json --non-interactive` | `SetupPreview`: `harness`, `mcp`, `skills`, then `instructions` (a preview) or `applied` (`--apply`, the `SetupOutcome`), and `hub`: `{can_clone, demo_url, cloned}`. `cloned` is null unless `--hub` cloned this run, else `{url, path, marketplaces, plugins, mcp}`: `marketplaces` is `[{harness, marketplace, error}]`; `plugins` is `[{harness, name, marketplace, skipped, error, retry}]`, one row per plugin a registered hub marketplace lists and harness that is not archived, installed when `skipped` and `error` are null (`skipped` is `"already installed"`, or `"not attempted: setup ran out of time"`); `retry` is the `swe plugins install <plugin>@<marketplace> --harness=<h>` command for a plugin left out (failed or not attempted), null otherwise; `mcp` is `[{harness, name, skipped, error, needs}]`, one row per `mcp.json` server and harness with a known MCP config that setup links into, synced when `skipped` and `error` are null. A server whose `${NAME}` has no value is skipped with `needs: [NAME]` and `skipped: "no value for NAME; set it with: swe mcp secret set NAME"`, and the others still sync; one the harness already has is skipped and left as it is. A row with an empty `harness` and `name` is about the whole hub: its marketplaces couldn't be read (`plugins`), or its `mcp.json` is there but couldn't be read or parsed (`mcp`; an absent one gives no rows). Time budget: after the clone (`git ls-remote` 30 s, `git clone` 600 s), registering marketplaces and installing plugins share 150 s (`HUB_INSTALL_BUDGET_S`); each harness CLI call gets at most 90 s and none starts with under 15 s left. A marketplace that gets no time has `error: "not attempted: setup ran out of time"` and a plugin the `skipped` above. The MCP sync runs in process after them. The Mac app waits 900 s for the whole command. A failed plugin or server is a row and never changes the exit status. An swe from before the install step sends no `plugins` or `mcp`, and one from before the budget no `retry` | |
 | `swe instructions check --json` | `{"directory", "index", "output", "index_exists", "output_exists", "output_generated", "chapters": [{"name", "path", "exists", "only", "except"}], "targets", "targets_exists", "entries": [{"name", "enabled"}], "outputs": [{"harness", "path", "exists", "chapters"}], "error", "stale"}` — `chapters` lists active index lines, each with its targets.json rule (`only`/`except` lists or null); `entries` adds off chapters (`enabled` false) in index order; `outputs` lists the shared output (`harness` null) first, then each differing harness sorted, with the chapter names each compiles; `stale` covers per-harness outputs and retired generated `AGENTS.<name>.md` files. `index_exists` false means the shared file is not chapter-managed (flat-file editing); `stale` is null then. `error` carries the compiler's refusal (an invalid targets.json included) while the chapter list still shows what index.txt names. Exits 1 when `error` is set or `stale` is true | |
 | `swe instructions build --json` · `swe instructions init --json` | build is `{"changed": bool, "outputs": [{"harness", "path", "changed"}], "relinked": [paths], "removed": [paths], "notes": [str]}` — `harness` null is the shared AGENTS.md, `relinked` the instruction links repointed to their harness's output, `removed` the retired generated `AGENTS.<name>.md` files; init is `{"created": true, "chapter", "source", "built"}` — it folds the flat AGENTS.md into `AGENTS_MD/<chapter>` (compiler comments stripped when it was generated) and builds | |
-| `swe hooks list [--harness=<id>] --json` | `{"hooks": [HookRow]}` — `name`, `harness`, `tier` (`shared`/`harness`/`foreign`), `source_path`, `dest_path`, `link_status` (the init link vocabulary plus `foreign`), `enabled`, `events_supported` (normalized event names), `declared` (`{event, matcher, file}`) | |
+| `swe hooks list [--harness=<id>] --json` | `{"hooks": [HookRow]}` — `name`, `harness`, `tier` (`shared`/`harness`/`foreign`), `source_path`, `dest_path`, `link_status` (the init link vocabulary plus `foreign`), `enabled`, `events_supported` (normalized event names), `declared` (`{event, matcher, file}`). `source_path` is the key `swe hooks stats` rows join on (`source_paths`; see "`swe hooks stats` shape") | |
 | `swe hooks info <name> --json` | `{"script", "harnesses": [row]}` — the `list` row shape plus `detail`, `summary`, and `declared` carrying `timeout` and `command` too | |
 | `swe hooks check --json` | `{"findings": [{"kind", "harness", "message"}]}` — `kind` is `declared-missing`/`undeclared`/`unlinked`/`managed` (`managed` is a note, not drift; exit 1 when anything else is present) | |
 | `swe hooks sync [--force] --json` | `{"generated": [path], "pruned": [path], "links": {state: count}}` | |
 | `swe hooks delete <name> [--harness=<id>] [--foreign] [--yes] --json` | `{"deleted": [str], "declarations_left": [file]}` — deletes need `--yes` or a tty confirm; foreign files need `--foreign` | |
 | `swe hooks disable <name>` / `swe hooks enable <name>` `[--harness=<id>] --json` | `{"name", "state": "disabled"|"enabled", "sources": [path], "links": {state: count}}` | |
 | `swe hooks new <harness> <name> --json` | `{"path", "harness", "command", "settings": [file], "stanza"}`; `swe hooks new shared <name> --json` returns `{"path", "harness": "shared", "tier", "commands": {h: cmd}, "deploys_to": [h], "stanza"}` | |
-| `swe hooks stats [--since=<span>] [--hook=<name>] [--harness=<id>] [--repo=<path>] [--no-backfill] --json` | `{"window", "since", "until", "filters": {"hook", "harness", "repo"}, "sources": {"helper", "transcript", "duplicates", "backfill"}, "totals": {...}, "hooks": [HookStats]}`; see "`swe hooks stats` shape" below | |
-| `swe hooks log <name> [--since=<span>] [--harness=<id>] [--repo=<path>] [--decision=<d>] [--limit=<n>] [--no-backfill] --json` | `{"hook", "window", "since", "matched", "events": [HookEvent]}`, newest first; see "`swe hooks stats` shape" below | |
+| `swe hooks stats [--since=<span>] [--hook=<name>] [--source=<path>] [--harness=<id>] [--repo=<path>] [--no-backfill] [--sum-harnesses] --json` | `{"window", "since", "until", "filters": {"hook", "harness", "repo", "source"}, "sources": {"helper", "transcript", "duplicates", "backfill"}, "totals": {...}, "hooks": [HookStats], "uncertain": [source_path]}`; see "`swe hooks stats` shape" below | |
+| `swe hooks log <name>\|--source=<path> [--since=<span>] [--harness=<id>] [--repo=<path>] [--decision=<d>] [--limit=<n>] [--no-backfill] --json` | `{"hook", "source_path", "window", "since", "matched", "events": [HookEvent]}`, newest first; see "`swe hooks stats` shape" below | |
 | `swe mcp list --json` · `swe mcp status --json` | `McpInventory` — each `servers[]` row also carries `type`: the hub entry's `swe mcp set-type` label, or null when none is set (a transport word like `sse` is the wire marker, never a label), and `adopted_from`: the harness a sync/discover adoption pulled the hub entry from, or null | `swe-mcp-list.json`, `swe-mcp-status.json` |
 | `swe mcp sync ... --no-interactive --json` | `McpSyncReport` — plus `adopted`: the harness-only servers the run pulled into the hub at the end (each scoped off for the harnesses that lack it, `swe.adopted_from` holds the donor); `[]` when none or `--no-adopt` | |
 | `swe mcp enable/disable NAME [--for=h1,h2] --json` | `ToggleReply`: `{name, enabled_in?, disabled_in?, failed_in?}` — the places the verb switched plus (enable only) the targets that stayed off because the restore could not land. Exits 1 when nothing switched; the document still prints | `swe-mcp-disable.json` |
@@ -131,7 +131,7 @@ replays the journal.
 | `GET /v1/app/sessions?rescan=1` | the web app's Sessions: `{sessions: [{key, id, harness, agent, title, cwd, project, project_key, last_active_at, status, location, machine_id, machine, remote, resume, ownership, attachable, mode, tmux, kept, model, harness_title, pinned, pinned_at, can_fork, usage, duration_s, trivial, unread}], ledger_harnesses, open_terminal, scanned_at, notes, machine}`. Rows are `/v1/sessions`' catalog; `mode`, `tmux` and `kept` are its supervised fields (empty/false when none); `usage` is `{tokens, input, output, cache_read, cache_write, reasoning, cost_usd, unpriced_tokens, events, first_ts, last_ts, models: [{model, tokens}]}` over all history, joined by `(harness, id)` for hub-machine rows only, else null. `project_key` is the lowercased project, or `other` for hash-like names; `trivial` marks a short or empty session the page hides by default; `ownership` (`attached` \| `observed`) and `attachable` are the catalog's, for the page's chat (docs/web-app/sessions.md). `title`, `harness_title`, `pinned`, `pinned_at` and `can_fork` are the catalog's, as on `GET /v1/sessions` (`pinned_at` is null when unpinned). `unread` is the calling device's flag, as on `GET /v1/sessions`. `open_terminal` is true when the hub can open a terminal on a pane (macOS). Built by `webapp/sessions.py` and `ledger/sessions.py` |
 | `GET /v1/app/harnesses` | the web app's Harnesses: `{harnesses: [HarnessRow], window_days, machine}`, the rows of `swe list --scope=all --json` for the hub machine (archived included, `rate_limit` always null; the Accounts page reads limits from `/v1/usage`). `503 registry_unavailable` when the registry can't be read |
 | `GET /v1/app/tasks` | the web app's Tasks: the `GET /v1/tasks` answer verbatim — `{tasks: [TaskRow], repos?, github, linear, notion, env_blocked?, machine, machine_id, fetched_at?}` — plus two joins on each `TaskRow`: `session_rows`, its linked session keys joined to catalog rows trimmed to `{key, id?, harness, agent, title, status, cwd, machine, machine_id, remote, ownership, attachable, last_active_at, trivial}` (`{"key", "gone": true}` for a key the catalog lost; a remote row's `machine` is its name from `machines.json`), and `launch_rows`, its linked launch ids joined to live launch views `{id, state: pending\|started\|failed\|untracked, harness, note, key, cwd, machine}` (a launch the hub forgot is left off). `?refresh=1` bypasses the cache as on `/v1/tasks`; `?harnesses=1` answers only `{harnesses: [{name, display_name, tracked, launch_model, launch_effort, launch_yolo, last_model, recent_models}], machine}` (`launch_model`/`launch_effort`/`launch_yolo`: the launch takes that pick or switch; `recent_models`: the harness's recently used models, newest first, at most 5; `last_model`: its head, "" when none) — `catalog.launchable_harnesses`. Built by `webapp/pages/tasks.py`; see docs/web-app/tasks.md |
-| `GET /v1/app/hooks?stats=<24h\|7d\|30d>` | the web Hooks page's run counts: `{state: "ready", window, since, until, sources, totals, hooks: [HookRun]}` once the read is done, `{state: "loading", window}` while it runs (ask again in a second or two). `sources`, `totals` and the numeric fields are `swe hooks stats --json`'s; `HookRun` is one of its `hooks` rows with the harnesses added up (so no `harness`; `harnesses: [name]` lists the ones that ran it) plus `recent`: the five newest runs, newest first, each a `HookEvent` as `swe hooks log <name> --json` prints it. `hook` is the script name without its extension. The read backfills from Claude Code transcripts and can take seconds, so no request runs it: a background thread does, one per window, and an answer is reused for 30 seconds (an older one is served while the next read runs). `refreshing` is true while a newer read runs behind an answer older than its 30 seconds (keep asking until it is false); `&refresh=1` (the Refresh button) starts a new read even inside them. `422 bad_window` for any other window; `503 stats_unavailable` when the read failed (retried after 5 seconds). Built by `webapp/pages/hooks.py`; see docs/web-app/hooks.md |
+| `GET /v1/app/hooks?stats=<24h\|7d\|30d>` | the web Hooks page's run counts: `{state: "ready", window, since, until, sources, totals, hooks: [HookRun]}` once the read is done, `{state: "loading", window}` while it runs (ask again in a second or two). `sources`, `totals` and the numeric fields are `swe hooks stats --json`'s; `HookRun` is one of its `--sum-harnesses` rows (so no `harness`; `harnesses: [name]` lists the ones that ran it) plus `recent`: the five newest runs, newest first, each a `HookEvent` as `swe hooks log --json` prints it, and `uncertain` is the same list. The page joins a row to the list by `source_paths` against the list row's `source_path`, as the Mac app does; list and detail rows carry no names to match on. The read backfills from Claude Code transcripts and can take seconds, so no request runs it: a background thread does, one per window, and an answer is reused for 30 seconds (an older one is served while the next read runs). `refreshing` is true while a newer read runs behind an answer older than its 30 seconds (keep asking until it is false); `&refresh=1` (the Refresh button) starts a new read even inside them. `422 bad_window` for any other window; `503 stats_unavailable` when the read failed (retried after 5 seconds). Built by `webapp/pages/hooks.py`; see docs/web-app/hooks.md |
 | `GET /v1/app/<page>` · `POST /v1/app/<page>/<action>` | a web app page plugin (`swe/webapp/pages/<page>.py`); each payload is documented in `docs/web-app/<page>.md`. `404` for an unknown page or action, `403 bad_origin` on a cross-site POST, `503 page_unavailable` when the page can't read its source |
 
 An `approval.requested` with `auto: true` was answered by the channel
@@ -449,9 +449,25 @@ Timestamps are epoch seconds (floats). Counts cover the window
 }
 ```
 
-- One `hooks` row per (hook, harness), most blocks first. `hook` is the
-  script name without its extension: join it to `swe hooks list`'s `name`
-  after dropping `.py`/`.sh`.
+- One `hooks` row per (hook, harness), most blocks first, where a hook is
+  the `swe hooks list` row its runs belong to (see "Which script a run
+  was" below), else the script that ran, else the name the runs carry. So
+  two scripts that share a name are two rows, and one script whose runs
+  were logged under two names (`check` by its own `record` call,
+  `bundle/check` by the transcript) is one. `source_paths` is the join:
+  every `source_path` a `swe hooks list --json` row prints for the file
+  that owns the runs (one, unless two rows spell one file two ways), and
+  `[]` for runs no listed script owns. `scripts` lists the resolved files
+  that ran (a directory hook's executables; `[]` when no run knew its
+  file). `hook` is the list's name for the owner without its extension
+  (`bundle`, `prose-guard`, `notify`), and for an unowned row the name most
+  of its runs carry: shown to people, never a key.
+- `uncertain` lists the `source_path` of every list row a run in the
+  selection could belong to when swe cannot tell which: a run with no
+  script whose name more than one source answers to (an old log line named
+  `guard` with `plugins/a/guard.sh` and `plugins/b/guard.sh` both listed)
+  is given to none of them, so their counts may be short. A client shows
+  dashes for these rows, never a number.
 - `fires` is every run; `block_rate` is `blocks / fires` (0 to 1, four
   places; 0 with no runs). `decision` is `block`, `warn`, `allow` or
   `error` (the hook failed open).
@@ -459,7 +475,9 @@ Timestamps are epoch seconds (floats). Counts cover the window
   blocked in the same session ("blocked, then the rewrite was accepted").
   `stop_hook_active` alone is not enough, since the harness sets it when
   any Stop hook blocked; transcript runs carry no flag, so it is inferred
-  from that same-hook rule. The window reads an hour back so a retry just
+  from that same-hook rule; inside a directory hook each executable
+  recovers on its own runs, though all count in the folder's row. The
+  window reads an hour back so a retry just
   inside it still sees its block.
 - `top_reasons` ranks the non-allow runs by `(decision, reason)`, at most
   five, count descending. `reason` is the first line of the hook's own
@@ -467,8 +485,12 @@ Timestamps are epoch seconds (floats). Counts cover the window
 - `sources` says where the runs came from after merging: `helper` is the
   hook log (`cache/hooks/events.jsonl`), `transcript` Claude Code
   transcripts, `duplicates` transcript runs the log already held (same
-  `session_id`, hook and event name before any `:`, timestamps within 5
-  seconds, matched one to one; the log's copy wins). `backfill` is false
+  `session_id`, event name before any `:` and script, timestamps within 5
+  seconds, matched one to one; the log's copy wins and keeps its name).
+  Two runs that both know their script are the same only when the scripts
+  are; when either has none, the name decides (the same name, or a log
+  line's name that is the transcript script's stem), after every exact
+  match is made. `backfill` is false
   under `--no-backfill`. Counts before the filters apply to `hook`,
   `harness` and `repo`. `--repo` matches an event's recorded repository
   root; only an event with none falls back to its cwd being under the path,
@@ -478,8 +500,53 @@ Timestamps are epoch seconds (floats). Counts cover the window
 - `HookEvent` (the `swe hooks log` rows): `ts`, `hook`, `harness`,
   `event`, `session_id`, `cwd`, `repo`, `git_branch`, `decision`,
   `reason`, `duration_ms`, `exit_code`, `stop_hook_active` (null when
-  unknown), `source` (`helper` or `transcript`). Any of the strings and
-  `duration_ms`/`exit_code` can be null.
+  unknown), `source` (`helper` or `transcript`), `script` (the resolved
+  file that ran, null when unknown) and `source_paths` (as on the stats
+  row it counts in). Any of the strings and `duration_ms`/`exit_code` can
+  be null. `hook` is the name the run was logged under, which for one
+  script can differ between runs; group by `source_paths`.
+- `--sum-harnesses` (stats only) folds every harness into one row per hook
+  before the counts and the five-reason cap, so a reason split across
+  harnesses totals exactly; each row's `harness` is `""` and `harnesses`
+  lists the ones that ran it. In `totals` every figure is unchanged except
+  `hooks`, which counts rows and so counts each hook once instead of once
+  per harness. The Mac app and the web page ask for it, so each list row
+  meets at most one stats row and neither client adds counts up.
+- Which script a run was (`hooks/identity.py`, one implementation for the
+  CLI, the web page and the app). The shim logs the shared script it ran
+  (`script` in the log line; `record` called by a hook itself logs the
+  running program). A transcript run's command is read the way `swe hooks
+  list` reads a declared command: quotes and spaces, `~` and `$HOME`, a
+  variable set once to a path (`f="$HOME/x.py"; python3 "$f"`), symlinks
+  resolved, and a generated wrapper resolved to the shared script it wraps
+  (its runs are named after that script, as the log names them). A command
+  whose path holds a variable swe cannot know (`${CLAUDE_PLUGIN_ROOT}`) or
+  is relative has no script, and so does a command that runs two scripts
+  (`a.py && b.py`: one run, and swe cannot say which file decided it). A
+  run with a script belongs to the list row whose source is that file (a
+  harness link to it resolves there), whose shared wrapper path holds a
+  generated wrapper for it (or holds nothing now and is where swe writes
+  that wrapper; another file at that path keeps its own runs), or whose
+  folder holds it as a declared executable, every file a declaration runs
+  inside the folder counting, two in one command included: an undeclared
+  helper inside a directory hook owns nothing. A run with no
+  script falls back to its name: a log line to the stems a row is logged
+  under (its file's, a directory's declared executables', including one
+  declared through a path swe cannot resolve), narrowed to the
+  rows on the run's harness when any answers; a transcript run to the
+  `command_hook` names of a row's declared commands that have no
+  resolvable path. A name or path two sources answer to belongs to
+  neither (`uncertain`). Ownership is worked out over every row whatever
+  `--harness` says, so a row's `source_paths` never change with a filter.
+- `--hook=<name>` and `swe hooks log <name>` take a name exactly as the
+  runs were logged (`claude-plugin/on-stop`, a folder prefix included,
+  wins over the bare `on-stop`) or a stats row's `hook` (`bundle` finds
+  every run its row counts, and so does an unowned script's printed name
+  for every name its runs carry); a script file name (`prose-guard.py`, a path)
+  still finds its hook. `--source=<path>` takes a list row's
+  `source_path` instead and selects exactly the runs its stats row counts:
+  the clients use it, never a name. `swe hooks log --json` echoes the name
+  (`hook`) and the `source_path` it matched.
 - A bad `--since`, `--limit` or `--decision` exits 1 with the reason on
   stderr and nothing on stdout.
 The web Hooks page reads the same numbers in process through

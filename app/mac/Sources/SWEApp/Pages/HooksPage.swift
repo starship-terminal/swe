@@ -17,6 +17,8 @@ struct HooksPage: View {
     @AppStorage("hooksHarness") private var harness = ""
     /// Lay out herdr's, Agent Relay's and other installers' hooks too.
     @AppStorage("hooksShowForeign") private var showForeign = false
+    /// The span run counts cover: the timeline's picker, remembered.
+    @AppStorage("hooksStatsWindow") private var statsWindow = HookStatsWindow.week
     /// The board's width, for the narrow layout; 0 until the first layout.
     @State private var boardWidth: CGFloat = 0
 
@@ -28,6 +30,13 @@ struct HooksPage: View {
     /// App-wide, so a list outlives a trip to another page and the last
     /// one shows at once.
     private var model: HooksModel { app.hooks }
+    /// Run counts, app-wide for the same reason.
+    private var stats: HookStatsModel { app.hookStats }
+
+    /// Asks swe for the run counts of the picked window, off the main actor.
+    private func loadStats() async {
+        await stats.load(window: statsWindow, swe: app.swe, for: app.swePath)
+    }
 
     var body: some View {
         Page(title: "Hooks",
@@ -37,15 +46,19 @@ struct HooksPage: View {
                 .disabled(model.creating)
             Button("Refresh", systemImage: "arrow.clockwise") {
                 Task { await model.load(swe: app.swe, for: app.swePath) }
+                Task { await loadStats() }
             }
             .iconButton()
             .disabled(model.linking)
             .keyboardShortcut("r", modifiers: .command)
-            .help("Read the hooks again (⌘R)")
+            .help("Read the hooks and their run counts again (⌘R)")
         } content: {
             list
         }
         .task(id: app.swePath) { await model.loadIfStale(swe: app.swe, for: app.swePath) }
+        // Counts load with the page, and again when the picker moves or the
+        // swe changes; the Refresh button runs them too. Never on a timer.
+        .task(id: [statsWindow.rawValue, app.swePath]) { await loadStats() }
         // The ⌘K search's hook pick opens its panel. Retried on each
         // load: the pick can land before the inventory does.
         .task(id: app.pendingHook) { applyPendingHook() }
@@ -104,9 +117,10 @@ struct HooksPage: View {
         let timeline = HookTimeline(harness: current, hooks: hooks, includeForeign: showForeign)
         let idle = HookTimeline.notRunning(in: hooks)
         let wide = boardWidth == 0 || boardWidth >= Self.sideBySideWidth
+        let counts = stats.state(for: statsWindow)
         return Group {
             if let opened, !wide {
-                panel(for: opened, in: hooks)
+                panel(for: opened, in: hooks, counts: counts)
             } else {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 16) {
@@ -124,7 +138,8 @@ struct HooksPage: View {
                                     foreignToggle(timeline.foreignCount)
                                 }
                             }
-                            TimelineCard(timeline: timeline, opened: opened) { opened = $0 }
+                            TimelineCard(timeline: timeline, opened: opened, counts: counts,
+                                         window: $statsWindow) { opened = $0 }
                         }
                         if !idle.isEmpty {
                             NotRunningCard(hooks: idle, opened: opened) { opened = $0 }
@@ -132,7 +147,7 @@ struct HooksPage: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let opened {
-                        panel(for: opened, in: hooks).frame(width: 440)
+                        panel(for: opened, in: hooks, counts: counts).frame(width: 440)
                     }
                 }
             }
@@ -141,10 +156,11 @@ struct HooksPage: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boardWidth = $0 }
     }
 
-    private func panel(for opened: Hook, in hooks: [Hook]) -> some View {
+    private func panel(for opened: Hook, in hooks: [Hook], counts: HookStatsState) -> some View {
         // A reload swaps the inventory: follow the same script's row.
         let hook = hooks.first { $0.rowKey == opened.rowKey } ?? opened
-        return HookDetailView(hook: hook, onBack: { self.opened = nil })
+        return HookDetailView(hook: hook, counts: counts, window: statsWindow,
+                              onBack: { self.opened = nil })
     }
 
     private func harnessTabs(_ tabs: [String], current: String, columns: Int = 1) -> some View {
@@ -288,6 +304,9 @@ private struct FindingsCard: View {
 private struct TimelineCard: View {
     var timeline: HookTimeline
     var opened: Hook?
+    /// The run counts for the picked window, beside every script.
+    var counts: HookStatsState
+    @Binding var window: HookStatsWindow
     var open: (Hook) -> Void
     @State private var showQuiet = false
 
@@ -295,7 +314,14 @@ private struct TimelineCard: View {
         let quiet = timeline.quietEvents
         let lanes = Dictionary(uniqueKeysWithValues: timeline.lanes.map { ($0.event, $0) })
         let events = showQuiet ? HookEvents.sorted(Array(lanes.keys) + quiet) : timeline.lanes.map(\.event)
-        Card {
+        // The column labels sit on the first lane with scripts in it.
+        let labelled = events.first { lanes[$0] != nil }
+        Card(title: "Session timeline",
+             subtitle: "Run counts add up every harness that runs the script.",
+             accessory: {
+                 SelectMenu(options: HookStatsWindow.allCases.map { ($0, $0.title) },
+                            selection: $window, width: nil)
+             }) {
             VStack(alignment: .leading, spacing: 0) {
                 if timeline.lanes.isEmpty {
                     Text(timeline.foreignCount > 0
@@ -306,10 +332,12 @@ private struct TimelineCard: View {
                 }
                 ForEach(Array(events.enumerated()), id: \.element) { index, event in
                     if index > 0 { Divider().overlay(Theme.border) }
-                    LaneRow(event: event, caption: HookEvents.caption(for: event)) {
+                    LaneRow(event: event, caption: HookEvents.caption(for: event),
+                            showsColumns: event == labelled) {
                         if let lane = lanes[event] {
                             ForEach(lane.entries) { entry in
-                                EntryRow(entry: entry, isOpen: opened?.rowKey == entry.hook.rowKey) {
+                                EntryRow(entry: entry, isOpen: opened?.rowKey == entry.hook.rowKey,
+                                         cells: counts.cells(for: entry.hook.source)) {
                                     open(entry.hook)
                                 }
                             }
@@ -342,6 +370,8 @@ private struct TimelineCard: View {
 private struct LaneRow<Content: View>: View {
     var event: String
     var caption: String?
+    /// Label the number columns above this lane's scripts.
+    var showsColumns = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -356,7 +386,10 @@ private struct LaneRow<Content: View>: View {
             }
             .frame(width: 168, alignment: .leading)
             .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 2) { content }
+            VStack(alignment: .leading, spacing: 2) {
+                if showsColumns { StatColumnLabels() }
+                content
+            }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Rows pad themselves for their hover fill; this keeps
                 // their text in line with the event name's column edge.
@@ -372,6 +405,7 @@ private struct LaneRow<Content: View>: View {
 private struct EntryRow: View {
     var entry: HookTimeline.Entry
     var isOpen: Bool
+    var cells: HookStatsCells
     var open: () -> Void
 
     var body: some View {
@@ -398,8 +432,113 @@ private struct EntryRow: View {
                         .lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: 0)
+                StatCells(cells: cells)
             }
         }
+    }
+}
+
+/// The three number columns on every script row, and their labels. The
+/// widths are shared so the labels, the numbers and the loading bars line
+/// up, and the page does not shift when the numbers arrive.
+private enum StatColumns {
+    @MainActor static var fires: CGFloat { Theme.scaled(44) }
+    @MainActor static var blocks: CGFloat { Theme.scaled(52) }
+    @MainActor static var rate: CGFloat { Theme.scaled(44) }
+    static let gap: CGFloat = 8
+}
+
+/// `Fires`, `Blocks` and `Rate` over the columns, right-aligned. It pads
+/// like a row, so the labels sit over the numbers.
+private struct StatColumnLabels: View {
+    var body: some View {
+        HStack(spacing: StatColumns.gap) {
+            label("Fires", width: StatColumns.fires)
+            label("Blocks", width: StatColumns.blocks)
+            label("Rate", width: StatColumns.rate)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 2)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func label(_ text: String, width: CGFloat) -> some View {
+        Text(text).font(Theme.caption).foregroundStyle(Theme.textMuted)
+            .lineLimit(1)
+            .frame(width: width, alignment: .trailing)
+    }
+}
+
+/// One script's fires, blocks and block rate. Bars stand in while swe
+/// reads, dashes when it could not answer, and the numbers fade in
+/// (unless Reduce Motion is on).
+private struct StatCells: View {
+    var cells: HookStatsCells
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: StatColumns.gap) {
+            cell(fires, width: StatColumns.fires, bar: 20)
+            cell(blocks, width: StatColumns.blocks, bar: 20)
+            cell(rate, width: StatColumns.rate, bar: 26)
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: cells)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(spoken))
+    }
+
+    private typealias Figure = (text: String, color: Color)?
+
+    /// nil while loading: the cell draws a bar.
+    private var fires: Figure {
+        switch cells {
+        case .loading: nil
+        case .dashes: ("-", Theme.textMuted)
+        case .counts(let c): (c.fires.formatted(), c.fires > 0 ? Theme.textPrimary : Theme.textMuted)
+        }
+    }
+
+    private var blocks: Figure {
+        switch cells {
+        case .loading: nil
+        case .dashes: ("-", Theme.textMuted)
+        case .counts(let c): (c.blocks.formatted(), c.blocks > 0 ? Theme.dangerText : Theme.textMuted)
+        }
+    }
+
+    private var rate: Figure {
+        switch cells {
+        case .loading: nil
+        case .dashes: ("-", Theme.textMuted)
+        case .counts(let c): (c.rateLabel, c.blocks > 0 ? Theme.textPrimary : Theme.textMuted)
+        }
+    }
+
+    private var spoken: String {
+        switch cells {
+        case .loading: "Counting runs"
+        case .dashes: "Run counts unavailable"
+        case .counts(let c):
+            c.hasRuns ? "\(c.fires) runs, \(c.blocks) blocked, block rate \(c.rateLabel)" : "No runs"
+        }
+    }
+
+    private func cell(_ figure: Figure, width: CGFloat, bar: CGFloat) -> some View {
+        ZStack(alignment: .trailing) {
+            if let figure {
+                Text(figure.text)
+                    .font(Theme.font(size: 13))
+                    .monospacedDigit()
+                    .foregroundStyle(figure.color)
+                    .lineLimit(1)
+                    .id(figure.text)
+                    .transition(.opacity)
+            } else {
+                SkeletonBlock(width: bar, height: 10, radius: 3)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: width, height: Theme.scaled(16), alignment: .trailing)
     }
 }
 
@@ -501,6 +640,9 @@ private struct HookButton<Label: View>: View {
 private struct HookDetailView: View {
     @Environment(AppModel.self) private var app
     var hook: Hook
+    /// The run counts for `window`, from the page.
+    var counts: HookStatsState
+    var window: HookStatsWindow
     var onBack: () -> Void
 
     /// The model's, not the view's: closing the panel keeps the drafts so
@@ -545,6 +687,7 @@ private struct HookDetailView: View {
                 PrimitiveLockNote(text: "Only scripts inside ~/.swe/hooks can be edited, so \(hook.script) is read-only.")
             }
             header
+            HookRunsCard(source: hook.source, counts: counts, window: window)
             if let check {
                 if !check.exists {
                     Card {
@@ -759,6 +902,159 @@ private struct HookDetailView: View {
     private func reload() {
         refresh += 1
         Task { await app.hooks.load(swe: app.swe, for: app.swePath) }
+    }
+}
+
+/// How the selected hook did in the window: fires, blocks and the last
+/// block, why it blocked and its newest runs. Nothing shows while swe
+/// cannot answer; the panel is whole without it.
+private struct HookRunsCard: View {
+    @Environment(AppModel.self) private var app
+    /// The hook's source, which the counts are keyed by.
+    var source: String
+    var counts: HookStatsState
+    var window: HookStatsWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let recentLimit = 5
+
+    /// Whether the panel lists recent runs: swe answered, knows which runs
+    /// are this script's, and it ran.
+    private var wantsRecent: Bool {
+        guard case .ready(let table) = counts else { return false }
+        return !table.isUnknown(source) && table.counts(for: source).hasRuns
+    }
+
+    var body: some View {
+        Group {
+            switch counts {
+            case .unavailable:
+                EmptyView()
+            case .loading:
+                Card(title: "Runs", subtitle: window.title) { loadingBody }
+            case .ready(let table):
+                let summed = table.counts(for: source)
+                Card(title: "Runs", subtitle: window.title) {
+                    if !table.identified {
+                        Text("This swe is too old to say which runs belong to this script.")
+                            .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                    } else if table.isUnknown(source) {
+                        Text("swe can't tell which runs belong to this script.")
+                            .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                    } else if summed.hasRuns { readyBody(summed) } else {
+                        Text(window.emptyLine)
+                            .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                    }
+                }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: counts)
+        // The log is asked for again whenever the counts are: a new window,
+        // a refresh, or the panel moving to another hook.
+        .task(id: RecentKey(source: source, wanted: wantsRecent, window: window,
+                            answered: app.hookStats.completed)) {
+            guard wantsRecent else { return }
+            await app.hookStats.loadRecent(source: source, window: window, swe: app.swe, for: app.swePath)
+        }
+    }
+
+    private struct RecentKey: Equatable {
+        var source: String
+        var wanted: Bool
+        var window: HookStatsWindow
+        var answered: Int
+    }
+
+    /// Bars shaped like the tiles and lines that follow.
+    private var loadingBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { _ in
+                    SkeletonBlock(width: nil, height: 52, radius: Theme.smallRadius)
+                }
+            }
+            ForEach(0..<2, id: \.self) { _ in SkeletonBlock(width: nil, height: 12, radius: 3) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Counting runs"))
+    }
+
+    private func readyBody(_ summed: HookCounts) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                tile("Fires", summed.fires.formatted(),
+                     color: summed.fires > 0 ? Theme.textPrimary : Theme.textMuted)
+                tile("Blocks", summed.blocks.formatted(),
+                     color: summed.blocks > 0 ? Theme.dangerText : Theme.textMuted)
+                tile("Last block", summed.lastBlock.map { HookStatsFormat.relative($0) } ?? "-",
+                     color: summed.lastBlock == nil ? Theme.textMuted : Theme.textPrimary)
+            }
+            if !summed.topReasons.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Top reasons")
+                    ForEach(summed.topReasons) { reason in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(reason.reason.isEmpty ? "No reason given" : reason.reason)
+                                .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                                .lineLimit(2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(reason.countLabel)
+                                .font(Theme.caption)
+                                .foregroundStyle(reason.decision == "block" ? Theme.dangerText : Theme.textMuted)
+                                .fixedSize()
+                        }
+                    }
+                }
+            }
+            recentRuns
+        }
+    }
+
+    @ViewBuilder private var recentRuns: some View {
+        if wantsRecent {
+            let runs = app.hookStats.recentRuns(source: source, window: window)
+            if let runs, !runs.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Recent runs")
+                    ForEach(runs.prefix(Self.recentLimit)) { run in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(run.summary)
+                                .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                                .lineLimit(1).truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(HookStatsFormat.relative(run.ts))
+                                .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                                .fixedSize()
+                        }
+                    }
+                }
+            } else if runs == nil && app.hookStats.recentIsLoading(source: source, window: window) {
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Recent runs")
+                    ForEach(0..<3, id: \.self) { _ in SkeletonBlock(width: nil, height: 12, radius: 3) }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Reading recent runs"))
+            }
+        }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text).font(Theme.control).foregroundStyle(Theme.textMuted)
+    }
+
+    private func tile(_ label: String, _ value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(Theme.caption).foregroundStyle(Theme.textMuted)
+            Text(value)
+                .font(Theme.font(size: 16, weight: .semibold))
+                .foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.subtle, in: .rect(cornerRadius: Theme.smallRadius))
+        .overlay(RoundedRectangle(cornerRadius: Theme.smallRadius).strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 

@@ -113,7 +113,8 @@ class RecordTest(unittest.TestCase):
             sorted(row),
             sorted(["v", "ts", "hook", "harness", "event", "session_id",
                     "cwd", "repo", "git_branch", "decision", "reason",
-                    "duration_ms", "exit_code", "stop_hook_active"]))
+                    "duration_ms", "exit_code", "stop_hook_active",
+                    "script"]))
         self.assertEqual(row["reason"], "first line")
         self.assertEqual(row["decision"], "block")
         self.assertIs(row["stop_hook_active"], False)
@@ -631,17 +632,17 @@ class StatsCommandTest(unittest.TestCase):
         data = json.loads(out)["data"]
         self.assertEqual(sorted(data), sorted([
             "window", "since", "until", "filters", "sources", "totals",
-            "hooks"]))
+            "hooks", "uncertain"]))
         self.assertEqual(sorted(data["filters"]),
-                         ["harness", "hook", "repo"])
+                         ["harness", "hook", "repo", "source"])
         self.assertEqual(sorted(data["totals"]), sorted([
             "fires", "blocks", "warns", "errors", "allows", "recovered",
             "block_rate", "last_fired", "last_block", "avg_duration_ms",
             "hooks"]))
         self.assertEqual(sorted(data["hooks"][0]), sorted([
-            "hook", "harness", "fires", "blocks", "warns", "errors",
-            "allows", "recovered", "block_rate", "last_fired", "last_block",
-            "avg_duration_ms", "top_reasons"]))
+            "hook", "harness", "source_paths", "scripts", "fires", "blocks",
+            "warns", "errors", "allows", "recovered", "block_rate",
+            "last_fired", "last_block", "avg_duration_ms", "top_reasons"]))
         self.assertAlmostEqual(data["until"] - data["since"], 7 * DAY, 2)
 
     def test_table_output(self):
@@ -765,7 +766,7 @@ class LogCommandTest(unittest.TestCase):
         self.assertEqual(sorted(data["events"][0]), sorted([
             "ts", "hook", "harness", "event", "session_id", "cwd", "repo",
             "git_branch", "decision", "reason", "duration_ms", "exit_code",
-            "stop_hook_active", "source"]))
+            "stop_hook_active", "source", "script", "source_paths"]))
 
     def test_decision_and_limit(self):
         _, out, _ = _run(self.home, "log", "prose-guard.py", "--json",
@@ -792,6 +793,110 @@ class LogCommandTest(unittest.TestCase):
                      ["x", "--hook=y"]):
             code, _, _ = _run(self.home, "log", *args)
             self.assertEqual(code, 1, args)
+
+
+class PrefixedNameTest(unittest.TestCase):
+    """A hook another installer declared is named ``folder/stem`` in the
+    stats, and ``--hook=`` / ``log <name>`` take that name back."""
+
+    def setUp(self):
+        self.home = temp_dir(self)
+        self.now = time.time()
+        # A bare ``on-stop`` in the log, and a plugin's ``on-stop`` that only
+        # a transcript knows, under its folder prefix.
+        _write_log(self.home, [_line(self.now, HOUR, "on-stop", "allow")])
+        project = self.home / ".claude" / "projects" / "-w-app"
+        project.mkdir(parents=True)
+        plugin = "${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh"
+        (project / "s.jsonl").write_text("\n".join([
+            _rec(self.now - 2 * HOUR, "user", isMeta=True, sessionId="p1",
+                 message={"role": "user", "content":
+                          f"Stop hook feedback:\n[{plugin}]: plugin said no"}),
+            _rec(self.now - 3 * HOUR, "user", isMeta=True, sessionId="p2",
+                 message={"role": "user", "content":
+                          f"Stop hook feedback:\n[{plugin}]: plugin said no"}),
+        ]) + "\n")
+
+    def _log(self, name):
+        _, out, _ = _run(self.home, "log", name, "--json")
+        return json.loads(out)["data"]
+
+    def test_the_stats_name_round_trips_through_log(self):
+        _, out, _ = _run(self.home, "stats", "--json")
+        names = {r["hook"] for r in json.loads(out)["data"]["hooks"]}
+        self.assertEqual(names, {"on-stop", "claude-plugin/on-stop"})
+        data = self._log("claude-plugin/on-stop")
+        self.assertEqual(data["hook"], "claude-plugin/on-stop")
+        self.assertEqual(data["matched"], 2)
+        self.assertEqual({e["hook"] for e in data["events"]},
+                         {"claude-plugin/on-stop"})
+
+    def test_a_bare_name_does_not_pick_up_the_prefixed_hook(self):
+        data = self._log("on-stop")
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual({e["hook"] for e in data["events"]}, {"on-stop"})
+
+    def test_a_file_name_still_finds_its_hook(self):
+        self.assertEqual(self._log("on-stop.sh")["matched"], 1)
+        self.assertEqual(self._log("claude-plugin/on-stop.sh")["matched"], 2)
+        self.assertEqual(self._log("/x/hooks/on-stop.py")["matched"], 1)
+
+    def test_stats_hook_filter_takes_the_exact_name(self):
+        _, out, _ = _run(self.home, "stats", "--hook=claude-plugin/on-stop",
+                         "--json")
+        rows = json.loads(out)["data"]["hooks"]
+        self.assertEqual([(r["hook"], r["fires"]) for r in rows],
+                         [("claude-plugin/on-stop", 2)])
+        _, out, _ = _run(self.home, "stats", "--hook=on-stop.sh", "--json")
+        rows = json.loads(out)["data"]["hooks"]
+        self.assertEqual([(r["hook"], r["fires"]) for r in rows],
+                         [("on-stop", 1)])
+
+
+class SumHarnessesTest(unittest.TestCase):
+    """``stats --sum-harnesses`` folds harnesses together before the
+    five-reason cap, so a reason split across harnesses totals exactly."""
+
+    def setUp(self):
+        self.home = temp_dir(self)
+        self.now = time.time()
+        rows = []
+        for n in range(5):
+            rows += [_line(self.now, HOUR + i, "pg", "block",
+                           reason=f"big-{n}", exit_code=2, session_id=f"a{n}{i}")
+                     for i in range(10)]
+        # Nine on Claude falls out of Claude's top five; nine more on
+        # Cursor brings the total to eighteen, the biggest of all.
+        rows += [_line(self.now, 2 * HOUR + i, "pg", "block", reason="split",
+                       exit_code=2, session_id=f"c{i}") for i in range(9)]
+        rows += [_line(self.now, 3 * HOUR + i, "pg", "block", reason="split",
+                       exit_code=2, harness="cursor", session_id=f"d{i}")
+                 for i in range(9)]
+        _write_log(self.home, rows)
+
+    def _stats(self, *flags):
+        code, out, err = _run(self.home, "stats", "--no-backfill", "--json",
+                              *flags)
+        self.assertEqual(code, 0, err)
+        return json.loads(out)["data"]
+
+    def test_the_default_still_has_one_row_per_harness(self):
+        rows = self._stats()["hooks"]
+        self.assertEqual({r["harness"] for r in rows}, {"claude", "cursor"})
+
+    def test_summed_rows_total_reasons_before_the_cap(self):
+        data = self._stats("--sum-harnesses")
+        (row,) = data["hooks"]
+        self.assertEqual((row["hook"], row["harness"]), ("pg", ""))
+        self.assertEqual((row["fires"], row["blocks"]), (68, 68))
+        top = row["top_reasons"]
+        self.assertEqual(len(top), 5)
+        self.assertEqual((top[0]["reason"], top[0]["count"]), ("split", 18))
+        self.assertEqual(data["totals"]["fires"], 68)
+
+    def test_log_does_not_take_the_flag(self):
+        code, _, _ = _run(self.home, "log", "pg", "--sum-harnesses")
+        self.assertEqual(code, 1)
 
 
 class HelperUnitTest(unittest.TestCase):

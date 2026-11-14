@@ -18,7 +18,11 @@ counted without a helper. What a transcript holds:
 
 Every record carries ``sessionId``, ``cwd``, ``gitBranch`` and
 ``timestamp``. This module turns them into the event dicts of
-``hooks/events.py``, with ``source: "transcript"``. It reads only: nothing
+``hooks/events.py``, with ``source: "transcript"`` and the ``script`` the
+command ran, resolved by ``hooks/identity.py`` the way ``swe hooks list``
+reads a declared command (None when the path holds a variable swe cannot
+know). A generated wrapper's run is named after its shared script, as the
+hook log names it. It reads only: nothing
 is written, and only the first line of a hook's message is kept.
 
 The transcript list comes from ``sessions.search_writer.sources``, the same
@@ -36,6 +40,7 @@ from datetime import datetime
 from pathlib import Path
 
 from swe.hooks import shim_runtime
+from swe.hooks.identity import Resolver
 from swe.hooks.events import SCRIPT_EXTENSIONS, hook_stem
 
 # A cheap byte test before json.loads: every record this module reads
@@ -160,11 +165,12 @@ def _int(value) -> int | None:
     return int(value)
 
 
-def _event(record: dict, ts: float, hook: str, name: str, decision: str,
-           reason: str, duration, exit_code, tool_use_id) -> dict:
+def _event(record: dict, ts: float, hook: tuple[str, str | None], name: str,
+           decision: str, reason: str, duration, exit_code,
+           tool_use_id) -> dict:
     return {
         "ts": ts,
-        "hook": hook,
+        "hook": hook[0],
         "harness": "claude",
         "event": name,
         "session_id": record.get("sessionId")
@@ -180,6 +186,7 @@ def _event(record: dict, ts: float, hook: str, name: str, decision: str,
         "exit_code": _int(exit_code),
         "stop_hook_active": None,
         "source": "transcript",
+        "script": hook[1],
         # Used by the in-file merge below and dropped before returning.
         "_tool_use_id": tool_use_id if isinstance(tool_use_id, str) else None,
         "_kind": "",
@@ -199,7 +206,7 @@ def _text_of(content) -> str:
     return ""
 
 
-def _attachment(record: dict, ts: float) -> list[dict]:
+def _attachment(record: dict, ts: float, ident) -> list[dict]:
     att = record.get("attachment")
     if not isinstance(att, dict):
         return []
@@ -211,9 +218,9 @@ def _attachment(record: dict, ts: float) -> list[dict]:
     if not isinstance(command, str) and isinstance(att.get("blockingError"),
                                                    dict):
         command = att["blockingError"].get("command")
-    hook = command_hook(command or "")
+    hook = ident(command or "")
     name = att.get("hookName") or att.get("hookEvent")
-    if not hook or not isinstance(name, str):
+    if not hook[0] or not isinstance(name, str):
         return []
     stderr = att.get("stderr")
     if not isinstance(stderr, str) or not stderr.strip():
@@ -239,7 +246,7 @@ def _attachment(record: dict, ts: float) -> list[dict]:
     return [event]
 
 
-def _stop_summary(record: dict, ts: float) -> list[dict]:
+def _stop_summary(record: dict, ts: float, ident) -> list[dict]:
     infos = record.get("hookInfos")
     if not isinstance(infos, list):
         return []
@@ -250,8 +257,8 @@ def _stop_summary(record: dict, ts: float) -> list[dict]:
         if not isinstance(info, dict) or not isinstance(info.get("command"),
                                                         str):
             continue
-        hook = command_hook(info["command"])
-        if not hook:
+        hook = ident(info["command"])
+        if not hook[0]:
             continue
         decision, reason = "allow", ""
         for error in errors:
@@ -261,7 +268,7 @@ def _stop_summary(record: dict, ts: float) -> list[dict]:
             named = re.match(r"^\[(?P<command>.*?)\]:\s*(?P<rest>.*)\Z",
                              error.strip(), re.DOTALL)
             if named and (named.group("command") == info["command"]
-                          or command_hook(named.group("command")) == hook):
+                          or ident(named.group("command")) == hook):
                 decision, reason = "error", named.group("rest")
                 break
         event = _event(record, ts, hook, "Stop", decision, reason,
@@ -271,7 +278,7 @@ def _stop_summary(record: dict, ts: float) -> list[dict]:
     return out
 
 
-def _feedback(record: dict, ts: float, text: str) -> list[dict]:
+def _feedback(record: dict, ts: float, text: str, ident) -> list[dict]:
     match = _FEEDBACK.match(text.strip())
     if not match:
         return []
@@ -280,8 +287,8 @@ def _feedback(record: dict, ts: float, text: str) -> list[dict]:
     for i, mark in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else None
         message = match.group("body")[mark.end():end]
-        hook = command_hook(mark.group("command"))
-        if hook:
+        hook = ident(mark.group("command"))
+        if hook[0]:
             event = _event(record, ts, hook, match.group("event"), "block",
                            message, None, 2, None)
             event["_kind"] = "feedback"
@@ -289,7 +296,7 @@ def _feedback(record: dict, ts: float, text: str) -> list[dict]:
     return out
 
 
-def _tool_results(record: dict, ts: float) -> list[dict]:
+def _tool_results(record: dict, ts: float, ident) -> list[dict]:
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, list):
@@ -301,8 +308,8 @@ def _tool_results(record: dict, ts: float) -> list[dict]:
         match = _TOOL_BLOCK.match(_text_of(item.get("content")).strip())
         if not match:
             continue
-        hook = command_hook(match.group("command"))
-        if hook:
+        hook = ident(match.group("command"))
+        if hook[0]:
             event = _event(record, ts, hook,
                            f"{match.group('event')}:{match.group('tool')}",
                            "block", match.group("message"), None, 2,
@@ -312,13 +319,16 @@ def _tool_results(record: dict, ts: float) -> list[dict]:
     return out
 
 
-def parse_lines(lines) -> list[dict]:
+def parse_lines(lines, resolver: Resolver | None = None) -> list[dict]:
     """Hook events in one transcript's lines (bytes or str), file order.
 
     Runs that two records describe become one: a block's tool result
     absorbs the attachment with the same tool use id, and a Stop feedback
     message absorbs the nearest stop summary for the same hook.
+    ``resolver`` reads each command's script (one per read; a fresh one
+    for this home when not given).
     """
+    ident = (resolver or Resolver(Path.home())).name
     found: list[dict] = []
     for line in lines:
         raw = line if isinstance(line, bytes) else line.encode("utf-8")
@@ -335,11 +345,11 @@ def parse_lines(lines) -> list[dict]:
             continue
         kind = record.get("type")
         if kind == "attachment":
-            found += _attachment(record, ts)
+            found += _attachment(record, ts, ident)
         elif kind == "system" and record.get("subtype") == "stop_hook_summary":
-            found += _stop_summary(record, ts)
+            found += _stop_summary(record, ts, ident)
         elif kind == "user":
-            found += _tool_results(record, ts)
+            found += _tool_results(record, ts, ident)
             message = record.get("message")
             content = message.get("content") if isinstance(
                 message, dict) else None
@@ -347,7 +357,7 @@ def parse_lines(lines) -> list[dict]:
             if not text and isinstance(record.get("content"), str):
                 text = record["content"]
             if record.get("isMeta") and "hook feedback" in text:
-                found += _feedback(record, ts, text)
+                found += _feedback(record, ts, text, ident)
     return _collapse(found)
 
 
@@ -358,14 +368,15 @@ def _pair(events, one_kind: str, other_kind: str, window: float,
           same_tool_use: bool = False):
     """(one index, other index) pairs: the same run seen in two records.
 
-    ``other`` is the nearest unused record of the same hook, session and
+    ``other`` is the nearest unused record of the same hook (name and
+    script: two scripts that share a name are two hooks), session and
     event name within ``window`` seconds (or with the same tool use id);
     each record pairs at most once. Records are bucketed first, because a
     long transcript holds thousands of hook records.
     """
     def key(event):
         tail = event["_tool_use_id"] if same_tool_use else event["event"]
-        return (event["hook"], event["session_id"], tail)
+        return (event["hook"], event["script"], event["session_id"], tail)
 
     buckets: dict[tuple, list[int]] = {}
     for j, other in enumerate(events):
@@ -440,11 +451,12 @@ def _collapse(events: list[dict]) -> list[dict]:
     return kept
 
 
-def parse_file(path: str, since: float | None = None) -> list[dict]:
+def parse_file(path: str, since: float | None = None,
+               resolver: Resolver | None = None) -> list[dict]:
     """Hook events in one transcript file; unreadable files give none."""
     try:
         with open(path, "rb") as handle:
-            events = parse_lines(handle)
+            events = parse_lines(handle, resolver)
     except OSError:
         return []
     return [e for e in events if since is None or e["ts"] >= since]
@@ -498,14 +510,16 @@ def claude_transcripts(home: Path, since: float | None = None) -> list[str]:
     return out
 
 
-def backfill(home: Path, since: float | None = None) -> list[dict]:
+def backfill(home: Path, since: float | None = None,
+             resolver: Resolver | None = None) -> list[dict]:
     """Every hook event the Claude transcripts hold since ``since``.
 
     ``repo`` is filled from each event's cwd (one lookup per folder).
     """
+    resolver = resolver or Resolver(home)
     events: list[dict] = []
     for path in claude_transcripts(home, since):
-        events += parse_file(path, since)
+        events += parse_file(path, since, resolver)
     repos: dict[str, str | None] = {}
     for event in events:
         cwd = event["cwd"]

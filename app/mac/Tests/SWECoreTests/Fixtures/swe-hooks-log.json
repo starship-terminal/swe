@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "data": {
+    "hook": "bundle",
+    "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/bundle",
+    "window": "7d",
+    "since": 1794061314.359848,
+    "matched": 5,
+    "events": [
+      {
+        "ts": 1794664193.906,
+        "hook": "bundle/on-stop",
+        "harness": "claude",
+        "event": "Stop",
+        "session_id": "o1",
+        "cwd": "/w/alpha",
+        "repo": null,
+        "git_branch": "main",
+        "decision": "block",
+        "reason": "stop-rule: tests not run",
+        "duration_ms": null,
+        "exit_code": 2,
+        "stop_hook_active": false,
+        "source": "transcript",
+        "script": "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/scripts/on-stop.sh",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/bundle"
+        ]
+      },
+      {
+        "ts": 1794662333.906,
+        "hook": "check",
+        "harness": "claude",
+        "event": "PreToolUse:Bash",
+        "session_id": "g0",
+        "cwd": "/w/alpha",
+        "repo": null,
+        "git_branch": "main",
+        "decision": "block",
+        "reason": "no force push",
+        "duration_ms": null,
+        "exit_code": 2,
+        "stop_hook_active": null,
+        "source": "transcript",
+        "script": "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/check.py",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/bundle"
+        ]
+      },
+      {
+        "ts": 1794658733.906,
+        "hook": "check",
+        "harness": "claude",
+        "event": "PreToolUse:Bash",
+        "session_id": "g1",
+        "cwd": "/w/alpha",
+        "repo": null,
+        "git_branch": "main",
+        "decision": "allow",
+        "reason": "",
+        "duration_ms": 25,
+        "exit_code": 0,
+        "stop_hook_active": null,
+        "source": "transcript",
+        "script": "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/check.py",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/bundle"
+        ]
+      },
+      {
+        "ts": 1794655133.906,
+        "hook": "check",
+        "harness": "claude",
+        "event": "PreToolUse:Bash",
+        "session_id": "g2",
+        "cwd": "/w/alpha",
+        "repo": null,
+        "git_branch": "main",
+        "decision": "allow",
+        "reason": "",
+        "duration_ms": 25,
+        "exit_code": 0,
+        "stop_hook_active": null,
+        "source": "transcript",
+        "script": "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/check.py",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/bundle"
+        ]
+      },
+      {
+        "ts": 1794647993.906,
+        "hook": "bundle/on-stop",
+        "harness": "claude",
+        "event": "Stop",
+        "session_id": "o2",
+        "cwd": "/w/alpha",
+        "repo": null,
+        "git_branch": "main",
+        "decision": "allow",
+        "reason": "",
+        "duration_ms": 25,
+        "exit_code": 0,
+        "stop_hook_active": false,
+        "source": "transcript",
+        "script": "/private/tmp/swe-fixture-home/.swe/hooks/claude/bundle/scripts/on-stop.sh",
+        "source_paths": [
+          "/tmp/swe-fixture-home/.swe/hooks/claude/bundle"
+        ]
+      }
+    ]
+  }
+}

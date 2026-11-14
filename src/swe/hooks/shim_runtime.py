@@ -147,19 +147,29 @@ def record(hook: str, decision: str, reason: str = "", *, harness: str = "",
            cwd: str | None = None, duration_ms: int | None = None,
            exit_code: int | None = None,
            stop_hook_active: bool | None = None,
-           home: str | None = None, ts: float | None = None) -> bool:
+           home: str | None = None, ts: float | None = None,
+           script: str | None = None) -> bool:
     """Append one hook run to the event log; True when a line was written.
 
     Fails open: any error (an unwritable folder, a full disk, a bad
     argument) is swallowed and the caller's result is unchanged.
     ``SWE_HOOK_LOG=0`` switches recording off. ``decision`` is one of
     ``block``, ``warn``, ``allow`` or ``error``; ``ts`` defaults to now,
-    the moment the run finished.
+    the moment the run finished. ``script`` is the file that ran, which
+    ``swe hooks stats`` uses to tell two hooks with one name apart; it
+    defaults to the running program (``sys.argv[0]``) when that is a
+    file, so a hook calling ``record`` itself is identified without
+    passing it.
     """
     try:
         if os.environ.get("SWE_HOOK_LOG", "").strip().lower() in _OFF_VALUES:
             return False
         repo, branch = repo_info(cwd)
+        if script is None and sys.argv and sys.argv[0]:
+            script = sys.argv[0]
+        script = (os.path.realpath(script)
+                  if isinstance(script, str) and script
+                  and os.path.isfile(script) else None)
         line = json.dumps({
             "v": EVENTS_VERSION,
             "ts": round(time.time() if ts is None else ts, 3),
@@ -178,6 +188,7 @@ def record(hook: str, decision: str, reason: str = "", *, harness: str = "",
             "stop_hook_active": (stop_hook_active
                                  if isinstance(stop_hook_active, bool)
                                  else None),
+            "script": script,
         }, ensure_ascii=False, separators=(",", ":")) + "\n"
         path = events_path(home)
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
@@ -285,7 +296,9 @@ def _log_run(norm: dict, native: str, script: str, started: float,
             session_id=norm.get("session_id"), cwd=norm.get("cwd"),
             duration_ms=int((time.time() - started) * 1000),
             exit_code=returncode,
-            stop_hook_active=active if isinstance(active, bool) else None)
+            stop_hook_active=active if isinstance(active, bool) else None,
+            # The shared script, not the shim: that is the hook that ran.
+            script=script)
     except Exception:
         pass
 

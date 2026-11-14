@@ -31,7 +31,9 @@ the registry's aliases first. Everything else is a 404.
 window: ``swe hooks stats --json`` and ``swe hooks log --json`` read in
 process (``hooks/stats_commands.py::collect``), one row per hook script
 summed across harnesses, each with its top reasons and its five newest
-runs. The read can take seconds on a large transcript library (it
+runs. A row names the list rows it belongs to by their ``source_path``
+(``source_paths``), which ``hooks/identity.py`` works out once for every
+client, so the page joins on that and never on names. The read can take seconds on a large transcript library (it
 backfills from Claude Code's transcripts), so no request runs it: a
 background thread does, its answer is cached for ``STATS_TTL_S``, and a
 request that finds nothing ready answers ``{"state": "loading"}`` after
@@ -41,8 +43,6 @@ reads above never touch it.
 
 from __future__ import annotations
 
-import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -106,11 +106,9 @@ def _inventory(home: Path):
     return all_rows(home, registry, statuses, declared), registry, patterns, warning
 
 
-def _row_json(r, keys: list[str] | None = None) -> dict:
-    """``commands._row_json`` plus the row's own ``detail`` note and the
-    stats names its run counts come from."""
+def _row_json(r) -> dict:
+    """``commands._row_json`` plus the row's own ``detail`` note."""
     return {
-        "stats_keys": keys or [],
         "name": r.script,
         "harness": r.harness,
         "tier": r.tier,
@@ -152,88 +150,13 @@ def listing(ctx, home: Path) -> dict:
     return {
         "machine": ctx.machine.get("name"),
         "home": str(home),
-        "hooks": [_row_json(r, k) for r, k in zip(rows, _stats_keys(rows, home))],
+        "hooks": [_row_json(r) for r in rows],
         "findings": findings,
         "check_error": check_error,
         "warning": warning,
         "blocked": blocked_now(home),
         "harnesses": _harnesses(registry, rows),
     }
-
-
-# -- which stats a row owns ------------------------------------------------
-
-_TOKEN_BREAKS = re.compile(r"[\s\"'`;|&()<>=]+")
-
-
-def _expand(token: str, home: Path) -> str:
-    for var in ("$HOME", "${HOME}"):
-        token = token.replace(var, str(home))
-    return str(home) + token[1:] if token == "~" or token.startswith("~/") else token
-
-
-def _real(path: str) -> str:
-    try:
-        return os.path.realpath(path)
-    except (OSError, ValueError):
-        return path
-
-
-def _stats_keys(rows, home: Path) -> list[list[str]]:
-    """For each row, the names its runs may be logged under, never one
-    another row's.
-
-    The log names a run by its script (``events.hook_stem``; a generic
-    stem takes its folder, ``transcripts.command_hook``), so a row cannot
-    just use its list name: a directory hook is named after its folder
-    while its runs carry the executable's stem, and two scripts with one
-    basename share a stem. A row's names are its own file's stem and
-    ``command_hook`` of its path, plus ``command_hook`` of every declared
-    command that points at it (inside it, for a directory) or, when the
-    command's path holds an unresolved variable, that has its basename. A
-    name that more than one distinct source file could own is dropped.
-    """
-    from swe.hooks.events import SCRIPT_EXTENSIONS, hook_stem
-    from swe.hooks.transcripts import command_hook
-
-    out: list[list[str]] = []
-    owners: dict[str, set[str]] = {}
-    for r in rows:
-        src = Path(r.source)
-        is_dir = src.is_dir()
-        real_src, real_dest = _real(str(r.source)), _real(str(r.dest))
-        keys: list[str] = []
-
-        def add(key: str) -> None:
-            if key and key not in keys:
-                keys.append(key)
-
-        if not is_dir:
-            add(hook_stem(src.name))
-            for path in (str(src), str(r.dest)):
-                add(command_hook(path))
-        for decl in getattr(r, "declared", []):
-            for token in _TOKEN_BREAKS.split(decl.command or ""):
-                scripted = token.lower().endswith(SCRIPT_EXTENSIONS) and len(token) > 3
-                # A directory's executable may have no extension at all.
-                if not scripted and not (is_dir and "/" in token):
-                    continue
-                path = _expand(token, home)
-                if "$" in path:
-                    # A plugin root the log resolved and the row cannot:
-                    # the basename is all there is to go on.
-                    mine = not is_dir and hook_stem(os.path.basename(path)) == hook_stem(src.name)
-                else:
-                    real = _real(path)
-                    roots = (real_src, real_dest)
-                    mine = (any(real.startswith(root.rstrip(os.sep) + os.sep) for root in roots)
-                            if is_dir else real in roots)
-                if mine:
-                    add(command_hook(token))
-        for key in keys:
-            owners.setdefault(key, set()).add(real_src)
-        out.append(keys)
-    return [[k for k in keys if len(owners[k]) == 1] for keys in out]
 
 
 # -- one hook -------------------------------------------------------------
@@ -258,7 +181,6 @@ def detail(ctx, home: Path, args: dict) -> dict:
         raise PageError(404, "unknown_hook",
                         f"No hook script named {args['hook']} under ~/.swe/hooks.")
     row = matches[0]
-    keys = {id(r): k for r, k in zip(rows, _stats_keys(rows, home))}[id(row)]
     source = Path(row.source)
     exists = source.exists()
     # A foreign hook's command can name any file on disk; a paired
@@ -267,7 +189,7 @@ def detail(ctx, home: Path, args: dict) -> dict:
     return {
         "machine": ctx.machine.get("name"),
         "home": str(home),
-        **_row_json(row, keys),
+        **_row_json(row),
         "declared": [{
             "event": d.event,
             "matcher": d.matcher,
@@ -446,31 +368,20 @@ def _stats_worker(key: tuple[str, str], home: Path, window: str) -> None:
 
 
 def build_stats_payload(home: Path, window: str, now: float | None = None) -> dict:
-    """What ``swe hooks stats --json`` and ``swe hooks log --json`` show
-    for ``window``, one row per hook script with the harnesses summed:
-    the counts, the top reasons and the newest runs of each."""
+    """What ``swe hooks stats --sum-harnesses --json`` and ``swe hooks log
+    --json`` show for ``window``, one row per hook script with the
+    harnesses summed: the counts, the top reasons and the newest runs of
+    each, plus the list rows it belongs to (``source_paths``)."""
     from swe.hooks import events as _events
     from swe.hooks import stats_commands as _stats
 
     now = time.time() if now is None else now
     since = _events.parse_since(window, now)
     data = _stats.collect(home, since, True, now)
-    events = data["events"]
-    # Blank the harness so build_stats folds each hook into one row.
-    merged = _events.build_stats([{**e, "harness": ""} for e in events])
-    harnesses: dict[str, set] = {}
-    newest: dict[str, list] = {}
-    for event in sorted(events, key=lambda e: e["ts"], reverse=True):
-        harnesses.setdefault(event["hook"], set()).add(event["harness"])
-        runs = newest.setdefault(event["hook"], [])
-        if len(runs) < RECENT_RUNS:
-            runs.append(_stats._event_json(event))
-    rows = []
-    for row in merged["hooks"]:
-        row = {k: v for k, v in row.items() if k != "harness"}
-        row["harnesses"] = sorted(h for h in harnesses.get(row["hook"], ()) if h)
-        row["recent"] = newest.get(row["hook"], [])
-        rows.append(row)
+    merged = _events.build_stats(data["events"], sum_harnesses=True,
+                                 recent=RECENT_RUNS)
+    rows = [{k: v for k, v in row.items() if k != "harness"}
+            for row in merged["hooks"]]
     return {
         "state": "ready",
         "window": window,
@@ -479,4 +390,5 @@ def build_stats_payload(home: Path, window: str, now: float | None = None) -> di
         "sources": data["sources"],
         "totals": merged["totals"],
         "hooks": rows,
+        "uncertain": merged["uncertain"],
     }

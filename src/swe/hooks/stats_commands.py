@@ -2,8 +2,9 @@
 
 Both read the hook run log (``hooks/events.py``) and, unless
 ``--no-backfill`` is given, the Claude Code transcripts
-(``hooks/transcripts.py``), merged so a run is counted once. They only
-read: the log is written by the hook shim, never here.
+(``hooks/transcripts.py``), merged so a run is counted once, each run
+given to the ``swe hooks list`` row that owns it (``hooks/identity.py``).
+They only read: the log is written by the hook shim, never here.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 from swe.console import c, sanitize
 from swe.flags import expand_value_flags
 from swe.hooks import events as _events
+from swe.hooks import identity as _identity
 from swe.hooks import transcripts as _transcripts
 from swe.init.layout import aliases_of, load_registry
 from swe.json_output import emit
@@ -29,7 +31,7 @@ _DECISION_COLOR = {"block": "red", "warn": "yellow", "error": "yellow",
                    "allow": "green"}
 
 _VALUE_FLAGS = {"--since", "--hook", "--harness", "--repo", "--decision",
-                "--limit"}
+                "--limit", "--source"}
 
 
 def _parse(rest: list[str], allowed: set[str], usage: str):
@@ -66,7 +68,8 @@ def _resolve_harness(name: str, registry: dict, seen: set[str]) -> str:
 
 def collect(home: Path, since: float | None, backfill: bool,
             now: float | None = None) -> dict:
-    """Every event since ``since``: the log plus the transcripts, merged.
+    """Every event since ``since``: the log plus the transcripts, merged,
+    each carrying the inventory row it belongs to (``identity.Owners``).
 
     Returns ``{"events": [...], "sources": {...}}``; ``sources`` counts
     the runs each source supplied after the merge and how many transcript
@@ -76,9 +79,17 @@ def collect(home: Path, since: float | None, backfill: bool,
     # fell just outside it, so read a little further back, decide what each
     # run was, and cut to the window afterwards.
     context = None if since is None else since - LOOKBACK
+    # One resolver for the read: the transcripts' commands and the
+    # inventory's declared commands resolve the same way, once each.
+    resolver = _identity.Resolver(home)
     helper = _events.read_log(home, context)
-    transcript = _transcripts.backfill(home, context) if backfill else []
-    merged, _ = _events.merge_events(helper, transcript)
+    transcript = (_transcripts.backfill(home, context, resolver)
+                  if backfill else [])
+    owners = _identity.Owners.load(home, resolver)
+    merged, _ = _events.merge_events(helper, transcript,
+                                     canonical=owners.canonical)
+    owners.assign(merged)
+    _events.assign_identities(merged)
     _events.mark_recovered(merged)
     if since is not None:
         merged = [e for e in merged if e["ts"] >= since]
@@ -111,12 +122,7 @@ def _pct(rate: float) -> str:
         f"{rate * 100:.1f}%"
 
 
-def _event_json(e: dict) -> dict:
-    """One event as ``swe hooks log --json`` shows it."""
-    return {k: e[k] for k in (
-        "ts", "hook", "harness", "event", "session_id", "cwd", "repo",
-        "git_branch", "decision", "reason", "duration_ms", "exit_code",
-        "stop_hook_active", "source")}
+_event_json = _events.event_json
 
 
 def _filtered(home: Path, values: dict, backfill: bool, now: float,
@@ -131,7 +137,7 @@ def _filtered(home: Path, values: dict, backfill: bool, now: float,
     selected = _events.filter_events(
         data["events"], hook=hook, harness=harness,
         repo=values.get("--repo"), decision=values.get("--decision"),
-        since=since)
+        since=since, source=values.get("--source"))
     return data, selected, since
 
 
@@ -140,10 +146,17 @@ def _filtered(home: Path, values: dict, backfill: bool, now: float,
 
 def stats(rest: list[str], json_view: bool, fail) -> int:
     usage = "Usage: swe hooks stats [--since=7d] [--hook=<name>] " \
-            "[--harness=<h>] [--repo=<path>] [--no-backfill] [--json]"
+            "[--source=<path>] [--harness=<h>] [--repo=<path>] " \
+            "[--no-backfill] [--sum-harnesses] [--json]"
+    # One row per hook with every harness folded in before the per-row
+    # reason cap, for a reader that wants exact totals (the Mac app and
+    # the web page, which join rows to the list by ``source_paths``).
+    sum_harnesses = "--sum-harnesses" in rest
+    rest = [a for a in rest if a != "--sum-harnesses"]
     try:
         values, backfill, extra = _parse(
-            rest, {"--since", "--hook", "--harness", "--repo"}, usage)
+            rest, {"--since", "--hook", "--harness", "--repo", "--source"},
+            usage)
     except ValueError as exc:
         return fail(c("red", str(exc)))
     if extra:
@@ -155,7 +168,7 @@ def stats(rest: list[str], json_view: bool, fail) -> int:
             home, values, backfill, now, values.get("--hook"))
     except ValueError as exc:
         return fail(c("red", str(exc)))
-    result = _events.build_stats(selected)
+    result = _events.build_stats(selected, sum_harnesses=sum_harnesses)
     window = values.get("--since", DEFAULT_SINCE)
 
     if json_view:
@@ -167,10 +180,12 @@ def stats(rest: list[str], json_view: bool, fail) -> int:
                 "hook": values.get("--hook"),
                 "harness": values.get("--harness"),
                 "repo": values.get("--repo"),
+                "source": values.get("--source"),
             },
             "sources": data["sources"],
             "totals": result["totals"],
             "hooks": result["hooks"],
+            "uncertain": result["uncertain"],
         })
 
     totals, rows = result["totals"], result["hooks"]
@@ -199,7 +214,8 @@ def stats(rest: list[str], json_view: bool, fail) -> int:
         rate = _pct(r["block_rate"])
         table.add_row({
             "hook": sanitize(r["hook"]),
-            "harness": sanitize(r["harness"]) or "-",
+            "harness": sanitize(r["harness"]) or
+                       ("all" if sum_harnesses else "-"),
             "fires": r["fires"],
             "blocks": r["blocks"],
             "rate": c("red", rate) if r["blocks"] else c("dim", rate),
@@ -244,17 +260,34 @@ def stats(rest: list[str], json_view: bool, fail) -> int:
 # --- log --------------------------------------------------------------------
 
 
+def _shown_name(name: str | None, source: str | None,
+                selected: list[dict]) -> str:
+    """The name ``swe hooks log`` heads its answer with: the one asked for
+    as the events carry it, else the owning row's list name."""
+    if name:
+        wanted = _events.resolve_hook_name(
+            name, {e["hook"] for e in selected}
+            | set(_events.group_names(selected).values()))
+        return wanted if selected else _events.strip_script_extension(name)
+    for event in selected:
+        if event.get("_owner_name"):
+            return event["_owner_name"]
+    return _events.strip_script_extension(Path(source or "").name)
+
+
 def log(rest: list[str], json_view: bool, fail) -> int:
-    usage = "Usage: swe hooks log <name> [--since=7d] [--harness=<h>] " \
-            "[--repo=<path>] [--decision=<d>] [--limit=20] [--no-backfill] " \
-            "[--json]"
+    usage = "Usage: swe hooks log <name> | --source=<path> [--since=7d] " \
+            "[--harness=<h>] [--repo=<path>] [--decision=<d>] [--limit=20] " \
+            "[--no-backfill] [--json]"
     try:
         values, backfill, names = _parse(
-            rest, {"--since", "--harness", "--repo", "--decision", "--limit"},
+            rest, {"--since", "--harness", "--repo", "--decision", "--limit",
+                   "--source"},
             usage)
     except ValueError as exc:
         return fail(c("red", str(exc)))
-    if len(names) != 1:
+    source = values.get("--source")
+    if len(names) > 1 or (not names and not source):
         return fail(c("red", usage))
     decision = values.get("--decision")
     if decision and decision not in _events.DECISIONS:
@@ -271,14 +304,16 @@ def log(rest: list[str], json_view: bool, fail) -> int:
     now = time.time()
     try:
         data, selected, since = _filtered(home, values, backfill, now,
-                                          names[0])
+                                          names[0] if names else None)
     except ValueError as exc:
         return fail(c("red", str(exc)))
     recent = sorted(selected, key=lambda e: e["ts"], reverse=True)[:limit]
+    shown = _shown_name(names[0] if names else None, source, selected)
 
     if json_view:
         return emit({
-            "hook": _events.hook_stem(names[0]),
+            "hook": shown,
+            "source_path": source,
             "window": values.get("--since", DEFAULT_SINCE),
             "since": since,
             "matched": len(selected),
@@ -286,7 +321,7 @@ def log(rest: list[str], json_view: bool, fail) -> int:
         })
 
     counts = f"{len(recent)} of {len(selected)} runs, newest first"
-    print(f"\n{c('bold', sanitize(_events.hook_stem(names[0])))}  "
+    print(f"\n{c('bold', sanitize(shown))}  "
           f"{c('dim', counts)}\n")
     if not recent:
         print(c("dim", "  No runs of that hook in this window.\n"))

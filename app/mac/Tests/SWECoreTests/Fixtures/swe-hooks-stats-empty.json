@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "data": {
+    "window": "24h",
+    "since": 1794579714.489302,
+    "until": 1794666114.489302,
+    "filters": {
+      "hook": null,
+      "harness": null,
+      "repo": null,
+      "source": null
+    },
+    "sources": {
+      "helper": 0,
+      "transcript": 0,
+      "duplicates": 0,
+      "backfill": true
+    },
+    "totals": {
+      "fires": 0,
+      "blocks": 0,
+      "warns": 0,
+      "errors": 0,
+      "allows": 0,
+      "recovered": 0,
+      "block_rate": 0.0,
+      "last_fired": null,
+      "last_block": null,
+      "avg_duration_ms": null,
+      "hooks": 0
+    },
+    "hooks": [],
+    "uncertain": []
+  }
+}

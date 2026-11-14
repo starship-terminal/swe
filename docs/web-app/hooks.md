@@ -121,15 +121,16 @@ while the next read runs. An answer older than 30 seconds is still served, with 
 while the next read runs, and the page keeps asking until it is false;
 Refresh adds `&refresh=1` to force that read.
 
-Each list and detail row carries `stats_keys`, the names its runs may be
-logged under: the file's stem, `command_hook` of its path, and
-`command_hook` of each declared command that points at it (inside the
-folder, for a directory hook, so `bundle` is counted under its
-executable's `guard`). A name more than one source file could own is
-dropped, and a row counts only when exactly one of its names has runs;
-anything else shows dashes. The counts are folded by the logged name, not
-through `swe hooks log`'s name filter, so a prefixed name such as
-`claude-plugin/on-stop` finds its top reasons and recent runs.
+Each stats row names the list rows it belongs to (`source_paths`), which
+`hooks/identity.py` works out once for the page, the CLI and the Mac app:
+the script a run carried, resolved, matched to the row whose source it is
+or whose folder holds it as a declared executable (so `bundle` counts
+`check` and `scripts/on-stop.sh`, and a helper nothing declares adds
+nothing), with names only for runs that have no script. The page joins a
+list or detail row's `source_path` to that and nothing else; a source in
+`uncertain` (a run that could be its own or another script's) shows dashes,
+and the detail card says swe can't tell which runs belong to it. A row
+with no runs shows dashes too.
 
 A bad window is 422 `bad_window`, a failed read
 503 `stats_unavailable`.

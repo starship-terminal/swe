@@ -802,7 +802,11 @@ Stats
   swe hooks stats [--since=7d] [--hook=&lt;name&gt;] [--harness=&lt;h&gt;] [--repo=&lt;path&gt;]
   swe hooks log &lt;name&gt; [--since=7d] [--decision=block] [--limit=20]
   --since takes 90m, 24h, 7d, 2w or all. Both add --no-backfill to skip the
-  Claude transcripts, and --json for the machine-readable form.
+  Claude transcripts, --source=&lt;path&gt; to pick a hook by the source_path
+  swe hooks list --json gives it instead of by name, --sum-harnesses
+  (stats) to fold every harness into one row per hook, and --json for
+  the machine-readable form. A run counts for the hook whose script ran; a
+  name two scripts share counts for neither.
   Each hook run is one line in ~/.swe/cache/hooks/events.jsonl (5 MB, one
   rotated copy; never committed or sent anywhere), written by the shared-hook
   shim: run swe hooks sync once so it carries the logger. Only the first
