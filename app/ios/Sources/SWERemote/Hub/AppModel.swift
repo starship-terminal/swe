@@ -50,8 +50,15 @@ final class AppModel {
         self.init(store: MemoryHubStore(list))
     }
 
+    /// Tests hand in a session whose protocol is stubbed.
+    @ObservationIgnored var clientSession: URLSession?
+
     var client: HubClient? {
-        hub.map { HubClient(baseURL: $0.baseURL, credential: $0.credential.credential) }
+        hub.map {
+            var client = HubClient(baseURL: $0.baseURL, credential: $0.credential.credential)
+            if let clientSession { client.session = clientSession }
+            return client
+        }
     }
 
     var hubName: String {
@@ -155,7 +162,8 @@ final class AppModel {
         let waiting = Set(inbox.filter { $0.sessionStatus == .approval }.map(\.key))
         guard !waiting.isEmpty else { return sessions }
         return sessions.map { r in
-            guard waiting.contains(r.key) else { return r }
+            // A mirrored copy has nothing to approve, whatever the inbox holds.
+            guard waiting.contains(r.key), !r.isMirrored else { return r }
             var row = r
             row.status = "approval"
             return row
@@ -289,6 +297,11 @@ final class AppModel {
     /// Returns true when the hub queued it for a satellite (202).
     @discardableResult
     func attach(_ key: String) async throws -> Bool {
+        // A mirrored copy has no process to attach to; no caller offers it,
+        // and a stale one reaching here must not call the hub.
+        if session(key)?.isMirrored == true {
+            throw HubError(status: 409, code: "mirrored", message: Mirrored.notice)
+        }
         guard let queued = try await onSameHub({ try await $0.control(key, op: "attach") }) else { return false }
         // An attach also cancels a detach waiting on the turn.
         pendingDetaches[key] = nil
@@ -380,7 +393,19 @@ final class AppModel {
     /// under "Waiting on you", so the badge and the page always agree.
     /// The hub already dropped stale rows and this device's dismissals.
     var waitingOnYou: [InboxItem] {
-        inbox.filter { InboxGrouping.section(of: $0) == .waiting }
+        inboxRows.filter { InboxGrouping.section(of: $0) == .waiting }
+    }
+
+    /// The inbox as the page and the badge show it: rows for a mirrored
+    /// session are left out. A copy of a deleted transcript has no
+    /// approval to answer, no follow-up to send and nothing live to
+    /// finish or fail, so an inbox row for it (a stale approval the hub
+    /// still holds) would offer an action the chat refuses. GitHub rows
+    /// aren't sessions and stay.
+    var inboxRows: [InboxItem] {
+        let mirrored = Set(sessions.filter(\.isMirrored).map(\.key))
+        guard !mirrored.isEmpty else { return inbox }
+        return inbox.filter { $0.isGitHub || !mirrored.contains($0.key) }
     }
 
     var inboxBadge: Int { waitingOnYou.count }
