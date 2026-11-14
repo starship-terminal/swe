@@ -33,6 +33,7 @@ Nothing here prints or writes.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 from pathlib import Path
@@ -110,66 +111,203 @@ def _splice(command: str) -> str:
     return out
 
 
+_PLUGIN_ROOT = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT(?![A-Za-z0-9_])")
+_PROJECT_DIR = re.compile(r"\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR(?![A-Za-z0-9_])")
+
+
+def _plugin_commands(value, out: list[str]) -> None:
+    """Every ``command`` string in a plugin's hooks definition."""
+    if isinstance(value, dict):
+        command = value.get("command")
+        if isinstance(command, str) and value.get("type", "command") == "command":
+            out.append(command)
+        for item in value.values():
+            _plugin_commands(item, out)
+    elif isinstance(value, list):
+        for item in value:
+            _plugin_commands(item, out)
+
+
+def _read_json(path: Path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def plugin_roots(home: Path) -> dict[str, set[str]]:
+    """``{declared command: {install folder}}`` for every Claude Code plugin
+    installed under ``home``: the hooks each plugin's ``hooks/hooks.json``
+    (or its manifest's ``hooks``) declares, read from the install record
+    ``~/.claude/plugins/installed_plugins.json``. A transcript stores a
+    plugin hook's command with ``${CLAUDE_PLUGIN_ROOT}`` unexpanded and
+    nothing else about the plugin; the exact command string is what ties
+    a run to the plugin that declares it."""
+    record = _read_json(home / ".claude" / "plugins" / "installed_plugins.json")
+    installs = record.get("plugins") if isinstance(record, dict) else None
+    out: dict[str, set[str]] = {}
+    if not isinstance(installs, dict):
+        return out
+    for entries in installs.values():
+        for entry in entries if isinstance(entries, list) else []:
+            folder = entry.get("installPath") if isinstance(entry, dict) else None
+            if not isinstance(folder, str) or not os.path.isdir(folder):
+                continue
+            found: list[str] = []
+            _plugin_commands(_read_json(Path(folder) / "hooks" / "hooks.json"),
+                             found)
+            manifest = _read_json(Path(folder) / ".claude-plugin" / "plugin.json")
+            hooks = manifest.get("hooks") if isinstance(manifest, dict) else None
+            if isinstance(hooks, str):
+                hooks = [hooks]
+            if isinstance(hooks, list) and all(isinstance(h, str) for h in hooks):
+                for rel in hooks:
+                    _plugin_commands(_read_json(Path(folder) / rel), found)
+            elif isinstance(hooks, dict):
+                _plugin_commands(hooks, found)
+            for command in found:
+                out.setdefault(command, set()).add(_real(folder))
+    return out
+
+
 class Resolver:
     """The script a command runs, resolved, cached for one read.
 
     One per ``collect``: the answer depends on the files on disk, so it
-    is never kept across reads.
+    is never kept across reads. Besides what ``swe hooks list`` resolves,
+    it expands the two variables Claude Code sets for a hook where they
+    are knowable: ``$CLAUDE_PLUGIN_ROOT`` to the one installed plugin that
+    declares that exact command (``plugin_roots``), and
+    ``$CLAUDE_PROJECT_DIR`` to the session's project folder (the first
+    ``cwd`` its transcript records) when one is given.
     """
 
     def __init__(self, home: Path):
         self.home = Path(home)
-        self._cache: dict[str, tuple[tuple[str, bool], ...]] = {}
+        self._cache: dict[tuple[str, str | None],
+                          tuple[tuple[str, bool], ...]] = {}
+        self._names_project: dict[str, bool] = {}
+        self._named: dict[tuple[str, str | None], tuple[str, str | None]] = {}
+        self._plugins: dict[str, set[str]] | None = None
+        self._generated: set[str] | None = None
 
-    def scripts(self, command: str) -> list[str]:
+    def scripts(self, command: str, project: str | None = None) -> list[str]:
         """Every resolved script ``command`` runs, in order, one per file
         (``a.py && b.py`` runs two)."""
-        return list(dict.fromkeys(path for path, _ in self._found(command)))
+        return list(dict.fromkeys(
+            path for path, _ in self._found(command, project)))
 
-    def script(self, command: str) -> tuple[str | None, bool]:
+    def script(self, command: str,
+               project: str | None = None) -> tuple[str | None, bool]:
         """(the one resolved script ``command`` runs, or None when it runs
         none or several; whether it was reached through a generated
         wrapper). A run of a command with two scripts is neither's: it is
         one run, and swe cannot say which file made its decision."""
-        found = self._found(command)
+        found = self._found(command, project)
         if len({path for path, _ in found}) != 1:
             return None, False
         return found[0]
 
-    def _found(self, command: str) -> tuple[tuple[str, bool], ...]:
+    def _found(self, command: str,
+               project: str | None) -> tuple[tuple[str, bool], ...]:
         command = command or ""
-        hit = self._cache.get(command)
+        # The project only matters to a command that names it.
+        names = self._names_project.get(command)
+        if names is None:
+            names = self._names_project[command] = bool(
+                _PROJECT_DIR.search(command))
+        key = (command, project if names else None)
+        hit = self._cache.get(key)
         if hit is None:
-            hit = self._cache[command] = self._resolve(command)
+            hit = self._cache[key] = self._resolve(command, key[1])
         return hit
 
-    def _resolve(self, command: str) -> tuple[tuple[str, bool], ...]:
+    def _expand(self, command: str, project: str | None) -> str:
+        if _PLUGIN_ROOT.search(command):
+            if self._plugins is None:
+                self._plugins = plugin_roots(self.home)
+            roots = self._plugins.get(command, set())
+            if len(roots) == 1:
+                root = next(iter(roots))
+                command = _PLUGIN_ROOT.sub(lambda _m: root, command)
+        if project and _PROJECT_DIR.search(command):
+            command = _PROJECT_DIR.sub(lambda _m: project, command)
+        return command
+
+    def _resolve(self, command: str,
+                 project: str | None) -> tuple[tuple[str, bool], ...]:
         from swe.hooks.inventory import _executed_scripts
 
         try:
             # A run's script may be gone since (a pruned wrapper): its
             # path still names it.
-            found = _executed_scripts(_splice(command), self.home,
-                                      must_exist=False)
+            found = _executed_scripts(_splice(self._expand(command, project)),
+                                      self.home, must_exist=False)
         except Exception:  # noqa: BLE001 - an odd command has no script
             return ()
         out = []
         for path in found:
             real = _real(str(path))
-            shared = wrapped_source(real)
+            shared = wrapped_source(real) or self._vanished_wrapper(str(path))
             out.append((shared, True) if shared else (real, False))
         return tuple(out)
 
-    def name(self, command: str) -> tuple[str, str | None]:
+    def _vanished_wrapper(self, path: str) -> str | None:
+        """The shared script a generated wrapper path stood for, when the
+        wrapper (or its whole ``_generated`` folder) is gone: nothing is
+        at ``path``, it has the shape swe writes (``<a harness's hooks
+        root>/_generated/<name>``), and ``~/.swe/hooks/shared/<name>``
+        exists. Anything that is there is never taken for a wrapper."""
+        from swe.hooks import shared as _shared
+
+        if os.path.lexists(path):
+            return None
+        folder, name = os.path.split(path)
+        if os.path.basename(folder) != _shared.GENERATED_DIRNAME:
+            return None
+        if self._generated is None:
+            self._generated = self._generated_folders()
+        if folder not in self._generated and _real(folder) not in self._generated:
+            return None
+        source = _shared.shared_dir(self.home) / name
+        return _real(str(source)) if source.is_file() else None
+
+    def _generated_folders(self) -> set[str]:
+        """``<root>/_generated`` for every harness's hooks root, as given
+        and resolved."""
+        try:
+            from swe.hooks import shared as _shared
+            from swe.hooks.inventory import _harness_names
+            from swe.init.hooks import hook_root
+            from swe.init.layout import load_registry
+            from swe import paths as _p
+
+            registry = load_registry(self.home)
+            out: set[str] = set()
+            for harness in _harness_names(_p.hooks_dir_for(self.home), registry):
+                root, _why = hook_root(registry, harness, self.home)
+                if root is not None:
+                    folder = str(root / _shared.GENERATED_DIRNAME)
+                    out |= {folder, _real(folder)}
+            return out
+        except Exception:  # noqa: BLE001 - no roots: no vanished wrappers
+            return set()
+
+    def name(self, command: str,
+             project: str | None = None) -> tuple[str, str | None]:
         """(hook name, script) for a transcript's command: a wrapper's run
         takes the shared script's stem, the name the shim logs it under;
         anything else is ``transcripts.command_hook``."""
         from swe.hooks.events import hook_stem
         from swe.hooks.transcripts import command_hook
 
-        script, wrapped = self.script(command)
-        return (hook_stem(script) if wrapped else command_hook(command)), \
-            script
+        hit = self._named.get((command, project))
+        if hit is None:
+            script, wrapped = self.script(command, project)
+            hit = self._named[(command, project)] = (
+                hook_stem(script) if wrapped else command_hook(command), script)
+        return hit
 
 
 def inventory_rows(home: Path) -> list:
@@ -333,14 +471,23 @@ class Owners:
         ``source_path`` spellings) and ``_maybe`` (the spellings of every
         owner a run that has none could be)."""
         names: dict[str, str] = {}
+        seen: dict[tuple, set[str]] = {}
+        spellings: dict[str, list[str]] = {}
         for event in events:
-            claims = self._claims(event)
+            # Many runs share one answer: memoize on what decides it.
+            memo = (event.get("script"), event.get("source") == "helper",
+                    event.get("hook"), event.get("harness"))
+            claims = seen.get(memo)
+            if claims is None:
+                claims = seen[memo] = self._claims(event)
             owner = next(iter(claims)) if len(claims) == 1 else None
             event["_owner"] = owner
             if owner is not None and owner not in names:
                 names[owner] = self.name_of(owner)
             event["_owner_name"] = names.get(owner) if owner else None
-            event["_sources"] = self.sources_of(owner)
-            event["_maybe"] = () if owner else tuple(sorted(
+            if owner is not None and owner not in spellings:
+                spellings[owner] = self.sources_of(owner)
+            event["_sources"] = spellings[owner] if owner else []
+            event["_maybe"] = () if owner or not claims else tuple(sorted(
                 spelling for claim in claims
                 for spelling in self.sources_of(claim)))

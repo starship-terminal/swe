@@ -214,8 +214,18 @@ def merge_events(helper: list[dict], transcript: list[dict],
     shim's copy of the run.
     """
     if canonical is not None:
-        helper = [dict(e, script=canonical(e.get("script"))) for e in helper]
-        transcript = [dict(e, script=canonical(e.get("script")))
+        memo: dict = {}
+
+        def canon(script):
+            if script not in memo:
+                memo[script] = canonical(script)
+            return memo[script]
+
+        helper = [dict(e, script=canon(e.get("script"))) for e in helper]
+        # Copied only when the script changes: there can be hundreds of
+        # thousands, and they are the caller's fresh dicts anyway.
+        transcript = [e if canon(e.get("script")) == e.get("script")
+                      else dict(e, script=canon(e.get("script")))
                       for e in transcript]
     else:
         helper = [dict(e) for e in helper]
