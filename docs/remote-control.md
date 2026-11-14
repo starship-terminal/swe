@@ -110,6 +110,28 @@ root-owned `/Applications/Tailscale.app` (the App Store variant). The
 answer is kept for the connection, and a request whose peer fails the
 check, or that the check can't place, is read as the loopback client it
 is: no tailnet identity, bearer credentials unaffected.
+
+The macOS lookup can be blind ([#1944](https://github.com/starship-terminal/swe/issues/1944)).
+On macOS 27 a process that is ad-hoc signed, or has a live ad-hoc-signed
+ancestor, sees an empty TCP table: `netstat -anv` lists no sockets, so
+the check never places tailscaled and every request through serve reads
+as loopback. Homebrew's Python and Nix's shells are ad-hoc signed; a
+Developer-ID-signed Python (python.org's installer) started by launchd
+or a signed shell sees the table. The check still fails closed, so
+nothing is let in that should not be: the owner's devices need a paired
+credential and `POST /v1/pair/request` answers `403 not_tailnet`
+(pair with a token instead). At start, `swe remote serve` behind serve
+asks the lookup about a loopback connection of its own
+(`peer.owner_lookup_works`) and, when it comes back empty, prints one
+line to stderr (`serve.log` under the LaunchAgent):
+
+```
+2026-11-15 10:42:07  warning: this hub cannot see which process owns a loopback connection, so requests through tailscale serve lose their tailnet identity (the owner's devices need a paired credential and pair requests need a pair token); run the hub with a Developer-ID-signed Python, such as python.org's, started by launchd or a signed shell
+```
+
+The probe only feeds that line; the check accepts exactly what it
+accepts without it.
+
 `X-Forwarded-Proto` keeps the loopback rule, since it only feeds the
 `Origin` check a local process can pass anyway. Owner identity
 comes from `whois` of the node's own tailnet IP, which also records
