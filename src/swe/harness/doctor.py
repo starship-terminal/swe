@@ -301,6 +301,13 @@ def mirror_findings(audit: dict | None) -> list[DoctorFinding]:
             f"{_count(len(untracked), 'mirror copy', 'mirror copies')} not in the manifest: "
             "they list and read, but swe cannot restore or purge them",
             None, source=source))
+    unreadable = _num(audit.get("unreadable"))
+    if unreadable:
+        findings.append(DoctorFinding(
+            "mirror.unreadable", "info",
+            f"{_count(unreadable, 'manifest entry', 'manifest entries')} could not be read: "
+            "swe skips them and leaves their copies alone, and keeps them in the file",
+            None, source=source))
     missing = audit.get("missing") if isinstance(audit.get("missing"), list) else []
     if missing:
         findings.append(DoctorFinding(

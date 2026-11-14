@@ -617,13 +617,95 @@ class StatusTests(PurgeCase):
         self.mirrored_claude()
         manifest = json.loads(mirror.manifest_path(self.home).read_text())
         for entry in manifest["files"].values():
-            entry.update(mirror_size="big", source=12)
+            entry.update(mirror_size="big")
+        manifest["files"]["claude/-bad/x.jsonl"] = {"harness": "claude", "source": 12}
         mirror.manifest_path(self.home).write_text(json.dumps(manifest))
         result = self.purge("--status", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         data = decode(result)["data"]
+        # The unreadable entry is not counted; the bad size reads as 0.
         self.assertEqual((data["entries"], data["bytes"]), (1, 0))
         self.assertEqual(self.purge("--status").returncode, 0)
+
+
+class MalformedManifestTests(PurgeCase):
+    """One bad manifest entry must never break a reader, and is never
+    dropped from the file or allowed to cost its copy."""
+
+    BAD = {
+        "claude/-bad/not-a-dict.jsonl": 5,
+        "claude/-bad/no-path.jsonl": {"harness": "claude", "source": 12, "mirror_size": 9},
+        "claude/-bad/no-number.jsonl": {"harness": "claude", "source": "/gone/x.jsonl",
+                                        "mirror_size": "big", "size": "x", "ino": None},
+    }
+
+    def poison(self):
+        manifest = json.loads(mirror.manifest_path(self.home).read_text())
+        manifest["files"].update(json.loads(json.dumps(self.BAD)))
+        mirror.manifest_path(self.home).write_text(json.dumps(manifest))
+
+    def assert_bad_entries_kept(self):
+        files = json.loads(mirror.manifest_path(self.home).read_text())["files"]
+        for key, value in self.BAD.items():
+            self.assertEqual(files.get(key), value, key)
+
+    def test_the_listing_survives(self):
+        self.mirrored_claude()
+        self.poison()
+        listed = run_swe(self.home, "session")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertEqual([r["id"] for r in self.sessions()], [CLAUDE_ID])
+        self.assert_bad_entries_kept()
+
+    def test_a_mirror_pass_keeps_bad_entries_verbatim(self):
+        self.mirrored_claude()
+        self.claude(session_id=OTHER_ID)
+        self.poison()
+        result = self.sync()
+        self.assertEqual(result.copied + result.cloned, 1)
+        self.assert_bad_entries_kept()
+        self.assertEqual(self.purge("--json").returncode, 0)
+        self.assert_bad_entries_kept()
+
+    def test_a_copy_whose_entry_is_unreadable_is_never_overwritten(self):
+        source = self.claude()
+        self.sync()
+        rel = f"claude/-work-proj/{source.name}"
+        manifest = json.loads(mirror.manifest_path(self.home).read_text())
+        manifest["files"][rel]["source"] = 12
+        mirror.manifest_path(self.home).write_text(json.dumps(manifest))
+        copy = self.mirror_root / rel
+        copy.write_text("only copy of older history\n")
+        write_jsonl(source, claude_records("changed since"), MTIME + 99)
+        result = self.sync()
+        self.assertEqual(copy.read_text(), "only copy of older history\n")
+        self.assertEqual(result.unreadable, 1)
+        files = json.loads(mirror.manifest_path(self.home).read_text())["files"]
+        self.assertEqual(files[rel]["source"], 12)
+
+    def test_restore_survives_and_keeps_bad_entries(self):
+        source = self.mirrored_claude()
+        self.poison()
+        result = self.restore(CLAUDE_ID)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(source.is_file())
+        self.assert_bad_entries_kept()
+
+    def test_purge_survives_and_keeps_bad_entries(self):
+        self.mirrored_claude()
+        self.poison()
+        result = self.purge(f"--purge={CLAUDE_ID}", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn(f"claude/-work-proj/{CLAUDE_ID}.jsonl", mirror.load_manifest(self.home))
+        self.assert_bad_entries_kept()
+
+    def test_doctor_counts_entries_it_could_not_read(self):
+        self.mirrored_claude()
+        self.poison()
+        self.assertEqual(mirror.audit(self.home)["unreadable"], 2)
+        data = decode(run_swe(self.home, "doctor", "--json"))["data"]
+        self.assertIn("mirror.unreadable", {f["check"] for f in data["findings"]})
+        self.assert_bad_entries_kept()
 
 
 class SweepTests(PurgeCase):

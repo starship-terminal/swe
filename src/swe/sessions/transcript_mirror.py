@@ -206,18 +206,64 @@ def _manifest_signature(path: Path) -> tuple | None:
     return (st.st_ino, st.st_size, st.st_mtime_ns)
 
 
-def _read_manifest(path: Path) -> tuple[dict, bool]:
-    """``(entries, corrupt)``. A missing file is empty and not corrupt."""
+# Entry fields that must be numbers for a reader to use them. A value of
+# another type reads as 0 (the stat then never matches, so a live source
+# is copied again, which is what an unknown stat should mean).
+_NUMERIC_FIELDS = ("ino", "mtime_ns", "size", "mirror_size", "copied_at")
+
+
+def _is_number(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and value == value and value not in (float("inf"), float("-inf")))
+
+
+def _clean_entry(value) -> dict | None:
+    """The entry as readers may use it, or None when it cannot be read: not
+    an object, no ``source`` path string, no ``harness`` string, or an
+    ``account_home`` that is not a string. Wrong-typed numbers read as 0."""
+    if not isinstance(value, dict):
+        return None
+    if not isinstance(value.get("source"), str) or not value["source"]:
+        return None
+    if not isinstance(value.get("harness"), str):
+        return None
+    account = value.get("account_home")
+    if account is not None and not isinstance(account, str):
+        return None
+    clean = dict(value)
+    clean["account_home"] = account or ""
+    for field in _NUMERIC_FIELDS:
+        if field in clean and not _is_number(clean[field]):
+            clean[field] = 0
+    return clean
+
+
+def _read_manifest_full(path: Path) -> tuple[dict, dict, bool]:
+    """``(raw, entries, corrupt)``: ``raw`` is the file's ``files`` object
+    exactly as stored, ``entries`` only the well-formed ones, cleaned
+    (:func:`_clean_entry`). A missing file is empty and not corrupt."""
     try:
         data = json.loads(path.read_text())
     except FileNotFoundError:
-        return {}, False
+        return {}, {}, False
     except (OSError, ValueError, RecursionError):
-        return {}, True
+        return {}, {}, True
     files = data.get("files") if isinstance(data, dict) else None
     if not isinstance(files, dict):
-        return {}, True
-    return {k: v for k, v in files.items() if isinstance(v, dict)}, False
+        return {}, {}, True
+    entries = {}
+    for key, value in files.items():
+        clean = _clean_entry(value)
+        if clean is not None:
+            entries[key] = clean
+    return files, entries, False
+
+
+def _read_manifest(path: Path) -> tuple[dict, bool]:
+    """``(entries, corrupt)``: only the well-formed entries, so no reader
+    ever sees a malformed one. A missing file is empty and not corrupt."""
+    _raw, entries, corrupt = _read_manifest_full(path)
+    return entries, corrupt
 
 
 def load_manifest(home: Path | None = None) -> dict[str, dict]:
@@ -236,7 +282,23 @@ def load_manifest(home: Path | None = None) -> dict[str, dict]:
     return entries
 
 
-def _write_manifest(home: Path | None, entries: dict) -> None:
+def _write_manifest(home: Path | None, entries: dict, raw: dict | None = None,
+                    before: dict | None = None) -> None:
+    """Write ``entries``. Given the ``raw`` file and the ``before`` entries
+    it was read as, only what the caller changed is written: an entry it
+    added or changed takes its new value, one it removed goes, and every
+    other key keeps its stored value verbatim, a malformed one included,
+    so no writer ever drops an entry it could not read."""
+    if raw is not None:
+        before = before or {}
+        merged = dict(raw)
+        for key in before:
+            if key not in entries:
+                merged.pop(key, None)
+        for key, value in entries.items():
+            if before.get(key) != value:
+                merged[key] = value
+        entries = merged
     body = {"version": MANIFEST_VERSION, "files": entries}
     atomic_write_text(manifest_path(home), json.dumps(body, indent=1, sort_keys=True) + "\n",
                       private=True)
@@ -269,6 +331,7 @@ class MirrorResult:
     orphaned: int = 0  # copies whose source is gone: kept, as intended
     failed: int = 0
     conflicts: int = 0  # a copy owned by another source: left alone
+    unreadable: int = 0  # a copy whose manifest entry cannot be read: left alone
     copied_bytes: int = 0
     cloned_bytes: int = 0
     unchanged_bytes: int = 0
@@ -277,7 +340,7 @@ class MirrorResult:
 
     def as_dict(self) -> dict:
         return {k: getattr(self, k) for k in (
-            "files", "copied", "cloned", "unchanged", "orphaned", "failed", "conflicts",
+            "files", "copied", "cloned", "unchanged", "orphaned", "failed", "conflicts", "unreadable",
             "copied_bytes", "cloned_bytes", "unchanged_bytes", "orphaned_bytes", "seconds")}
 
 
@@ -429,7 +492,9 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
     table = roots(home)
     _ensure_dir(root, root.parent)
     with _pass_lock(home, wait):
-        entries, corrupt = _read_manifest(manifest_path(home))
+        raw, entries, corrupt = _read_manifest_full(manifest_path(home))
+        before = dict(entries)
+        unreadable = set(raw) - set(entries)
         if corrupt:
             # Never overwrite what cannot be read: set it aside, and the
             # copies below rebuild the record.
@@ -455,6 +520,11 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
                     st = os.stat(source.path)
                 except OSError:
                     continue  # gone between the walk and now: orphan next pass
+                if rel in unreadable:
+                    # Its record cannot be read, so whether this source
+                    # owns the copy is unknown: leave the copy alone.
+                    result.unreadable += 1
+                    continue
                 entry = entries.get(rel)
                 if (entry is not None and entry.get("source") != source.path
                         and not _is_gone(entry)):
@@ -493,7 +563,7 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
                 dirty = True
                 pending += 1
                 if pending >= FLUSH_EVERY:
-                    _write_manifest(home, entries)
+                    _write_manifest(home, entries, raw, before)
                     pending = 0
             # Copies whose source is no longer anywhere: counted, kept.
             for rel, entry in entries.items():
@@ -504,7 +574,7 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
                     result.orphaned_bytes += entry.get("mirror_size", 0)
         finally:
             if dirty or corrupt:
-                _write_manifest(home, entries)
+                _write_manifest(home, entries, None if corrupt else raw, before)
     result.seconds = round(time.monotonic() - started, 3)
     stamp = {**result.as_dict(), "finished_at": time.time()}
     with contextlib.suppress(OSError):
@@ -675,7 +745,11 @@ def restore(home: Path | None, session) -> dict:
                       "(a symlink, or behind one)")
     rel = copy_path[len(root) + 1:]
     with _pass_lock(home, wait=False):
-        entries, _corrupt = _read_manifest(manifest_path(home))
+        raw, entries, _corrupt = _read_manifest_full(manifest_path(home))
+        before = dict(entries)
+        if rel in raw and rel not in entries:
+            raise Refused(f"the manifest entry for {rel} cannot be read, so swe cannot tell "
+                          "where to put it back")
         entry = entries.get(rel)
         if entry is None:
             raise Refused(f"the manifest has no record of where {rel} was copied from, "
@@ -700,7 +774,7 @@ def restore(home: Path | None, session) -> dict:
         entries[rel] = {**entry, "ino": taken.st_ino, "mtime_ns": taken.st_mtime_ns,
                         "size": taken.st_size}
         with contextlib.suppress(OSError):
-            _write_manifest(home, entries)
+            _write_manifest(home, entries, raw, before)
     return {"harness": session.tool_name, "session_id": session.session_id,
             "account_home": session.account_home or None, "copy": copy_path,
             "target": target, "bytes": written, "how": how}
@@ -852,11 +926,12 @@ def purge(home: Path | None, plan: dict) -> dict:
             except FileNotFoundError:
                 continue
             removed.append(path)
-        entries, corrupt = _read_manifest(manifest_path(home))
+        raw, entries, corrupt = _read_manifest_full(manifest_path(home))
         if not corrupt:
+            before = dict(entries)
             for rel in again["entries"]:
                 entries.pop(rel, None)
-            _write_manifest(home, entries)
+            _write_manifest(home, entries, raw, before)
     return {**again, "removed": removed, "search": _forget_searched(home, again)}
 
 
@@ -984,9 +1059,13 @@ def audit(home: Path | None = None) -> dict:
             for name in files:
                 if name.endswith(".jsonl"):
                     on_disk.add(os.path.relpath(os.path.join(folder, name), root))
-    body["untracked"] = sorted(on_disk - set(entries))
+    raw, _readable, _corrupt = _read_manifest_full(manifest_path(home))
+    # A copy with an entry swe cannot read is not untracked: it is counted
+    # in ``unreadable`` below.
+    body["untracked"] = sorted(on_disk - set(entries) - set(raw))
     body["missing"] = sorted(rel for rel in entries if not os.path.isfile(os.path.join(root, rel)))
     body["stale_temps"] = temp_files(home)
+    body["unreadable"] = len(set(raw) - set(entries))
     return body
 
 
