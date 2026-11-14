@@ -19,6 +19,18 @@ from swe.paths import (
 )
 
 
+def _identity(path):
+    """What a build may not change in a file it leaves alone.
+
+    The access time is left out: reading the file (the check does) may move
+    it, and a read that crosses a second boundary made the old whole-stat
+    comparison fail now and then.
+    """
+    st = path.stat()
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_uid,
+            st.st_gid, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
 class CompilerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -43,9 +55,9 @@ class CompilerTests(unittest.TestCase):
         self.assertLess(content.index("# First"), content.index("# Second"))
         self.assertTrue(content.endswith("\n"))
         self.assertFalse(content.endswith("\n\n"))
-        before = self.output.stat()
+        before = _identity(self.output)
         self.assertFalse(build(self.home))
-        self.assertEqual(before, self.output.stat())
+        self.assertEqual(before, _identity(self.output))
 
     def test_check_detects_missing_and_tampered_output_without_replacing(self):
         self.assertTrue(build(self.home, check=True))
@@ -53,10 +65,10 @@ class CompilerTests(unittest.TestCase):
         build(self.home)
         self.assertFalse(build(self.home, check=True))
         self.output.write_text("tampered")
-        before = self.output.stat()
+        before = _identity(self.output)
         self.assertTrue(build(self.home, check=True))
         self.assertEqual(self.output.read_text(), "tampered")
-        self.assertEqual(before, self.output.stat())
+        self.assertEqual(before, _identity(self.output))
 
     def test_atomic_build_preserves_mode_and_existing_harness_alias(self):
         self.output.write_text("old instructions")
