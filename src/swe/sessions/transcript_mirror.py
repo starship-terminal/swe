@@ -1263,3 +1263,40 @@ def status(home: Path | None = None) -> dict:
         "orphaned_bytes": sum(size(e) for e in gone),
         "last_pass": state.get("last_pass"),
     }
+
+
+# -- read-only helpers for search (#1918) ---------------------------------
+
+
+def source_candidates(rel: str, table: list[Root]) -> list[str]:
+    """Where the copy at mirror-relative ``rel`` came from, worked out from
+    the layout alone: the inverse of :func:`_mirror_rel`, for a copy the
+    manifest no longer records. Most likely first.
+
+    A Claude prefix maps to one root, so its answer is exact. A Codex
+    prefix maps to ``sessions/`` and ``archived_sessions/``: a dated path
+    (``YYYY/MM/DD/<file>``) names ``sessions/`` first, a flat one only
+    ``archived_sessions/``, since Codex writes every live rollout dated.
+    Empty when the layout cannot say: an external transcript's folder is a
+    hash of its path, and a prefix no current root has belongs to an
+    account since removed. Reads nothing."""
+    out: list[str] = []
+    for root in table:
+        if not rel.startswith(root.prefix + "/"):
+            continue
+        rest = rel[len(root.prefix) + 1:]
+        if not rest:
+            continue
+        if root.harness == "claude" and rest.split("/", 1)[0].startswith("-external-"):
+            return []
+        if root.harness == "codex":
+            if rest.startswith("external/"):
+                return []
+            # By the root's place in its home, not its name: a symlinked
+            # root resolves to a path whose last part can be anything.
+            archived = root.path == os.path.realpath(
+                os.path.join(root.home, "archived_sessions"))
+            if "/" not in rest and not archived:
+                continue
+        out.append(os.path.join(root.path, rest))
+    return out
