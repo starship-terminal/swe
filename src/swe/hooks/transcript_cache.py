@@ -174,6 +174,9 @@ class TranscriptCache:
                 os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT, 0o600))
             db = sqlite3.connect(str(self.path), timeout=2.0,
                                  isolation_level=None)
+        except (OSError, sqlite3.Error):
+            return
+        try:
             db.execute("PRAGMA busy_timeout = 2000")
             # Set before the first table exists, it lets a trim hand freed
             # pages back to the disk (``PRAGMA incremental_vacuum``).
@@ -191,6 +194,8 @@ class TranscriptCache:
                     pass
             self._db = db
         except (OSError, sqlite3.Error):
+            # Not a database (damaged, another file): read uncached.
+            db.close()
             self._db = None
 
     def events(self, path: str, parse) -> list[dict]:

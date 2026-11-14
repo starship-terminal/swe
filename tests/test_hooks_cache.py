@@ -23,7 +23,17 @@ from tests.test_hooks_stats import _rec
 HOUR = 3600
 
 
+def _db(path):
+    """A connection the test closes when it ends."""
+    return sqlite3.connect(path, isolation_level=None)
+
+
 class TranscriptCacheTest(unittest.TestCase):
+    def connect(self, path):
+        db = _db(path)
+        self.addCleanup(db.close)
+        return db
+
     def setUp(self):
         self.home = temp_dir(self)
         (self.home / ".claude").mkdir()
@@ -127,8 +137,7 @@ class TranscriptCacheTest(unittest.TestCase):
         old = self.path.with_name("old.jsonl")
         old.write_text(self.path.read_text())
         self.read()
-        db = sqlite3.connect(transcript_cache.cache_file_for(self.home),
-                             isolation_level=None)
+        db = self.connect(transcript_cache.cache_file_for(self.home))
         db.execute("UPDATE files SET used = 1 WHERE path LIKE '%/old.jsonl'")
         db.execute("UPDATE files SET used = 2 WHERE path LIKE '%/s.jsonl'")
         (size,) = db.execute(
@@ -160,7 +169,7 @@ class TranscriptCacheTest(unittest.TestCase):
 
     def test_the_cached_rows_hold_only_what_the_file_says(self):
         self.read()
-        db = sqlite3.connect(transcript_cache.cache_file_for(self.home))
+        db = self.connect(transcript_cache.cache_file_for(self.home))
         (blob,) = db.execute("SELECT events FROM files").fetchone()
         rows = transcript_cache._unpack(blob)
         for row in rows:
@@ -172,8 +181,7 @@ class TranscriptCacheTest(unittest.TestCase):
 
     def test_corrupt_or_truncated_rows_read_as_a_miss(self):
         self.read()
-        db = sqlite3.connect(transcript_cache.cache_file_for(self.home),
-                             isolation_level=None)
+        db = self.connect(transcript_cache.cache_file_for(self.home))
         (good,) = db.execute("SELECT events FROM files").fetchone()
         import zlib
         bad_rows = [
@@ -224,13 +232,12 @@ class TranscriptCacheTest(unittest.TestCase):
     def test_a_store_made_without_auto_vacuum_is_rebuilt_with_it(self):
         db = transcript_cache.cache_file_for(self.home)
         db.parent.mkdir(parents=True)
-        old = sqlite3.connect(db)
+        old = self.connect(db)
         old.execute(transcript_cache._SCHEMA)
-        old.commit()
         self.assertEqual(old.execute("PRAGMA auto_vacuum").fetchone()[0], 0)
         old.close()
         self.read()
-        self.assertEqual(sqlite3.connect(db).execute(
+        self.assertEqual(self.connect(db).execute(
             "PRAGMA auto_vacuum").fetchone()[0], 2)
 
     def test_the_file_comes_back_under_its_bound_after_a_big_read(self):
@@ -240,7 +247,7 @@ class TranscriptCacheTest(unittest.TestCase):
                 mock.patch.object(transcript_cache, "BATCH_BYTES", batch):
             self.read()
         db = transcript_cache.cache_file_for(self.home)
-        rows = sqlite3.connect(db).execute(
+        rows = self.connect(db).execute(
             "SELECT SUM(bytes), COUNT(*) FROM files").fetchone()
         written = sum(len(transcript_cache._pack(transcripts._raw_file(str(p))))
                       for p in self.path.parent.glob("*.jsonl"))
@@ -251,7 +258,7 @@ class TranscriptCacheTest(unittest.TestCase):
         self.assertLess(size, cap + batch + 128 * 1024)
         self.assertLessEqual(rows[0], cap)
         self.assertGreater(rows[1], 0)
-        rows = sqlite3.connect(db).execute("SELECT SUM(bytes) FROM files")
+        rows = self.connect(db).execute("SELECT SUM(bytes) FROM files")
         self.assertLessEqual(rows.fetchone()[0], cap)
 
     def test_the_fingerprint_names_the_modules_that_decide_a_row(self):
