@@ -1,7 +1,7 @@
 # SWE state arrows
 
 Artwork for the status indicators every client draws. `AGENTS.md` and the
-FEATURES.md ported-logic table hold the state mapping.
+ported-logic table in `docs/ported-logic.md` hold the state mapping.
 
 | Colour | Intended state |
 | --- | --- |

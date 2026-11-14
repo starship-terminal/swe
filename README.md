@@ -81,6 +81,8 @@ If you juggle more than one AI coding agent you end up with a mess:
 | **Providers** | Manage API keys and metadata for 27 built-in LLM providers, plus your own |
 | **Remote control** | Watch and steer sessions from a phone: hub + web app + iOS app over Tailscale |
 
+Every user-facing feature, where it stands on the CLI, macOS, iOS and web app, and the tests behind it are listed in [FEATURES.md](FEATURES.md).
+
 ## Install
 
 **Requirements:** Python 3.11+, and nothing else. The core CLI has **no
@@ -602,6 +604,7 @@ PR process, one concern per PR, and what CI will check. By taking part you agree
 | Document | What it covers |
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | The brief for coding agents: commands, throwaway-`$HOME` rule, gotchas log |
+| [FEATURES.md](FEATURES.md) | Every user-facing feature per surface, with its status, entry point and tests |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layering rules, `~/.swe` layout, registry and link states, session engines |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to propose and land a change |
 | [SECURITY.md](SECURITY.md) | Supported versions and how to report a vulnerability |

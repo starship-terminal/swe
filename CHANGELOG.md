@@ -101,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **FEATURES.md is now a feature inventory.** The cross-client matrix became `## <Area>` sections with one line per feature per surface (CLI, web, iOS, macOS, API or job), each giving its status (`stable`, `beta` or `planned`), entry point and the tests behind it, so QA checks can map onto it. Each client's notes and what it still owes moved onto its own line, and `tests/test_features_inventory.py` checks the line format and that every test path exists. The table of logic ported between Swift and Python moved to `docs/ported-logic.md`, and the README links FEATURES.md.
+
 - **Mac Accounts now groups accounts into horizontally scrolling provider columns.**
   Narrow cards keep the plan visible, with usage rings and settings beneath. Click a
   card to smoothly expand its readings; drag provider columns horizontally to save their order.
