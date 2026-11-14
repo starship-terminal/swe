@@ -340,7 +340,8 @@ def _copy(source: str, dest: Path, root: Path, *,
     is never replaced. Its folder must resolve to itself (no symlink on
     the way, since the recorded source path is already resolved), and the
     last step is a hard link, which fails with ``FileExistsError`` if a
-    file appeared at ``dest`` meanwhile.
+    file appeared at ``dest`` meanwhile. The stat returned is then the
+    published file's, taken before it was published.
 
     The stat is what the manifest records, and it never claims more than
     the copy holds. Cloning: the source is stat'ed *before* the clone, so
@@ -389,9 +390,13 @@ def _copy(source: str, dest: Path, root: Path, *,
         os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
         os.chmod(tmp, 0o600)
         if exclusive:
+            # The stat of exactly the bytes written, before anything else
+            # can reach them: the file published next is this inode, so a
+            # harness append after it reads as a change on the next pass.
+            published = os.stat(tmp)
             _link_new(tmp, dest)
             os.unlink(tmp)
-            return st, written, how
+            return published, written, how
         _keep_shrunk(dest, written)
         os.replace(tmp, dest)
         return st, written, how
@@ -554,6 +559,8 @@ class Refused(Exception):
 # The temp names this module writes: a copy's (``_copy``) beside its
 # target, and ``atomic_write_text``'s for the two state files in the root.
 _COPY_TMP = re.compile(r"^\..+\.\d+-[0-9a-f]{32}\.tmp$")
+# A restore's temp beside its target: the same naming, the name captured.
+_RESTORE_TMP = re.compile(r"^\.(.+)\.\d+-[0-9a-f]{32}\.tmp$")
 _STATE_TMP = re.compile(r"^\.(?:manifest|mirror)\.json\.[A-Za-z0-9_]+\.tmp$")
 STALE_TMP_S = 24 * 3600
 
@@ -626,6 +633,19 @@ def _session_rels(entries: dict, session, home: Path | None) -> tuple[list[str],
     return sorted(main), sorted(extra)
 
 
+def _thread_of_name(name: str) -> str:
+    from swe.sessions.parsers import codex_thread_id  # function-local: parsers imports this module
+
+    return codex_thread_id(name[:-len(".jsonl")] if name.endswith(".jsonl") else name)
+
+
+def _thread_of(session) -> str:
+    """A Codex session's thread uuid, or "" for anything else."""
+    if session.tool_name != "codex":
+        return ""
+    return _thread_of_name(Path(session.session_id).stem)
+
+
 def restore(home: Path | None, session) -> dict:
     """Put the mirror copy a read of ``session`` would use (the one
     :func:`find_copy` picks, which the listing shows) back at the source
@@ -643,9 +663,16 @@ def restore(home: Path | None, session) -> dict:
     if copy is None:
         raise Refused("swe has no mirror copy of this session")
     root = _real_root(home)
-    copy_path = os.path.join(os.path.realpath(copy.parent), copy.name)
+    # The path as found, never resolved first: a resolved folder would
+    # hide a link inside the mirror and could select another account's
+    # entry. Only the root's own spelling is mapped to its real path.
+    copy_path = str(copy)
+    spelled = str(transcripts_dir_for(home))
+    if not _under(copy_path, root) and _under(copy_path, spelled):
+        copy_path = root + copy_path[len(spelled):]
     if not _inside(copy_path, root):
-        raise Refused(f"the mirror copy {copy} is not a plain file inside {root}")
+        raise Refused(f"the mirror copy {copy} is not a plain file inside {root} "
+                      "(a symlink, or behind one)")
     rel = copy_path[len(root) + 1:]
     with _pass_lock(home, wait=False):
         entries, _corrupt = _read_manifest(manifest_path(home))
@@ -653,8 +680,9 @@ def restore(home: Path | None, session) -> dict:
         if entry is None:
             raise Refused(f"the manifest has no record of where {rel} was copied from, "
                           "so swe cannot tell where to put it back")
-        target = entry.get("source") or ""
-        if not os.path.isabs(target) or os.path.normpath(target) != target:
+        target = entry.get("source")
+        if not isinstance(target, str) or not os.path.isabs(target) \
+                or os.path.normpath(target) != target:
             raise Refused(f"the manifest's source path for {rel} is not a usable path")
         if os.path.lexists(target):
             raise Refused(f"{target} already exists; swe never overwrites a transcript")
@@ -665,12 +693,13 @@ def restore(home: Path | None, session) -> dict:
             raise Refused(f"{target} appeared while restoring; swe left it alone") from None
         except OSError as exc:
             raise Refused(f"could not restore to {target}: {exc.strerror or exc}") from None
-        # The restored file is the source now: record its stat, so the
-        # next pass finds the copy current instead of cloning it again.
+        # The restored file is the source now. Its stat was taken before
+        # it was published, so it describes exactly the bytes the copy
+        # holds: the next pass finds the copy current, and anything the
+        # harness appends since reads as a change and is copied.
+        entries[rel] = {**entry, "ino": taken.st_ino, "mtime_ns": taken.st_mtime_ns,
+                        "size": taken.st_size}
         with contextlib.suppress(OSError):
-            now = os.stat(target)
-            entries[rel] = {**entry, "ino": now.st_ino, "mtime_ns": now.st_mtime_ns,
-                            "size": now.st_size}
             _write_manifest(home, entries)
     return {"harness": session.tool_name, "session_id": session.session_id,
             "account_home": session.account_home or None, "copy": copy_path,
@@ -748,13 +777,20 @@ def purge_plan(home: Path | None, session) -> dict:
     skipped: list[str] = []
     for rel in rels:
         path = os.path.join(root, rel)
-        if not os.path.lexists(path):
-            continue
-        if not _inside(path, root):
-            skipped.append(path)
-            continue
-        files.append(path)
+        if os.path.lexists(path):
+            if not _inside(path, root):
+                skipped.append(path)
+                continue
+            files.append(path)
+        # The backups are scanned even when the copy itself is gone (a
+        # purge interrupted between the two), or they would outlive
+        # their entry and no later purge could name them.
         folder, name = os.path.split(path)
+        if not os.path.lexists(folder):
+            continue
+        if not _resolves_to_itself(folder):
+            skipped.append(folder)
+            continue
         with contextlib.suppress(OSError):
             for child in sorted(os.listdir(folder)):
                 if child.startswith(name + SHRUNK_SUFFIX) and child[len(name + SHRUNK_SUFFIX):].isdigit():
@@ -765,10 +801,15 @@ def purge_plan(home: Path | None, session) -> dict:
     base = mirror_dir(session.tool_name, session.account_home, home)
     if base is not None:
         names = {os.path.basename(rel) for rel in main}
+        thread = _thread_of(session)
         for folder, _dirs, names_here in os.walk(os.path.realpath(base)):
             for name in names_here:
                 path = os.path.join(folder, name)
-                if name in names and path not in known:
+                if path in known or not name.endswith(".jsonl"):
+                    continue
+                # Codex names every rollout of a thread differently: a
+                # rollout the manifest never recorded is the thread's too.
+                if name in names or (thread and _thread_of_name(name) == thread):
                     untracked.append(path)
     if skipped:
         raise Refused(f"{skipped[0]} is a symlink or not a plain file inside the mirror; "
@@ -830,12 +871,12 @@ def _forget_searched(home: Path, plan: dict) -> str:
     forget = getattr(search_writer, "forget_session", None)
     if forget is None:
         return "none"
-    # Every purged copy's own id: the Claude id, each rollout of a Codex
-    # thread, and the subagent transcripts beside a Claude session.
-    stems = sorted({Path(rel).stem for rel in plan["entries"]})
+    # The index keys a session by (harness, identity): the Claude session
+    # id, or the Codex thread uuid every rollout of the thread carries.
+    stem = Path(plan["session_id"]).stem
+    identity = (_thread_of_name(stem) or stem) if plan["harness"] == "codex" else stem
     try:
-        for stem in stems or [Path(plan["session_id"]).stem]:
-            forget(home, plan["harness"], stem)
+        forget(home, plan["harness"], identity)
     except Exception as exc:  # IndexBusy, IndexUnavailable, a broken index
         return f"not removed from search: {exc}"
     return "forgotten"
@@ -849,10 +890,49 @@ def _age(st: os.stat_result, now: float) -> float:
     return now - max(st.st_mtime, st.st_ctime)
 
 
+def _stale(path: str, now: float, older_than: float) -> bool:
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat_mod.S_ISREG(st.st_mode) and _age(st, now) >= older_than
+
+
+def _restore_leftovers(home: Path | None, now: float, older_than: float) -> list[str]:
+    """A restore's own temp files a crash left: in each folder the
+    manifest records a source in (that folder only, never a wider scan),
+    named exactly as ``_copy`` names the temp for that source
+    (``.<source name>.<pid>-<32 hex>.tmp``). A folder that does not
+    resolve to itself is skipped."""
+    by_folder: dict[str, set[str]] = {}
+    for entry in load_manifest(home).values():
+        source = entry.get("source")
+        if not isinstance(source, str) or not os.path.isabs(source) \
+                or os.path.normpath(source) != source:
+            continue
+        folder, name = os.path.split(source)
+        by_folder.setdefault(folder, set()).add(name)
+    found: list[str] = []
+    for folder, names in by_folder.items():
+        if not os.path.isdir(folder) or not _resolves_to_itself(folder):
+            continue
+        with contextlib.suppress(OSError):
+            for child in os.listdir(folder):
+                match = _RESTORE_TMP.match(child)
+                if match is None or match.group(1) not in names:
+                    continue
+                path = os.path.join(folder, child)
+                if _stale(path, now, older_than):
+                    found.append(path)
+    return found
+
+
 def temp_files(home: Path | None = None, older_than: float = STALE_TMP_S) -> list[str]:
-    """This module's own temp files under the mirror root that nothing
-    has touched for ``older_than`` seconds: what a hard crash mid-copy
-    leaves. Plain files only; symlinked folders are not entered."""
+    """This module's own temp files that nothing has touched for
+    ``older_than`` seconds: what a hard crash mid-copy leaves under the
+    mirror root, and what one mid-restore leaves beside a recorded source
+    (:func:`_restore_leftovers`). Plain files only; symlinked folders are
+    not entered."""
     root = _real_root(home)
     if not os.path.isdir(root):
         return []
@@ -863,27 +943,27 @@ def temp_files(home: Path | None = None, older_than: float = STALE_TMP_S) -> lis
             if not (_COPY_TMP.match(name) or (folder == root and _STATE_TMP.match(name))):
                 continue
             path = os.path.join(folder, name)
-            try:
-                st = os.lstat(path)
-            except OSError:
-                continue
-            if stat_mod.S_ISREG(st.st_mode) and _age(st, now) >= older_than:
+            if _stale(path, now, older_than):
                 found.append(path)
+    found += _restore_leftovers(home, now, older_than)
     return sorted(found)
 
 
 def sweep_temps(home: Path | None = None) -> list[str]:
-    """Remove :func:`temp_files` under the pass lock, so no copy in flight
-    can lose its temp. Returns what was removed. Raises
-    :class:`MirrorBusy` while a pass runs."""
+    """Remove :func:`temp_files` under the pass lock, so no copy or
+    restore in flight can lose its temp (a restore holds the same lock).
+    Each path is checked again just before it goes. Returns what was
+    removed. Raises :class:`MirrorBusy` while a pass runs."""
     home = Path(home) if home is not None else Path(os.path.expanduser("~"))
     if not os.path.isdir(_real_root(home)):
         return []
     root = _real_root(home)
     removed: list[str] = []
     with _pass_lock(home, wait=False):
+        leftovers = set(_restore_leftovers(home, time.time(), STALE_TMP_S))
         for path in temp_files(home):
-            if not _inside(path, root):
+            beside_source = path in leftovers and _resolves_to_itself(path)
+            if not (_inside(path, root) or beside_source):
                 continue
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(path)

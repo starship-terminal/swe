@@ -236,9 +236,10 @@ HELP = {
                                             the harnesses' 30-day pruning (a pass never deletes a copy)
   {c('cyan', 'swe session mirror --on|--off')} Whether the hub and swe session index keep mirroring (default on)
   {c('cyan', 'swe session mirror --status')}  What the mirror holds, without a pass
-  {c('cyan', 'swe session mirror --purge=<N|id>')} Delete one mirrored session's copies, backups and manifest
-                                            entries; lists the files and asks first (--yes skips the prompt)
-  {c('cyan', 'swe session mirror --sweep-tmp')} Remove the mirror's own temp files a crash left over a day ago
+  {c('cyan', 'swe session mirror --purge=<id>')} Delete one mirrored session's copies, backups and manifest
+                                            entries, by session id or Codex thread id (never a #); lists the
+                                            files and asks first (--yes skips the prompt)
+  {c('cyan', 'swe session mirror --sweep-tmp')} Remove temp files a crashed copy or restore left over a day ago
   {c('cyan', 'swe session restore <N|id>')}   Put a mirrored transcript back where its harness kept it, so the
                                             session resumes again; never overwrites an existing file
 
@@ -272,7 +273,7 @@ HELP = {
   swe session index --on
   swe session mirror --json
   swe session restore 3
-  swe session mirror --purge=3"""
+  swe session mirror --purge=11111111-2222-3333-4444-555555555555"""
     ),
     "report": (
         "Summarize coding sessions and manage follow-ups",

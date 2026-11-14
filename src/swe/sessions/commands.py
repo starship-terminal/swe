@@ -686,15 +686,21 @@ def _bytes(n: int) -> str:
 _MIRROR_FLAGS = {"--on", "--off", "--status", "--json", "--yes", "--sweep-tmp"}
 
 
-def _listed_session(want: str):
+def _listed_session(want: str, by_index: bool = True):
     """The one listed session ``want`` names: its ``#`` in the default
-    ``swe session`` listing, its id, or for Codex its thread uuid.
-    Returns ``(session, None)`` or ``(None, message)``."""
+    ``swe session`` listing (when ``by_index``), its id, or for Codex its
+    thread uuid. Returns ``(session, None)`` or ``(None, message)``."""
     from swe.sessions.parsers import codex_thread_id
 
     want = want.strip()
     if not want:
-        return None, "name a session: its # from swe session, or its id"
+        return None, ("name a session: its # from swe session, or its id" if by_index
+                      else "name a session by its session id (or a Codex thread id)")
+    if want.isdigit() and not by_index:
+        # A # copied from a filtered listing names a different row, and
+        # --yes skips the one look at the plan: a delete takes an id.
+        return None, (f"--purge takes a session id (or a Codex thread id), not a # from the "
+                      f"listing: swe session --json shows each row's id. Nothing was removed.")
     if want.isdigit():
         index = int(want)
         sessions = get_all_sessions(limit=max(index, 10))
@@ -765,7 +771,7 @@ def cmd_session_restore(args) -> int:
 
 
 def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool) -> int:
-    """``swe session mirror --purge=<N|id>``: remove one mirrored
+    """``swe session mirror --purge=<id>``: remove one mirrored
     session's copies, their ``.shrunk-*`` backups and manifest entries,
     after showing exactly which files go."""
     from swe.sessions import aggregator, transcript_mirror
@@ -775,7 +781,7 @@ def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool) -> int:
         print(c("red", "--purge with --json needs --yes: there is no prompt to answer"),
               file=out)
         return 1
-    session, problem = _listed_session(want)
+    session, problem = _listed_session(want, by_index=False)
     if session is None:
         print(c("red", problem), file=out)
         return 1
@@ -796,10 +802,13 @@ def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool) -> int:
         for path in plan["files"]:
             print(f"  {tilde(path)}")
         entries = len(plan["entries"])
-        print(f"and {entries} manifest entr{'y' if entries == 1 else 'ies'}. "
-              "The session will no longer list.")
+        tail = "" if plan["untracked"] else " The session will no longer list."
+        print(f"and {entries} manifest entr{'y' if entries == 1 else 'ies'}.{tail}")
         for path in plan["untracked"]:
             print(c("yellow", f"  left alone (not in the manifest): {tilde(path)}"))
+        if plan["untracked"]:
+            print(c("yellow", "swe cannot remove copies the manifest does not know, so the "
+                              "session will keep listing from them as mirrored."))
     if not yes:
         if not sys.stdin.isatty():
             print(c("red", "Nothing was removed: pass --yes to purge without a prompt."))
@@ -857,7 +866,7 @@ def cmd_session_mirror(args) -> int:
     transcripts into ``~/.swe/data/transcripts/`` so they outlive the
     harnesses' 30-day pruning, or with ``--on``/``--off`` choose whether
     the hub and ``swe session index`` keep doing it. A pass deletes
-    nothing; ``--purge=<N|id>`` is the one deliberate delete."""
+    nothing; ``--purge=<id>`` is the one deliberate delete."""
     from swe.sessions import transcript_mirror
 
     args, json_view = take_json_flag(args)

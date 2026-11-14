@@ -78,6 +78,27 @@ class RestoreTests(RestoreCase):
         result = self.sync()
         self.assertEqual((result.copied, result.cloned, result.unchanged), (0, 0, 1))
 
+    def test_an_append_right_after_the_restore_reads_as_changed(self):
+        source = self.mirrored_claude()
+        copy = self.mirror_root / "claude/-work-proj" / source.name
+        written = copy.stat().st_size
+        real_link = mirror._link_new
+
+        def link_then_append(tmp, dest):
+            real_link(tmp, dest)
+            with open(dest, "a") as fh:  # the harness resumes at once
+                fh.write(json.dumps(claude_records("new reply")[0]) + "\n")
+
+        session = Session(timestamp=1.0, agent="Claude Code", path="/work/proj",
+                          session_id=CLAUDE_ID, tool_name="claude", mirrored=True)
+        with mock.patch.object(mirror, "_link_new", side_effect=link_then_append):
+            mirror.restore(self.home, session)
+        entry = mirror.load_manifest(self.home)[f"claude/-work-proj/{source.name}"]
+        self.assertEqual(entry["size"], written)
+        result = self.sync()
+        self.assertEqual(result.copied + result.cloned, 1)
+        self.assertEqual(copy.read_bytes(), source.read_bytes())
+
     def test_an_existing_file_is_never_overwritten(self):
         source = self.mirrored_claude()
         source.write_text("a new transcript the harness started\n")
@@ -179,6 +200,17 @@ class RestoreTests(RestoreCase):
         self.assertTrue(newer.is_file())
         self.assertFalse(older.exists())
 
+    def test_a_source_that_is_not_a_path_is_refused(self):
+        self.mirrored_claude()
+        manifest = json.loads(mirror.manifest_path(self.home).read_text())
+        for entry in manifest["files"].values():
+            entry["source"] = 12
+        mirror.manifest_path(self.home).write_text(json.dumps(manifest))
+        session = Session(timestamp=1.0, agent="Claude Code", path="/work/proj",
+                          session_id=CLAUDE_ID, tool_name="claude", mirrored=True)
+        with self.assertRaises(mirror.Refused):
+            mirror.restore(self.home, session)
+
     def test_a_copy_the_manifest_does_not_know_is_refused(self):
         source = self.mirrored_claude()
         mirror.manifest_path(self.home).unlink()
@@ -235,6 +267,24 @@ class RestoreTests(RestoreCase):
         copy.unlink()
         copy.symlink_to(outside)
         self.assertEqual(self.restore(CLAUDE_ID).returncode, 1)
+        self.assertFalse(source.exists())
+
+    def test_a_copy_folder_linked_to_another_account_is_refused(self):
+        source = self.mirrored_claude()
+        account = self.home / ".swe/accounts/claude/work/home"
+        in_account = write_jsonl(account / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
+                                 claude_records("account text"))
+        self.sync()
+        in_account.unlink()
+        folder = self.mirror_root / "claude/-work-proj"
+        (folder / source.name).unlink()
+        folder.rmdir()
+        folder.symlink_to(self.mirror_root / "accounts/claude/work/-work-proj")
+        session = Session(timestamp=1.0, agent="Claude Code", path="/work/proj",
+                          session_id=CLAUDE_ID, tool_name="claude", mirrored=True)
+        with self.assertRaises(mirror.Refused):
+            mirror.restore(self.home, session)
+        self.assertFalse(in_account.exists())
         self.assertFalse(source.exists())
 
     def test_a_parent_swapped_for_a_link_is_refused(self):
@@ -294,6 +344,23 @@ class PurgeTests(PurgeCase):
         self.assertIn(backup.name, result.stdout)
         self.assertEqual([r for r in self.sessions() if r["id"] == CLAUDE_ID], [])
 
+    def test_backups_of_a_copy_already_gone_still_go(self):
+        source = self.claude()
+        self.sync()
+        copy = self.mirror_root / f"claude/-work-proj/{source.name}"
+        backup = copy.with_name(copy.name + ".shrunk-123")
+        os.link(copy, backup)
+        source.unlink()
+        # An interrupted purge removed the copy but not its backup.
+        copy.unlink()
+        session = Session(timestamp=1.0, agent="Claude Code", path="/work/proj",
+                          session_id=CLAUDE_ID, tool_name="claude", mirrored=True)
+        plan = mirror.purge_plan(self.home, session)
+        self.assertEqual(plan["files"], [str(Path(os.path.realpath(backup)))])
+        mirror.purge(self.home, plan)
+        self.assertFalse(backup.exists())
+        self.assertEqual(mirror.load_manifest(self.home), {})
+
     def test_without_yes_and_no_terminal_nothing_is_removed(self):
         source = self.mirrored_claude()
         copy = self.mirror_root / "claude/-work-proj" / source.name
@@ -315,24 +382,28 @@ class PurgeTests(PurgeCase):
         self.claude()
         other = self.claude(session_id=OTHER_ID)
         account = self.home / ".swe/accounts/claude/work/home"
-        in_account = write_jsonl(account / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
+        third = "77777777-6666-5555-4444-333333333333"
+        in_account = write_jsonl(account / "projects/-work-proj" / f"{third}.jsonl",
                                  claude_records())
         self.sync()
         (self.home / ".claude/projects/-work-proj" / f"{CLAUDE_ID}.jsonl").unlink()
         other.unlink()
         in_account.unlink()
         before = set(mirror.load_manifest(self.home))
-        # Two rows carry the id (default home and account): the index picks one.
-        rows = self.sessions()
-        index = next(i for i, r in enumerate(rows, 1)
-                     if r["id"] == CLAUDE_ID and not r["account_home"])
-        result = self.purge(f"--purge={index}", "--yes")
+        result = self.purge(f"--purge={CLAUDE_ID}", "--yes")
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         after = set(mirror.load_manifest(self.home))
         self.assertEqual(before - after, {f"claude/-work-proj/{CLAUDE_ID}.jsonl"})
         self.assertTrue((self.mirror_root / f"claude/-work-proj/{OTHER_ID}.jsonl").is_file())
         self.assertTrue((self.mirror_root
-                         / f"accounts/claude/work/-work-proj/{CLAUDE_ID}.jsonl").is_file())
+                         / f"accounts/claude/work/-work-proj/{third}.jsonl").is_file())
+
+    def test_a_row_number_is_refused(self):
+        source = self.mirrored_claude()
+        result = self.purge("--purge=1", "--yes")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("session id", result.stdout + result.stderr)
+        self.assertTrue((self.mirror_root / "claude/-work-proj" / source.name).is_file())
 
     def test_an_ambiguous_id_is_refused(self):
         self.mirrored_claude()
@@ -385,6 +456,19 @@ class PurgeTests(PurgeCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(list((self.mirror_root / "codex").rglob("*.jsonl")), [])
         self.assertEqual(mirror.load_manifest(self.home), {})
+
+    def test_an_untracked_rollout_of_the_thread_is_named_and_left(self):
+        first = self.codex()
+        self.sync()
+        first.unlink()
+        stray = write_jsonl(self.mirror_root / "codex/2026/09/05"
+                            / f"rollout-2026-09-05T10-00-00-{CODEX_UUID}.jsonl",
+                            codex_records(), MTIME - 10)
+        result = self.purge(f"--purge={CODEX_UUID}", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(stray.is_file())
+        self.assertIn(stray.name, result.stdout)
+        self.assertIn("keep listing", result.stdout)
 
     def test_subagent_copies_of_the_session_go_too(self):
         source = self.claude()
@@ -454,6 +538,22 @@ class PurgeTests(PurgeCase):
         self.assertEqual(calls, [("claude", CLAUDE_ID, False)])
         self.assertEqual(done["search"], "forgotten")
 
+    def test_search_forgets_a_codex_thread_by_its_thread_id(self):
+        from swe.sessions import search_writer
+
+        first = self.codex()
+        resumed = self.codex(stem=f"rollout-2026-09-03T10-00-00-{CODEX_UUID}")
+        self.sync()
+        first.unlink()
+        resumed.unlink()
+        calls = []
+        session = Session(timestamp=1.0, agent="Codex CLI", path="/work/other",
+                          session_id=resumed.stem, tool_name="codex", mirrored=True)
+        with mock.patch.object(search_writer, "forget_session", create=True,
+                               side_effect=lambda h, harness, sid: calls.append((harness, sid))):
+            mirror.purge(self.home, mirror.purge_plan(self.home, session))
+        self.assertEqual(calls, [("codex", CODEX_UUID)])
+
     def test_a_busy_index_does_not_undo_the_purge(self):
         from swe.sessions import search_writer
 
@@ -497,6 +597,32 @@ class SweepTests(PurgeCase):
             self.assertTrue(kept.exists())
         self.assertTrue(link.is_symlink())
         self.assertTrue(mirror.load_manifest(self.home))
+
+    def test_a_restores_own_leftovers_in_recorded_source_folders_go(self):
+        source = self.mirrored_claude()
+        hexid = "c" * 32
+        leftover = self.temp(source.parent, f".{source.name}.77-{hexid}.tmp", 3 * 86400)
+        fresh = self.temp(source.parent, f".{source.name}.78-{'d' * 32}.tmp", 60)
+        other_name = self.temp(source.parent, f".{OTHER_ID}.jsonl.79-{hexid}.tmp", 3 * 86400)
+        elsewhere = self.temp(self.home / ".claude/projects/-other",
+                              f".{source.name}.80-{hexid}.tmp", 3 * 86400)
+        user_file = self.temp(source.parent, "notes.txt", 3 * 86400)
+        with mock.patch.object(mirror, "_age", side_effect=lambda st, now: now - st.st_mtime):
+            self.assertIn(str(leftover), mirror.audit(self.home)["stale_temps"])
+            removed = mirror.sweep_temps(self.home)
+        self.assertEqual(removed, [str(leftover)])
+        for kept in (fresh, other_name, elsewhere, user_file):
+            self.assertTrue(kept.exists(), kept)
+
+    def test_a_linked_source_folder_is_not_swept(self):
+        source = self.mirrored_claude()
+        real = temp_dir(self).resolve()
+        source.parent.rmdir()
+        source.parent.symlink_to(real)
+        leftover = self.temp(real, f".{source.name}.77-{'c' * 32}.tmp", 3 * 86400)
+        with mock.patch.object(mirror, "_age", side_effect=lambda st, now: now - st.st_mtime):
+            self.assertEqual(mirror.sweep_temps(self.home), [])
+        self.assertTrue(leftover.exists())
 
     def test_the_command_sweeps(self):
         self.mirrored_claude()
@@ -543,6 +669,23 @@ class DoctorTests(PurgeCase):
         # Never a failure: the mirror's state cannot fail doctor.
         self.assertFalse(any(f["severity"] == "error" for f in checks.values()
                              if f["check"].startswith("mirror.")))
+
+    def test_bad_mirror_state_never_fails_doctor(self):
+        self.mirrored_claude()
+        state = json.loads((self.mirror_root / "mirror.json").read_text())
+        state["last_pass"].update(failed="lots", files=None, copied=[1], finished_at="soon")
+        (self.mirror_root / "mirror.json").write_text(json.dumps(state))
+        manifest = json.loads(mirror.manifest_path(self.home).read_text())
+        for entry in manifest["files"].values():
+            entry["mirror_size"] = "big"
+            entry["source"] = 12
+        mirror.manifest_path(self.home).write_text(json.dumps(manifest))
+        plain = self.doctor()
+        self.assertNotIn("Traceback", plain.stderr)
+        self.assertIn("Transcript mirror", plain.stdout)
+        result = self.doctor("--json")
+        self.assertNotIn("Traceback", result.stderr)
+        decode(result)
 
     def test_an_off_mirror_is_said(self):
         mirror.set_enabled(self.home, False)

@@ -144,9 +144,9 @@ _COMMAND_FLAGS: dict[str, list[tuple[str, str]]] = {
         ("--on", "Keep mirroring transcripts (the default)"),
         ("--off", "Stop mirroring transcripts"),
         ("--status", "Show what the mirror holds, without a pass"),
-        ("--purge=", "Delete one mirrored session's copies (asks first)"),
+        ("--purge=", "Delete one mirrored session's copies by id (asks first)"),
         ("--yes", "Purge without a prompt"),
-        ("--sweep-tmp", "Remove temp files a crashed copy left behind"),
+        ("--sweep-tmp", "Remove temp files a crashed copy or restore left"),
         ("--json", "Print the mirror status as JSON"),
     ],
     "session restore": [

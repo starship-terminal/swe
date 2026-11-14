@@ -221,8 +221,18 @@ def mirror_audit(home: Path | None = None) -> dict | None:
 
     try:
         return transcript_mirror.audit(home or Path.home())
-    except (OSError, ValueError):
+    except Exception:  # bad mirror state is never a doctor failure
         return None
+
+
+def _num(value) -> int:
+    """A count from ``mirror.json`` or the manifest, which a person or an
+    older swe may have left in any shape: 0 for anything not a number."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value) if value == value and abs(value) != float("inf") else 0
+    return 0
 
 
 def _size(n: int) -> str:
@@ -244,19 +254,21 @@ def mirror_lines(audit: dict | None) -> list[tuple[str, str]]:
         return [("state", "unreadable")]
     root = tilde(audit.get("root") or "")
     rows = [("state", f"{'on' if audit.get('enabled') else 'off'}  ({root})"),
-            ("copies", f"{_count(audit.get('entries', 0), 'copy', 'copies')} "
-                       f"({_size(audit.get('bytes', 0))})"),
-            ("orphans", f"{_count(audit.get('orphaned', 0), 'orphan')} "
-                        f"({_size(audit.get('orphaned_bytes', 0))}), kept after "
+            ("copies", f"{_count(_num(audit.get('entries')), 'copy', 'copies')} "
+                       f"({_size(_num(audit.get('bytes')))})"),
+            ("orphans", f"{_count(_num(audit.get('orphaned')), 'orphan')} "
+                        f"({_size(_num(audit.get('orphaned_bytes')))}), kept after "
                         "the harness deleted the source")]
     last = audit.get("last_pass")
-    if isinstance(last, dict) and last.get("finished_at"):
+    if isinstance(last, dict) and last:
         import time
 
-        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(last["finished_at"])))
-        made = int(last.get("copied") or 0) + int(last.get("cloned") or 0)
-        rows.append(("last pass", f"{when} · {_count(int(last.get('files') or 0), 'file')}, "
-                                  f"{made:,} copied, {int(last.get('failed') or 0):,} failed"))
+        finished = _num(last.get("finished_at"))
+        when = (time.strftime("%Y-%m-%d %H:%M", time.localtime(finished)) if finished > 0
+                else "at an unknown time")
+        made = _num(last.get("copied")) + _num(last.get("cloned"))
+        rows.append(("last pass", f"{when} · {_count(_num(last.get('files')), 'file')}, "
+                                  f"{made:,} copied, {_num(last.get('failed')):,} failed"))
     else:
         rows.append(("last pass", "none yet"))
     return rows
@@ -276,27 +288,27 @@ def mirror_findings(audit: dict | None) -> list[DoctorFinding]:
             "when the harness prunes them",
             "swe session mirror --on", source=source))
     last = audit.get("last_pass")
-    failed = int(last.get("failed") or 0) if isinstance(last, dict) else 0
+    failed = _num(last.get("failed")) if isinstance(last, dict) else 0
     if failed:
         findings.append(DoctorFinding(
             "mirror.failed", "warning",
             f"The last mirror pass could not copy {_count(failed, 'transcript')}",
             "swe session mirror", source=source))
-    untracked = audit.get("untracked") or []
+    untracked = audit.get("untracked") if isinstance(audit.get("untracked"), list) else []
     if untracked:
         findings.append(DoctorFinding(
             "mirror.untracked", "info",
             f"{_count(len(untracked), 'mirror copy', 'mirror copies')} not in the manifest: "
             "they list and read, but swe cannot restore or purge them",
             None, source=source))
-    missing = audit.get("missing") or []
+    missing = audit.get("missing") if isinstance(audit.get("missing"), list) else []
     if missing:
         findings.append(DoctorFinding(
             "mirror.missing", "info",
             f"{_count(len(missing), 'manifest entry', 'manifest entries')} name a copy that "
             "is no longer on disk",
             "swe session mirror", source=source))
-    stale = audit.get("stale_temps") or []
+    stale = audit.get("stale_temps") if isinstance(audit.get("stale_temps"), list) else []
     if stale:
         findings.append(DoctorFinding(
             "mirror.stale-tmp", "warning",
