@@ -744,6 +744,81 @@ class StagedReadTests(MirrorSearchCase):
         self.assertEqual(self.live_messages(), 48)
 
 
+class StagedIdsTests(MirrorSearchCase):
+    """A staged read moves or takes back only the messages it wrote, even
+    when another writer adds to the same session between its pieces
+    (review thread 4574708233). The host here is a live row's session:
+    the live file of a session whose copy row sits at another path."""
+
+    def live_host(self):
+        a = self.claude(CLAUDE_ID, "first question", folder="-work-a")
+        self.mirror_only()
+        a.unlink()
+        self.index()  # the copy row at A, marked
+        b = self.claude(CLAUDE_ID, "first question", folder="-work-b", mtime=MTIME + 50)
+        self.index_live_only()  # B's own row: the host of the next read
+        self.grow(b, CLAUDE_ID, *(f"pelican reply {n} " + "y" * 40 for n in range(12)),
+                  mtime=MTIME + 100)
+        return b
+
+    def other_writer(self, path, *, touch_row: bool):
+        """Add a message to ``path``'s session from a second connection,
+        the way the Mac writer can at any moment: with its files row moved
+        (an append), or, for the adopt path, without it."""
+        conn = sqlite3.connect(search_index.index_path(self.home), isolation_level=None)
+        try:
+            session = conn.execute("SELECT session_row_id FROM files WHERE path = ?",
+                                   (str(path),)).fetchone()[0]
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute("INSERT INTO messages(session_row_id, role, ts)"
+                               " VALUES (?, 'user', NULL)", (session,))
+            conn.execute("INSERT INTO messages_fts(rowid, user_text, assistant_text,"
+                         " tool_text, identifiers) VALUES (?, 'avocet from the mac', '', '', '')",
+                         (cur.lastrowid,))
+            if touch_row:
+                conn.execute("UPDATE files SET byte_offset = byte_offset + 1 WHERE path = ?",
+                             (str(path),))
+            conn.execute("COMMIT")
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+    def interleave(self, b, touch_row):
+        real = INDEXER._flush
+        calls, added = [], []
+
+        def between(indexer, pending, stat):
+            calls.append(1)
+            out = real(indexer, pending, stat)
+            if len(calls) == 2:
+                added.append(self.other_writer(b, touch_row=touch_row))
+            return out
+        with small_buffer(), mock.patch.object(INDEXER, "_flush", between):
+            self.index()
+        return added[0]
+
+    def message_session(self, message_id):
+        row = self.db().execute("SELECT session_row_id FROM messages WHERE id = ?",
+                                (message_id,)).fetchone()
+        return None if row is None else row[0]
+
+    def test_taking_staged_pieces_back_keeps_the_other_writers_message(self):
+        b = self.live_host()
+        added = self.interleave(b, touch_row=True)  # the fence moves: the read stops
+        self.assertIsNotNone(self.message_session(added))
+        self.assertEqual(self.hits("avocet"), [CLAUDE_ID])
+
+    def test_the_switch_moves_only_the_reads_own_messages(self):
+        b = self.live_host()
+        added = self.interleave(b, touch_row=False)  # the read finishes
+        counted = self.db().execute(
+            "SELECT s.id, s.message_count, count(m.id) FROM sessions s"
+            " JOIN messages m ON m.session_row_id = s.id WHERE s.file_path = ?",
+            (str(b),)).fetchone()
+        self.assertEqual(counted[1], counted[2])  # nothing foreign moved in
+        self.assertNotEqual(self.message_session(added), counted[0])
+
+
 class MovedSessionTests(MirrorSearchCase):
     """A session read from a copy at one path that comes back live at
     another is counted once (review thread 4574590435)."""

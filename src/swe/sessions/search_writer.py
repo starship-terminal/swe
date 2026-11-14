@@ -460,7 +460,7 @@ class Store:
                     mark: tuple[str, "containers.DevinMark"] | None = None,
                     expected_mtime: float | None = None,
                     drop: "list[FileRow] | None" = None,
-                    adopt: tuple[int, int] | None = None,
+                    adopt: "tuple[int, list[int]] | None" = None,
                     gone: tuple[str, ...] = (),
                     copy_mark: str | None = None) -> bool:
         """``SearchStore.commitFile``: one transaction, fenced on the
@@ -472,9 +472,11 @@ class Store:
         ``drop`` are other files' rows of the same session, read before the
         commit: each is fenced like ``path`` (session, offset and mtime) and
         deleted with its session once the new rows are in, so search never
-        sees the session twice or not at all. ``adopt`` is ``(host, first
-        id)``: messages a staged read parked on the session ``host``
-        (:meth:`stage_messages`) move to the new session here. ``gone``
+        sees the session twice or not at all. ``adopt`` is ``(host, ids)``:
+        the messages a staged read parked on the session ``host``
+        (:meth:`stage_messages`) move to the new session here, by their
+        exact ids, so a message another writer added to ``host`` meanwhile
+        never moves with them. ``gone``
         are paths that must still be absent from disk, checked inside the
         transaction. ``copy_mark`` is the agent of a row read from a mirror
         copy: the commit records ``mirror_copy:<path>`` so a later live
@@ -503,8 +505,10 @@ class Store:
                 if kind == REPLACE and actual is not None and actual[0] is not None:
                     self._delete_session(actual[0])
             if adopt is not None and target is not None:
-                conn.execute("UPDATE messages SET session_row_id = ?"
-                             " WHERE session_row_id = ? AND id >= ?", (target,) + tuple(adopt))
+                host, ids = adopt
+                conn.executemany("UPDATE messages SET session_row_id = ?"
+                                 " WHERE id = ? AND session_row_id = ?",
+                                 ((target, message_id, host) for message_id in ids))
             if target is not None:
                 for row in rows:
                     cur = conn.execute(
@@ -600,13 +604,15 @@ class Store:
             for row in rows)
 
     def stage_messages(self, path: str, expected: tuple | None, drop, gone: tuple[str, ...],
-                       host: int, rows: list[decode.Row]) -> int | None:
+                       host: int, rows: list[decode.Row]) -> list[int] | None:
         """Park part of a staged whole read on ``host``, a session already
         visible for the same session identity, leaving every ``files`` row
         as it is. Search keeps seeing one session holding at least what it
         held. Fenced like :meth:`commit_file` (``path``'s row, ``drop``,
-        ``gone``, and the host still there). Returns the first message id
-        written, or None (nothing written) when anything moved."""
+        ``gone``, and the host still there). Returns the ids of the
+        messages written, or None (nothing written) when anything moved:
+        the read keeps them, since the Mac writer may add its own messages
+        to the same session between two pieces."""
         conn = self.conn
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -616,7 +622,7 @@ class Store:
                                     (host,)).fetchone() is None):
                 conn.execute("ROLLBACK")
                 return None
-            first = None
+            ids: list[int] = []
             for row in rows:
                 cur = conn.execute(
                     "INSERT INTO messages(session_row_id, role, ts) VALUES (?, ?, ?)",
@@ -626,26 +632,26 @@ class Store:
                     " tool_text, identifiers) VALUES (?, ?, ?, ?, ?)",
                     (cur.lastrowid, row.user_text, row.assistant_text,
                      row.tool_text, row.identifiers))
-                first = cur.lastrowid if first is None else first
+                ids.append(cur.lastrowid)
             conn.execute("COMMIT")
-            return first
+            return ids
         except BaseException:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
 
-    def discard_staged(self, host: int, first: int) -> None:
+    def discard_staged(self, host: int, ids: list[int]) -> None:
         """Take back what a staged read that will not finish parked on
-        ``host``. Only its own messages: ids from ``first`` on, on that
-        session, which no other writer adds to."""
+        ``host``: exactly the messages ``ids`` names, each only while it is
+        still on ``host``. Never "everything on the session past an id":
+        the Mac writer (no ``index.lock``) may have appended to it."""
         conn = self.conn
         conn.execute("BEGIN IMMEDIATE")
         try:
-            ids = [r[0] for r in conn.execute(
-                "SELECT id FROM messages WHERE session_row_id = ? AND id >= ?", (host, first))]
             for message_id in ids:
-                conn.execute("DELETE FROM messages_fts WHERE rowid = ?", (message_id,))
-                conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+                if conn.execute("DELETE FROM messages WHERE id = ? AND session_row_id = ?",
+                                (message_id, host)).rowcount:
+                    conn.execute("DELETE FROM messages_fts WHERE rowid = ?", (message_id,))
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
@@ -862,10 +868,10 @@ class _Pending:
     # The agent, when the bytes come from a mirror copy (``copy_mark``).
     copy_agent: str | None = None
     # A staged read parks its pieces on ``host``, a session already visible
-    # for this session identity, from message id ``staged_from`` on, and
+    # for this session identity (the messages ``staged_ids`` names), and
     # switches sessions only in its final commit.
     host: int | None = None
-    staged_from: int | None = None
+    staged_ids: list = field(default_factory=list)
 
     def fence(self) -> tuple | None:
         if self.has_expected:
@@ -1174,12 +1180,12 @@ class Indexer:
                     self._record(pending, *decoder.decode_object(obj), stat)
                 committed = self._finish(pending, stat, end_offset)
             finally:
-                if not committed and pending.staged_from is not None:
+                if not committed and pending.staged_ids:
                     # Its pieces would only add to the old session's text;
                     # take them back. A kill skips this, and the next whole
                     # read deletes the session they sit on.
                     with contextlib.suppress(sqlite3.Error):
-                        self.store.discard_staged(pending.host, pending.staged_from)
+                        self.store.discard_staged(pending.host, pending.staged_ids)
             # A print proves a prefix of the file at ``path``; a copy's
             # bytes prove nothing about it.
             if committed and read_path is None:
@@ -1207,13 +1213,12 @@ class Indexer:
         if not pending.messages:
             return
         if pending.host is not None:
-            first = self.store.stage_messages(
+            ids = self.store.stage_messages(
                 pending.path, pending.fence(), pending.drop, pending.gone, pending.host,
                 decode.message_rows(pending.messages))
-            if first is None:
+            if ids is None:
                 raise _Moved()
-            if pending.staged_from is None:
-                pending.staged_from = first
+            pending.staged_ids.extend(ids)
             pending.messages = []
             pending.buffered = 0
             return
@@ -1269,12 +1274,12 @@ class Indexer:
                                          **keep)
             return store.commit_file(pending.path, fence, stat, end_offset, FRESH, fields, rows,
                                      **extra)
-        if pending.staged_from is not None:
+        if pending.staged_ids:
             # The switch: a new session takes the parked pieces and the
             # rest, and every old row of the session goes, in one commit.
             kind = REPLACE if old is not None and old.session_row_id is not None else FRESH
             return store.commit_file(pending.path, fence, stat, end_offset, kind, fields, rows,
-                                     adopt=(pending.host, pending.staged_from), **extra)
+                                     adopt=(pending.host, pending.staged_ids), **extra)
         if pending.flushed_session is not None:
             return store.commit_file(pending.path, fence, stat, end_offset, EXISTING,
                                      None, rows, updating=fields,
