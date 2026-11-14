@@ -115,17 +115,20 @@ enum WidgetSummary {
                      at: Date) -> WidgetSnapshot {
         var waiting: [String: WidgetSnapshot.Row] = [:]
         var stamps: [String: Double] = [:]
-        for item in inbox where InboxGrouping.section(of: item) == .waiting {
+        // A mirrored copy has nothing live to wait on, even when the inbox
+        // still holds an approval for its key.
+        let mirrored = Set(sessions.filter(\.isMirrored).map(\.key))
+        for item in inbox where InboxGrouping.section(of: item) == .waiting && !mirrored.contains(item.key) {
             waiting[item.key] = .init(key: item.key, title: item.displayTitle, harness: item.harnessName, status: item.status)
             stamps[item.key] = item.lastActiveAt ?? 0
         }
-        for row in sessions where row.sessionStatus.needsYou && waiting[row.key] == nil {
+        for row in sessions where !row.isMirrored && row.sessionStatus.needsYou && waiting[row.key] == nil {
             waiting[row.key] = .init(key: row.key, title: row.displayTitle, harness: row.harnessName, status: row.status)
             stamps[row.key] = row.lastActiveAt ?? 0
         }
         let needsYou = waiting.values.sorted { (stamps[$0.key] ?? 0, $1.key) > (stamps[$1.key] ?? 0, $0.key) }
         let active = sessions
-            .filter { $0.sessionStatus == .active && waiting[$0.key] == nil }
+            .filter { !$0.isMirrored && $0.sessionStatus == .active && waiting[$0.key] == nil }
             .sorted { ($0.lastActiveAt ?? 0, $1.key) > ($1.lastActiveAt ?? 0, $0.key) }
         return WidgetSnapshot(
             hubId: hubId, hubName: hubName,

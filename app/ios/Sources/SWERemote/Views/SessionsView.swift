@@ -338,8 +338,19 @@ struct SessionRowView: View {
         // At accessibility sizes the attached/watching mark leads the
         // details line instead of taking a column from the title.
         let markInline = size.isAccessibilitySize
+        let marks = SessionRowMarks(row)
         HStack(spacing: 12) {
-            StatusDot(status: status, stale: status.needsYou && !waiting)
+            if marks.showsStatus {
+                StatusDot(status: status, stale: status.needsYou && !waiting)
+            } else {
+                // No live status for a copy: a quiet document mark holds
+                // the dot's column so titles line up with the other rows.
+                Image(systemName: "doc.on.doc")
+                    .font(Theme.font(size: 11))
+                    .foregroundStyle(Theme.textMuted)
+                    .frame(width: Theme.statusDot + 2, height: Theme.statusDot + 2)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(row.displayTitle)
@@ -348,9 +359,15 @@ struct SessionRowView: View {
                     if unread { UnreadDot() }
                 }
                 WrappingHStack(spacing: 6) {
-                    if markInline { attachMark }
+                    if markInline, marks.showsOwnership { attachMark }
                     HarnessIcon(harness: row.harness, name: row.harnessName, size: 13)
-                    Text(status.label).foregroundStyle(waiting ? Theme.warningText : Theme.textSecondary)
+                    if let tag = marks.tag {
+                        Badge(tag, tint: Theme.textSecondary)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Mirrored.tagAccessibility)
+                    } else {
+                        Text(status.label).foregroundStyle(waiting ? Theme.warningText : Theme.textSecondary)
+                    }
                     let when = RelativeTime.short(row.lastActiveAt, now: now)
                     if !when.isEmpty { Text("· \(when)") }
                     if let model = row.modelLabel {
@@ -366,7 +383,7 @@ struct SessionRowView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if !markInline { attachMark }
+            if !markInline, marks.showsOwnership { attachMark }
             Image(systemName: "chevron.right").font(Theme.chevron).foregroundStyle(Theme.textMuted)
         }
         .padding(.vertical, Theme.rowVertical)

@@ -138,8 +138,16 @@ struct SessionRow: Codable, Identifiable, Hashable {
     /// phone last read it (`POST .../read`). Nil on a hub older than the
     /// field, which reads as read. `UnreadTracker` decides the dot.
     var unread: Bool? = nil
+    /// The harness deleted the transcript and swe lists its read-only
+    /// copy (#1918). Nil on a hub older than the field, which reads as
+    /// false (`isMirrored`).
+    var mirrored: Bool? = nil
 
     var id: String { key }
+    /// The hub's `mirrored` flag; a hub older than the field, or a row
+    /// without it, reads as false. Here, not beside `Mirrored`, because the
+    /// share and widget targets compile this file but not that one.
+    var isMirrored: Bool { mirrored == true }
     /// The chat offers its Model menu: attached through a channel whose
     /// `model` control op works. Everywhere else the op is refused, so
     /// the menu is hidden rather than offered.
@@ -166,8 +174,12 @@ struct SessionRow: Codable, Identifiable, Hashable {
     }
     var harnessName: String { agent ?? harness ?? "agent" }
     var sessionStatus: SessionStatus { SessionStatus(raw: status) }
-    var isAttached: Bool { ownership == "attached" }
-    var canAttach: Bool { !isAttached && attachable == true && sessionStatus != .active }
+    /// Mirrored wins over ownership: a copy of a deleted transcript is
+    /// never attached, whatever a stale ownership event says.
+    var isAttached: Bool { ownership == "attached" && !isMirrored }
+    var canAttach: Bool { !isMirrored && !isAttached && attachable == true && sessionStatus != .active }
+    /// Fork is offered: the harness can, and there is a live transcript.
+    var offersFork: Bool { canFork == true && !isMirrored }
     /// The hub can hold a send until this session goes idle. A satellite
     /// delivers on arrival or refuses a busy session, so it can't.
     var holdsQueuedSends: Bool { remote != true }

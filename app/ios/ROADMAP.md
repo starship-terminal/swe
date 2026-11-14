@@ -75,6 +75,7 @@ are server changes in `src/swe/remote/`.
 - [x] Pull to refresh
 - [x] Swipe to attach or open (Open sits beside attach/detach on a half swipe and is the only right-swipe action on a row that cannot attach)
 - [x] Empty state: "No sessions on this machine yet"
+- [x] Mirrored sessions (#1918): a "Mirrored" tag replaces the status and attached marks; swipes and the long-press menu offer Open, Pin and Rename only; the chat shows a read-only notice, the saved chat, a dimmed prompt box and a calm "not available yet" state; mirrored wins over attached
 - [x] More than one machine: the hub chip's menu switches between paired hubs, and the new-session sheet picks the machine
 - [x] New-session sheet: machine, folder, harness, first prompt
 - [x] Hub: a route to start a session (machine, cwd, harness, prompt): `POST /v1/sessions` answers a `launch_id`, and `GET /v1/launches/<id>` names the session once it is adopted
