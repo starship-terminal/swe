@@ -59,6 +59,10 @@ public final class SearchIndexer: @unchecked Sendable {
     /// How many mid-read commits this indexer has run — the observable a
     /// test asserts against. Internal, not public API.
     private(set) var midReadFlushes = 0
+    /// Runs after each mid-read commit, staged or not: a test looks at the
+    /// index, or a second writer acts, between two pieces here. Nil in the
+    /// app.
+    var afterPiece: (() -> Void)?
 
     /// The file currently being decoded — set by `beginFile`, committed by
     /// `finishFile`, dropped by `failFile`. One scan reads one file at a
@@ -100,6 +104,28 @@ public final class SearchIndexer: @unchecked Sendable {
         /// recorded — applied inside `finishFile`'s commit, so they land in
         /// the same transaction as the messages they describe.
         var fieldOverlay: SearchSessionFields?
+        /// Rows of the same session under other, gone paths (a mirror
+        /// copy's, #1918), deleted by the commit that leaves this file a
+        /// session.
+        var drop: [SearchFileRow] = []
+        /// Paths that must still be gone at every commit: a copy's source
+        /// path and the dropped rows' paths.
+        var gone: [String] = []
+        /// The agent, when the bytes come from a mirror copy: every commit
+        /// records `mirror_copy:<path>`.
+        var copyAgent: String?
+        /// The stat a mid-read flush records. Nil reads `path`'s own; a
+        /// copy read passes the copy's, since `path` is gone.
+        var stat: SearchFileStat?
+        /// A staged read parks its pieces on `host`, a session already
+        /// visible for the session (the messages `stagedIDs` names), and
+        /// switches sessions only in its final commit, so no commit shows
+        /// two sessions or a prefix in place of a complete row.
+        var host: Int64?
+        var stagedIDs: [Int64] = []
+        /// A staged piece lost its fence: the read stops, commits nothing,
+        /// and the next pass decides again.
+        var moved = false
     }
 
     public init(store: SearchStore) {
@@ -176,10 +202,16 @@ public final class SearchIndexer: @unchecked Sendable {
     /// - Parameter sessionID: the source-derived session id for transcripts
     ///   whose records never carry one; a record's own `sessionId` hint
     ///   still outranks it.
+    /// - Parameter drop: rows a mirror copy put in for this file's session
+    ///   under other, gone paths (`SearchMirror.copiedRows`): they go in the commit
+    ///   that reads this file. A whole read that drops them is staged.
     public func beginFile(
         path: String, harness: SearchDecoder.Harness,
-        appending: Bool = false, sessionID: String? = nil
+        appending: Bool = false, sessionID: String? = nil, drop: [SearchFileRow] = []
     ) {
+        // A read that never finished must not leave its staged pieces
+        // behind when this one takes the slot.
+        if let stale = pending { abandonFile(path: stale.path) }
         let fileRow = try? store.fileRow(for: path)
         var decoder = SearchDecoder(harness)
         if appending {
@@ -193,6 +225,13 @@ public final class SearchIndexer: @unchecked Sendable {
             path: path, harness: harness, appending: appending,
             fileRow: fileRow, decoder: decoder,
             sessionIDHint: sessionID)
+        if !drop.isEmpty {
+            pending!.drop = drop
+            pending!.gone = drop.map(\.path)
+            if !appending {
+                pending!.host = ([fileRow?.sessionRowID] + drop.map(\.sessionRowID)).compactMap { $0 }.first
+            }
+        }
     }
 
     /// The parsed object of the first `"session_meta"`-marked line in the
@@ -289,7 +328,7 @@ public final class SearchIndexer: @unchecked Sendable {
     private func record(_ output: (messages: [SearchMessage], hints: SearchHints)) {
         // A flushed-failure file buffers nothing more — the bound holds and
         // `finishFile` still gets to throw the original error.
-        guard pending!.flushError == nil else { return }
+        guard pending!.flushError == nil, !pending!.moved else { return }
         // Hints arrive repeatedly across a file: keep the latest non-nil.
         // That lands the explicit title wherever its record sits.
         if let value = output.hints.sessionId { pending!.hints.sessionId = value }
@@ -321,7 +360,33 @@ public final class SearchIndexer: @unchecked Sendable {
 
     private func flushNow() throws {
         let file = pending!
-        guard !file.messages.isEmpty, let info = FileInfo(path: file.path) else { return }
+        guard !file.messages.isEmpty else { return }
+        let expected = file.expected
+            ?? file.fileRow.map { SearchFileFence(sessionRowID: $0.sessionRowID, byteOffset: $0.byteOffset) }
+        if let host = file.host {
+            // Staged: the piece goes onto the visible session, no `files`
+            // row moves, and only the final commit switches sessions.
+            guard let ids = try store.stageMessages(
+                path: file.path, expected: expected, drop: file.drop, gone: file.gone,
+                host: host, rows: Self.messageRows(from: file.messages))
+            else {
+                pending!.moved = true
+                return
+            }
+            pending!.stagedIDs += ids
+            midReadFlushes += 1
+            afterPiece?()
+            return
+        }
+        let stat: SearchFileStat
+        if let given = file.stat {
+            stat = given
+        } else if let info = FileInfo(path: file.path) {
+            stat = SearchFileStat(
+                ino: Int64(info.inode), mtimeMs: info.modified * 1000, sizeBytes: Int64(info.size))
+        } else {
+            return
+        }
         let fields = SearchSessionFields(
             agent: file.harness.rawValue,
             sessionID: file.hints.sessionId ?? file.sessionIDHint ?? Self.stem(of: file.path),
@@ -329,10 +394,6 @@ public final class SearchIndexer: @unchecked Sendable {
             cwd: file.hints.cwd, cwdKey: file.hints.cwd,
             createdAt: file.firstTs, updatedAt: file.lastTs,
             messageCount: file.decoded)
-        let stat = SearchFileStat(
-            ino: Int64(info.inode), mtimeMs: info.modified * 1000, sizeBytes: Int64(info.size))
-        let expected = file.expected
-            ?? file.fileRow.map { SearchFileFence(sessionRowID: $0.sessionRowID, byteOffset: $0.byteOffset) }
         let session: IndexSessionCommit
         if let rowID = file.flushedSessionRowID {
             session = .existing(rowID)
@@ -347,12 +408,14 @@ public final class SearchIndexer: @unchecked Sendable {
         guard try store.commitFile(
             path: file.path, expected: expected, stat: stat,
             byteOffset: SearchStore.partialFileOffset,
-            session: session, messages: Self.messageRows(from: file.messages))
+            session: session, messages: Self.messageRows(from: file.messages),
+            mark: nil, gone: file.gone, copyMark: file.copyAgent)
         else { return }
         let fence = try? store.fileFence(for: file.path)
         pending!.flushedSessionRowID = fence?.sessionRowID
         pending!.expected = fence
         midReadFlushes += 1
+        afterPiece?()
     }
 
     /// Commits the read in the store's per-file transaction, fenced on the
@@ -374,8 +437,26 @@ public final class SearchIndexer: @unchecked Sendable {
                 byteOffset: byteOffset, session: .none, messages: [])
         }
         defer { pending = nil }
+        var committed = false
+        // A staged read that does not land takes its pieces back: they would
+        // only add to the old session's text. A kill skips this, and the
+        // next whole read deletes the session they sit on.
+        defer {
+            if !committed, let host = file.host, !file.stagedIDs.isEmpty {
+                try? store.discardStaged(host: host, ids: file.stagedIDs)
+            }
+        }
         if let flushError = file.flushError { throw flushError }
+        if file.moved { return false }
+        committed = try commitRead(file, path: path, stat: stat, byteOffset: byteOffset)
+        return committed
+    }
 
+    /// `finishFile`'s commit, by the read's kind (swe's `_finish`). Rows of
+    /// the session under other paths (`drop`) go only with a commit that
+    /// leaves this file a session: a read that found none keeps them.
+    private func commitRead(_ file: Pending, path: String, stat: SearchFileStat,
+                            byteOffset: Int64) throws -> Bool {
         let rows = Self.messageRows(from: file.messages)
         var fields = SearchSessionFields(
             agent: file.harness.rawValue,
@@ -420,20 +501,33 @@ public final class SearchIndexer: @unchecked Sendable {
                 }
                 return try store.commitFile(path: path, expected: fence, stat: stat,
                     byteOffset: byteOffset, session: .existing(sessionRowID),
-                    messages: rows, updating: fields)
+                    messages: rows, updating: fields, mark: nil,
+                    drop: file.drop, gone: file.gone, copyMark: file.copyAgent)
             }
             guard hasSession else {
                 return try store.commitFile(path: path, expected: fence, stat: stat,
-                    byteOffset: byteOffset, session: .none, messages: [])
+                    byteOffset: byteOffset, session: .none, messages: [], mark: nil,
+                    gone: file.gone, copyMark: file.copyAgent)
             }
             return try store.commitFile(path: path, expected: fence, stat: stat,
-                byteOffset: byteOffset, session: .fresh(fields), messages: rows)
+                byteOffset: byteOffset, session: .fresh(fields), messages: rows, mark: nil,
+                drop: file.drop, gone: file.gone, copyMark: file.copyAgent)
+        }
+        if let host = file.host, !file.stagedIDs.isEmpty {
+            // The switch: a new session takes the parked pieces and the
+            // rest, and every old row of the session goes, in one commit.
+            let expected = file.expected ?? fence
+            return try store.commitFile(path: path, expected: expected, stat: stat,
+                byteOffset: byteOffset, session: old?.sessionRowID != nil ? .replace(fields) : .fresh(fields),
+                messages: rows, mark: nil, drop: file.drop, adopt: (host, file.stagedIDs),
+                gone: file.gone, copyMark: file.copyAgent)
         }
 
         return try commitWholeRead(
             path: path, stat: stat, byteOffset: byteOffset,
             fields: fields, rows: rows, hasSession: hasSession, old: old,
-            flushedID: file.flushedSessionRowID, expected: file.expected)
+            flushedID: file.flushedSessionRowID, expected: file.expected,
+            drop: file.drop, gone: file.gone, copyMark: file.copyAgent)
     }
 
     /// Commits one session read whole out of a container — the synthetic
@@ -478,11 +572,99 @@ public final class SearchIndexer: @unchecked Sendable {
             session: session, messages: rows, mark: mark, writesMark: writesMark)
     }
 
+    // MARK: - Mirror copies (#1918)
+
+    /// What one copy read did, as swe's `index_copy` reports it.
+    public enum CopyOutcome: Sendable, Equatable {
+        case skip, current, indexed, moved
+        /// The read or its commit threw; the reason is the error's text.
+        case failed(String)
+    }
+
+    /// `readNeed` from a `files` row alone, with no ledger cursor: swe's
+    /// `read_need`. A copy is always read whole, so `.append` reads whole.
+    static func readNeed(row: SearchFileRow?, stat: SearchFileStat) -> SearchReadNeed {
+        guard let row else { return .whole }
+        if row.state == .failed, row.failCount >= failuresBeforeHoldout,
+           row.failedMtimeMs == stat.mtimeMs {
+            return .skip
+        }
+        if row.state == .due || row.byteOffset == SearchStore.partialFileOffset { return .whole }
+        if let size = stat.sizeBytes, row.state == .current, row.byteOffset == size,
+           row.sizeBytes == size, row.mtimeMs == stat.mtimeMs {
+            return .current
+        }
+        return .whole
+    }
+
+    /// Reads the mirror copy `copy` into the index under `path`, the
+    /// transcript it was copied from, whose file is gone (swe's
+    /// `index_copy`). `stat` is the copy's and is what the `files` row
+    /// records, so an unchanged copy reads as current next pass. Always a
+    /// whole read, staged when it commits in pieces and a session is
+    /// already visible for it. `drop` are the session's rows under other
+    /// paths, removed in the final commit; `path` and their paths must
+    /// still be gone at every commit.
+    @discardableResult
+    func indexCopy(path: String, copy: String, harness: SearchDecoder.Harness, stat: SearchFileStat,
+                   row: SearchFileRow?, drop: [SearchFileRow]) -> CopyOutcome {
+        switch Self.readNeed(row: row, stat: stat) {
+        case .skip: return .skip
+        case .current: return .current
+        case .append, .whole: break
+        }
+        if let stale = pending { abandonFile(path: stale.path) }
+        pending = Pending(path: path, harness: harness, appending: false, fileRow: row,
+                          decoder: SearchDecoder(harness))
+        pending!.drop = drop
+        pending!.gone = [path] + drop.map(\.path)
+        pending!.copyAgent = harness.rawValue
+        pending!.stat = stat
+        pending!.host = ([row?.sessionRowID] + drop.map(\.sessionRowID)).compactMap { $0 }.first
+        do {
+            let result = try JSONLReader().read(URL(fileURLWithPath: copy), from: 0) { line in
+                consume(line: line)
+            }
+            return try finishFile(path: path, stat: stat, byteOffset: Int64(result.endOffset))
+                ? .indexed : .moved
+        } catch {
+            failFile(path: path, mtimeMs: stat.mtimeMs)
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// For a live file whose row is current: retires the rows a mirror copy
+    /// put in for its session under other, gone paths (swe's `index_file`
+    /// with `drop` on a current row). Fenced on the row and every dropped
+    /// row; a failure leaves them for the next pass.
+    func retireCopies(path: String, drop: [SearchFileRow]) {
+        guard !drop.isEmpty, let row = try? store.fileRow(for: path), row.sessionRowID != nil else { return }
+        _ = try? store.retire(keep: row, rows: drop)
+    }
+
+    /// Drops the read in flight for `path` without counting a failure (the
+    /// scan stopped for a reason of its own, such as the ledger's store
+    /// failing), taking back exactly the messages a staged read parked:
+    /// swe's `_read` discards them in its `finally` on every path that
+    /// does not commit.
+    func abandonFile(path: String) {
+        guard let file = pending, file.path == path else { return }
+        if let host = file.host, !file.stagedIDs.isEmpty {
+            try? store.discardStaged(host: host, ids: file.stagedIDs)
+        }
+        pending = nil
+    }
+
     /// A read that never committed. Counted against the mtime it failed at:
     /// three failures at the same stat hold the file out until the stat
     /// itself moves.
     public func failFile(path: String, mtimeMs: Double) {
-        if pending?.path == path { pending = nil }
+        if let file = pending, file.path == path {
+            if let host = file.host, !file.stagedIDs.isEmpty {
+                try? store.discardStaged(host: host, ids: file.stagedIDs)
+            }
+            pending = nil
+        }
         guard shouldIndex(path: path) else { return }
         try? store.setFileState(path, .failed, atMtimeMs: mtimeMs)
     }
@@ -520,7 +702,8 @@ public final class SearchIndexer: @unchecked Sendable {
         path: String, stat: SearchFileStat, byteOffset: Int64,
         fields: SearchSessionFields, rows: [SearchMessageRow],
         hasSession: Bool, old: SearchFileRow?,
-        flushedID: Int64? = nil, expected: SearchFileFence? = nil
+        flushedID: Int64? = nil, expected: SearchFileFence? = nil,
+        drop: [SearchFileRow] = [], gone: [String] = [], copyMark: String? = nil
     ) throws -> Bool {
         let fence = expected
             ?? old.map { SearchFileFence(sessionRowID: $0.sessionRowID, byteOffset: $0.byteOffset) }
@@ -529,18 +712,22 @@ public final class SearchIndexer: @unchecked Sendable {
         if let flushedID {
             return try store.commitFile(path: path, expected: fence, stat: stat,
                 byteOffset: byteOffset, session: .existing(flushedID),
-                messages: rows, updating: fields)
+                messages: rows, updating: fields, mark: nil,
+                drop: drop, gone: gone, copyMark: copyMark)
         }
         if let old, old.sessionRowID != nil {
             return try store.commitFile(path: path, expected: fence, stat: stat,
-                byteOffset: byteOffset, session: .replace(fields), messages: rows)
+                byteOffset: byteOffset, session: .replace(fields), messages: rows, mark: nil,
+                drop: drop, gone: gone, copyMark: copyMark)
         }
         guard hasSession else {
             return try store.commitFile(path: path, expected: fence, stat: stat,
-                byteOffset: byteOffset, session: .none, messages: [])
+                byteOffset: byteOffset, session: .none, messages: [], mark: nil,
+                gone: gone, copyMark: copyMark)
         }
         return try store.commitFile(path: path, expected: fence, stat: stat,
-            byteOffset: byteOffset, session: .fresh(fields), messages: rows)
+            byteOffset: byteOffset, session: .fresh(fields), messages: rows, mark: nil,
+            drop: drop, gone: gone, copyMark: copyMark)
     }
 
     /// The session id a file reports when no line carried one.

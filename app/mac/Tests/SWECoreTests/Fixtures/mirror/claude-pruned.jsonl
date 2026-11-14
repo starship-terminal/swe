@@ -1,0 +1,4 @@
+{"cwd":"/work/proj","message":{"content":"quokka migration plan","role":"user"},"sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:00:00.000Z","type":"user"}
+{"message":{"content":[{"text":"done 0","type":"text"}],"stop_reason":"end_turn"},"sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:00:05.000Z","type":"assistant"}
+{"cwd":"/work/proj","message":{"content":"and the rollback","role":"user"},"sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:01:00.000Z","type":"user"}
+{"message":{"content":[{"text":"done 1","type":"text"}],"stop_reason":"end_turn"},"sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:01:05.000Z","type":"assistant"}

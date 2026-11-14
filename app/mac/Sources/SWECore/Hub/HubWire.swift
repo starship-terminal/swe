@@ -53,13 +53,19 @@ public struct HubSessionRow: Codable, Sendable, Equatable {
     /// `last_active_at` is past that device's cursor). Nil from a hub
     /// older than read state, which reads as read: no dot.
     public var unread: Bool?
+    /// The harness deleted the transcript and the hub reads swe's
+    /// read-only copy (#1918): no stream, no attach, no send. Nil from a
+    /// hub older than the mirror.
+    public var mirrored: Bool?
 
     public init(key: String, harness: String? = nil, agent: String? = nil, cwd: String? = nil,
                 title: String? = nil, status: String? = nil, machineId: String? = nil,
                 machine: String? = nil, lastActiveAt: Double? = nil,
                 ownership: String? = nil, attachable: Bool? = nil, remote: Bool? = nil,
                 model: String? = nil, harnessTitle: String? = nil, pinned: Bool? = nil,
-                pinnedAt: Double? = nil, canFork: Bool? = nil, unread: Bool? = nil) {
+                pinnedAt: Double? = nil, canFork: Bool? = nil, unread: Bool? = nil,
+                mirrored: Bool? = nil) {
+        self.mirrored = mirrored
         self.key = key
         self.harness = harness
         self.agent = agent
@@ -83,7 +89,9 @@ public struct HubSessionRow: Codable, Sendable, Equatable {
     /// `model` short enough for a header or a list row, or nil.
     public var modelLabel: String? { ModelLabel.short(model) }
 
-    public var isAttached: Bool { ownership == "attached" }
+    public var isAttached: Bool { ownership == "attached" && mirrored != true }
+
+    public var isMirrored: Bool { mirrored == true }
 
     /// The hub's name for a session the Mac lists: `harness:id`, as
     /// `protocol.session_key` builds it.

@@ -21,6 +21,9 @@ struct SessionHubMenuItems: View {
         Button("Rename…") { act(.rename) }
         if meta.canFork {
             Button("Fork…") { act(.fork) }
+        } else if meta.mirrored {
+            // Listed but off, with the reason, as on the web.
+            Button("Fork…") {}.disabled(true).help(SessionInfo.mirroredHint)
         }
     }
 }

@@ -1,0 +1,188 @@
+{
+ "files": [
+  {
+   "agent": "claude",
+   "byte_offset": 751,
+   "created_at": "2026-10-01T10:00:00.000Z",
+   "cwd": "/work/proj",
+   "file_path": ".claude/projects/-work-other/33333333-2222-3333-4444-555555555555.jsonl",
+   "mark": {
+    "agent": "claude",
+    "names_session": true
+   },
+   "message_count": 4,
+   "mtime_ms": 1790000100000.0,
+   "path": ".claude/projects/-work-other/33333333-2222-3333-4444-555555555555.jsonl",
+   "session_id": "33333333-2222-3333-4444-555555555555",
+   "size_bytes": 751,
+   "state": "current",
+   "title": "first question",
+   "updated_at": "2026-10-01T10:10:05.000Z"
+  },
+  {
+   "agent": "claude",
+   "byte_offset": 749,
+   "created_at": "2026-10-01T10:00:00.000Z",
+   "cwd": "/work/proj",
+   "file_path": ".claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl",
+   "mark": {
+    "agent": "claude",
+    "names_session": true
+   },
+   "message_count": 4,
+   "mtime_ms": 1790000000000.0,
+   "path": ".claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl",
+   "session_id": "11111111-2222-3333-4444-555555555555",
+   "size_bytes": 749,
+   "state": "current",
+   "title": "quokka migration plan",
+   "updated_at": "2026-10-01T10:01:05.000Z"
+  },
+  {
+   "agent": "claude",
+   "byte_offset": 375,
+   "created_at": "2026-10-01T10:00:00.000Z",
+   "cwd": "/work/proj",
+   "file_path": ".claude/projects/-work-proj/22222222-2222-3333-4444-555555555555.jsonl",
+   "mark": null,
+   "message_count": 2,
+   "mtime_ms": 1790000000000.0,
+   "path": ".claude/projects/-work-proj/22222222-2222-3333-4444-555555555555.jsonl",
+   "session_id": "22222222-2222-3333-4444-555555555555",
+   "size_bytes": 375,
+   "state": "current",
+   "title": "live heron question",
+   "updated_at": "2026-10-01T10:00:05.000Z"
+  },
+  {
+   "agent": "codex",
+   "byte_offset": 354,
+   "created_at": null,
+   "cwd": "/work/other",
+   "file_path": ".codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199aaaa-bbbb-cccc-dddd-eeeeffff0001.jsonl",
+   "mark": {
+    "agent": "codex",
+    "names_session": true
+   },
+   "message_count": 2,
+   "mtime_ms": 1790000000000.0,
+   "path": ".codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199aaaa-bbbb-cccc-dddd-eeeeffff0001.jsonl",
+   "session_id": "0199aaaa-bbbb-cccc-dddd-eeeeffff0001",
+   "size_bytes": 354,
+   "state": "current",
+   "title": "wombat dashboards",
+   "updated_at": null
+  }
+ ],
+ "messages": [
+  {
+   "assistant_text": "",
+   "file_path": ".claude/projects/-work-other/33333333-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": "2026-10-01T10:00:00.000Z",
+   "user_text": "first question"
+  },
+  {
+   "assistant_text": "done 0",
+   "file_path": ".claude/projects/-work-other/33333333-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "assistant",
+   "tool_text": "",
+   "ts": "2026-10-01T10:00:05.000Z",
+   "user_text": ""
+  },
+  {
+   "assistant_text": "",
+   "file_path": ".claude/projects/-work-other/33333333-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": "2026-10-01T10:10:00.000Z",
+   "user_text": "then the narwhal rollout"
+  },
+  {
+   "assistant_text": "done 10",
+   "file_path": ".claude/projects/-work-other/33333333-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "assistant",
+   "tool_text": "",
+   "ts": "2026-10-01T10:10:05.000Z",
+   "user_text": ""
+  },
+  {
+   "assistant_text": "",
+   "file_path": ".claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": "2026-10-01T10:00:00.000Z",
+   "user_text": "quokka migration plan"
+  },
+  {
+   "assistant_text": "done 0",
+   "file_path": ".claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "assistant",
+   "tool_text": "",
+   "ts": "2026-10-01T10:00:05.000Z",
+   "user_text": ""
+  },
+  {
+   "assistant_text": "",
+   "file_path": ".claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": "2026-10-01T10:01:00.000Z",
+   "user_text": "and the rollback"
+  },
+  {
+   "assistant_text": "done 1",
+   "file_path": ".claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "assistant",
+   "tool_text": "",
+   "ts": "2026-10-01T10:01:05.000Z",
+   "user_text": ""
+  },
+  {
+   "assistant_text": "",
+   "file_path": ".claude/projects/-work-proj/22222222-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": "2026-10-01T10:00:00.000Z",
+   "user_text": "live heron question"
+  },
+  {
+   "assistant_text": "done 0",
+   "file_path": ".claude/projects/-work-proj/22222222-2222-3333-4444-555555555555.jsonl",
+   "identifiers": "",
+   "role": "assistant",
+   "tool_text": "",
+   "ts": "2026-10-01T10:00:05.000Z",
+   "user_text": ""
+  },
+  {
+   "assistant_text": "",
+   "file_path": ".codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199aaaa-bbbb-cccc-dddd-eeeeffff0001.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": null,
+   "user_text": "wombat dashboards"
+  },
+  {
+   "assistant_text": "",
+   "file_path": ".codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199aaaa-bbbb-cccc-dddd-eeeeffff0001.jsonl",
+   "identifiers": "",
+   "role": "user",
+   "tool_text": "",
+   "ts": null,
+   "user_text": "and dark mode"
+  }
+ ],
+ "sessions": 4
+}

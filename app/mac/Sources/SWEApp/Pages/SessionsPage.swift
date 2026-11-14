@@ -33,6 +33,11 @@ private struct SessionsContent: View {
     /// The newest click, so a slower lookup for an older one can't land.
     @State private var opening: UUID?
     @State private var actionError: String?
+    /// What the last Restore transcript did: swe's answer, or its refusal.
+    @State private var restoreNote: (text: String, ok: Bool)?
+    /// A restore is running; a second click waits for it rather than
+    /// racing it into a refusal.
+    @State private var restoring = false
     /// The hub refused a pin or unpin; the row went back.
     @State private var pinNote: String?
     /// Rename or Fork's sheet, from a row's menu or the chat's header.
@@ -68,7 +73,8 @@ private struct SessionsContent: View {
                                         self.chat = nil
                                         detail = chat
                                     },
-                                    act: { run($0, on: chat) }, note: pinNote)
+                                    act: { run($0, on: chat) }, note: pinNote,
+                                    restore: { restore(chat) }, restoreNote: restoreNote)
                         .frame(maxWidth: .infinity)
                         .onChange(of: app.navReselects) { self.chat = nil }
                     SessionRail(model: model, current: chat, select: { self.chat = $0 })
@@ -82,7 +88,7 @@ private struct SessionsContent: View {
         }
         .cardSheet(item: $detail) { row in
             SessionDetail(row: row, title: model.hubOverlay.title(for: row),
-                          resume: { resume(row) }, close: { detail = nil })
+                          resume: { resume(row) }, restore: { restore(row) }, close: { detail = nil })
         }
         .cardSheet(item: $hubSheet) { sheet in
             switch sheet.kind {
@@ -187,6 +193,9 @@ private struct SessionsContent: View {
                         .font(Theme.bodySmall).foregroundStyle(Theme.warningText)
                 }
             }
+            if let restoreNote {
+                RestoreNoteCard(note: restoreNote) { self.restoreNote = nil }
+            }
             if !model.failures.isEmpty {
                 Card {
                     Label("Couldn't read: \(model.failures.joined(separator: "; "))", systemImage: "exclamationmark.circle")
@@ -235,7 +244,7 @@ private struct SessionsContent: View {
         }
         // Opening the page again within a minute shows the same list.
         .task(id: app.swePath) {
-            let home = FileManager.default.homeDirectoryForCurrentUser
+            let home = AppHome.url()
             localMachineId = await offMain { IssueResolve.localMachineId(home: home) }
             async let keyStatus: Void = app.services.reload()
             async let hubKeys: Void = app.hub.refreshKeys()
@@ -414,7 +423,7 @@ private struct SessionsContent: View {
                    unread: app.hub.isUnread(row),
                    match: model.searchHit(for: row.session.id),
                    open: { open(row) }, showDetails: { detail = row },
-                   resume: { resume(row) }, act: { run($0, on: row) })
+                   resume: { resume(row) }, restore: { restore(row) }, act: { run($0, on: row) })
     }
 
     /// "N short or empty sessions hidden" plus the Show/Hide toggle,
@@ -448,6 +457,56 @@ private struct SessionsContent: View {
                 actionError = "Couldn't resume: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Restore transcript: swe puts the mirror copy back, off the main
+    /// actor, and the list is read again so the row turns live.
+    private func restore(_ row: SessionsModel.Row) {
+        guard !restoring else { return }
+        restoring = true
+        restoreNote = (text: "Restoring the transcript…", ok: true)
+        Task {
+            let result = await app.restore(row)
+            restoring = false
+            restoreNote = (text: result.message, ok: result.ok)
+            // Back to the list: the chat it was opened from now reads a
+            // live file, which this view's copy of the row does not know.
+            if result.ok, chat?.id == row.id { chat = nil }
+        }
+    }
+}
+
+/// The result of Restore transcript, above the list or the chat.
+struct RestoreNoteCard: View {
+    var note: (text: String, ok: Bool)
+    var dismiss: (() -> Void)? = nil
+
+    var body: some View {
+        Card {
+            HStack(spacing: 10) {
+                Label(note.text, systemImage: note.ok ? "arrow.uturn.backward.circle" : "exclamationmark.triangle")
+                    .font(Theme.bodySmall)
+                    .foregroundStyle(note.ok ? Theme.textSecondary : Theme.warningText)
+                Spacer()
+                if let dismiss {
+                    Button(action: dismiss) { Image(systemName: "xmark") }
+                        .iconButton()
+                        .help("Dismiss")
+                        .accessibilityLabel("Dismiss")
+                }
+            }
+        }
+    }
+}
+
+/// A mirrored session's tag, in the status badge's slot: the harness
+/// deleted the transcript and swe lists the read-only copy it kept.
+struct MirroredTag: View {
+    var body: some View {
+        Badge("Mirrored")
+            .help(SessionInfo.mirroredHint)
+            .accessibilityLabel("Mirrored")
+            .accessibilityHint(SessionInfo.mirroredHint)
     }
 }
 
@@ -694,6 +753,8 @@ private struct SessionRow: View {
     var open: () -> Void
     var showDetails: () -> Void
     var resume: () -> Void
+    /// Restore transcript, for a mirrored row.
+    var restore: () -> Void
     var act: (SessionMenuAction) -> Void
     @State private var hovering = false
     @FocusState private var resumeFocused: Bool
@@ -711,7 +772,7 @@ private struct SessionRow: View {
                         if unread { UnreadDot() }
                         Text(hub?.title(over: s.title) ?? s.title ?? s.id)
                             .font(Theme.rowTitle).foregroundStyle(Theme.textPrimary).lineLimit(1)
-                        StatusBadge(status: s.status)
+                        if s.mirrored { MirroredTag() } else { StatusBadge(status: s.status) }
                     }
                     Text(details)
                         .font(Theme.caption).foregroundStyle(Theme.textSecondary)
@@ -744,10 +805,12 @@ private struct SessionRow: View {
                 .focused($resumeFocused)
                 .focusRing(resumeFocused, cornerRadius: Theme.iconButtonRadius)
                 .hoverTip(s.resume != nil ? "Resume in your terminal"
+                          : s.mirrored ? SessionInfo.mirroredHint
                           : s.opensInBrowser ? "Open in Devin"
                           : row.location == .cloud ? "A cloud session can't be resumed here"
                           : "This harness has no resume command",
                           replacesLabel: false)
+                .help(s.mirrored ? SessionInfo.mirroredHint : "")
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 8)
@@ -762,6 +825,10 @@ private struct SessionRow: View {
             Button("Details…", action: showDetails)
             if s.opensInBrowser {
                 Button("Open in Devin", action: resume)
+            } else if s.mirrored {
+                Button("Resume in terminal", action: resume).disabled(true).help(SessionInfo.mirroredHint)
+                Button("Restore transcript", action: restore)
+                    .help("Put swe's copy back where \(HarnessMark(s.harness).name) kept it, so it resumes again")
             } else {
                 Button("Resume in terminal", action: resume).disabled(s.resume == nil)
             }
@@ -780,8 +847,12 @@ private struct SessionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: "Open chat", open)
         .accessibilityAction(named: "Details", showDetails)
-        .accessibilityAction(named: "Resume", resume)
         .accessibilityActions {
+            if s.mirrored {
+                Button("Restore transcript", action: restore)
+            } else {
+                Button("Resume", action: resume)
+            }
             if let hub {
                 Button(hub.pinned ? "Unpin" : "Pin") { act(.pin(!hub.pinned)) }
                 Button("Rename") { act(.rename) }
@@ -975,15 +1046,23 @@ struct SessionDetail: View {
     /// back to swe's title, then the id.
     var title: String? = nil
     var resume: () -> Void
+    /// Restore transcript, for a mirrored session; nil leaves it out.
+    var restore: (() -> Void)? = nil
     var close: () -> Void
 
     var body: some View {
         let s = row.session
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 8) {
-                HarnessIcon(harness: HarnessMark(s.harness).icon ?? s.harness, size: 20)
-                Text(title ?? s.title ?? s.id).font(Theme.sectionTitle).tracking(-0.5).lineLimit(2)
-                StatusBadge(status: s.status)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    HarnessIcon(harness: HarnessMark(s.harness).icon ?? s.harness, size: 20)
+                    Text(title ?? s.title ?? s.id).font(Theme.sectionTitle).tracking(-0.5).lineLimit(2)
+                    if s.mirrored { MirroredTag() } else { StatusBadge(status: s.status) }
+                }
+                if s.mirrored {
+                    Text(SessionInfo.mirroredHint)
+                        .font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
+                }
             }
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 field("Harness", HarnessMark(s.harness).name)
@@ -1035,6 +1114,7 @@ struct SessionDetail: View {
                 }
             } else {
                 Text(s.opensInBrowser ? "Devin's API reports no token or ACU usage for this session."
+                     : s.mirrored ? "No token usage recorded for this session in the ledger. A full scan reads it from swe's copy."
                      : "No token usage recorded for this session in the ledger.")
                     .font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
             }
@@ -1053,15 +1133,25 @@ struct SessionDetail: View {
                 Button("Copy session ID") { copyToPasteboard(s.id) }.secondaryButton()
                 Spacer()
                 Button("Close", action: close).keyboardShortcut(.cancelAction).secondaryButton()
-                Button(s.opensInBrowser ? "Open in Devin" : "Resume in terminal") { resume(); close() }
-                    .keyboardShortcut(.defaultAction)
-                    .primaryButton()
-                    .disabled(s.resume == nil && !s.opensInBrowser)
-                    .hoverTip(s.resume != nil ? "Resume in terminal"
-                              : s.opensInBrowser ? "Open the session in Devin's web app"
-                              : row.location == .cloud ? "A cloud session can't be resumed here"
-                              : "This session is no longer in \(HarnessMark(s.harness).name)'s history",
-                              replacesLabel: false)
+                if s.mirrored, let restore {
+                    // Nothing can resume a copy; putting it back can.
+                    Button("Restore transcript") { restore(); close() }
+                        .keyboardShortcut(.defaultAction)
+                        .primaryButton()
+                        .help("Put swe's copy back where \(HarnessMark(s.harness).name) kept it, so it resumes again")
+                } else {
+                    Button(s.opensInBrowser ? "Open in Devin" : "Resume in terminal") { resume(); close() }
+                        .keyboardShortcut(.defaultAction)
+                        .primaryButton()
+                        .disabled(s.resume == nil && !s.opensInBrowser)
+                        .hoverTip(s.resume != nil ? "Resume in terminal"
+                                  : s.mirrored ? SessionInfo.mirroredHint
+                                  : s.opensInBrowser ? "Open the session in Devin's web app"
+                                  : row.location == .cloud ? "A cloud session can't be resumed here"
+                                  : "This session is no longer in \(HarnessMark(s.harness).name)'s history",
+                                  replacesLabel: false)
+                        .help(s.mirrored ? SessionInfo.mirroredHint : "")
+                }
             }
         }
         .padding(24)

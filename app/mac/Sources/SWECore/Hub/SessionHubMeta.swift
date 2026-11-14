@@ -46,6 +46,9 @@ public struct HubSessionMeta: Equatable, Sendable {
     public var pinnedAt: Double?
     /// The harness's CLI can fork the session.
     public var canFork: Bool
+    /// The hub lists swe's read-only copy of a pruned transcript: Fork is
+    /// shown off, with `SessionInfo.mirroredHint`.
+    public var mirrored: Bool
     /// The hub's `unread` for this device as of the read. What a row
     /// shows also depends on the chat open here and the reads this app
     /// posted since: `LocalHub.isUnread` (`UnreadDots.swift`).
@@ -56,12 +59,13 @@ public struct HubSessionMeta: Equatable, Sendable {
 
     public init(title: String = "", harnessTitle: String = "", pinned: Bool = false,
                 pinnedAt: Double? = nil, canFork: Bool = false, unread: Bool = false,
-                lastActiveAt: Double? = nil) {
+                lastActiveAt: Double? = nil, mirrored: Bool = false) {
+        self.mirrored = mirrored
         self.title = title
         self.harnessTitle = harnessTitle
         self.pinned = pinned
         self.pinnedAt = pinned ? pinnedAt : nil
-        self.canFork = canFork
+        self.canFork = canFork && !mirrored
         self.unread = unread
         self.lastActiveAt = lastActiveAt
     }
@@ -73,7 +77,7 @@ public struct HubSessionMeta: Equatable, Sendable {
         let title = row.title ?? ""
         self.init(title: title, harnessTitle: row.harnessTitle ?? title, pinned: row.pinned == true,
                   pinnedAt: row.pinnedAt, canFork: row.canFork == true, unread: row.unread == true,
-                  lastActiveAt: row.lastActiveAt)
+                  lastActiveAt: row.lastActiveAt, mirrored: row.isMirrored)
     }
 
     /// A name set on the hub replaces the harness's title (the web app's

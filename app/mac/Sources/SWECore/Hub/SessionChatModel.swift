@@ -238,8 +238,12 @@ public final class SessionChatModel {
     public var working: Bool { row?.status == "active" || awaitingReply }
 
     /// Only an attached session takes messages; an observed one belongs to
-    /// its terminal.
-    public var canSend: Bool { row?.isAttached == true }
+    /// its terminal, and a mirrored one has no harness transcript at all.
+    public var canSend: Bool { row?.isAttached == true && row?.isMirrored != true }
+
+    /// The hub reads swe's read-only copy of a pruned transcript (#1918):
+    /// history only, no stream, approvals or queue.
+    public var isMirrored: Bool { row?.isMirrored == true }
 
     /// Loads the row and history, then follows the live stream until
     /// `stop()`.
@@ -277,6 +281,12 @@ public final class SessionChatModel {
             guard gen == generation else { return }
             load(page)
             loadError = nil
+            // A copy never changes and nothing runs it: no stream, no
+            // approval or queue to ask about, as on the web.
+            if row.isMirrored {
+                loading = false
+                return
+            }
             // An approval asked before the newest message isn't in the
             // page or after it (codex journals the ask before its tool
             // call): replay the journal from the start for its ask, taking
@@ -969,7 +979,7 @@ public final class SessionChatModel {
     /// Takes an observed session over: the hub stops the harness in its
     /// terminal and resumes it under SWE, so it takes messages here.
     public func attach() async {
-        guard row?.isAttached == false, !attaching else { return }
+        guard row?.isAttached == false, !isMirrored, !attaching else { return }
         attaching = true
         defer { attaching = false }
         do {
@@ -991,7 +1001,7 @@ public final class SessionChatModel {
     /// Attach can take this session now: observed, resumable, and not
     /// mid-turn (the hub refuses that with not_idle).
     public var canAttach: Bool {
-        guard let row else { return false }
+        guard let row, !row.isMirrored else { return false }
         return !row.isAttached && row.attachable == true && row.status != "active"
     }
 

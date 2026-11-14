@@ -418,8 +418,9 @@ struct MultiSelectMenu<Value: Hashable>: View {
                 .padding(.vertical, 6)
             }
             // A long list scrolls the way SelectOptionList does; a short
-            // one keeps its own height.
-            .frame(minWidth: 200, maxHeight: 360)
+            // one keeps its own height. The cap fits every harness the
+            // AGENTS.md Compile tab lists (`PopoverList`).
+            .frame(minWidth: 200, maxHeight: PopoverList.maxHeight)
             .fixedSize(horizontal: true, vertical: false)
         }
     }

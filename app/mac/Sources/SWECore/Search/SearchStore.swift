@@ -575,6 +575,20 @@ public final class SearchStore: @unchecked Sendable {
     ///   - expectedMtimeMs: also fences on the row's `mtime_ms`. An append
     ///     keeps the session and the offset, so without it an older read
     ///     could commit over a newer one.
+    ///   - drop: other files' rows of the same session (a mirror copy's,
+    ///     #1918), each fenced like `path` on its session, offset and
+    ///     mtime, and deleted with its session once this commit's rows are
+    ///     in, so search never sees the session twice or not at all.
+    ///   - adopt: `(host, ids)`, the messages a staged read parked on the
+    ///     session `host` (`stageMessages`), moved to this commit's session
+    ///     by their exact ids: a message another writer added to `host`
+    ///     meanwhile never moves with them.
+    ///   - gone: paths that must still be absent from disk, checked inside
+    ///     the transaction (a copy's source path and the dropped rows').
+    ///   - copyMark: the agent, when the rows come from a mirror copy: the
+    ///     commit records `mirror_copy:<path>` = `"<agent> <session>"`.
+    ///     Any other commit for `path` deletes that key, since the row is
+    ///     then the file's own (swe's `commit_file` does the same).
     @discardableResult
     func commitFile(
         path: String,
@@ -586,7 +600,11 @@ public final class SearchStore: @unchecked Sendable {
         updating fields: SearchSessionFields? = nil,
         mark: SearchDevin.Mark?,
         writesMark: Bool = false,
-        expectedMtimeMs: Double? = nil
+        expectedMtimeMs: Double? = nil,
+        drop: [SearchFileRow] = [],
+        adopt: (host: Int64, ids: [Int64])? = nil,
+        gone: [String] = [],
+        copyMark: String? = nil
     ) throws -> Bool {
         if case .none = session, !messages.isEmpty || fields != nil {
             throw SQLiteDatabase.Failure(
@@ -599,7 +617,8 @@ public final class SearchStore: @unchecked Sendable {
                 let actual = try fileFence(for: path)
                 guard actual?.sessionRowID == expected?.sessionRowID,
                       actual?.byteOffset == expected?.byteOffset,
-                      try expectedMtimeMs.map({ try Self.mtime(of: path, in: db) == $0 }) ?? true
+                      try expectedMtimeMs.map({ try Self.mtime(of: path, in: db) == $0 }) ?? true,
+                      try unchanged(drop), !gone.contains(where: TranscriptMirror.exists)
                 else {
                     try db.execute("ROLLBACK")
                     return false
@@ -621,6 +640,13 @@ public final class SearchStore: @unchecked Sendable {
                         try setOrphansPending()
                     }
                 }
+                if let adopt, let sessionRowID {
+                    let move = try cachedStatement(
+                        "UPDATE messages SET session_row_id = ? WHERE id = ? AND session_row_id = ?")
+                    for id in adopt.ids {
+                        try move.bind([.int(sessionRowID), .int(id), .int(adopt.host)]).run()
+                    }
+                }
                 if let sessionRowID {
                     try insertMessages(under: sessionRowID, messages)
                     if let fields {
@@ -628,6 +654,19 @@ public final class SearchStore: @unchecked Sendable {
                     }
                 }
                 try upsertFile(path: path, stat: stat, byteOffset: byteOffset, sessionRowID: sessionRowID)
+                for old in drop {
+                    if let oldSession = old.sessionRowID, oldSession != sessionRowID {
+                        try deleteSession(oldSession)
+                        try setOrphansPending()
+                    }
+                    try cachedStatement("DELETE FROM files WHERE path = ?").bind([.text(old.path)]).run()
+                    try deleteMeta(Self.copyMarkKey(old.path))
+                }
+                if let copyMark, let sessionRowID {
+                    try setMeta(Self.copyMarkKey(path), "\(copyMark) \(sessionRowID)")
+                } else {
+                    try deleteMeta(Self.copyMarkKey(path))
+                }
                 if writesMark, let mark, let sessionRowID {
                     try setMeta(SearchDevin.markKey(path), mark.value(session: sessionRowID))
                 } else if writesMark, mark == nil {
@@ -668,27 +707,206 @@ public final class SearchStore: @unchecked Sendable {
         try storeLock.withLock { try metaValue(key) }
     }
 
+    // MARK: - Mirror copies (#1918)
+
+    /// `meta` key prefix marking a `files` row a mirror copy put in:
+    /// `mirror_copy:<path>` = `"<agent> <session row id>"`, swe's
+    /// `COPY_MARK`.
+    static let copyMarkPrefix = "mirror_copy:"
+
+    static func copyMarkKey(_ path: String) -> String { copyMarkPrefix + path }
+
+    private func deleteMeta(_ key: String) throws {
+        try cachedStatement("DELETE FROM meta WHERE key = ?").bind([.text(key)]).run()
+    }
+
+    /// Inside a transaction: every row in `rows` still holds the session,
+    /// offset and mtime it was read with (swe's `_unchanged`).
+    private func unchanged(_ rows: [SearchFileRow]) throws -> Bool {
+        guard !rows.isEmpty else { return true }
+        let statement = try cachedStatement(
+            "SELECT session_row_id, byte_offset, mtime_ms FROM files WHERE path = ?")
+        for row in rows {
+            statement.bind([.text(row.path)])
+            guard try statement.step() else {
+                statement.bind([])
+                return false
+            }
+            let same = (statement.isNull(0) ? nil : statement.int(0)) == row.sessionRowID
+                && statement.int(1) == row.byteOffset && statement.double(2) == row.mtimeMs
+            statement.bind([])
+            if !same { return false }
+        }
+        return true
+    }
+
+    /// Parks part of a staged whole read on `host`, a session already
+    /// visible for the same session identity, leaving every `files` row as
+    /// it is: search keeps seeing one session holding at least what it
+    /// held. Fenced like `commitFile` (`path`'s row, `drop`, `gone`, and
+    /// the host still there). Returns the ids of the messages written, or
+    /// nil with nothing written when anything moved. The caller keeps the
+    /// ids, since swe may add its own messages to the same session between
+    /// two pieces.
+    func stageMessages(path: String, expected: SearchFileFence?, drop: [SearchFileRow],
+                       gone: [String], host: Int64, rows: [SearchMessageRow]) throws -> [Int64]? {
+        try storeLock.withLock {
+            let db = try liveDB()
+            try db.execute("BEGIN IMMEDIATE")
+            do {
+                let actual = try fileFence(for: path)
+                guard actual?.sessionRowID == expected?.sessionRowID,
+                      actual?.byteOffset == expected?.byteOffset,
+                      try unchanged(drop), !gone.contains(where: TranscriptMirror.exists),
+                      try sessionRow(host) != nil
+                else {
+                    try db.execute("ROLLBACK")
+                    return nil
+                }
+                let ids = try insertMessages(under: host, rows)
+                try db.execute("COMMIT")
+                return ids
+            } catch {
+                try? db.execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    /// Takes back what a staged read that will not finish parked on
+    /// `host`: exactly the messages `ids` names, each only while it is
+    /// still on `host`. Never "everything on the session past an id":
+    /// swe may have appended to it.
+    func discardStaged(host: Int64, ids: [Int64]) throws {
+        guard !ids.isEmpty else { return }
+        try storeLock.withLock {
+            let db = try liveDB()
+            try db.execute("BEGIN IMMEDIATE")
+            do {
+                let delete = try cachedStatement("DELETE FROM messages WHERE id = ? AND session_row_id = ?")
+                let deleteFTS = fts5Available
+                    ? try cachedStatement("DELETE FROM messages_fts WHERE rowid = ?") : nil
+                for id in ids {
+                    try delete.bind([.int(id), .int(host)]).run()
+                    if db.changes > 0, let deleteFTS { try deleteFTS.bind([.int(id)]).run() }
+                }
+                try db.execute("COMMIT")
+            } catch {
+                try? db.execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    /// Deletes `rows` (other files' rows of one session, each under a path
+    /// gone from disk) because `keep` stands for the session. One
+    /// transaction: `keep` and every row must be unchanged since they were
+    /// read and the paths still gone, or nothing is deleted.
+    @discardableResult
+    func retire(keep: SearchFileRow, rows: [SearchFileRow]) throws -> Bool {
+        guard let kept = keep.sessionRowID else { return false }
+        return try storeLock.withLock {
+            let db = try liveDB()
+            try db.execute("BEGIN IMMEDIATE")
+            do {
+                guard try unchanged([keep] + rows),
+                      !rows.map(\.path).contains(where: TranscriptMirror.exists) else {
+                    try db.execute("ROLLBACK")
+                    return false
+                }
+                for row in rows {
+                    if let session = row.sessionRowID, session != kept {
+                        try deleteSession(session)
+                        try setOrphansPending()
+                    }
+                    try cachedStatement("DELETE FROM files WHERE path = ?").bind([.text(row.path)]).run()
+                    try deleteMeta(Self.copyMarkKey(row.path))
+                }
+                try db.execute("COMMIT")
+                return true
+            } catch {
+                try? db.execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    /// The rows a mirror copy put in, by session identity: a range seek on
+    /// `meta`. A mark speaks only while its session is still the row's,
+    /// which the caller checks.
+    func copyMarks() throws -> [TranscriptMirror.SessionIdentity: [(path: String, session: Int64)]] {
+        try storeLock.withLock {
+            // ':' + 1 is ';', so the range is exactly the prefix.
+            let statement = try cachedStatement("SELECT key, value FROM meta WHERE key >= ? AND key < ?")
+            statement.bind([.text(Self.copyMarkPrefix), .text("mirror_copy;")])
+            defer { statement.bind([]) }
+            var out: [TranscriptMirror.SessionIdentity: [(path: String, session: Int64)]] = [:]
+            while try statement.step() {
+                guard let key = statement.text(0), let value = statement.text(1) else { continue }
+                let parts = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2, TranscriptMirror.harnesses.contains(String(parts[0])),
+                      !parts[1].isEmpty, parts[1].allSatisfy({ $0.isASCII && $0.isNumber }),
+                      let session = Int64(parts[1]) else { continue }
+                let agent = String(parts[0])
+                let path = String(key.dropFirst(Self.copyMarkPrefix.count))
+                out[TranscriptMirror.SessionIdentity(harness: agent, path: path), default: []]
+                    .append((path, session))
+            }
+            return out
+        }
+    }
+
+    /// Every `files` row with a session of one of `agents`, by
+    /// `(agent, identity of its path)`: one read of the table, for the
+    /// copies whose own row did not settle them (swe's `session_rows`).
+    func sessionRows(agents: [String]) throws -> [TranscriptMirror.SessionIdentity: [SearchFileRow]] {
+        guard !agents.isEmpty else { return [:] }
+        return try storeLock.withLock {
+            let marks = Array(repeating: "?", count: agents.count).joined(separator: ",")
+            let statement = try liveDB().prepare("""
+                SELECT f.path, f.dev, f.ino, f.byte_offset, f.mtime_ms, f.size_bytes, f.session_row_id,
+                       f.state, f.fail_count, f.failed_mtime_ms, s.agent
+                FROM files f JOIN sessions s ON s.id = f.session_row_id
+                WHERE s.agent IN (\(marks))
+                """)
+            statement.bind(agents.map { .text($0) })
+            var out: [TranscriptMirror.SessionIdentity: [SearchFileRow]] = [:]
+            while try statement.step() {
+                let row = Self.fileRow(statement)
+                let agent = statement.text(10) ?? ""
+                out[TranscriptMirror.SessionIdentity(harness: agent, path: row.path), default: []].append(row)
+            }
+            return out
+        }
+    }
+
     /// Rows in `messages` and the FTS rows with the same ids, in the caller's
     /// transaction, so a message is never present in one and absent in the
     /// other.
-    private func insertMessages(under sessionRowID: Int64, _ messages: [SearchMessageRow]) throws {
-        guard !messages.isEmpty else { return }
+    /// - Returns: the new message ids, in order.
+    @discardableResult
+    private func insertMessages(under sessionRowID: Int64, _ messages: [SearchMessageRow]) throws -> [Int64] {
+        guard !messages.isEmpty else { return [] }
         let insertMessage = try cachedStatement(
             "INSERT INTO messages(session_row_id, role, ts) VALUES (?, ?, ?)")
         let insertFTS = fts5Available ? try cachedStatement("""
             INSERT INTO messages_fts(rowid, user_text, assistant_text, tool_text, identifiers)
             VALUES (?, ?, ?, ?, ?)
             """) : nil
+        var ids: [Int64] = []
+        ids.reserveCapacity(messages.count)
         for message in messages {
             try insertMessage.bind([.int(sessionRowID), .text(message.role),
                                     message.ts.map(SQLiteValue.text) ?? .null]).run()
+            let rowID = try liveDB().lastInsertRowID
+            ids.append(rowID)
             if let insertFTS {
-                let rowID = try liveDB().lastInsertRowID
                 try insertFTS.bind([.int(rowID), .text(message.userText),
                                     .text(message.assistantText), .text(message.toolText),
                                     .text(message.identifiers)]).run()
             }
         }
+        return ids
     }
 
     // MARK: - Orphan drain
