@@ -181,6 +181,28 @@ says it starts when the machine is online. Closing the sheet cancels the
 wait, not the launch — the hub keeps it and the session appears in the
 list whenever it lands.
 
+## Mirrored sessions
+
+A row with `mirrored: true` is a session whose harness deleted its
+transcript; swe lists the read-only copy it kept (`swe session mirror`,
+#1918). `webapp/sessions.py` passes the flag through and forces the
+fields that only make sense for a live session: `resume` null,
+`attachable` and `can_fork` false, and `trivial` false (the ledger has no
+usage for a copy, and "no usage after a clean scan" would otherwise hide
+it as an accidental session). The one wording everywhere is "Its
+transcript was deleted by the harness. swe kept a read-only copy."
+
+| Place | A mirrored session |
+|---|---|
+| List row | A quiet "Mirrored" tag in the status badges' slot, with the wording as its hover hint. No status badge, Attached or Kept mark, and no Attach or Detach button. Pin and Rename stay in the More actions menu. |
+| More actions menu (row, right-click, chat header) | Pin and Rename as usual; Fork is listed but off (`aria-disabled`) with the wording as its hint. |
+| Details sheet | The tag, the wording as a line under the title, no Attach or Detach, no Resume command. |
+| Chat | A one-line notice at the top (the banner, in neutral colours, no button) in place of "Observed session: read-only…". The composer stays off, there is no Live dot, and the page asks for no stream, approval or queue. The transcript shows when the hub can read the copy; if it cannot yet (a 404 or error) or the copy is empty, the log says "This session's chat is not available yet." with no error styling. |
+| Filters and counts | The page has no status filter, so no "Mirrored" option was added. A mirrored row stays in the list, in the day groups and in the summary strip's session count (its tokens and spend read as dashes, as for any row without ledger usage). |
+
+At phone width the tag shrinks to 11 px with tighter padding, and the
+title (the one part of the row that ellipsises) takes the difference.
+
 ## Differences from the remote PWA it replaced
 
 - Attach asks first. The PWA attached on one tap; here it stops the

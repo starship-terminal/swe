@@ -476,10 +476,13 @@ Examples
   swe session mirror --status  What the mirror holds, without a pass
   swe session mirror --purge=&lt;id&gt; Delete one mirrored session's copies, backups and manifest
                                             entries, by session id or Codex thread id (never a #); lists the
-                                            files and asks first (--yes skips the prompt)
+                                            files and asks first (--yes skips the prompt). An id in two
+                                            homes takes --account=&lt;id|default&gt; (the account's id in
+                                            ~/.swe/accounts/&lt;vendor&gt;/&lt;id&gt;/home, or its account_home path)
   swe session mirror --sweep-tmp Remove temp files a crashed copy or restore left over a day ago
   swe session restore &lt;N|id&gt;   Put a mirrored transcript back where its harness kept it, so the
                                             session resumes again; never overwrites an existing file
+                                            (an id in two homes takes --account=&lt;id|default&gt;)
 
 Flags
   --agent=&lt;name&gt;               Filter by agent (claude, codex, opencode, droid, ...)
