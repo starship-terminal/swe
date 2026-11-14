@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "data": {
+    "restored": {
+      "harness": "claude",
+      "session_id": "11111111-2222-3333-4444-555555555555",
+      "account_home": "",
+      "copy": "/tmp/swe-fixture-home/.swe/data/transcripts/claude/-tmp-swe-fixture/11111111-2222-3333-4444-555555555555.jsonl",
+      "target": "/tmp/swe-fixture-home/.claude/projects/-tmp-swe-fixture/11111111-2222-3333-4444-555555555555.jsonl",
+      "bytes": 749,
+      "how": "cloned"
+    }
+  }
+}

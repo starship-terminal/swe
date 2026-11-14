@@ -80,6 +80,7 @@ Modelled on TokenTracker's Sessions page.
 - [x] Session detail sheet
 - [x] Chat from the local hub, as in the web app: live transcript ([#708](https://github.com/starship-terminal/swe/pull/708)); composer with Queue/Steer and Stop ([#710](https://github.com/starship-terminal/swe/pull/710)); Attach and approvals
 - [x] Resolve a GitHub issue with an agent ([#816](https://github.com/starship-terminal/swe/issues/816)): issue rows open a detail sheet with comments and a composer (`swe gh issue view|comment`); Resolve starts a session through the hub (`POST /v1/issues/resolve`) in a `swe/issue-<n>` worktree, shows the hub's steps, then opens its chat in Sessions
+- [x] Mirrored sessions ([#1918](https://github.com/starship-terminal/swe/issues/1918)): a "Mirrored" tag, no Resume, Attach or Fork, a read-only chat from swe's copy, and Restore transcript (`swe session restore --json`); the scan reads the copies for search (the ported copy rule) and for usage the ledger never recorded
 
 ### M5. Manage
 - [x] Skills, built on swe hub: per-harness link chips, link and unlink through `swe skills` ([#144](https://github.com/starship-terminal/swe/pull/144))

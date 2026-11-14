@@ -20,7 +20,14 @@ struct SessionChatPage: View {
     var act: (SessionMenuAction) -> Void
     /// A refused pin's message, shared with the list so it shows here too.
     var note: String? = nil
+    /// Restore transcript, for a mirrored session, and what the last one did.
+    var restore: (() -> Void)? = nil
+    var restoreNote: (text: String, ok: Bool)? = nil
     @State private var model: SessionChatModel?
+
+    /// swe lists the session's read-only copy (#1918), by the list's row or
+    /// the hub's.
+    private var mirrored: Bool { row.session.mirrored || model?.isMirrored == true }
 
     private var key: String { HubSessionRow.key(harness: row.session.harness, id: row.session.id) }
 
@@ -40,7 +47,11 @@ struct SessionChatPage: View {
              subtitle: subtitle,
              subtitleTail: model?.row?.modelLabel,
              back: ("Back to all sessions", onBack), maxWidth: 960, scrolls: false) {
-            if let model { ChatBadges(model: model) }
+            if mirrored {
+                MirroredTag()
+            } else if let model {
+                ChatBadges(model: model)
+            }
             if let meta {
                 EllipsisMenu { SessionHubMenuItems(meta: meta, act: act) }
             }
@@ -48,7 +59,8 @@ struct SessionChatPage: View {
                            action: onDetails)
         } content: {
             if let model {
-                ChatTranscript(model: model, note: note)
+                ChatTranscript(model: model, note: note, mirrored: mirrored, restore: restore,
+                               restoreNote: restoreNote)
             } else {
                 Spacer()
             }
@@ -106,6 +118,12 @@ private struct ChatBadges: View {
 private struct ChatTranscript: View {
     var model: SessionChatModel
     var note: String?
+    /// The read-only copy of a pruned transcript: a notice in place of the
+    /// observed banner, no composer, and a calm line when the hub cannot
+    /// read the copy yet.
+    var mirrored = false
+    var restore: (() -> Void)? = nil
+    var restoreNote: (text: String, ok: Bool)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -115,19 +133,28 @@ private struct ChatTranscript: View {
                         .font(Theme.bodySmall).foregroundStyle(Theme.warningText)
                 }
             }
-            if let error = model.loadError {
+            if let restoreNote {
+                RestoreNoteCard(note: restoreNote)
+            }
+            if mirrored {
+                MirroredBanner(harness: model.row?.harness, restore: restore)
+            } else if let error = model.loadError {
                 ErrorCard(message: error, actionTitle: "Try again") {
                     Task { await model.start() }
                 }
             }
-            if let row = model.row, !row.isAttached {
+            if !mirrored, let row = model.row, !row.isAttached {
                 ObservedBanner(model: model, row: row)
             }
             if model.loading {
                 ChatSkeleton()
+            } else if mirrored, model.loadError != nil || (model.items.isEmpty && !model.hasEarlier) {
+                Text("This session's chat is not available yet.")
+                    .font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
+                Spacer()
             } else if model.loadError == nil {
                 log
-                Composer(model: model)
+                if !mirrored { Composer(model: model) }
             } else {
                 Spacer()
             }
@@ -223,6 +250,28 @@ private struct ChatSkeleton: View {
         HStack(spacing: 8) {
             SkeletonBlock(height: Theme.fieldHeight, radius: Theme.controlRadius)
             SkeletonBlock(width: 66, height: Theme.fieldHeight, radius: Theme.controlRadius)
+        }
+    }
+}
+
+/// A mirrored session's chat is swe's read-only copy: the one wording,
+/// neutral, with Restore beside it when the page offers it.
+private struct MirroredBanner: View {
+    var harness: String?
+    var restore: (() -> Void)?
+
+    var body: some View {
+        Card {
+            HStack(spacing: 16) {
+                Label(SessionInfo.mirroredHint, systemImage: "doc.on.doc")
+                    .font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
+                Spacer()
+                if let restore {
+                    Button("Restore transcript", action: restore)
+                        .secondaryButton()
+                        .help("Put swe's copy back where \(HarnessMark(harness ?? "").name) kept it, so it resumes again")
+                }
+            }
         }
     }
 }

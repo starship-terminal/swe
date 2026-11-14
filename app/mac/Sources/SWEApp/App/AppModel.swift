@@ -549,12 +549,12 @@ final class AppModel {
     var primitiveNames: PluginDisplayNames
     /// The last display-name save, which the next one waits for.
     @ObservationIgnored var displayNamesSave: Task<Void, Never>?
-    private let userHome = FileManager.default.homeDirectoryForCurrentUser
+    private let userHome = AppHome.url()
     /// This Mac's hub, which the Sessions page's chat talks to.
     private(set) var hub: LocalHub
 
     static func localHub(swe: SweClient) -> LocalHub {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = AppHome.url()
         return LocalHub(locator: swe, store: HubDeviceStore(url: HubDeviceStore.defaultURL(home: home)))
     }
 
@@ -610,7 +610,7 @@ final class AppModel {
     }
 
     init() {
-        Self.migrateDataRoot(home: FileManager.default.homeDirectoryForCurrentUser)
+        Self.migrateDataRoot(home: AppHome.url())
         let saved = UserDefaults.standard.string(forKey: SweLocation.defaultsKey) ?? ""
         swePath = saved
         let client = Self.client(for: saved)
@@ -630,7 +630,7 @@ final class AppModel {
         codeEditor = UserDefaults.standard.string(forKey: "codeEditor") ?? ""
 
         // Everything SWE keeps lives under ~/.swe (see AGENTS.md).
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = AppHome.url()
         let swe = home.appending(path: ".swe")
         primitiveNames = PluginDisplayNames.load(from: PluginDisplayNames.file(home: home))
         limits = LimitsMonitor(swe: swe)
@@ -1236,6 +1236,23 @@ final class AppModel {
         try await accounts.runInTerminal(line: line)
     }
 
+    /// Restore transcript for a mirrored session (#1918): the bundled swe
+    /// puts the copy back (`swe session restore <id> --json`, run off the
+    /// main actor), then the list is read again so the row turns live.
+    /// Returns the line the page shows, and whether it worked.
+    func restore(_ row: SessionsModel.Row) async -> (message: String, ok: Bool) {
+        let defaults = Set([".claude", ".codex"].map { userHome.appending(path: $0).path })
+        do {
+            let restored = try await swe.restoreSession(id: row.session.id, accountHome: row.session.accountHome,
+                                                        defaultHomes: defaults)
+            await sessions?.load(for: swePath)
+            await hub.refreshKeys()
+            return (SessionRestore.success(restored), true)
+        } catch {
+            return (SessionRestore.failure(error), false)
+        }
+    }
+
     /// Open a new agent session on a PR's head: `swe gh pr worktree`
     /// checks the head out under ~/.swe/worktrees, then the chosen
     /// terminal gets `cd <checkout> && <harness cli>`.
@@ -1263,7 +1280,7 @@ final class AppModel {
     }
 
     static func keysFile(path: String) -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = AppHome.url()
         let trimmed = path.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
               PathSafety.rejection(of: trimmed) == nil else {
@@ -1273,7 +1290,7 @@ final class AppModel {
     }
 
     static func mcpServersFolder(path: String) -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = AppHome.url()
         let trimmed = path.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
               PathSafety.rejection(of: trimmed) == nil else {
@@ -1284,12 +1301,12 @@ final class AppModel {
 
     private static func keysModel(path: String) -> APIKeysModel {
         // One backup of the previous version, private to you, under ~/.swe.
-        let backups = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".swe/backups/api-keys")
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let backups = AppHome.url().appending(path: ".swe/backups/api-keys")
+        let home = AppHome.url()
         return APIKeysModel(store: APIKeysStore(url: keysFile(path: path), backupDirectory: backups,
                                                 sealedFolder: APIKeysStore.secretsFolder(home: home)),
                             shell: LoginShellEnvironment(),
-                            checkCache: APIKeyCheckStore(url: FileManager.default.homeDirectoryForCurrentUser
+                            checkCache: APIKeyCheckStore(url: AppHome.url()
                                 .appending(path: ".swe/cache/api-key-checks.json")))
     }
 

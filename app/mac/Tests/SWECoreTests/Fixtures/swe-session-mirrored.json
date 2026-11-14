@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "data": {
+    "sessions": [
+      {
+        "id": "22222222-2222-3333-4444-555555555555",
+        "harness": "claude",
+        "agent": "Claude Code",
+        "cwd": "/work/proj",
+        "title": "live heron question",
+        "title_source": null,
+        "last_active_at": 1790820000.0,
+        "status": "done",
+        "resume": {
+          "argv": [
+            "claude",
+            "--resume",
+            "22222222-2222-3333-4444-555555555555"
+          ],
+          "cwd": "/work/proj"
+        },
+        "account_home": null,
+        "mirrored": false
+      },
+      {
+        "id": "11111111-2222-3333-4444-555555555555",
+        "harness": "claude",
+        "agent": "Claude Code",
+        "cwd": "/work/proj",
+        "title": "quokka migration plan",
+        "title_source": null,
+        "last_active_at": 1790820000.0,
+        "status": null,
+        "resume": null,
+        "account_home": null,
+        "mirrored": true
+      }
+    ],
+    "failures": []
+  }
+}

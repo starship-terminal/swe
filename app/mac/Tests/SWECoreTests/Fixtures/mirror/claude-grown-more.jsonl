@@ -1,0 +1,2 @@
+{"cwd":"/work/proj","message":{"content":"then the narwhal rollout","role":"user"},"sessionId":"33333333-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:10:00.000Z","type":"user"}
+{"message":{"content":[{"text":"done 10","type":"text"}],"stop_reason":"end_turn"},"sessionId":"33333333-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:10:05.000Z","type":"assistant"}

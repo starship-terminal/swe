@@ -607,6 +607,21 @@ final class CountingSessionSource: SessionListing, Sendable {
         #expect(model.models.first?.tokens == 900)
     }
 
+    /// A mirrored session (#1918) with no ledger usage is never hidden as
+    /// accidental: its copy can predate the ledger, so missing usage proves
+    /// nothing about it, as on the web.
+    @Test func aMirroredSessionIsNeverHiddenAsAccidental() async {
+        var copy = session("m", "claude", cwd: "/c/q", at: 1_791_699_000)
+        copy.mirrored = true
+        copy.resume = nil
+        let model = await model([copy, session("a", "claude", cwd: "/c/q", at: 1_791_698_000)], [])
+        await model.load()
+        await model.refreshUsage(ledgerScanned: true)
+        #expect(model.visible.map(\.id) == ["m"])
+        #expect(model.visible.first?.session.mirrored == true)
+        #expect(model.hiddenTrivialCount == 1)
+    }
+
     @Test func emptyListedSessionsHideAfterTheFirstScanWithACountUntilShown() async {
         // A session swe lists that the ledger never saw ran zero
         // responses — once the ledger has actually scanned. Gemini has

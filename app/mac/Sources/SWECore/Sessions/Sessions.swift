@@ -29,9 +29,14 @@ public struct SessionInfo: Codable, Sendable, Equatable, Identifiable {
     /// (`~/.swe/accounts/<vendor>/<id>/home`); nil for the harness's
     /// default home.
     public var accountHome: String?
+    /// The harness deleted the transcript and swe lists the read-only copy
+    /// it kept (#1918): nothing launches it, and Restore puts it back.
+    public var mirrored: Bool
 
     public init(id: String, harness: String, agent: String, cwd: String?, title: String?, titleSource: String?,
-                lastActiveAt: Date, status: String?, resume: Resume?, accountHome: String? = nil) {
+                lastActiveAt: Date, status: String?, resume: Resume?, accountHome: String? = nil,
+                mirrored: Bool = false) {
+        self.mirrored = mirrored
         self.id = id
         self.harness = harness
         self.agent = agent
@@ -51,6 +56,7 @@ public struct SessionInfo: Codable, Sendable, Equatable, Identifiable {
     /// swe's client decodes with `convertFromSnakeCase`.
     enum CodingKeys: String, CodingKey {
         case id, harness, agent, cwd, title, status, resume, titleSource, lastActiveAt, webURL, accountHome
+        case mirrored
     }
 
     public init(from decoder: Decoder) throws {
@@ -65,6 +71,11 @@ public struct SessionInfo: Codable, Sendable, Equatable, Identifiable {
         resume = try c.decodeIfPresent(Resume.self, forKey: .resume)
         webURL = try c.decodeIfPresent(String.self, forKey: .webURL)
         accountHome = try c.decodeIfPresent(String.self, forKey: .accountHome)
+        // An swe from before the mirror sends no flag: a live session.
+        mirrored = try c.decodeIfPresent(Bool.self, forKey: .mirrored) ?? false
+        // A copy has nothing to resume, whatever a row says: its harness
+        // no longer has the transcript.
+        if mirrored { resume = nil }
         // A harness can list a session it has no id for; one such row must
         // not sink the whole list, so it gets a stable id of its own.
         id = try c.decodeIfPresent(String.self, forKey: .id)
@@ -85,7 +96,12 @@ public struct SessionInfo: Codable, Sendable, Equatable, Identifiable {
         try c.encodeIfPresent(resume, forKey: .resume)
         try c.encodeIfPresent(webURL, forKey: .webURL)
         try c.encodeIfPresent(accountHome, forKey: .accountHome)
+        if mirrored { try c.encode(mirrored, forKey: .mirrored) }
     }
+
+    /// The one wording for a mirrored session, everywhere it shows (the
+    /// web app's too).
+    public static let mirroredHint = "Its transcript was deleted by the harness. swe kept a read-only copy."
 
     public var project: String? { Self.project(of: cwd) }
 
@@ -978,7 +994,10 @@ public final class SessionsModel {
     /// Feed-polled harnesses (Cursor, Grok Bot) and harnesses the ledger
     /// does not read are never hidden for missing usage.
     func isTrivial(_ row: Row) -> Bool {
-        guard SessionFilter.usageLogHarnesses.contains(row.session.harness) else { return false }
+        // A mirrored session is never an accident: its copy may predate
+        // the ledger, so missing usage proves nothing about it.
+        guard !row.session.mirrored,
+              SessionFilter.usageLogHarnesses.contains(row.session.harness) else { return false }
         guard let usage = row.usage else {
             return ledgerScanned && SessionFilter.localLogHarnesses.contains(row.session.harness)
         }
@@ -996,7 +1015,7 @@ public final class SessionsModel {
     private func searchEngine() -> SearchEngine {
         if let cachedSearchEngine { return cachedSearchEngine }
         let directory = searchIndexDirectory ?? SearchLocation.directory(under:
-            FileManager.default.homeDirectoryForCurrentUser.appending(path: ".swe"))
+            AppHome.url().appending(path: ".swe"))
         let made = SearchEngine(directory: directory)
         cachedSearchEngine = made
         return made

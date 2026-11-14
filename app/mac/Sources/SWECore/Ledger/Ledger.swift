@@ -32,14 +32,22 @@ public struct LedgerRoots: Sendable, Equatable {
     /// An empty map means no index-pure enumeration, so a roots value built
     /// for a couple of harnesses never sweeps the real user home.
     public var transcriptRoots: [SearchDecoder.Harness: [URL]]
+    /// swe's transcript mirror (`~/.swe/data/transcripts`, #1918): the
+    /// copies of Claude Code and Codex transcripts the harness pruned,
+    /// which a full scan reads for usage it never recorded and for search.
+    /// Nil reads no copy, so a roots value built for a test never sweeps
+    /// the real mirror.
+    public var mirror: TranscriptMirror?
 
     public init(
         claudeHomes: [URL] = [], codexHomes: [URL] = [],
         openCodeDatabases: [URL] = [], devinDatabases: [URL] = [],
         piHomes: [URL] = [], droidHomes: [URL] = [], clineHomes: [URL] = [],
         cursorProjects: [URL] = [], clineSessions: [URL] = [],
-        transcriptRoots: [SearchDecoder.Harness: [URL]] = [:]
+        transcriptRoots: [SearchDecoder.Harness: [URL]] = [:],
+        mirror: TranscriptMirror? = nil
     ) {
+        self.mirror = mirror
         self.claudeHomes = claudeHomes
         self.codexHomes = codexHomes
         self.openCodeDatabases = openCodeDatabases
@@ -69,9 +77,11 @@ public struct LedgerRoots: Sendable, Equatable {
                 transcriptRoots[harness, default: []] += source.roots
             }
         }
+        let claudeHomes = [home.appendingPathComponent(".claude")] + claudeProfiles
+        let codexHomes = [home.appendingPathComponent(".codex")] + codexProfiles
         return LedgerRoots(
-            claudeHomes: [home.appendingPathComponent(".claude")] + claudeProfiles,
-            codexHomes: [home.appendingPathComponent(".codex")] + codexProfiles,
+            claudeHomes: claudeHomes,
+            codexHomes: codexHomes,
             openCodeDatabases: [home.appendingPathComponent(".local/share/opencode/opencode.db")],
             devinDatabases: [home.appendingPathComponent(".local/share/devin/cli/sessions.db")],
             piHomes: [home.appendingPathComponent(".pi")],
@@ -79,7 +89,9 @@ public struct LedgerRoots: Sendable, Equatable {
             clineHomes: [home.appendingPathComponent(".cline")],
             cursorProjects: [home.appendingPathComponent(".cursor/projects")],
             clineSessions: [home.appendingPathComponent(".cline/data/sessions")],
-            transcriptRoots: transcriptRoots)
+            transcriptRoots: transcriptRoots,
+            mirror: .standard(root: TranscriptMirror.defaultRoot(home: home),
+                              claudeHomes: claudeHomes, codexHomes: codexHomes))
     }
 }
 
@@ -422,10 +434,14 @@ public actor Ledger {
             }
         }
 
+        // Rows a mirror copy put in, by session (#1918): a live file of one
+        // of these sessions retires them in the commit that reads it.
+        let copyMarks = (try? indexer?.store.copyMarks()) ?? [:]
         for (home, files) in claudeFiles {
             for file in files {
                 if Task.isCancelled { throw CancellationError() }
-                try scanFile(file, accountHome: home.path, parser: ClaudeFileParser.self, seen: &seen, report: &report)
+                try scanFile(file, accountHome: home.path, parser: ClaudeFileParser.self, seen: &seen,
+                             report: &report, copyMarks: copyMarks)
                 advanceProgress(owner)
                 await Task.yield()
             }
@@ -433,9 +449,30 @@ public actor Ledger {
         for (home, files) in codexFiles {
             for file in files {
                 if Task.isCancelled { throw CancellationError() }
-                try scanFile(file, accountHome: home.path, parser: CodexFileParser.self, seen: &seen, report: &report)
+                try scanFile(file, accountHome: home.path, parser: CodexFileParser.self, seen: &seen,
+                             report: &report, copyMarks: copyMarks)
                 advanceProgress(owner)
                 await Task.yield()
+            }
+        }
+        // Copies of sessions the harnesses pruned: only on a full scan,
+        // whose enumeration names every live session, so a copy never
+        // stands for one a capped list left out.
+        if recentLimit == nil, let mirror = roots.mirror {
+            let live = Self.liveIdentities(claude: claudeFiles.flatMap(\.1), codex: codexFiles.flatMap(\.1))
+            // One walk of the mirror for both consumers. A Codex copy the
+            // manifest lost has two possible sources; the one the index
+            // already holds a row for is preferred, as swe prefers it.
+            let store = self.store
+            let pruned = mirror.pruned(live: live, known: { [indexer] path in
+                if let indexer { return (try? indexer.store.fileRow(for: path)) != nil }
+                return (try? store.cursor(for: path)) != nil
+            })
+            try await scanCopies(pruned, mirror: mirror, seen: &seen, report: &report)
+            if let indexer {
+                let counts = SearchMirror.indexCopies(indexer: indexer, pruned: pruned,
+                                                      shouldStop: { Task.isCancelled })
+                report.filesIndexed += counts.indexed
             }
         }
         if let indexer {
@@ -1335,17 +1372,32 @@ public actor Ledger {
         }
     }
 
+    /// - Parameter indexes: false for a mirror copy, which feeds the
+    ///   ledger only: its search rows are filed under its source path, by
+    ///   `SearchMirror`, never under the copy's.
+    /// - Parameter copyMarks: the index's `mirror_copy:` marks, so this
+    ///   file's commit retires the rows a copy put in for its session.
     private func scanFile<P: FileLogParser>(
-        _ url: URL, accountHome: String, parser: P.Type, seen: inout Set<String>, report: inout ScanReport
+        _ url: URL, accountHome: String, parser: P.Type, seen: inout Set<String>, report: inout ScanReport,
+        indexes: Bool = true,
+        copyMarks: [TranscriptMirror.SessionIdentity: [(path: String, session: Int64)]] = [:]
     ) throws {
         let path = url.resolvingSymlinksInPath().path
         guard seen.insert(path).inserted, let info = FileInfo(path: path) else { return }
         let saved = try store.cursor(for: path)
         let indexStat = SearchFileStat(
             ino: Int64(info.inode), mtimeMs: info.modified * 1000, sizeBytes: Int64(info.size))
-        let indexNeed = indexer?.readNeed(
+        let fileIndexer = indexes ? self.indexer : nil
+        let indexNeed = fileIndexer?.readNeed(
             path: path, stat: indexStat, ledgerOffset: saved?.offset,
             harness: P.searchHarness) ?? .skip
+        let drop = fileIndexer.map {
+            SearchMirror.copiedRows(store: $0.store, marks: copyMarks,
+                                    harness: P.searchHarness.rawValue, path: path)
+        } ?? []
+        if indexNeed == .current, !drop.isEmpty {
+            fileIndexer?.retireCopies(path: path, drop: drop)
+        }
 
         var start: UInt64 = 0
         var state: Data?
@@ -1381,10 +1433,10 @@ public actor Ledger {
         // the appended lines, `.whole` the file. `.current` and `.skip` never
         // enter the closure. A local binding keeps the line closure
         // nonisolated — capturing `self` here would flag every other capture.
-        let indexer = (indexNeed == .append || indexNeed == .whole) ? self.indexer : nil
+        let indexer = (indexNeed == .append || indexNeed == .whole) ? fileIndexer : nil
         if let indexer {
             indexer.beginFile(path: path, harness: P.searchHarness,
-                              appending: indexNeed == .append && start > 0)
+                              appending: indexNeed == .append && start > 0, drop: drop)
         }
         var lineParser = P(file: url, accountHome: accountHome, savedState: state)
         let store = self.store
@@ -1451,6 +1503,56 @@ public actor Ledger {
             }
         }
         report.filesRead += 1
+    }
+
+    // MARK: - Mirror copies (#1918)
+
+    /// `(harness, identity)` of every live Claude and Codex transcript a
+    /// full scan enumerated. A uuid-named file needs only its name; any
+    /// other name is its own identity, its resolved path.
+    static func liveIdentities(claude: [URL], codex: [URL]) -> Set<TranscriptMirror.SessionIdentity> {
+        var live = Set<TranscriptMirror.SessionIdentity>()
+        for (harness, files) in [("claude", claude), ("codex", codex)] {
+            for file in files {
+                var identity = TranscriptMirror.SessionIdentity(harness: harness, path: file.path)
+                if identity.id == file.path {
+                    identity = TranscriptMirror.SessionIdentity(
+                        harness: harness, path: file.resolvingSymlinksInPath().path)
+                }
+                live.insert(identity)
+            }
+        }
+        return live
+    }
+
+    /// Usage from the copies of sessions the harness pruned, for events
+    /// the ledger never recorded (a session that ran and was pruned
+    /// between two scans, or before this ledger existed). Never double
+    /// counted: a copy is read only when no live file carries its session
+    /// and its source is gone, events keep their content keys
+    /// (`message.id` + `requestId`, Codex's response id or session and
+    /// timestamp), so a line the ledger already holds upserts onto its own
+    /// row with nothing to add, and a copy the source's cursor already
+    /// covers is not read at all. The copy's own cursor then keeps it from
+    /// being read again. Events are filed under the copy's harness home,
+    /// as the live scan filed the source's. Nothing is ever deleted here.
+    private func scanCopies(_ pruned: [TranscriptMirror.Pruned], mirror: TranscriptMirror,
+                            seen: inout Set<String>, report: inout ScanReport) async throws {
+        for copy in pruned {
+            if Task.isCancelled { throw CancellationError() }
+            guard let home = mirror.home(for: copy.copy.rel, harness: copy.copy.harness),
+                  let info = FileInfo(path: copy.copy.path) else { continue }
+            if let cursor = try store.cursor(for: copy.source), cursor.offset >= info.size { continue }
+            let url = URL(fileURLWithPath: copy.copy.path)
+            if copy.copy.harness == "claude" {
+                try scanFile(url, accountHome: home.home.path, parser: ClaudeFileParser.self, seen: &seen,
+                             report: &report, indexes: false)
+            } else {
+                try scanFile(url, accountHome: home.home.path, parser: CodexFileParser.self, seen: &seen,
+                             report: &report, indexes: false)
+            }
+            await Task.yield()
+        }
     }
 
     /// Bytes each fingerprint sample covers. Head, middle and tail of the

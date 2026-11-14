@@ -1,0 +1,2 @@
+{"cwd":"/work/proj","message":{"content":"live heron question","role":"user"},"sessionId":"22222222-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:00:00.000Z","type":"user"}
+{"message":{"content":[{"text":"done 0","type":"text"}],"stop_reason":"end_turn"},"sessionId":"22222222-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:00:05.000Z","type":"assistant"}
