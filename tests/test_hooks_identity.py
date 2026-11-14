@@ -620,6 +620,36 @@ class KnowableVariablesTest(_IdentityHome):
         (row,) = self.stats()["hooks"]
         self.assertEqual(row["scripts"], [os.path.realpath(hook)])
 
+    def test_a_directory_marketplace_plugin_runs_from_its_source(self):
+        # Claude Code loads a plugin from a directory marketplace straight
+        # from the marketplace folder; the cache copy is never run.
+        market = self.home / "markets" / "local"
+        (market / ".claude-plugin").mkdir(parents=True)
+        (market / ".claude-plugin" / "marketplace.json").write_text(json.dumps(
+            {"plugins": [{"name": "x", "source": "./x"}]}))
+        extra = '"${CLAUDE_PLUGIN_ROOT}/hooks/only-in-source.sh"'
+        source = market / "x" / "hooks"
+        source.mkdir(parents=True)
+        for name in ("on-stop.sh", "only-in-source.sh"):
+            (source / name).write_text("#!/bin/sh\n")
+        (source / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+            {"hooks": [{"type": "command", "command": c}
+                       for c in (self.PLUGIN, extra)]}]}}))
+        cached = self.install_plugin("x", [self.PLUGIN])  # the stale copy
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        data = json.loads(record.read_text())
+        data["plugins"]["x@local"] = data["plugins"].pop("x@mk")
+        record.write_text(json.dumps(data))
+        (self.home / ".claude" / "plugins" / "known_marketplaces.json").write_text(
+            json.dumps({"local": {"source": {"source": "directory",
+                                             "path": str(market)}}}))
+        self.ran(self.PLUGIN, HOUR)
+        self.ran(extra, 2 * HOUR, session="s2")
+        scripts = sorted(p for r in self.stats()["hooks"] for p in r["scripts"])
+        self.assertEqual(scripts, sorted(os.path.realpath(source / n) for n in (
+            "on-stop.sh", "only-in-source.sh")))
+        self.assertNotIn(os.path.realpath(cached), scripts)
+
     def test_two_plugins_with_one_command_stay_unknowable(self):
         self.install_plugin("x", [self.PLUGIN])
         self.install_plugin("y", [self.PLUGIN])

@@ -136,11 +136,39 @@ def _read_json(path: Path):
         return None
 
 
+def _live_sources(home: Path):
+    """``(plugin@marketplace) -> folder or None``: the folder Claude Code
+    loads a plugin from live, by the skills inventory's own reader
+    (``skills.inventory._claude_live_source``); None means its install
+    record's cached copy is what runs."""
+    try:
+        from swe.skills.inventory import (
+            _claude_directory_marketplaces,
+            _claude_live_source,
+        )
+
+        settings = _read_json(home / ".claude" / "settings.json")
+        markets = _claude_directory_marketplaces(home, settings)
+    except Exception:  # noqa: BLE001 - no live sources: the cache runs
+        return lambda _ref: None
+
+    def live(ref: str) -> str | None:
+        try:
+            found = _claude_live_source(markets, ref)
+        except Exception:  # noqa: BLE001
+            return None
+        return str(found) if found is not None else None
+
+    return live
+
+
 def plugin_roots(home: Path) -> dict[str, set[str]]:
     """``{declared command: {install folder}}`` for every Claude Code plugin
     installed under ``home``: the hooks each plugin's ``hooks/hooks.json``
     (or its manifest's ``hooks``) declares, read from the install record
-    ``~/.claude/plugins/installed_plugins.json``. A transcript stores a
+    ``~/.claude/plugins/installed_plugins.json``, or from the marketplace
+    folder Claude Code loads a directory marketplace's plugin from. A
+    transcript stores a
     plugin hook's command with ``${CLAUDE_PLUGIN_ROOT}`` unexpanded and
     nothing else about the plugin; the exact command string is what ties
     a run to the plugin that declares it."""
@@ -149,9 +177,17 @@ def plugin_roots(home: Path) -> dict[str, set[str]]:
     out: dict[str, set[str]] = {}
     if not isinstance(installs, dict):
         return out
-    for entries in installs.values():
-        for entry in entries if isinstance(entries, list) else []:
-            folder = entry.get("installPath") if isinstance(entry, dict) else None
+    live = _live_sources(home)
+    for ref, entries in installs.items():
+        # A plugin from a directory marketplace runs from that folder, not
+        # from the cached copy its install record names (which may be
+        # stale, or lack a hook the source has since gained).
+        source = live(ref)
+        folders = [source] if source else [
+            entry.get("installPath") for entry in
+            (entries if isinstance(entries, list) else [])
+            if isinstance(entry, dict)]
+        for folder in folders:
             if not isinstance(folder, str) or not os.path.isdir(folder):
                 continue
             found: list[str] = []

@@ -143,12 +143,51 @@ def _unpack(blob: bytes) -> list[dict]:
         # Most transcripts hold no hook run at all: that is an answer too.
         return []
     columns = dict(zip(keys, (_column(spec, n) for spec in specs)))
-    ts = columns.get("ts")
-    command = columns.get("_command", ())
-    if ts is None or not all(type(t) in (int, float) for t in ts) \
-            or not all(isinstance(c, str) for c in command):
-        raise BadRow("field type")
+    for key, ok in _FIELDS.items():
+        column = columns.get(key)
+        if column is None or not all(ok(v) for v in column):
+            raise BadRow(f"field {key}")
     return [dict(zip(keys, row)) for row in zip(*(columns[k] for k in keys))]
+
+
+def _number(v) -> bool:
+    return type(v) in (int, float)
+
+
+def _text(v) -> bool:
+    return isinstance(v, str)
+
+
+def _maybe_text(v) -> bool:
+    return v is None or isinstance(v, str)
+
+
+def _maybe_int(v) -> bool:
+    return v is None or type(v) is int
+
+
+# Every field ``transcripts.parse_raw`` writes and the read after it uses,
+# with the values it can hold: a row missing one, or holding anything
+# else, is not this parser's and reads as a miss.
+_FIELDS = {
+    "ts": _number,
+    "hook": lambda v: v is None,
+    "harness": _text,
+    "event": _text,
+    "session_id": _maybe_text,
+    "cwd": _maybe_text,
+    "repo": _maybe_text,
+    "git_branch": _maybe_text,
+    "decision": lambda v: v in ("block", "warn", "allow", "error"),
+    "reason": _text,
+    "duration_ms": _maybe_int,
+    "exit_code": _maybe_int,
+    "stop_hook_active": lambda v: v is None or type(v) is bool,
+    "source": lambda v: v == "transcript",
+    "script": lambda v: v is None,
+    "_command": _text,
+    "_project": _maybe_text,
+}
 
 
 def _signature(st: os.stat_result) -> tuple[int, int, int, int]:
@@ -254,9 +293,14 @@ class TranscriptCache:
                 [(now, self.version, p) for p in hits])
             if pending:
                 self._trim(db)
-                # It frees one page per step: run it to the end.
-                db.execute("PRAGMA incremental_vacuum").fetchall()
             db.execute("COMMIT")
+            if pending:
+                # Give the trimmed pages back. ``incremental_vacuum`` frees
+                # one page per step; Python 3.11's ``execute`` steps a
+                # statement with no result columns only once, so it must go
+                # through ``executescript``, which steps it to the end. It
+                # commits first, hence after our own COMMIT.
+                db.executescript("PRAGMA incremental_vacuum;")
         except sqlite3.Error:
             try:
                 db.execute("ROLLBACK")

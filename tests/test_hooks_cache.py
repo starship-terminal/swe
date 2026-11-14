@@ -179,6 +179,14 @@ class TranscriptCacheTest(unittest.TestCase):
             self.assertIsNone(row["repo"])
             self.assertEqual(row["_command"], self.command)
 
+    @staticmethod
+    def with_field(blob, key, value):
+        """``blob`` with one field's column set to ``value`` for every run."""
+        import zlib
+        data = json.loads(zlib.decompress(blob))
+        data["c"][data["k"].index(key)] = {"c": value}
+        return zlib.compress(json.dumps(data).encode())
+
     def test_corrupt_or_truncated_rows_read_as_a_miss(self):
         self.read()
         db = self.connect(transcript_cache.cache_file_for(self.home))
@@ -194,6 +202,13 @@ class TranscriptCacheTest(unittest.TestCase):
                           b'{"d": ["a"], "i": [0, -1]}]}'),   # bad index
             zlib.compress(b'{"n": 1, "k": ["ts"], "c": [{"c": 1}, {"c": 2}]}'),
             zlib.compress(b"[1, 2, 3]"),                      # wrong shape
+            # ts and _command only: every other field a run needs is gone.
+            zlib.compress(b'{"n": 1, "k": ["_command", "ts"], '
+                          b'"c": [{"c": "x"}, {"c": 1}]}'),
+            # every field, one of the wrong type
+            self.with_field(good, "cwd", 7),
+            self.with_field(good, "decision", "maybe"),
+            self.with_field(good, "stop_hook_active", "yes"),
             zlib.compress(b"\xe3\x01\x00\x00\x00" * 50),     # marshal-ish
         ]
         for blob in bad_rows:
