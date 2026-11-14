@@ -783,10 +783,25 @@ SKIP, CURRENT, APPEND, WHOLE = "skip", "current", "append", "whole"
 APPENDABLE = frozenset({"claude", "codex", "pi"})
 
 
-def should_index(path: str) -> bool:
-    """Claude ``subagents/`` transcripts are a session's own delegation
-    chatter; the Swift indexer leaves them out too."""
-    return "/subagents/" not in path
+SUBAGENTS = "subagents"
+
+
+def should_index(path: str, root: str) -> bool:
+    """Whether ``path``, found under the transcript root ``root`` (both
+    spelled alike: the walk's resolved forms), is a session rather than a
+    Claude subagent transcript: a session's own delegation chatter, which
+    the Swift indexer leaves out too (``SearchIndexer.shouldIndex``).
+
+    Only a folder named ``subagents`` below ``root`` counts, at any depth:
+    the folders :func:`_walk` prunes. One above it never does, so a home
+    whose own path holds one (an SWE account whose id is ``subagents``)
+    is indexed like any other (#1946). A path outside ``root`` (a linked
+    file's target elsewhere) is left to the walk, which judged it by the
+    folders it entered; this check adds a linked file's target below the
+    root."""
+    if not path.startswith(root + "/"):
+        return True
+    return SUBAGENTS not in path[len(root) + 1:].split("/")[:-1]
 
 
 def read_need(row: FileRow | None, stat: FileStat) -> str:
@@ -947,7 +962,8 @@ class Indexer:
 
     def index_file(self, path: str, harness: str, *, document: bool = False,
                    session_id: str | None = None, meta_path: str | None = None,
-                   pair: str | None = None, drop: list[FileRow] | None = None) -> str:
+                   pair: str | None = None, drop: list[FileRow] | None = None,
+                   root: str | None = None) -> str:
         """Read one transcript into the index. Returns what happened:
         ``skip``, ``current``, ``indexed``, ``moved`` (another writer won the
         fence) or ``failed``. ``document`` reads the file as one JSON value
@@ -958,8 +974,11 @@ class Indexer:
         ``chat_history.jsonl``): the two read as one, their stat combined.
         ``drop`` are rows a mirror copy put in for this file's session under
         other, gone paths: they go in the commit that reads this file, or
-        on their own once this file's row is current."""
-        if not should_index(path):
+        on their own once this file's row is current. ``root`` is the
+        transcript root the file was found under (:attr:`Source.root`):
+        a subagent transcript below it is skipped (:func:`should_index`);
+        without one the caller vouches the path is a session."""
+        if root is not None and not should_index(path, root):
             return SKIP
         stat = file_stat(path)
         if stat is None:
@@ -1364,7 +1383,7 @@ def _walk(root: Path, suffix: str = ".jsonl", *, subagents: bool = False) -> lis
             except OSError:
                 is_dir = False
             if is_dir:
-                if not entry.name.startswith(".") and (subagents or entry.name != "subagents"):
+                if not entry.name.startswith(".") and (subagents or entry.name != SUBAGENTS):
                     subdirs.append(entry)
             elif entry.name.endswith(suffix) and not entry.name.startswith("."):
                 found.append(_resolved(real_dir, entry))
@@ -1442,6 +1461,9 @@ class Source:
     # have more than one. The mirror uses it to keep a symlinked transcript,
     # whose resolved path sits outside every root, with its account.
     home: str | None = None
+    # The resolved root the walk found this file under, which
+    # `should_index` measures a `subagents` folder from.
+    root: str | None = None
 
 
 # Kiro session files are `<uuid>.json` (Orca's KIRO_SESSION_FILE_PATTERN).
@@ -1473,8 +1495,9 @@ def sources(home: Path) -> list[Source]:
     out: list[Source] = []
     seen: set[str] = set()
 
-    def add(found: list[str], harness: str, document: bool = False, meta=None,
+    def add(root: Path, found: list[str], harness: str, document: bool = False, meta=None,
             pair=None, session_id=None, origin: str | None = None) -> None:
+        real_root = os.path.realpath(root)
         for path in found:
             if path not in seen:
                 seen.add(path)
@@ -1482,36 +1505,42 @@ def sources(home: Path) -> list[Source]:
                                   session_id=session_id(path) if session_id else None,
                                   meta_path=meta(path) if meta else None,
                                   pair=pair(path) if pair else None,
-                                  home=origin))
+                                  home=origin, root=real_root))
 
     for claude_home in _homes(home, "claude", ".claude"):
-        add(_walk(claude_home / "projects"), "claude", origin=str(claude_home))
+        root = claude_home / "projects"
+        add(root, _walk(root), "claude", origin=str(claude_home))
     for codex_home in _homes(home, "codex", ".codex"):
-        add(_walk(codex_home / "sessions"), "codex", origin=str(codex_home))
-        add(_walk(codex_home / "archived_sessions"), "codex", origin=str(codex_home))
+        for root in (codex_home / "sessions", codex_home / "archived_sessions"):
+            add(root, _walk(root), "codex", origin=str(codex_home))
     # Devin's ATIF exports beside sessions.db (`Ledger`'s devinTranscripts).
     # The database holds the same sessions and more; both are read, and
     # search shows one hit per session.
-    add(_walk((home / DEVIN_DB).parent / "transcripts", ".json"), "devin", document=True)
-    add(_walk(home / ".pi/agent/sessions"), "pi")
+    root = (home / DEVIN_DB).parent / "transcripts"
+    add(root, _walk(root, ".json"), "devin", document=True)
+    root = home / ".pi/agent/sessions"
+    add(root, _walk(root), "pi")
     # Only `agent-transcripts/` holds chats; the projects tree also keeps
     # mcps/, canvases/ and friends. The chat's meta.json sits in the
     # `chats` tree beside `projects`.
     cursor_projects = home / ".cursor/projects"
     metas = cursor_chat_meta_index(cursor_projects.parent / "chats")
-    add([p for p in _walk(cursor_projects) if "agent-transcripts" in Path(p).parts],
+    add(cursor_projects, [p for p in _walk(cursor_projects) if "agent-transcripts" in Path(p).parts],
         "cursor", meta=lambda p: metas.get(cursor_chat_id(p) or ""))
-    add(_walk(home / ".qoder/projects"), "qoder")
-    add(_walk(home / ".codebuddy/projects"), "codebuddy")
-    add([p for p in _walk(home / ".hermes/sessions", ".json")
-         if os.path.basename(p).startswith("session_")], "hermes", document=True)
+    for root, harness in ((home / ".qoder/projects", "qoder"), (home / ".codebuddy/projects", "codebuddy")):
+        add(root, _walk(root), harness)
+    root = home / ".hermes/sessions"
+    add(root, [p for p in _walk(root, ".json") if os.path.basename(p).startswith("session_")],
+        "hermes", document=True)
     # Kiro: `<uuid>.json` directly under the root (subdirectories hold task
     # state), its turns in the `<uuid>.jsonl` beside it, the UUID its id.
-    add([p for p in _files_in(home / ".kiro/sessions/cli") if _KIRO_FILE.match(os.path.basename(p))],
+    root = home / ".kiro/sessions/cli"
+    add(root, [p for p in _files_in(root) if _KIRO_FILE.match(os.path.basename(p))],
         "kiro", pair=lambda p: p + "l", session_id=lambda p: Path(p).stem)
     # Grok: `<session dir>/summary.json`, turns in `chat_history.jsonl`, the
     # directory its id when `info.id` is absent.
-    add([p for p in _walk(home / ".grok/sessions", ".json") if os.path.basename(p) == "summary.json"],
+    root = home / ".grok/sessions"
+    add(root, [p for p in _walk(root, ".json") if os.path.basename(p) == "summary.json"],
         "grok", pair=lambda p: os.path.join(os.path.dirname(p), "chat_history.jsonl"),
         session_id=lambda p: os.path.basename(os.path.dirname(p)))
     return out
@@ -2022,7 +2051,8 @@ def _pass(home: Path, path: Path, should_stop) -> PassResult:
                                             session_id=source.session_id,
                                             meta_path=source.meta_path,
                                             pair=source.pair,
-                                            drop=_copied_rows(indexer.store, copied, source)))
+                                            drop=_copied_rows(indexer.store, copied, source),
+                                            root=source.root))
         # After the live files, so a session they carry is never read
         # from a copy (copies are used whether mirroring is on or off,
         # as the listing and reads use them).

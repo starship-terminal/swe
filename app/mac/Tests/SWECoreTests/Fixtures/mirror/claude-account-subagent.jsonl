@@ -1,0 +1,2 @@
+{"cwd":"/work/acct","isSidechain":true,"message":{"content":"wombat delegation chatter","role":"user"},"sessionId":"44444444-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:00:01.000Z","type":"user"}
+{"isSidechain":true,"message":{"content":[{"text":"done 50","type":"text"}],"stop_reason":"end_turn"},"sessionId":"44444444-2222-3333-4444-555555555555","timestamp":"2026-10-01T10:00:02.000Z","type":"assistant"}

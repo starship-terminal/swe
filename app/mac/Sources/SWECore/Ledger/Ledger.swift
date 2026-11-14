@@ -365,16 +365,21 @@ public actor Ledger {
         // at worst one needless rebuild, and that ingest reloads anyway.
         let writesBefore = store.eventWrites
 
+        // Each list keeps the root it was walked from: a Claude subagent
+        // transcript is read for tokens, and only a `subagents` folder below
+        // that root keeps a file out of the index (`SearchIndexer.Root`).
         let claudeFiles = roots.claudeHomes.map { home in
-            (home, Self.capped(Self.jsonlFiles(under: home.appendingPathComponent("projects")),
-                               recentLimit: recentLimit))
+            let root = home.appendingPathComponent("projects")
+            return (home, Self.capped(Self.jsonlFiles(under: root), recentLimit: recentLimit),
+                    SearchIndexer.Root(root))
         }
         // Active sessions first, so a rollout that also sits in the archive
         // is attributed to the live copy.
         let codexFiles = roots.codexHomes.flatMap { home in
             ["sessions", "archived_sessions"].map { directory in
-                (home, Self.capped(Self.jsonlFiles(under: home.appendingPathComponent(directory)),
-                                   recentLimit: recentLimit))
+                let root = home.appendingPathComponent(directory)
+                return (home, Self.capped(Self.jsonlFiles(under: root), recentLimit: recentLimit),
+                        SearchIndexer.Root(root))
             }
         }
         let openCodeDatabases = roots.openCodeDatabases.filter {
@@ -386,15 +391,17 @@ public actor Ledger {
         // Devin's transcripts are pretty-printed ATIF documents beside
         // `sessions.db`, not JSONL — they feed the index only, never the
         // ledger's records, so they are listed only while an indexer is set.
+        // Filtered before the cap, as an index-pure list: a file the index
+        // never reads must not crowd sessions out of a limited window.
         let devinTranscripts: [URL] = indexer == nil ? [] : roots.devinDatabases.flatMap { database in
-            Self.capped(
-                Self.files(under: database.deletingLastPathComponent().appendingPathComponent("transcripts"),
-                           suffix: ".json"),
-                recentLimit: recentLimit)
+            let root = database.deletingLastPathComponent().appendingPathComponent("transcripts")
+            return Self.capped(Self.files(under: root, suffix: ".json").filter(SearchIndexer.Root(root).indexes),
+                               recentLimit: recentLimit)
         }
         let piFiles = roots.piHomes.map { home in
-            (home, Self.capped(Self.jsonlFiles(under: home.appendingPathComponent("agent/sessions")),
-                               recentLimit: recentLimit))
+            let root = home.appendingPathComponent("agent/sessions")
+            return (home, Self.capped(Self.jsonlFiles(under: root), recentLimit: recentLimit),
+                    SearchIndexer.Root(root))
         }
         let droidFiles = roots.droidHomes.map { home in
             (home, Self.capped(Self.files(under: home.appendingPathComponent("sessions"),
@@ -438,20 +445,20 @@ public actor Ledger {
         // Rows a mirror copy put in, by session (#1918): a live file of one
         // of these sessions retires them in the commit that reads it.
         let copyMarks = (try? indexer?.store.copyMarks()) ?? [:]
-        for (home, files) in claudeFiles {
+        for (home, files, root) in claudeFiles {
             for file in files {
                 if Task.isCancelled { throw CancellationError() }
                 try scanFile(file, accountHome: home.path, parser: ClaudeFileParser.self, seen: &seen,
-                             report: &report, copyMarks: copyMarks)
+                             report: &report, root: root, copyMarks: copyMarks)
                 advanceProgress(owner)
                 await Task.yield()
             }
         }
-        for (home, files) in codexFiles {
+        for (home, files, root) in codexFiles {
             for file in files {
                 if Task.isCancelled { throw CancellationError() }
                 try scanFile(file, accountHome: home.path, parser: CodexFileParser.self, seen: &seen,
-                             report: &report, copyMarks: copyMarks)
+                             report: &report, root: root, copyMarks: copyMarks)
                 advanceProgress(owner)
                 await Task.yield()
             }
@@ -526,10 +533,11 @@ public actor Ledger {
                 await Task.yield()
             }
         }
-        for (home, files) in piFiles {
+        for (home, files, root) in piFiles {
             for file in files {
                 if Task.isCancelled { throw CancellationError() }
-                try scanFile(file, accountHome: home.path, parser: PiFileParser.self, seen: &seen, report: &report)
+                try scanFile(file, accountHome: home.path, parser: PiFileParser.self, seen: &seen,
+                             report: &report, root: root)
                 advanceProgress(owner)
                 await Task.yield()
             }
@@ -658,9 +666,12 @@ public actor Ledger {
                     ? cursorChatMetaIndex(under: root
                         .deletingLastPathComponent().appendingPathComponent("chats"))
                     : [:]
+                // Filtered before the cap: a subagent transcript the index
+                // never reads must not crowd sessions out of a limited window.
+                let files = transcriptFiles(under: root, source: source).filter(SearchIndexer.Root(root).indexes)
                 jobs.append(IndexJob(
                     source: source, harness: harness, cursorMeta: cursorMeta,
-                    files: capped(transcriptFiles(under: root, source: source), recentLimit: recentLimit)))
+                    files: capped(files, recentLimit: recentLimit)))
             }
         }
         return jobs
@@ -1385,11 +1396,14 @@ public actor Ledger {
     /// - Parameter indexes: false for a mirror copy, which feeds the
     ///   ledger only: its search rows are filed under its source path, by
     ///   `SearchMirror`, never under the copy's.
+    /// - Parameter root: the transcript root `url` was walked from; a
+    ///   subagent transcript below it feeds the ledger only
+    ///   (`SearchIndexer.Root.indexes`).
     /// - Parameter copyMarks: the index's `mirror_copy:` marks, so this
     ///   file's commit retires the rows a copy put in for its session.
     private func scanFile<P: FileLogParser>(
         _ url: URL, accountHome: String, parser: P.Type, seen: inout Set<String>, report: inout ScanReport,
-        indexes: Bool = true,
+        indexes: Bool = true, root: SearchIndexer.Root? = nil,
         copyMarks: [TranscriptMirror.SessionIdentity: [(path: String, session: Int64)]] = [:]
     ) throws {
         let path = url.resolvingSymlinksInPath().path
@@ -1397,7 +1411,7 @@ public actor Ledger {
         let saved = try store.cursor(for: path)
         let indexStat = SearchFileStat(
             ino: Int64(info.inode), mtimeMs: info.modified * 1000, sizeBytes: Int64(info.size))
-        let fileIndexer = indexes ? self.indexer : nil
+        let fileIndexer = indexes && self.indexer != nil && root?.indexes(url) != false ? self.indexer : nil
         let indexNeed = fileIndexer?.readNeed(
             path: path, stat: indexStat, ledgerOffset: saved?.offset,
             harness: P.searchHarness) ?? .skip

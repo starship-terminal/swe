@@ -200,6 +200,54 @@ import Testing
         #expect(try s.store.status().messageCount == 0)
     }
 
+    /// `~/.swe/accounts/claude/subagents/home`: the folder named
+    /// `subagents` is the account's id, above the transcript root, so its
+    /// sessions are indexed like any other home's (#1946); a subagent
+    /// transcript below the root is still left out. swe's
+    /// `test_an_account_whose_id_is_subagents_is_indexed` pins the same.
+    @Test func anAccountWhoseIDIsSubagentsIsIndexed() async throws {
+        let s = try Setup()
+        let home = s.temp.path(".swe/accounts/claude/subagents/home")
+        let session = home.appendingPathComponent("projects/-work-acct/sess-acct.jsonl")
+        let sub = home.appendingPathComponent("projects/-work-acct/sess-acct/subagents/agent-a1.jsonl")
+        try FileManager.default.createDirectory(
+            at: sub.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(userLine("quokka account plan", session: "sess-acct").utf8).write(to: session)
+        try Data(userLine("wombat delegation chatter", session: "sess-acct").utf8).write(to: sub)
+
+        // The ledger already read both, as it did while the index skipped
+        // the account: its cursors are current, the index holds no row.
+        let roots = LedgerRoots(claudeHomes: [home])
+        #expect(try await s.ledger.scan(roots: roots).filesRead == 2)
+        await s.attach()
+
+        let report = try await s.ledger.scan(roots: roots)
+
+        // The next pass picks the session up with no rebuild; the subagent
+        // transcript stays a ledger-only file.
+        #expect(report.filesRead == 1)
+        #expect(report.filesIndexed == 1)
+        #expect(try s.store.files().map(\.path) == [session.resolvingSymlinksInPath().path])
+        #expect(try s.fts("quokka").count == 1)
+        #expect(try s.fts("wombat").isEmpty)
+    }
+
+    /// The rule swe's `should_index` applies, case for case
+    /// (`test_only_folders_below_the_transcript_root_count`).
+    @Test func onlyFoldersBelowTheTranscriptRootCount() {
+        let root = "/h/.swe/accounts/claude/subagents/home/projects"
+        #expect(SearchIndexer.shouldIndex(path: root + "/-p/s.jsonl", root: root))
+        #expect(!SearchIndexer.shouldIndex(path: root + "/-p/s/subagents/a.jsonl", root: root))
+        #expect(!SearchIndexer.shouldIndex(path: root + "/subagents/a.jsonl", root: root))
+        #expect(!SearchIndexer.shouldIndex(path: root + "/-p/subagents/deeper/a.jsonl", root: root))
+        // Outside the root (a linked file's target elsewhere): the walk
+        // already decided, by the folders it entered.
+        #expect(SearchIndexer.shouldIndex(path: "/elsewhere/subagents/a.jsonl", root: root))
+        #expect(SearchIndexer.shouldIndex(path: root + "-other/subagents/a.jsonl", root: root))
+        // A file named `subagents` is no folder.
+        #expect(SearchIndexer.shouldIndex(path: root + "/-p/subagents", root: root))
+    }
+
     @Test func aTranscriptWithNothingToDecodeStillRecordsItsCursor() async throws {
         let s = try Setup()
         await s.attach()
