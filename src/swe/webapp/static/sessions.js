@@ -30,6 +30,10 @@ function statusBadge(status) {
   const img = arrow ? `<img class="badge-arrow" src="state-${arrow}.svg" alt="" aria-hidden="true">` : "";
   return `<span class="badge status-${status}">${img}${title}</span>`;
 }
+/* A mirrored session's harness deleted its transcript; swe kept a
+ * read-only copy (#1918). One wording wherever the page says so: the
+ * row's tag, the details sheet, the menu's Fork and the chat's notice. */
+const MIRRORED_HINT = "Its transcript was deleted by the harness. swe kept a read-only copy.";
 // Transcript search waits for a pause in typing and a query this long.
 const SEARCH_DEBOUNCE_MS = 250;
 const SEARCH_MIN_CHARS = 2;
@@ -379,6 +383,8 @@ function duration(seconds) {
  * detach an attached one, attach one the hub can take over (a kept pane
  * attaches even mid-turn: it is adopted, nothing restarts). */
 function rowAction(r) {
+  // Nothing to resume: no Attach, Detach or Kept for a mirrored copy.
+  if (r.mirrored) return "";
   if (r.ownership === "attached") return "detach";
   const busy = r.status === "active" || r.status === "approval";
   if ((r.attachable || r.kept) && (r.kept || !busy)) return "attach";
@@ -414,8 +420,15 @@ function sessionsSkeleton() {
     ${day(5, 0)}${day(4, 5)}</div>`;
 }
 
+/* The tag in the status badges' slot. Live-only marks (status, Attached,
+ * Kept) are not drawn for a mirrored row: it has no process to describe. */
+function mirroredTag() {
+  return `<span class="badge mirrored" title="${esc(MIRRORED_HINT)}">Mirrored</span>`;
+}
+
 function sessionRow(r) {
-  const badge = statusBadge(r.status)
+  const badge = r.mirrored ? mirroredTag()
+    : statusBadge(r.status)
     + (r.ownership === "attached" ? '<span class="badge ownership-attached" title="Runs under SWE: you can send to it">Attached</span>' : "")
     + (r.kept ? '<span class="badge" title="Detached, still running in tmux">Kept</span>' : "");
   const time = new Date(r.last_active_at * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -482,7 +495,8 @@ function openSheet(r) {
     sessionsPage.data && sessionsPage.data.open_terminal);
   sheet.innerHTML = `<form method="dialog" class="sheet-body">
     <div class="sheet-title">${Fmt.logo(r.harness)}<span>${esc(r.title || r.id || "Untitled")}</span>
-      ${statusBadge(r.status)}</div>
+      ${r.mirrored ? mirroredTag() : statusBadge(r.status)}</div>
+    ${r.mirrored ? `<p class="caption mirrored-note">${esc(MIRRORED_HINT)}</p>` : ""}
     <div class="fields">
       ${field("Harness", esc(Fmt.harnessName(r.harness)))}
       ${field("Machine", esc(r.machine || ""))}
@@ -772,7 +786,7 @@ async function sessionDetails(key) {
  * where the hub says the harness's CLI can fork this session. */
 function rowMenuActions(r) {
   const out = [r.pinned ? "unpin" : "pin", "rename"];
-  if (r.can_fork === true) out.push("fork");
+  if (r.can_fork === true && !r.mirrored) out.push("fork");
   return out;
 }
 const MENU_LABEL = { pin: "Pin", unpin: "Unpin", rename: "Rename", fork: "Fork" };
@@ -1027,7 +1041,10 @@ function openSessionMenu(r, anchor, point) {
   menu.className = "row-menu";
   menu.setAttribute("role", "menu");
   menu.innerHTML = rowMenuActions(r).map((a) =>
-    `<button type="button" class="row-menu-item" role="menuitem" data-act="${a}">${MENU_LABEL[a]}</button>`).join("");
+    `<button type="button" class="row-menu-item" role="menuitem" data-act="${a}">${MENU_LABEL[a]}</button>`).join("")
+    // Fork stays visible but off for a mirrored copy, with the reason.
+    + (r.mirrored ? `<button type="button" class="row-menu-item" role="menuitem" data-act="fork" aria-disabled="true"
+        title="${esc(MIRRORED_HINT)}">Fork</button>` : "");
   document.body.appendChild(menu);
   const box = point ? { left: point.x, right: point.x, bottom: point.y, top: point.y } : anchor.getBoundingClientRect();
   const w = menu.offsetWidth, h = menu.offsetHeight;
@@ -1059,6 +1076,7 @@ function openSessionMenu(r, anchor, point) {
   for (const item of items) {
     item.onclick = (e) => {
       e.stopPropagation();
+      if (item.getAttribute("aria-disabled") === "true") return;
       close();
       runSessionAction(item.dataset.act, r);
     };
@@ -1081,7 +1099,7 @@ function openSessionMenu(r, anchor, point) {
 function runSessionAction(action, r) {
   if (action === "pin" || action === "unpin") return setPinned(r, action === "pin");
   if (action === "rename") return openRenameSheet(r);
-  if (action === "fork") return openForkSheet(r);
+  if (action === "fork") return r.mirrored ? undefined : openForkSheet(r);
 }
 
 /* A route sheet (app.js bodySheet): leaving the page closes it. Any
