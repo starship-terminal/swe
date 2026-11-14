@@ -1686,7 +1686,9 @@ def _copy_trees(real_root: str) -> list[tuple[str, str]]:
         for entry in _scan(os.path.join(real_root, "accounts", harness)):
             if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
                 out.append((harness, entry.path))
-    return out
+    # A linked tree, or one behind a link, is read as absent, as the
+    # listing reads it: a link must never file one account's copies twice.
+    return [(harness, tree) for harness, tree in out if os.path.realpath(tree) == tree]
 
 
 def _copy_key(rel: str, harness: str, manifest: dict, table, store: Store) -> str | None:

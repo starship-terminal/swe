@@ -1798,6 +1798,8 @@ def _doctor_probe(home: Path) -> SimpleNamespace:
         collect_findings,
         issue_findings,
         mcp_findings,
+        mirror_audit,
+        mirror_findings,
         plugin_findings,
         setup_findings,
     )
@@ -1821,10 +1823,12 @@ def _doctor_probe(home: Path) -> SimpleNamespace:
     probe.plugins = plugin_findings(home) if not any(
         f.check in ("setup.hub", "setup.agents-md") for f in probe.setup) else []
     probe.mcp = mcp_findings(home)
+    probe.mirror_audit = mirror_audit(home)
+    probe.mirror = mirror_findings(probe.mirror_audit)
     probe.report = DoctorReport(
         collect_findings(probe.env, probe.preferred, probe.which_npm,
                          probe.nvm_dirs, probe.orphans, probe.drift)
-        + probe.setup + probe.plugins + probe.mcp + probe.issues)
+        + probe.setup + probe.plugins + probe.mcp + probe.issues + probe.mirror)
     return probe
 
 
@@ -1949,6 +1953,18 @@ def cmd_doctor(args):
             if finding.fix:
                 print(c("dim", f"        fix: {finding.fix}"))
         print()
+
+    from swe.harness.doctor import mirror_lines
+
+    print(c("bold", "  Transcript mirror"))
+    for label, value in mirror_lines(probe.mirror_audit):
+        print(f"    {label + ':':<14}{value}")
+    for finding in probe.mirror:
+        icon, color = ("!", "yellow") if finding.severity == "warning" else ("•", "dim")
+        print(f"    {c(color, icon)} {finding.message}")
+        if finding.fix:
+            print(c("dim", f"        fix: {finding.fix}"))
+    print()
 
     if probe.issues:
         print(c("bold", "  Issues"))

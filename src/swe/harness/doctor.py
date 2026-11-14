@@ -214,6 +214,116 @@ def issue_findings(home: Path | None = None) -> list[DoctorFinding]:
     return findings
 
 
+def mirror_audit(home: Path | None = None) -> dict | None:
+    """The transcript mirror's state for ``swe doctor``
+    (``transcript_mirror.audit``), or None when it cannot be read."""
+    from swe.sessions import transcript_mirror
+
+    try:
+        return transcript_mirror.audit(home or Path.home())
+    except Exception:  # bad mirror state is never a doctor failure
+        return None
+
+
+def _num(value) -> int:
+    """A count from ``mirror.json`` or the manifest, which a person or an
+    older swe may have left in any shape: 0 for anything not a number."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value) if value == value and abs(value) != float("inf") else 0
+    return 0
+
+
+def _size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{n} B"  # pragma: no cover
+
+
+def _count(n: int, noun: str, plural: str | None = None) -> str:
+    return f"{n:,} {noun if n == 1 else (plural or noun + 's')}"
+
+
+def mirror_lines(audit: dict | None) -> list[tuple[str, str]]:
+    """``(label, value)`` rows for the human ``swe doctor`` section."""
+    if audit is None:
+        return [("state", "unreadable")]
+    root = tilde(audit.get("root") or "")
+    rows = [("state", f"{'on' if audit.get('enabled') else 'off'}  ({root})"),
+            ("copies", f"{_count(_num(audit.get('entries')), 'copy', 'copies')} "
+                       f"({_size(_num(audit.get('bytes')))})"),
+            ("orphans", f"{_count(_num(audit.get('orphaned')), 'orphan')} "
+                        f"({_size(_num(audit.get('orphaned_bytes')))}), kept after "
+                        "the harness deleted the source")]
+    last = audit.get("last_pass")
+    if isinstance(last, dict) and last:
+        import time
+
+        finished = _num(last.get("finished_at"))
+        when = (time.strftime("%Y-%m-%d %H:%M", time.localtime(finished)) if finished > 0
+                else "at an unknown time")
+        made = _num(last.get("copied")) + _num(last.get("cloned"))
+        rows.append(("last pass", f"{when} · {_count(_num(last.get('files')), 'file')}, "
+                                  f"{made:,} copied, {_num(last.get('failed')):,} failed"))
+    else:
+        rows.append(("last pass", "none yet"))
+    return rows
+
+
+def mirror_findings(audit: dict | None) -> list[DoctorFinding]:
+    """What ``swe doctor`` flags about the transcript mirror. Never an
+    error: the mirror's state cannot fail doctor's exit status."""
+    if audit is None:
+        return []
+    source = tilde(audit.get("root") or "~/.swe/data/transcripts")
+    findings: list[DoctorFinding] = []
+    if not audit.get("enabled"):
+        findings.append(DoctorFinding(
+            "mirror.off", "info",
+            "The transcript mirror is off, so Claude Code and Codex transcripts are lost "
+            "when the harness prunes them",
+            "swe session mirror --on", source=source))
+    last = audit.get("last_pass")
+    failed = _num(last.get("failed")) if isinstance(last, dict) else 0
+    if failed:
+        findings.append(DoctorFinding(
+            "mirror.failed", "warning",
+            f"The last mirror pass could not copy {_count(failed, 'transcript')}",
+            "swe session mirror", source=source))
+    untracked = audit.get("untracked") if isinstance(audit.get("untracked"), list) else []
+    if untracked:
+        findings.append(DoctorFinding(
+            "mirror.untracked", "info",
+            f"{_count(len(untracked), 'mirror copy', 'mirror copies')} not in the manifest: "
+            "they list and read, but swe cannot restore or purge them",
+            None, source=source))
+    unreadable = _num(audit.get("unreadable"))
+    if unreadable:
+        findings.append(DoctorFinding(
+            "mirror.unreadable", "info",
+            f"{_count(unreadable, 'manifest entry', 'manifest entries')} could not be read: "
+            "swe skips them and leaves their copies alone, and keeps them in the file",
+            None, source=source))
+    missing = audit.get("missing") if isinstance(audit.get("missing"), list) else []
+    if missing:
+        findings.append(DoctorFinding(
+            "mirror.missing", "info",
+            f"{_count(len(missing), 'manifest entry', 'manifest entries')} name a copy that "
+            "is no longer on disk",
+            "swe session mirror", source=source))
+    stale = audit.get("stale_temps") if isinstance(audit.get("stale_temps"), list) else []
+    if stale:
+        findings.append(DoctorFinding(
+            "mirror.stale-tmp", "warning",
+            f"{_count(len(stale), 'temp file')} left in the mirror by an interrupted copy",
+            "swe session mirror --sweep-tmp", source=source))
+    return findings
+
+
 def setup_findings(home: Path | None = None) -> list[DoctorFinding]:
     """Setup-state checks ``swe doctor`` runs after the path probes.
 
