@@ -1188,6 +1188,12 @@ def listing_roots(harness: str, home: Path | None = None) -> list[tuple[str, str
             if child.is_dir():
                 groups.append((str(swe_dir_for(home) / "accounts" / harness / child.name / "home"),
                                child.path))
+    # A linked group folder, or one behind a link, is read as absent: a
+    # link must never show one account's sessions under another home.
+    real_root = os.path.realpath(base)
+    groups = [(account, path) for account, path in groups
+              if os.path.realpath(path) == os.path.join(
+                  real_root, os.path.relpath(path, str(base)))]
     skip: dict[str, set[str]] = {account: set() for account, _ in groups}
     for rel, entry in load_manifest(home).items():
         if entry.get("harness") == harness and not _is_gone(entry):

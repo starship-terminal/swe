@@ -842,6 +842,73 @@ class ChosenCopyTests(PurgeCase):
         self.assertIsNone(mirror.find_copy("claude", CLAUDE_ID, "", self.home))
 
 
+class LinkedGroupReadTests(PurgeCase):
+    """A linked account folder in the mirror is read as absent, so a link
+    never shows one account's sessions under another home."""
+
+    def link_default_to_work(self):
+        account = self.home / ".swe/accounts/claude/work/home"
+        source = write_jsonl(account / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
+                             claude_records("account text"))
+        self.sync()
+        source.unlink()
+        (self.mirror_root / "claude").symlink_to(self.mirror_root / "accounts/claude/work")
+        return account
+
+    def test_the_listing_shows_the_session_only_under_its_own_account(self):
+        account = self.link_default_to_work()
+        rows = self.sessions()
+        self.assertEqual([(r["id"], r["account_home"]) for r in rows],
+                         [(CLAUDE_ID, str(account))])
+        plain = run_swe(self.home, "session")
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertEqual(plain.stdout.count("account text"), 1)
+
+    def test_listing_roots_skip_a_linked_group(self):
+        self.link_default_to_work()
+        groups = mirror.listing_roots("claude", self.home)
+        self.assertEqual([account for _base, account, _skip in groups],
+                         [str(self.home / ".swe/accounts/claude/work/home")])
+
+    def test_a_normal_layout_lists_both_homes(self):
+        self.mirrored_claude()
+        account = self.home / ".swe/accounts/claude/work/home"
+        in_account = write_jsonl(account / "projects/-work-proj" / f"{OTHER_ID}.jsonl",
+                                 claude_records("account text"))
+        self.sync()
+        in_account.unlink()
+        self.assertEqual(sorted((r["id"], r["account_home"]) for r in self.sessions()),
+                         sorted([(CLAUDE_ID, None), (OTHER_ID, str(account))]))
+
+    def test_search_skips_a_linked_group(self):
+        from swe.sessions import search_writer
+
+        self.link_default_to_work()
+        real_root = os.path.realpath(self.mirror_root)
+        trees = search_writer._copy_trees(real_root)
+        self.assertNotIn(("claude", os.path.join(real_root, "claude")), trees)
+        self.assertIn(("claude", os.path.join(real_root, "accounts/claude/work")), trees)
+
+
+class PurgeSearchTests(PurgeCase):
+    def test_a_real_purge_leaves_the_session_unsearchable(self):
+        from swe.sessions import search_index, search_writer
+
+        source = self.claude(prompt="tune the flamingo cache")
+        search_writer.run_pass(self.home)
+        source.unlink()
+        search_writer.run_pass(self.home)
+        found = [h.session_id for h in search_index.search(self.home, "flamingo")]
+        self.assertEqual(found, [CLAUDE_ID])
+        result = self.purge(f"--purge={CLAUDE_ID}", "--yes", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(decode(result)["data"]["purged"]["search"], "forgotten")
+        self.assertEqual(search_index.search(self.home, "flamingo"), [])
+        # A later pass does not bring it back.
+        search_writer.run_pass(self.home)
+        self.assertEqual(search_index.search(self.home, "flamingo"), [])
+
+
 class SweepTests(PurgeCase):
     def temp(self, folder: Path, name: str, age: float) -> Path:
         folder.mkdir(parents=True, exist_ok=True)
