@@ -274,10 +274,11 @@ class LedgerSubagentTests(LedgerMirrorCase):
     from its copy, exactly once."""
 
     def session(self, base: Path, parent=((1, 100, 10),), subs=(((101, 50, 5),),),
-                pad=0) -> list[Path]:
+                pad=0, claude_home: Path | None = None) -> list[Path]:
         """The parent transcript and one subagent transcript per entry of
-        ``subs``, every line carrying the parent's session id."""
-        main = base / ".claude/projects/-work-proj" / f"{CLAUDE_ID}.jsonl"
+        ``subs``, every line carrying the parent's session id, under
+        ``claude_home`` (``base/.claude`` by default)."""
+        main = (claude_home or base / ".claude") / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl"
         files = [write_usage(main, [claude_event(CLAUDE_ID, *e, pad=pad) for e in parent])]
         for index, events in enumerate(subs):
             path = main.parent / CLAUDE_ID / "subagents" / f"agent-a{index:016x}.jsonl"
@@ -386,6 +387,24 @@ class LedgerSubagentTests(LedgerMirrorCase):
         result = self.scan()
         self.assertEqual(result.errors, [])
         self.assertEqual(self.totals(), (1, 100, 10))
+
+    def test_an_account_named_subagents_keeps_its_own_copies(self):
+        # An account id is never mistaken for the subagents folder: the
+        # copy walk prunes nothing at or above a tree's root, the rule the
+        # Swift side's ``Copy.isSubagent`` follows too.
+        account = self.home / ".swe/accounts/claude/subagents/home"
+        self.session(self.home, claude_home=account)
+        self.mirror_pass()
+        root = Path(os.path.realpath(transcripts_dir_for(self.home)))
+        self.assertTrue((root / f"accounts/claude/subagents/-work-proj/{CLAUDE_ID}.jsonl").is_file())
+        self.assertEqual(len(list((root / "accounts/claude/subagents").rglob(
+            "subagents/*.jsonl"))), 1)
+        folder = account / "projects/-work-proj"
+        shutil.rmtree(folder / CLAUDE_ID)
+        (folder / f"{CLAUDE_ID}.jsonl").unlink()
+        self.scan()
+        self.assertEqual(self.totals(), (2, 150, 15))
+        self.assertEqual(self.sessions(), [("claude", str(account), CLAUDE_ID)])
 
     def test_a_lost_manifest_still_counts_the_subagent_once(self):
         self.session(self.home)

@@ -193,6 +193,21 @@ import Testing
         }.joined()
     }
 
+    /// The usage tests offset message ids by `start`; every timestamp the
+    /// fixture writes must still be a real time in the harness's shape.
+    @Test func fixtureTimestampsStayValidForHighStarts() throws {
+        let shape = try NSRegularExpression(pattern: #"^2026-10-01T\d{2}:[0-5]\d:[0-5]\d\.\d{3}Z$"#)
+        for start in [0, 100, 200, 300] {
+            let lines = H.claudeLines(H.claudeID, (0..<40).map { "p\($0)" }, start: start, usage: true)
+            for line in lines.split(separator: "\n") {
+                let object = try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+                let stamp = try #require(object["timestamp"] as? String)
+                #expect(shape.firstMatch(in: stamp, range: NSRange(stamp.startIndex..., in: stamp)) != nil,
+                        "\(stamp)")
+            }
+        }
+    }
+
     @Test func liveSubagentUsageIsFiledUnderTheParentSession() async throws {
         let h = try H()
         try sessionWithSubagents(h)

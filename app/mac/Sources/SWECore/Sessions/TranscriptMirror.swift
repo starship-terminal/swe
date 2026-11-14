@@ -70,8 +70,17 @@ public struct TranscriptMirror: Sendable, Equatable {
 
         /// A Claude subagent transcript (`<uuid>/subagents/<agent>.jsonl`):
         /// the ledger reads it, search never indexes it, as neither treats
-        /// a live one as a session of its own.
-        public var isSubagent: Bool { rel.contains("/\(TranscriptMirror.subagents)/") }
+        /// a live one as a session of its own. Exactly the copies the
+        /// search walk prunes (`walk`, swe's `_walk(subagents=False)`): a
+        /// folder named `subagents` below the copy's tree (`claude/`,
+        /// `codex/` or `accounts/<harness>/<id>/`). The tree is never one,
+        /// so an account whose id is `subagents` keeps its own copies.
+        public var isSubagent: Bool {
+            var parts = rel.split(separator: "/", omittingEmptySubsequences: false)
+            parts.removeLast()  // the file name
+            parts.removeFirst(min(parts.count, parts.first == "accounts" ? 3 : 1))
+            return parts.contains { $0 == TranscriptMirror.subagents }
+        }
     }
 
     /// The folder Claude Code keeps a session's subagent transcripts in.

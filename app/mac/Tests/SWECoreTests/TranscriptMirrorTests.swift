@@ -98,6 +98,25 @@ import Testing
         #expect(all.map(\.isSubagent) == [false, true])
     }
 
+    /// `isSubagent` is exactly what the search walk prunes (swe's
+    /// `_walk(subagents=False)`): a folder named `subagents` below the
+    /// harness or account tree. The tree itself is never one, so an account
+    /// whose id is `subagents` keeps every normal copy searchable.
+    @Test func onlyAFolderBelowTheTreeMakesACopyASubagent() throws {
+        let h = try H()
+        let rels = ["claude/-p/\(H.claudeID).jsonl",
+                    "claude/-p/\(H.claudeID)/subagents/agent-a1.jsonl",
+                    "accounts/claude/subagents/-p/\(H.claudeID).jsonl",
+                    "accounts/claude/subagents/-p/\(H.claudeID)/subagents/agent-a1.jsonl",
+                    "accounts/claude/work/-p/subagents/x.jsonl"]
+        for rel in rels { try h.write("{}\n", to: h.mirrorRoot.appending(path: rel)) }
+        let all = h.mirror.copies(subagents: true)
+        let flagged = Dictionary(uniqueKeysWithValues: all.map { ($0.rel, $0.isSubagent) })
+        #expect(flagged == [rels[0]: false, rels[1]: true, rels[2]: false, rels[3]: true, rels[4]: true])
+        // The same copies the search walk keeps.
+        #expect(Set(h.mirror.copies().map(\.rel)) == Set(all.filter { !$0.isSubagent }.map(\.rel)))
+    }
+
     @Test func aPrunedSubagentCopyIsACandidateOfItsOwnIdentityOnlyWhenAsked() throws {
         let h = try H()
         let session = try h.claude(H.claudeID, "a")

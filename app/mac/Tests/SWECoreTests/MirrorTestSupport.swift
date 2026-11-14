@@ -67,7 +67,9 @@ final class MirrorHome: @unchecked Sendable {
     static func claudeLines(_ id: String, _ prompts: [String], start: Int = 0, usage: Bool = false) -> String {
         prompts.enumerated().map { offset, prompt -> String in
             let n = offset + start
-            let stamp = String(format: "2026-10-01T10:%02d", n)
+            // `start` only keeps message ids apart: the time rolls into
+            // the hour, so every stamp is a real time.
+            let stamp = String(format: "2026-10-01T%02d:%02d", 10 + n / 60, n % 60)
             let user: [String: Any] = [
                 "type": "user", "sessionId": id, "cwd": "/work/proj", "timestamp": "\(stamp):00.000Z",
                 "message": ["role": "user", "content": prompt],
