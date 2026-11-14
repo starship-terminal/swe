@@ -8,6 +8,7 @@ session stays listed and readable afterwards.
 Layout keeps the source's structure::
 
     transcripts/claude/<project-slug>/<uuid>.jsonl
+    transcripts/claude/<project-slug>/<uuid>/subagents/<agent>.jsonl
     transcripts/codex/<path under sessions/ or archived_sessions/>
     transcripts/accounts/<vendor>/<account id>/<same, per SWE account home>
     transcripts/manifest.json     what was copied from where
@@ -43,9 +44,13 @@ Rules that keep user data safe, in the order they matter:
 
 Mirroring rides :func:`swe.sessions.search_writer.sources`, the one
 enumeration the search indexer also uses, so a pass costs no extra
-directory walk: it is handed that list. Nothing in this module reads a
-transcript's bytes except the copy itself, so no value derived from here
-goes into ``parse_cache``.
+directory walk: it is handed that list. That list leaves Claude Code's
+subagent transcripts out (search never indexes them), so the pass adds
+them itself: one ``scandir`` of each Claude session's
+``<uuid>/subagents/`` folder (:func:`_subagent_sources`). Codex has no
+such folder: a spawned thread is a rollout of its own, already listed.
+Nothing in this module reads a transcript's bytes except the copy itself,
+so no value derived from here goes into ``parse_cache``.
 """
 
 from __future__ import annotations
@@ -83,6 +88,9 @@ MANIFEST_VERSION = 1
 # copied again, never lost).
 FLUSH_EVERY = 100
 SHRUNK_SUFFIX = ".shrunk-"
+# The folder Claude Code keeps a session's subagent transcripts in:
+# ``<project>/<session id>/subagents/<agent>.jsonl``.
+SUBAGENTS = "subagents"
 
 
 class MirrorBusy(Exception):
@@ -488,12 +496,74 @@ def _link_new(tmp: str, dest: Path) -> None:
     os.link(tmp, dest, follow_symlinks=False)
 
 
+@dataclass(frozen=True)
+class _Subagent:
+    """A subagent transcript found beside a Claude session: the shape
+    :func:`sync` reads from a ``search_writer.Source``."""
+
+    path: str
+    harness: str
+    home: str | None
+
+
+def _in_root(path: str, harness: str, table: list[Root]) -> bool:
+    return any(root.harness == harness and path.startswith(root.path + os.sep)
+               for root in table)
+
+
+def _subagent_sources(source, table: list[Root]) -> list[_Subagent]:
+    """The subagent transcripts Claude Code keeps beside the session
+    transcript ``source`` (``<project>/<id>.jsonl``): every plain
+    ``*.jsonl`` directly in ``<project>/<id>/subagents/``, by name.
+
+    Only for a transcript inside a harness root, so each copy lands in the
+    session's own folder in the mirror (``<id>/subagents/``), where
+    :func:`_session_rels` ties it to the session and nothing lists it. A
+    linked session or ``subagents`` folder is not entered and a linked
+    file is left out, as the walk never follows a link: a copy is only
+    ever made of a file inside the harness's own tree. Hidden names are
+    skipped. Nothing is read but the folder listing."""
+    if source.harness != "claude" or not source.path.endswith(".jsonl") \
+            or not _in_root(source.path, "claude", table):
+        return []
+    session_dir = source.path[:-len(".jsonl")]
+    folder = os.path.join(session_dir, SUBAGENTS)
+    if os.path.islink(session_dir) or os.path.islink(folder):
+        return []
+    found: list[str] = []
+    try:
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or not entry.name.endswith(".jsonl"):
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                found.append(entry.path)
+    except OSError:
+        return []  # no such folder: the usual case
+    home = getattr(source, "home", None)
+    return [_Subagent(path, "claude", home) for path in sorted(found)]
+
+
+def _with_subagents(sources: Iterable, table: list[Root]):
+    """``sources``, each Claude session followed by its subagent
+    transcripts (:func:`_subagent_sources`)."""
+    for source in sources:
+        yield source
+        yield from _subagent_sources(source, table)
+
+
 def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) -> MirrorResult:
     """Copy every mirrored-harness file in ``sources`` that is new or
     changed, and count the copies whose source is gone.
 
     ``sources`` is what :func:`search_writer.sources` returned (anything
-    with ``path`` and ``harness``); the caller owns the enumeration.
+    with ``path`` and ``harness``); the caller owns the enumeration. Each
+    Claude session's subagent transcripts are copied too, beside its copy
+    (:func:`_subagent_sources`), and counted in ``files``.
     Nothing is deleted. Raises :class:`MirrorBusy` when ``wait`` is false
     and another pass is running."""
     started = time.monotonic()
@@ -519,7 +589,7 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
         dirty = False
         pending = 0
         try:
-            for source in sources:
+            for source in _with_subagents(sources, table):
                 if should_stop is not None and should_stop():
                     break
                 located = _mirror_rel(source.path, source.harness, table,
@@ -773,7 +843,12 @@ def restore(home: Path | None, session) -> dict:
     roots unless its folder is still there and a link in the harness
     root still points at it (otherwise the restored file would not
     list). Never overwrites: see ``_copy(exclusive=True)``. Raises
-    :class:`MirrorBusy` while a pass runs."""
+    :class:`MirrorBusy` while a pass runs.
+
+    A Claude session's subagent transcripts copied beside that copy go
+    back too (:func:`_restore_subagents`), each under the same rules, each
+    on its own: one that cannot go back is named in ``subagents_skipped``
+    and never stops the session's own restore."""
     home = Path(home) if home is not None else Path(os.path.expanduser("~"))
     root = _real_root(home)
     copy_path = _listed_copy(home, session)
@@ -812,11 +887,67 @@ def restore(home: Path | None, session) -> dict:
         # harness appends since reads as a change and is copied.
         entries[rel] = {**entry, "ino": taken.st_ino, "mtime_ns": taken.st_mtime_ns,
                         "size": taken.st_size}
+        subagents, skipped = _restore_subagents(root, rel, target, entries, session)
         with contextlib.suppress(OSError):
             _write_manifest(home, entries, raw, before)
     return {"harness": session.tool_name, "session_id": session.session_id,
             "account_home": session.account_home or None, "copy": copy_path,
-            "target": target, "bytes": written, "how": how}
+            "target": target, "bytes": written, "how": how,
+            "subagents": subagents, "subagents_skipped": skipped}
+
+
+def _restore_subagents(root: str, rel: str, target: str, entries: dict,
+                       session) -> tuple[list[str], list[dict]]:
+    """Put back the subagent transcripts the manifest records under the
+    restored copy's folder (``<rel without .jsonl>/subagents/``), once the
+    session's own transcript is back at ``target``. Returns ``(restored
+    targets, [{target, reason}])`` and updates each restored entry's stat
+    in ``entries``, as :func:`restore` does for the session's.
+
+    Each one goes back only to ``<target without .jsonl>/subagents/<its
+    name>``, where Claude Code keeps it: an entry recording any other
+    source is left alone, so a manifest can never steer a restore
+    elsewhere. Never overwrites (``_copy(exclusive=True)``), and a copy
+    that is a symlink or behind one is never read."""
+    if session.tool_name != "claude":
+        return [], []
+    prefix = f"{rel[:-len('.jsonl')]}/{SUBAGENTS}/"
+    folder = os.path.join(target[:-len(".jsonl")], SUBAGENTS)
+    restored: list[str] = []
+    skipped: list[dict] = []
+    for sub_rel in sorted(entries):
+        if not sub_rel.startswith(prefix) or "/" in sub_rel[len(prefix):] \
+                or not sub_rel.endswith(".jsonl"):
+            continue
+        entry = entries[sub_rel]
+        if entry.get("harness") != "claude" or not _same_account(entry, session.account_home):
+            continue
+        source = entry.get("source")
+        expected = os.path.join(folder, os.path.basename(sub_rel))
+        if source != expected:
+            skipped.append({"target": source, "reason": f"recorded outside {folder}"})
+            continue
+        if os.path.lexists(source):
+            skipped.append({"target": source, "reason": "already exists"})
+            continue
+        copy = os.path.join(root, sub_rel)
+        if not _inside(copy, root):
+            skipped.append({"target": source, "reason": "its copy is not a plain file "
+                                                      "inside the mirror"})
+            continue
+        try:
+            taken, _written, _how = _copy(copy, Path(source), Path(os.path.dirname(target)),
+                                          exclusive=True)
+        except FileExistsError:
+            skipped.append({"target": source, "reason": "appeared while restoring"})
+            continue
+        except OSError as exc:
+            skipped.append({"target": source, "reason": str(exc.strerror or exc)})
+            continue
+        entries[sub_rel] = {**entry, "ino": taken.st_ino, "mtime_ns": taken.st_mtime_ns,
+                            "size": taken.st_size}
+        restored.append(source)
+    return restored, skipped
 
 
 def _listed_copy(home: Path, session) -> str:

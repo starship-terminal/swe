@@ -806,6 +806,12 @@ def cmd_session_restore(args) -> int:
         return emit({"restored": restored})
     print(f"Restored {tilde(restored['copy'])}")
     print(f"      to {tilde(restored['target'])} ({_bytes(restored['bytes'])}).")
+    subagents = restored.get("subagents") or []
+    if subagents:
+        noun = "transcript" if len(subagents) == 1 else "transcripts"
+        print(f"Restored {len(subagents)} subagent {noun} beside it.")
+    for left in restored.get("subagents_skipped") or []:
+        print(c("yellow", f"Left {tilde(str(left['target']))}: {sanitize(left['reason'])}."))
     print(c("dim", "It lists as live again (swe session); swe session use <N> resumes it."))
     return 0
 

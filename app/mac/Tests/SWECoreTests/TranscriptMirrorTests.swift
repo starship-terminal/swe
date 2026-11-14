@@ -76,6 +76,43 @@ import Testing
                 == ["claude/-p/a.jsonl", "codex/2026/09/01/r.jsonl", "accounts/claude/work/-q/e.jsonl"])
     }
 
+    /// The ledger reads subagent copies; search does not, so the walk
+    /// keeps `subagents/` only when asked. Links stay unfollowed either way.
+    @Test func theWalkKeepsSubagentsOnlyWhenAsked() throws {
+        let h = try H()
+        for rel in ["claude/-p/\(H.claudeID).jsonl", "claude/-p/\(H.claudeID)/subagents/agent-a1.jsonl",
+                    "claude/-p/\(H.claudeID)/subagents/.hidden.jsonl",
+                    "claude/-p/\(H.claudeID)/subagents/agent-a1.meta.json"] {
+            try h.write("{}\n", to: h.mirrorRoot.appending(path: rel))
+        }
+        let elsewhere = h.temp.path("elsewhere")
+        try h.write("{}\n", to: elsewhere.appending(path: "agent-b2.jsonl"))
+        try FileManager.default.createDirectory(at: h.mirrorRoot.appending(path: "claude/-p/\(H.otherID)"),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: h.mirrorRoot.appending(path: "claude/-p/\(H.otherID)/subagents"), withDestinationURL: elsewhere)
+        #expect(h.mirror.copies().map(\.rel) == ["claude/-p/\(H.claudeID).jsonl"])
+        let all = h.mirror.copies(subagents: true)
+        #expect(all.map(\.rel) == ["claude/-p/\(H.claudeID).jsonl",
+                                   "claude/-p/\(H.claudeID)/subagents/agent-a1.jsonl"])
+        #expect(all.map(\.isSubagent) == [false, true])
+    }
+
+    @Test func aPrunedSubagentCopyIsACandidateOfItsOwnIdentityOnlyWhenAsked() throws {
+        let h = try H()
+        let session = try h.claude(H.claudeID, "a")
+        let sub = try h.subagent(of: session, "agent-a1")
+        try h.mirrorPass()
+        try h.prune(session)
+        #expect(h.mirror.pruned(live: []).map(\.source) == [session.path])
+        let all = h.mirror.pruned(live: [], subagents: true)
+        #expect(all.map(\.source) == [session.path, sub.path])
+        #expect(all.last?.identity == TranscriptMirror.SessionIdentity(harness: "claude", id: sub.path))
+        // A live subagent file is never stood for by its copy.
+        try h.write("{}\n", to: sub)
+        #expect(h.mirror.pruned(live: [], subagents: true).map(\.source) == [session.path])
+    }
+
     /// swe's `_copy_trees`: a tree behind a link reads as absent, so one
     /// account's copies are never filed twice.
     @Test func aLinkedAccountsFolderIsNotRead() throws {

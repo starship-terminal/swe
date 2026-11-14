@@ -131,6 +131,34 @@ final class MirrorHome: @unchecked Sendable {
                   to: claudeHome.appending(path: "projects/\(folder)/\(id).jsonl"), mtime: mtime)
     }
 
+    /// A subagent transcript beside the Claude session at `session`, as
+    /// Claude Code writes it (`<project>/<id>/subagents/<agent>.jsonl`):
+    /// every line carries the parent's session id and `isSidechain`.
+    /// `start` keeps its message ids apart from the parent's.
+    @discardableResult
+    func subagent(of session: URL, _ agent: String, _ prompts: String..., start: Int = 50,
+                  mtime: TimeInterval = MirrorHome.mtime, usage: Bool = false) throws -> URL {
+        let id = session.deletingPathExtension().lastPathComponent
+        let lines = Self.claudeLines(id, prompts.isEmpty ? ["look around"] : prompts, start: start, usage: usage)
+            .split(separator: "\n").map { line -> String in
+                var object = try! JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
+                object["isSidechain"] = true
+                return Self.line(object)
+            }.joined()
+        return try write(lines, to: session.deletingPathExtension()
+            .appending(path: "subagents/\(agent).jsonl"), mtime: mtime)
+    }
+
+    /// What Claude Code's cleanup does: the transcript and its session
+    /// folder go.
+    func prune(_ session: URL) throws {
+        let folder = session.deletingPathExtension()
+        if FileManager.default.fileExists(atPath: folder.path) {
+            try FileManager.default.removeItem(at: folder)
+        }
+        try FileManager.default.removeItem(at: session)
+    }
+
     @discardableResult
     func grow(_ url: URL, _ id: String, _ prompts: String..., mtime: TimeInterval, usage: Bool = false) throws -> URL {
         try write(Self.claudeLines(id, prompts, start: 10, usage: usage), to: url, mtime: mtime, append: true)
@@ -150,6 +178,8 @@ final class MirrorHome: @unchecked Sendable {
 
     /// Copies every live Claude and Codex transcript into the mirror at
     /// its relative path, keeping the source's mtime, and records it.
+    /// Claude subagent transcripts are copied too, beside their session's
+    /// copy, as swe's pass copies them.
     func mirrorPass() throws {
         let trees: [(String, URL, [String])] = [
             ("claude", claudeHome, ["projects"]), ("codex", codexHome, ["sessions", "archived_sessions"]),
@@ -157,7 +187,7 @@ final class MirrorHome: @unchecked Sendable {
         for (harness, harnessHome, subdirs) in trees {
             for sub in subdirs {
                 let base = harnessHome.appending(path: sub)
-                for path in TranscriptMirror.walk(base.path) {
+                for path in TranscriptMirror.walk(base.path, subagents: harness == "claude") {
                     let rest = String(path.dropFirst(base.resolvingSymlinksInPath().path.count + 1))
                     try copy(path, rel: "\(harness)/\(rest)", harness: harness, source: path)
                 }

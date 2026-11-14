@@ -169,4 +169,100 @@ import Testing
         let usage = await h.ledger.bySession(in: allTime, harness: "claude")
         #expect(usage.map(\.accountHome) == [account.path])
     }
+    // MARK: Subagent transcripts
+
+    /// A session and two subagent transcripts beside it, with usage. Every
+    /// line carries the parent's session id.
+    @discardableResult
+    private func sessionWithSubagents(_ h: H, long: Bool = false) throws -> [URL] {
+        let prompts = long ? (0..<40).map { "prompt \($0) " + String(repeating: "x", count: 300) } : ["a", "b"]
+        let session = try h.write(H.claudeLines(H.claudeID, prompts, usage: true),
+                                  to: h.claudeHome.appending(path: "projects/-work-proj/\(H.claudeID).jsonl"))
+        let subs = long ? (0..<40).map { "sub \($0) " + String(repeating: "y", count: 300) } : ["c"]
+        let first = try h.write("", to: session.deletingPathExtension().appending(path: "subagents/agent-a1.jsonl"))
+        try h.write(Self.sidechain(H.claudeLines(H.claudeID, subs, start: 100, usage: true)), to: first)
+        let second = try h.subagent(of: session, "agent-a2", "d", start: 200, usage: true)
+        return [session, first, second]
+    }
+
+    private static func sidechain(_ lines: String) -> String {
+        lines.split(separator: "\n").map { line -> String in
+            var object = try! JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
+            object["isSidechain"] = true
+            return H.line(object)
+        }.joined()
+    }
+
+    @Test func liveSubagentUsageIsFiledUnderTheParentSession() async throws {
+        let h = try H()
+        try sessionWithSubagents(h)
+        try await h.scan(withMirror: false, index: false)
+        #expect(await h.ledger.totals(in: allTime).eventCount == 4)
+        let usage = await h.ledger.bySession(in: allTime, harness: "claude")
+        #expect(usage.map(\.sessionId) == [H.claudeID])
+        #expect(usage.map(\.accountHome) == [h.claudeHome.path])
+    }
+
+    @Test func aSessionWithSubagentsPrunedBeforeAnyScanKeepsBothUsages() async throws {
+        let expected = try await reference { try self.sessionWithSubagents($0) }
+        #expect(expected.eventCount == 4)
+        let h = try H()
+        let files = try sessionWithSubagents(h)
+        try h.mirrorPass()
+        try h.prune(files[0])
+        let first = try await h.scan(index: false)
+        #expect(first.filesRead == 3)
+        #expect(await h.ledger.totals(in: allTime) == expected)
+        // Under the parent session and its harness home, as when live.
+        let usage = await h.ledger.bySession(in: allTime, harness: "claude")
+        #expect(usage.map(\.sessionId) == [H.claudeID])
+        #expect(usage.map(\.accountHome) == [h.claudeHome.path])
+        let second = try await h.scan(index: false)
+        #expect(second.filesRead == 0)
+        #expect(second.eventsWritten == 0)
+        #expect(await h.ledger.totals(in: allTime) == expected)
+    }
+
+    @Test func subagentsScannedThenPrunedAreNotCountedTwice() async throws {
+        for long in [false, true] {
+            let h = try H()
+            let files = try sessionWithSubagents(h, long: long)
+            try await h.scan(index: false)
+            let before = await h.ledger.totals(in: allTime)
+            #expect(before.eventCount == (long ? 81 : 4))
+            try h.mirrorPass()
+            try h.prune(files[0])
+            try await h.scan(index: false)
+            #expect(await h.ledger.totals(in: allTime) == before)
+            try await h.scan(index: false)
+            #expect(await h.ledger.totals(in: allTime) == before)
+        }
+    }
+
+    @Test func aLiveSubagentsCopyIsNeverRead() async throws {
+        let expected = try await reference { try self.sessionWithSubagents($0) }
+        let h = try H()
+        let files = try sessionWithSubagents(h)
+        try h.mirrorPass()
+        // The copy holds an event of its own, which would count if read.
+        let copy = h.mirrorRoot.appending(path: "claude/-work-proj/\(H.claudeID)/subagents/agent-a2.jsonl")
+        try h.write(Self.sidechain(H.claudeLines(H.claudeID, ["extra"], start: 300, usage: true)),
+                    to: copy, append: true)
+        try FileManager.default.removeItem(at: files[0])
+        try await h.scan(index: false)
+        #expect(await h.ledger.totals(in: allTime) == expected)
+    }
+
+    @Test func aPrunedSubagentCopyIsNeverIndexed() async throws {
+        let h = try H()
+        let files = try sessionWithSubagents(h)
+        try await h.scan()
+        let live = try h.files().map(\.path)
+        #expect(live == [".claude/projects/-work-proj/\(H.claudeID).jsonl"])
+        try h.mirrorPass()
+        try h.prune(files[0])
+        try await h.scan()
+        #expect(try h.files().map(\.path) == live)
+        #expect(await h.ledger.totals(in: allTime).eventCount == 4)
+    }
 }
