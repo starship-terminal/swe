@@ -1,17 +1,18 @@
 {
   "schema": 1,
   "data": {
-    "window": "7d",
-    "since": 1794056463.767843,
-    "until": 1794661263.767843,
+    "window": "24h",
+    "since": 1794579714.489302,
+    "until": 1794666114.489302,
     "filters": {
-      "hook": "nothing",
+      "hook": null,
       "harness": null,
-      "repo": null
+      "repo": null,
+      "source": null
     },
     "sources": {
-      "helper": 16,
-      "transcript": 2,
+      "helper": 0,
+      "transcript": 0,
       "duplicates": 0,
       "backfill": true
     },
@@ -28,6 +29,7 @@
       "avg_duration_ms": null,
       "hooks": 0
     },
-    "hooks": []
+    "hooks": [],
+    "uncertain": []
   }
 }

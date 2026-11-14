@@ -715,73 +715,60 @@ class TestStatsAggregation(_StatsHome):
         self.assertEqual(len(reasons), 5)
 
 
-class TestStatsKeys(_HooksHome, unittest.TestCase):
-    """Which stats names a row's numbers come from (``stats_keys``)."""
-
-    def keys(self, name=None):
-        d = page.get(self.ctx, {})
-        return [(h["source_path"], h["stats_keys"]) for h in d["hooks"] if name in (None, h["name"])]
-
-    def foreign(self, rel, command):
-        path = self.home / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("#!/bin/sh\n")
-        return str(path), command
+class TestStatsJoin(_HooksHome, unittest.TestCase):
+    """A stats row names the list rows it belongs to (``source_paths``);
+    the list rows carry no names to guess with."""
 
     def declare(self, commands):
         _settings(self.home, ".claude/settings.json", {"Stop": [{"hooks": [
             {"type": "command", "command": c} for c in commands]}]})
 
-    def test_a_file_hook_is_its_stem(self):
-        _hook(self.home, "claude", "prose-guard.py")
-        self.assertEqual(self.keys("prose-guard.py")[0][1], ["prose-guard"])
+    def ran(self, command, ago):
+        project = self.home / ".claude" / "projects" / "-w-app"
+        project.mkdir(parents=True, exist_ok=True)
+        stamp = __import__("datetime").datetime.fromtimestamp(
+            __import__("time").time() - ago, __import__("datetime").timezone.utc)
+        line = json.dumps({"type": "attachment", "timestamp": stamp.isoformat(),
+                           "sessionId": f"s{ago}", "cwd": "/w/app", "attachment": {
+                               "type": "hook_success", "hookName": "Stop", "command": command,
+                               "exitCode": 0, "durationMs": 3, "stderr": ""}})
+        with (project / "s.jsonl").open("a") as handle:
+            handle.write(line + "\n")
 
-    def test_a_directory_hook_is_named_by_its_executable(self):
+    def test_list_rows_carry_no_stats_names(self):
+        _hook(self.home, "claude", "prose-guard.py")
+        rows = page.get(self.ctx, {})["hooks"]
+        self.assertNotIn("stats_keys", rows[0])
+        self.assertNotIn("stats_keys", page.get(self.ctx, {"hook": "prose-guard.py"}))
+
+    def test_a_directory_hook_joins_by_its_source(self):
         folder = self.home / ".swe/hooks/claude/bundle"
         folder.mkdir(parents=True)
         (folder / "guard.py").write_text("print(1)\n")
         dest = self.home / ".claude/hooks/bundle"
-        dest.parent.mkdir(parents=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.symlink_to(folder)
         self.declare([f'python3 "{dest}/guard.py"'])
-        rows = page.get(self.ctx, {})["hooks"]
-        bundle = next(h for h in rows if h["name"] == "bundle")
-        self.assertEqual(bundle["stats_keys"], ["guard"])
-
-    def test_a_directory_hook_with_an_extensionless_executable(self):
-        folder = self.home / ".swe/hooks/claude/bundle"
-        folder.mkdir(parents=True)
-        (folder / "guard").write_text("#!/bin/sh\n")
-        dest = self.home / ".claude/hooks/bundle"
-        dest.parent.mkdir(parents=True)
-        dest.symlink_to(folder)
-        self.declare([f"{dest}/guard"])
+        self.ran(f'python3 "{dest}/guard.py"', HOUR)
         bundle = next(h for h in page.get(self.ctx, {})["hooks"] if h["name"] == "bundle")
-        self.assertEqual(bundle["stats_keys"], ["guard"])
+        page._STATS.clear()
+        out = page.build_stats_payload(self.home, "7d")
+        (row,) = out["hooks"]
+        self.assertEqual(row["source_paths"], [bundle["source_path"]])
+        self.assertEqual((row["hook"], row["fires"]), ("bundle", 1))
 
     def test_same_basename_in_two_places_never_shares(self):
-        a, ca = self.foreign("plugins/a/on-stop.sh", None)
-        b, cb = self.foreign("plugins/b/on-stop.sh", None)
-        ga, _ = self.foreign("plugins/a/guard.sh", None)
-        gb, _ = self.foreign("plugins/b/guard.sh", None)
-        self.declare([a, b, ga, gb])
-        by_source = dict(self.keys())
-        self.assertEqual(by_source[a], ["a/on-stop"])
-        self.assertEqual(by_source[b], ["b/on-stop"])
-        # A non-generic basename logs as plain "guard" for both: neither may claim it.
-        self.assertEqual((by_source[ga], by_source[gb]), ([], []))
-
-    def test_a_variable_prefixed_name_matches_its_one_row(self):
-        src, _ = self.foreign(".claude/plugins/x/hooks/on-stop.sh", None)
-        self.declare([src, "${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh"])
-        rows = [h for h in page.get(self.ctx, {})["hooks"] if h["name"] == "on-stop.sh"]
-        self.assertEqual(len(rows), 1)
-        self.assertIn("claude-plugin/on-stop", rows[0]["stats_keys"])
-        self.assertIn("x/on-stop", rows[0]["stats_keys"])
-
-    def test_the_detail_carries_the_keys_too(self):
-        _hook(self.home, "claude", "prose-guard.py")
-        self.assertEqual(page.get(self.ctx, {"hook": "prose-guard.py"})["stats_keys"], ["prose-guard"])
+        a = self.home / "plugins/a/guard.sh"
+        b = self.home / "plugins/b/guard.sh"
+        for path in (a, b):
+            path.parent.mkdir(parents=True)
+            path.write_text("#!/bin/sh\n")
+        self.declare([f"bash {a}", f"bash {b}"])
+        self.ran(f"bash {a}", HOUR)
+        self.ran(f"bash {a}", 2 * HOUR)
+        out = page.build_stats_payload(self.home, "7d")
+        self.assertEqual([(r["source_paths"], r["fires"]) for r in out["hooks"]], [([str(a)], 2)])
+        self.assertEqual(out["uncertain"], [])
 
 
 class TestStatsRoute(HubBase):
@@ -839,19 +826,21 @@ const localStorage = { getItem: () => { if (stored === "throw") throw new Error(
     ROWS = """
 const row = (o) => Object.assign({ hook: "g", fires: 12, blocks: 3, warns: 1, errors: 0, block_rate: 0.25,
   last_block: 1000, top_reasons: [], recent: [] }, o);
-const ready = (rows) => ({ state: "ready", rows, at: Date.now() });
+const ready = (rows, uncertain = []) => ({ state: "ready", rows, uncertain: new Set(uncertain), at: Date.now() });
 """
 
-    def test_a_row_owns_a_stats_row_only_when_exactly_one_name_has_runs(self):
+    def test_a_row_joins_its_stats_row_by_source_path_only(self):
         out = self.run_js(self.ROWS + """
-const s = ready({ guard: row({ hook: "guard", fires: 4 }), "a/on-stop": row({ hook: "a/on-stop", fires: 2 }),
-  "claude-plugin/on-stop": row({ hook: "claude-plugin/on-stop", fires: 7 }) });
-const fires = (keys) => { const r = hkMatch(keys, s); return r ? r.fires : null; };
-process.stdout.write(JSON.stringify([fires(["guard"]), fires(["a/on-stop", "on-stop"]), fires(["claude-plugin/on-stop", "x/on-stop"]),
-  fires(["guard", "a/on-stop"]), fires(["b/on-stop"]), fires([]), fires(undefined), hkMatch(["guard"], { state: "loading", rows: {} })]));
+const s = ready({ "/h/a/guard.sh": row({ hook: "guard", fires: 4 }), "/h/b/guard.sh": row({ hook: "guard", fires: 2 }),
+  "/h/idle.py": row({ hook: "idle", fires: 0 }), "/h/maybe.sh": row({ hook: "maybe", fires: 9 }) }, ["/h/maybe.sh", "/h/c/guard.sh"]);
+const fires = (source) => { const r = hkMatch(source, s); return r ? r.fires : null; };
+process.stdout.write(JSON.stringify([fires("/h/a/guard.sh"), fires("/h/b/guard.sh"), fires("/h/c/guard.sh"),
+  fires("guard"), fires("/h/idle.py"), fires("/h/maybe.sh"), fires(""), fires(undefined),
+  hkMatch("/h/a/guard.sh", { state: "loading", rows: {} }), hkUncertain("/h/maybe.sh", s), hkUncertain("/h/a/guard.sh", s)]));
 """)
-        # one name present: its row; two present (ambiguous), none, no names: nothing.
-        self.assertEqual(out, [4, 2, 7, None, None, None, None, None])
+        # Each source its own row; a name, an unknown source, no runs, an
+        # uncertain source and a loading read: nothing.
+        self.assertEqual(out, [4, 2, None, None, None, None, None, None, None, True, False])
 
     def test_the_three_columns_per_state(self):
         out = self.run_js(self.ROWS + """
@@ -860,17 +849,20 @@ hooksPage.window = "7d";
 const w = hkWindow();
 const out = {};
 hooksPage.statsBy[w] = ready({ g: row({}), calm: row({ hook: "calm", fires: 5, blocks: 0, block_rate: 0 }),
-  tiny: row({ hook: "tiny", fires: 400, blocks: 1, block_rate: 0.0025 }), idle: row({ hook: "idle", fires: 0, blocks: 0 }) });
-out.busy = cells(hkNumsHtml(["g"]));
-out.calm = cells(hkNumsHtml(["calm"]));
-out.tiny = cells(hkNumsHtml(["tiny"]));
-out.idle = cells(hkNumsHtml(["idle"]));
-out.none = cells(hkNumsHtml(["never-ran"]));
+  tiny: row({ hook: "tiny", fires: 400, blocks: 1, block_rate: 0.0025 }), idle: row({ hook: "idle", fires: 0, blocks: 0 }),
+  maybe: row({ hook: "maybe" }) }, ["maybe"]);
+out.busy = cells(hkNumsHtml("g"));
+out.calm = cells(hkNumsHtml("calm"));
+out.tiny = cells(hkNumsHtml("tiny"));
+out.idle = cells(hkNumsHtml("idle"));
+out.none = cells(hkNumsHtml("never-ran"));
+out.maybe = cells(hkNumsHtml("maybe"));
+out.attr = /data-hk-source="g"/.test(hkNumsWrap("g"));
 hooksPage.statsBy[w] = { state: "error", rows: {}, at: 0 };
-out.error = cells(hkNumsHtml(["g"]));
+out.error = cells(hkNumsHtml("g"));
 hooksPage.statsBy[w] = { state: "loading", rows: {}, at: 0 };
-out.loading = hkNumsHtml(["g"]);
-out.sharedTrack = [(hkColsHeader().match(/class="hk-nums"/g) || []).length ? (hkColsHeader().match(/class="hk-num"/g) || []).length : 0, (hkNumsWrap(["g"]).match(/class="hk-num[ "]/g) || []).length];
+out.loading = hkNumsHtml("g");
+out.sharedTrack = [(hkColsHeader().match(/class="hk-nums"/g) || []).length ? (hkColsHeader().match(/class="hk-num"/g) || []).length : 0, (hkNumsWrap("g").match(/class="hk-num[ "]/g) || []).length];
 out.header = hkColsHeader().replace(/<[^>]+>/g, " ").trim().split(/\\s+/);
 process.stdout.write(JSON.stringify(out));
 """)
@@ -878,7 +870,9 @@ process.stdout.write(JSON.stringify(out));
         self.assertEqual(out["calm"], ["5|", "0|hk-zero", "0%|hk-zero"])
         self.assertEqual(out["tiny"], ["400|", "1|hk-bad", "&lt;1%|hk-bad"])
         dashes = ["–|hk-zero"] * 3
-        self.assertEqual((out["idle"], out["none"], out["error"]), (dashes, dashes, dashes))
+        self.assertEqual((out["idle"], out["none"], out["error"], out["maybe"]),
+                         (dashes, dashes, dashes, dashes))
+        self.assertTrue(out["attr"])
         # Loading keeps three cells too, each holding a placeholder.
         self.assertEqual(out["loading"].count('class="hk-num"'), 3)
         self.assertEqual(out["loading"].count("skel"), 3)
@@ -909,16 +903,18 @@ const runs = Array.from({ length: 7 }, (_, i) => ({ ts: 2000 - i, decision: i ? 
 hooksPage.statsBy["7d"] = ready({ g: row({ top_reasons: [
   { decision: "block", reason: "no em dash", count: 2 }, { decision: "warn", reason: "long reply", count: 1 },
   { decision: "error", reason: "boom", count: 4 }], recent: runs }) });
-out.full = text(hkDetailStatsInner(["g"]));
-out.recentRows = (hkDetailStatsInner(["g"]).match(/hk-line-row/g) || []).length;
-out.blocksBad = /hk-tile-value hk-bad">3</.test(hkDetailStatsInner(["g"]));
-out.noRuns = text(hkDetailStatsInner(["other"]));
+out.full = text(hkDetailStatsInner("g"));
+out.recentRows = (hkDetailStatsInner("g").match(/hk-line-row/g) || []).length;
+out.blocksBad = /hk-tile-value hk-bad">3</.test(hkDetailStatsInner("g"));
+out.noRuns = text(hkDetailStatsInner("other"));
 hooksPage.window = "24h"; hooksPage.statsBy["24h"] = ready({});
-out.noRuns24 = text(hkDetailStatsInner(["g"]));
+out.noRuns24 = text(hkDetailStatsInner("g"));
 hooksPage.statsBy["24h"] = ready({ g: row({ blocks: 0, last_block: null, block_rate: 0 }) });
-out.never = text(hkDetailStatsInner(["g"]));
+out.never = text(hkDetailStatsInner("g"));
+hooksPage.statsBy["24h"] = ready({ g: row({}) }, ["g"]);
+out.uncertain = text(hkDetailStatsInner("g"));
 hooksPage.statsBy["24h"] = { state: "error", rows: {}, at: 0 };
-out.error = text(hkDetailStatsInner(["g"]));
+out.error = text(hkDetailStatsInner("g"));
 process.stdout.write(JSON.stringify(out));
 """)
         full = out["full"]
@@ -933,6 +929,8 @@ process.stdout.write(JSON.stringify(out));
         self.assertNotIn("Top reasons", out["noRuns"])
         self.assertIn("No runs in the last 24 hours.", out["noRuns24"])
         self.assertIn("Last block|–", out["never"])
+        self.assertIn("can't tell which runs belong to this script", out["uncertain"])
+        self.assertNotIn("Fires", out["uncertain"])
         self.assertIn("not available", out["error"])
 
     def test_polling_waits_out_a_refresh_and_refresh_forces_a_read(self):
@@ -943,7 +941,7 @@ const document = { getElementById: () => null, querySelectorAll: () => [], activ
 const answers = [];
 const urls = [];
 const api = async (url) => { urls.push(url); return { status: 200, data: answers.shift() }; };
-const reply = (fires, extra) => Object.assign({ state: "ready", hooks: [row({ fires })] }, extra);
+const reply = (fires, extra) => Object.assign({ state: "ready", hooks: [row({ fires, source_paths: ["g"] })] }, extra);
 (async () => {
   const out = {};
   // The hub answers an old result marked refreshing, then the new one.

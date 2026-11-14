@@ -1,0 +1,250 @@
+{
+  "schema": 1,
+  "data": {
+    "hooks": [
+      {
+        "name": "bundle",
+        "harness": "claude",
+        "tier": "harness",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/bundle",
+        "dest_path": "/tmp/swe-fixture-home/.claude/hooks/bundle",
+        "link_status": "linked",
+        "detail": "",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          },
+          {
+            "event": "PreToolUse",
+            "matcher": "Bash",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      },
+      {
+        "name": "prose-guard.py",
+        "harness": "claude",
+        "tier": "harness",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/prose-guard.py",
+        "dest_path": "/tmp/swe-fixture-home/.claude/hooks/prose-guard.py",
+        "link_status": "linked",
+        "detail": "",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      },
+      {
+        "name": "notify.py",
+        "harness": "claude",
+        "tier": "shared",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py",
+        "dest_path": "/tmp/swe-fixture-home/.claude/hooks/_generated/notify.py",
+        "link_status": "linked",
+        "detail": "",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "Stop"
+        ],
+        "summary": "Say the turn is done."
+      },
+      {
+        "name": "notify.py",
+        "harness": "codex",
+        "tier": "shared",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py",
+        "dest_path": "/tmp/swe-fixture-home/.codex/hooks/_generated/notify.py",
+        "link_status": "create",
+        "detail": "",
+        "enabled": true,
+        "declared": [],
+        "events_supported": [
+          "Stop"
+        ],
+        "summary": "Say the turn is done."
+      },
+      {
+        "name": "notify.py",
+        "harness": "cursor",
+        "tier": "shared",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py",
+        "dest_path": "/tmp/swe-fixture-home/.cursor/hooks/_generated/notify.py",
+        "link_status": "create",
+        "detail": "",
+        "enabled": true,
+        "declared": [],
+        "events_supported": [
+          "Stop"
+        ],
+        "summary": "Say the turn is done."
+      },
+      {
+        "name": "notify.py",
+        "harness": "devin",
+        "tier": "shared",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py",
+        "dest_path": "/tmp/swe-fixture-home/.config/devin/hooks/_generated/notify.py",
+        "link_status": "create",
+        "detail": "",
+        "enabled": true,
+        "declared": [],
+        "events_supported": [
+          "Stop"
+        ],
+        "summary": "Say the turn is done."
+      },
+      {
+        "name": "notify.py",
+        "harness": "droid",
+        "tier": "shared",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py",
+        "dest_path": "/tmp/swe-fixture-home/.factory/hooks/_generated/notify.py",
+        "link_status": "create",
+        "detail": "",
+        "enabled": true,
+        "declared": [],
+        "events_supported": [
+          "Stop"
+        ],
+        "summary": "Say the turn is done."
+      },
+      {
+        "name": "notify.py",
+        "harness": "qwen-code",
+        "tier": "shared",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/shared/notify.py",
+        "dest_path": "/tmp/swe-fixture-home/.qwen/hooks/_generated/notify.py",
+        "link_status": "create",
+        "detail": "",
+        "enabled": true,
+        "declared": [],
+        "events_supported": [
+          "Stop"
+        ],
+        "summary": "Say the turn is done."
+      },
+      {
+        "name": "guard.sh",
+        "harness": "claude",
+        "tier": "foreign",
+        "source_path": "/tmp/swe-fixture-home/plugins/a/guard.sh",
+        "dest_path": "/tmp/swe-fixture-home/plugins/a/guard.sh",
+        "link_status": "foreign",
+        "detail": "declared in settings.json outside ~/.swe",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          },
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      },
+      {
+        "name": "guard.sh",
+        "harness": "claude",
+        "tier": "foreign",
+        "source_path": "/tmp/swe-fixture-home/plugins/b/guard.sh",
+        "dest_path": "/tmp/swe-fixture-home/plugins/b/guard.sh",
+        "link_status": "foreign",
+        "detail": "declared in settings.json outside ~/.swe",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          },
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      }
+    ]
+  }
+}

@@ -577,8 +577,11 @@ to use their own login state and environment."""
   {c('cyan', 'swe hooks stats [--since=7d] [--hook=<name>] [--harness=<h>] [--repo=<path>]')}
   {c('cyan', 'swe hooks log <name> [--since=7d] [--decision=block] [--limit=20]')}
   --since takes 90m, 24h, 7d, 2w or all. Both add {c('cyan', '--no-backfill')} to skip the
-  Claude transcripts, {c('cyan', '--sum-harnesses')} (stats) to fold every harness into one
-  row per hook, and {c('cyan', '--json')} for the machine-readable form.
+  Claude transcripts, {c('cyan', '--source=<path>')} to pick a hook by the source_path
+  {c('cyan', 'swe hooks list --json')} gives it instead of by name, {c('cyan', '--sum-harnesses')}
+  (stats) to fold every harness into one row per hook, and {c('cyan', '--json')} for
+  the machine-readable form. A run counts for the hook whose script ran; a
+  name two scripts share counts for neither.
   Each hook run is one line in {c('dim', '~/.swe/cache/hooks/events.jsonl')} (5 MB, one
   rotated copy; never committed or sent anywhere), written by the shared-hook
   shim: run {c('cyan', 'swe hooks sync')} once so it carries the logger. Only the first

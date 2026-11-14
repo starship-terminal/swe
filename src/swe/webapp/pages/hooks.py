@@ -31,7 +31,9 @@ the registry's aliases first. Everything else is a 404.
 window: ``swe hooks stats --json`` and ``swe hooks log --json`` read in
 process (``hooks/stats_commands.py::collect``), one row per hook script
 summed across harnesses, each with its top reasons and its five newest
-runs. The read can take seconds on a large transcript library (it
+runs. A row names the list rows it belongs to by their ``source_path``
+(``source_paths``), which ``hooks/identity.py`` works out once for every
+client, so the page joins on that and never on names. The read can take seconds on a large transcript library (it
 backfills from Claude Code's transcripts), so no request runs it: a
 background thread does, its answer is cached for ``STATS_TTL_S``, and a
 request that finds nothing ready answers ``{"state": "loading"}`` after
@@ -45,7 +47,6 @@ import threading
 import time
 from pathlib import Path
 
-from swe.hooks.stats_keys import stats_keys as _stats_keys
 from swe.webapp.pages import PageError, home_path
 from swe.webapp.pages.doctor import blocked_now
 from swe.webapp.pages.skills import _inside, read_text
@@ -105,11 +106,9 @@ def _inventory(home: Path):
     return all_rows(home, registry, statuses, declared), registry, patterns, warning
 
 
-def _row_json(r, keys: list[str] | None = None) -> dict:
-    """``commands._row_json`` plus the row's own ``detail`` note and the
-    stats names its run counts come from."""
+def _row_json(r) -> dict:
+    """``commands._row_json`` plus the row's own ``detail`` note."""
     return {
-        "stats_keys": keys or [],
         "name": r.script,
         "harness": r.harness,
         "tier": r.tier,
@@ -151,7 +150,7 @@ def listing(ctx, home: Path) -> dict:
     return {
         "machine": ctx.machine.get("name"),
         "home": str(home),
-        "hooks": [_row_json(r, k) for r, k in zip(rows, _stats_keys(rows, home))],
+        "hooks": [_row_json(r) for r in rows],
         "findings": findings,
         "check_error": check_error,
         "warning": warning,
@@ -182,7 +181,6 @@ def detail(ctx, home: Path, args: dict) -> dict:
         raise PageError(404, "unknown_hook",
                         f"No hook script named {args['hook']} under ~/.swe/hooks.")
     row = matches[0]
-    keys = {id(r): k for r, k in zip(rows, _stats_keys(rows, home))}[id(row)]
     source = Path(row.source)
     exists = source.exists()
     # A foreign hook's command can name any file on disk; a paired
@@ -191,7 +189,7 @@ def detail(ctx, home: Path, args: dict) -> dict:
     return {
         "machine": ctx.machine.get("name"),
         "home": str(home),
-        **_row_json(row, keys),
+        **_row_json(row),
         "declared": [{
             "event": d.event,
             "matcher": d.matcher,
@@ -370,31 +368,20 @@ def _stats_worker(key: tuple[str, str], home: Path, window: str) -> None:
 
 
 def build_stats_payload(home: Path, window: str, now: float | None = None) -> dict:
-    """What ``swe hooks stats --json`` and ``swe hooks log --json`` show
-    for ``window``, one row per hook script with the harnesses summed:
-    the counts, the top reasons and the newest runs of each."""
+    """What ``swe hooks stats --sum-harnesses --json`` and ``swe hooks log
+    --json`` show for ``window``, one row per hook script with the
+    harnesses summed: the counts, the top reasons and the newest runs of
+    each, plus the list rows it belongs to (``source_paths``)."""
     from swe.hooks import events as _events
     from swe.hooks import stats_commands as _stats
 
     now = time.time() if now is None else now
     since = _events.parse_since(window, now)
     data = _stats.collect(home, since, True, now)
-    events = data["events"]
-    # Blank the harness so build_stats folds each hook into one row.
-    merged = _events.build_stats([{**e, "harness": ""} for e in events])
-    harnesses: dict[str, set] = {}
-    newest: dict[str, list] = {}
-    for event in sorted(events, key=lambda e: e["ts"], reverse=True):
-        harnesses.setdefault(event["hook"], set()).add(event["harness"])
-        runs = newest.setdefault(event["hook"], [])
-        if len(runs) < RECENT_RUNS:
-            runs.append(_stats._event_json(event))
-    rows = []
-    for row in merged["hooks"]:
-        row = {k: v for k, v in row.items() if k != "harness"}
-        row["harnesses"] = sorted(h for h in harnesses.get(row["hook"], ()) if h)
-        row["recent"] = newest.get(row["hook"], [])
-        rows.append(row)
+    merged = _events.build_stats(data["events"], sum_harnesses=True,
+                                 recent=RECENT_RUNS)
+    rows = [{k: v for k, v in row.items() if k != "harness"}
+            for row in merged["hooks"]]
     return {
         "state": "ready",
         "window": window,
@@ -403,4 +390,5 @@ def build_stats_payload(home: Path, window: str, now: float | None = None) -> di
         "sources": data["sources"],
         "totals": merged["totals"],
         "hooks": rows,
+        "uncertain": merged["uncertain"],
     }

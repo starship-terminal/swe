@@ -117,7 +117,7 @@ struct HooksPage: View {
         let timeline = HookTimeline(harness: current, hooks: hooks, includeForeign: showForeign)
         let idle = HookTimeline.notRunning(in: hooks)
         let wide = boardWidth == 0 || boardWidth >= Self.sideBySideWidth
-        let counts = stats.state(for: statsWindow, scripts: HookStatsScript.scripts(for: hooks))
+        let counts = stats.state(for: statsWindow)
         return Group {
             if let opened, !wide {
                 panel(for: opened, in: hooks, counts: counts)
@@ -918,10 +918,11 @@ private struct HookRunsCard: View {
 
     private static let recentLimit = 5
 
-    /// The names swe's stats hold runs of this script under.
-    private var names: [String] {
-        guard case .ready(let table) = counts else { return [] }
-        return table.statsNames(for: source)
+    /// Whether the panel lists recent runs: swe answered, knows which runs
+    /// are this script's, and it ran.
+    private var wantsRecent: Bool {
+        guard case .ready(let table) = counts else { return false }
+        return !table.isUnknown(source) && table.counts(for: source).hasRuns
     }
 
     var body: some View {
@@ -934,7 +935,10 @@ private struct HookRunsCard: View {
             case .ready(let table):
                 let summed = table.counts(for: source)
                 Card(title: "Runs", subtitle: window.title) {
-                    if table.hasNoKeys(source) {
+                    if !table.identified {
+                        Text("This swe is too old to say which runs belong to this script.")
+                            .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                    } else if table.isUnknown(source) {
                         Text("swe can't tell which runs belong to this script.")
                             .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
                     } else if summed.hasRuns { readyBody(summed) } else {
@@ -947,14 +951,16 @@ private struct HookRunsCard: View {
         .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: counts)
         // The log is asked for again whenever the counts are: a new window,
         // a refresh, or the panel moving to another hook.
-        .task(id: RecentKey(names: names, window: window, answered: app.hookStats.completed)) {
-            guard !names.isEmpty else { return }
-            await app.hookStats.loadRecent(names: names, window: window, swe: app.swe, for: app.swePath)
+        .task(id: RecentKey(source: source, wanted: wantsRecent, window: window,
+                            answered: app.hookStats.completed)) {
+            guard wantsRecent else { return }
+            await app.hookStats.loadRecent(source: source, window: window, swe: app.swe, for: app.swePath)
         }
     }
 
     private struct RecentKey: Equatable {
-        var names: [String]
+        var source: String
+        var wanted: Bool
         var window: HookStatsWindow
         var answered: Int
     }
@@ -1005,8 +1011,8 @@ private struct HookRunsCard: View {
     }
 
     @ViewBuilder private var recentRuns: some View {
-        if !names.isEmpty {
-            let runs = app.hookStats.recentRuns(names: names, window: window)
+        if wantsRecent {
+            let runs = app.hookStats.recentRuns(source: source, window: window)
             if let runs, !runs.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     sectionLabel("Recent runs")
@@ -1022,7 +1028,7 @@ private struct HookRunsCard: View {
                         }
                     }
                 }
-            } else if runs == nil && app.hookStats.recentIsLoading(names: names, window: window) {
+            } else if runs == nil && app.hookStats.recentIsLoading(source: source, window: window) {
                 VStack(alignment: .leading, spacing: 6) {
                     sectionLabel("Recent runs")
                     ForEach(0..<3, id: \.self) { _ in SkeletonBlock(width: nil, height: 12, radius: 3) }

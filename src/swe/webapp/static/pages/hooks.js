@@ -19,8 +19,9 @@ const hooksPage = {
   running: null, confirming: false, actionError: null,
   newToken: 0,            // the New hook form on show; older replies are stale
   // Run stats: the chosen window, what each window last answered
-  // ({state: "loading"|"ready"|"error", rows: {stem: row}, at}), and a
-  // counter that drops the replies of an older ask.
+  // ({state: "loading"|"ready"|"error", rows: {source_path: row},
+  // uncertain: Set of source_path, at}), and a counter that drops the
+  // replies of an older ask.
   window: null, statsBy: {}, statsSeq: 0, forceStats: false,
 };
 
@@ -47,15 +48,19 @@ function hkWindow() {
 }
 const hkWindowSpan = () => (HK_WINDOWS.find((w) => w[0] === hkWindow()) || HK_WINDOWS[1])[2];
 
-/* The one stats row a hook's numbers come from: its row lists the names
- * its runs may be logged under (``stats_keys``, from the hub), and it owns
- * a row only when exactly one of them has runs. Anything else is
- * ambiguous and shows dashes, never another hook's numbers. */
-function hkMatch(keys, s) {
-  if (!s || s.state !== "ready") return null;
-  const found = (keys || []).map((k) => s.rows[k]).filter((r) => r && r.fires);
-  return found.length === 1 ? found[0] : null;
+/* The stats row a hook's numbers come from: the hub names the list rows
+ * each stats row belongs to (``source_paths``, worked out once by
+ * swe's hooks/identity.py), so the join is the list row's
+ * ``source_path`` and nothing else. A source the hub marks uncertain (a
+ * run it could not tell from another hook's) shows dashes, never a
+ * count that may be short or someone else's. */
+function hkMatch(source, s) {
+  if (!s || s.state !== "ready" || !source) return null;
+  if (s.uncertain && s.uncertain.has(source)) return null;
+  const row = s.rows[source];
+  return row && row.fires ? row : null;
 }
+const hkUncertain = (source, s) => !!(s && s.state === "ready" && s.uncertain && s.uncertain.has(source));
 
 // The app's "link" and "plus" glyphs, and the lock note's.
 const HK_LINK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/></svg>';
@@ -272,7 +277,7 @@ function hooksSkeleton() {
     <span class="hk-title">${Sk.bar(120 - (i % 3) * 20, 13)}${Sk.pill(52)}${i % 2 ? Sk.pill(62) : ""}</span>
     ${Sk.bar(`${52 - (i % 4) * 9}%`, 11)}
     ${i % 2 ? `<span class="hk-badges">${Sk.pill(56)}${Sk.pill(72)}</span>` : ""}
-  </span>${hkNumsWrap([], "loading")}<span class="hk-chevron">${Sk.bar(8, 16)}</span></div>`;
+  </span>${hkNumsWrap("", "loading")}<span class="hk-chevron">${Sk.bar(8, 16)}</span></div>`;
   const group = (n, off) => `<div class="card hk-group"><div class="hk-group-head">${Sk.bar(16, 16)}${Sk.bar(96 + off * 20, 14)}
     <span class="caption">${Sk.bar(52, 11)}</span></div>
     <div class="hk-rows">${hkColsHeader()}${Array.from({ length: n }, (_, i) => row(i + off)).join("")}</div></div>`;
@@ -294,7 +299,7 @@ function hkRow(h) {
       ${h.detail ? `<span class="caption">${esc(h.detail)}</span>` : ""}
       ${declared || events ? `<span class="hk-badges">${declared}${events}</span>` : ""}
     </span>
-    ${hkNumsWrap(h.stats_keys)}
+    ${hkNumsWrap(h.source_path)}
     <span class="hk-chevron" aria-hidden="true">›</span></a>`;
 }
 
@@ -362,7 +367,7 @@ function paintHookDetail(d) {
         ${declared ? `<div class="hk-decls"><span class="caption">Declared in</span>${declared}</div>` : ""}
         ${events}
       </div>
-      ${hkDetailStats(d.stats_keys)}
+      ${hkDetailStats(d.source_path)}
       ${doc}
     </div></div>`;
   bindHooksHeader();
@@ -378,7 +383,7 @@ const hkCount = (n) => Number(n || 0).toLocaleString("en-US");
 const hkStats = () => hooksPage.statsBy[hkWindow()];
 
 /* One hook's row in the current window, or undefined with no runs. */
-const hkStatRow = (keys) => hkMatch(keys, hkStats());
+const hkStatRow = (source) => hkMatch(source, hkStats());
 
 /* Ask for the current window. A window answered under HK_STATS_FRESH_MS
  * ago is reused; an older one stays on screen while its refresh runs.
@@ -393,7 +398,7 @@ async function hooksLoadStats() {
     return;
   }
   if (!have || have.state !== "ready") {
-    p.statsBy[w] = { state: "loading", rows: {}, at: 0 };
+    p.statsBy[w] = { state: "loading", rows: {}, uncertain: new Set(), at: 0 };
     hkPaintStats(false);
   }
   for (let tries = 0; tries < 60; tries++) {
@@ -402,31 +407,32 @@ async function hooksLoadStats() {
     if (mine !== p.statsSeq || !hooksOnRoute()) return;
     if (status === 200 && data && data.state === "ready") {
       const rows = {};
-      for (const r of data.hooks || []) rows[r.hook] = r;
+      for (const r of data.hooks || []) for (const sp of r.source_paths || []) rows[sp] = r;
+      const uncertain = new Set(data.uncertain || []);
       // An answer with a newer read behind it shows, but is not fresh.
-      p.statsBy[w] = { state: "ready", rows, at: data.refreshing ? 0 : Date.now() };
+      p.statsBy[w] = { state: "ready", rows, uncertain, at: data.refreshing ? 0 : Date.now() };
       hkPaintStats(true);
       if (!data.refreshing) return;
     } else if (!(status === 200 && data && data.state === "loading")) {
-      if (!have || have.state !== "ready") p.statsBy[w] = { state: "error", rows: {}, at: Date.now() };
+      if (!have || have.state !== "ready") p.statsBy[w] = { state: "error", rows: {}, uncertain: new Set(), at: Date.now() };
       hkPaintStats(true);
       return;
     }
     await hkDelay(HK_POLL_MS);
     if (mine !== p.statsSeq || !hooksOnRoute()) return;
   }
-  if (!p.statsBy[w] || p.statsBy[w].state !== "ready") p.statsBy[w] = { state: "error", rows: {}, at: Date.now() };
+  if (!p.statsBy[w] || p.statsBy[w].state !== "ready") p.statsBy[w] = { state: "error", rows: {}, uncertain: new Set(), at: Date.now() };
   hkPaintStats(true);
 }
 
 /* The number columns of one row. Loading, error and no runs hold their
  * three cells at the same width, so nothing moves when the numbers land. */
-function hkNumsHtml(keys, forced) {
+function hkNumsHtml(source, forced) {
   const s = forced ? { state: forced } : hkStats();
   const cell = (inner, cls = "") => `<span class="hk-num${cls ? ` ${cls}` : ""}">${inner}</span>`;
   const dash = cell(HK_DASH, "hk-zero");
   if (!s || s.state === "loading") return cell(Sk.num(22)) + cell(Sk.num(22)) + cell(Sk.num(24));
-  const row = hkMatch(keys, s);
+  const row = hkMatch(source, s);
   if (!row) return dash + dash + dash;
   const pct = Math.round(row.block_rate * 100);
   const rate = row.blocks ? (pct < 1 ? "&lt;1%" : `${pct}%`) : "0%";
@@ -435,17 +441,17 @@ function hkNumsHtml(keys, forced) {
     + cell(rate, row.blocks ? "hk-bad" : "hk-zero");
 }
 
-function hkNumsTitle(keys) {
-  const row = hkStatRow(keys);
+function hkNumsTitle(source) {
+  const row = hkStatRow(source);
   if (!row) return "";
   return `${hkCount(row.fires)} ${row.fires === 1 ? "run" : "runs"}, ${hkCount(row.blocks)} ${row.blocks === 1 ? "block" : "blocks"} in the last ${hkWindowSpan()}`;
 }
 
-function hkNumsWrap(keys, forced) {
+function hkNumsWrap(source, forced) {
   // A forced state is the list's own skeleton: nothing to patch later.
-  if (forced) return `<span class="hk-nums">${hkNumsHtml(keys, forced)}</span>`;
-  const title = hkNumsTitle(keys);
-  return `<span class="hk-nums" data-hk-keys="${esc(JSON.stringify(keys || []))}"${title ? ` title="${esc(title)}"` : ""}>${hkNumsHtml(keys)}</span>`;
+  if (forced) return `<span class="hk-nums">${hkNumsHtml(source, forced)}</span>`;
+  const title = hkNumsTitle(source);
+  return `<span class="hk-nums" data-hk-source="${esc(source || "")}"${title ? ` title="${esc(title)}"` : ""}>${hkNumsHtml(source)}</span>`;
 }
 
 /* The column labels over each card's rows. The spacer matches the
@@ -492,9 +498,9 @@ function bindHkWindow() {
 function hkPaintStats(animate) {
   const note = document.getElementById("hk-stats-note");
   if (note) note.textContent = hkStatsNote();
-  for (const box of document.querySelectorAll(".hk-nums[data-hk-keys]")) {
-    const keys = JSON.parse(box.dataset.hkKeys), title = hkNumsTitle(keys);
-    box.innerHTML = hkNumsHtml(keys);
+  for (const box of document.querySelectorAll(".hk-nums[data-hk-source]")) {
+    const source = box.dataset.hkSource, title = hkNumsTitle(source);
+    box.innerHTML = hkNumsHtml(source);
     if (title) box.title = title; else box.removeAttribute("title");
     hkFade(box, animate);
   }
@@ -502,7 +508,7 @@ function hkPaintStats(animate) {
   if (card) {
     // The picker is replaced with the rest: keep the keyboard on it.
     const focused = card.contains(document.activeElement);
-    card.innerHTML = hkDetailStatsInner(JSON.parse(card.dataset.hkKeys));
+    card.innerHTML = hkDetailStatsInner(card.dataset.hkSource);
     hkFade(card, animate);
     bindHkWindow();
     if (focused) card.querySelector(".hk-window").focus();
@@ -533,7 +539,7 @@ function hkTile(label, value, cls = "") {
     <span class="hk-tile-value${cls ? ` ${cls}` : ""}">${value}</span></div>`;
 }
 
-function hkDetailStatsInner(keys) {
+function hkDetailStatsInner(source) {
   const s = hkStats();
   const head = `<div class="hk-stats-head"><div class="card-title">Runs</div>${hkWindowSelect()}</div>`;
   if (!s || s.state === "loading") {
@@ -543,7 +549,10 @@ function hkDetailStatsInner(keys) {
     return `${head}<div class="hk-tiles">${hkTile("Fires", HK_DASH, "hk-zero")}${hkTile("Blocks", HK_DASH, "hk-zero")}${hkTile("Last block", HK_DASH, "hk-zero")}</div>
       <p class="caption">Run counts are not available right now.</p>`;
   }
-  const row = hkMatch(keys, s);
+  if (hkUncertain(source, s)) {
+    return `${head}<p class="caption hk-none">swe can't tell which runs belong to this script.</p>`;
+  }
+  const row = hkMatch(source, s);
   if (!row) {
     return `${head}<p class="caption hk-none">No runs in the last ${hkWindowSpan()}.</p>`;
   }
@@ -565,8 +574,8 @@ function hkDetailStatsInner(keys) {
 }
 
 /* The detail page's card: the same numbers as the list's row, opened up. */
-function hkDetailStats(keys) {
-  return `<div class="card hk-stats-card" id="hk-detail-stats" data-hk-keys="${esc(JSON.stringify(keys || []))}">${hkDetailStatsInner(keys)}</div>`;
+function hkDetailStats(source) {
+  return `<div class="card hk-stats-card" id="hk-detail-stats" data-hk-source="${esc(source || "")}">${hkDetailStatsInner(source)}</div>`;
 }
 
 /* ---------------------------------------------------------------- writes */

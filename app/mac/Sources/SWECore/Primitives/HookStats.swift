@@ -2,10 +2,15 @@ import Foundation
 import Observation
 
 // What each hook did: the counts the Hooks page shows beside every script
-// and in its side panel. They come from `swe hooks stats --json` (one row
-// per hook and harness) and `swe hooks log <name> --json` (the latest runs),
-// shipped in the CLI half of #1888; see docs/json-contracts.md, "`swe hooks
-// stats` shape".
+// and in its side panel. They come from `swe hooks stats --sum-harnesses
+// --json` (one row per hook) and `swe hooks log --source=<path> --json` (the
+// latest runs); see docs/json-contracts.md, "`swe hooks stats` shape".
+//
+// Which runs are which script's is swe's call, made once for every client
+// (src/swe/hooks/identity.py): each stats row lists the `source_path` of
+// the `swe hooks list` rows it belongs to, and `uncertain` the ones a run
+// could belong to but swe cannot tell. The app joins on that path and
+// nothing else: no names, no stems, no folder scans.
 
 /// The span the Hooks page counts runs over, and the `--since` it asks swe for.
 public enum HookStatsWindow: String, CaseIterable, Sendable, Identifiable {
@@ -69,12 +74,20 @@ public struct HookReason: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// One row of `swe hooks stats --json`'s `hooks`: a hook on a harness.
+/// One row of `swe hooks stats --json`'s `hooks`: a hook (on a harness, or
+/// on all of them under `--sum-harnesses`).
 public struct HookStatsRow: Decodable, Sendable, Equatable {
-    /// The script name without its extension, `prose-guard`; a hook another
-    /// installer declared can carry a folder, `claude-plugin/on-stop`.
+    /// The list's name for the script without its extension, `prose-guard`
+    /// or `bundle`; for runs no listed script owns, the name they ran under.
+    /// Shown, never matched on.
     public let hook: String
     public let harness: String
+    /// The `source_path` of every `swe hooks list` row these runs belong to:
+    /// the join. Empty when no listed script owns them.
+    public let sourcePaths: [String]
+    /// Whether swe sent `source_paths` at all: one from before it did gives
+    /// the app nothing to join on.
+    public let identified: Bool
     public let fires: Int
     public let blocks: Int
     public let warns: Int
@@ -83,11 +96,13 @@ public struct HookStatsRow: Decodable, Sendable, Equatable {
     public let lastBlock: Date?
     public let topReasons: [HookReason]
 
-    public init(hook: String, harness: String, fires: Int = 0, blocks: Int = 0,
-                warns: Int = 0, errors: Int = 0, allows: Int = 0,
-                lastBlock: Date? = nil, topReasons: [HookReason] = []) {
+    public init(hook: String, harness: String = "", sourcePaths: [String] = [],
+                fires: Int = 0, blocks: Int = 0, warns: Int = 0, errors: Int = 0,
+                allows: Int = 0, lastBlock: Date? = nil, topReasons: [HookReason] = []) {
         self.hook = hook
         self.harness = harness
+        self.sourcePaths = sourcePaths
+        self.identified = true
         self.fires = fires
         self.blocks = blocks
         self.warns = warns
@@ -98,13 +113,15 @@ public struct HookStatsRow: Decodable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case hook, harness, fires, blocks, warns, errors, allows, lastBlock, topReasons
+        case hook, harness, sourcePaths, fires, blocks, warns, errors, allows, lastBlock, topReasons
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         hook = try c.decode(String.self, forKey: .hook)
         harness = try c.decodeIfPresent(String.self, forKey: .harness) ?? ""
+        identified = c.contains(.sourcePaths)
+        sourcePaths = try c.decodeIfPresent([String].self, forKey: .sourcePaths) ?? []
         fires = try c.decodeIfPresent(Int.self, forKey: .fires) ?? 0
         blocks = try c.decodeIfPresent(Int.self, forKey: .blocks) ?? 0
         warns = try c.decodeIfPresent(Int.self, forKey: .warns) ?? 0
@@ -121,20 +138,30 @@ public struct HookStatsRow: Decodable, Sendable, Equatable {
 public struct HookStatsReport: Decodable, Sendable, Equatable {
     public let window: String
     public let hooks: [HookStatsRow]
+    /// The `source_path` of every script a run could belong to that swe
+    /// could not tell from another's: their counts may be short, so the
+    /// page shows dashes for them.
+    public let uncertain: Set<String>
 
-    public init(window: String, hooks: [HookStatsRow]) {
+    public init(window: String, hooks: [HookStatsRow], uncertain: Set<String> = []) {
         self.window = window
         self.hooks = hooks
+        self.uncertain = uncertain
     }
 
-    enum CodingKeys: String, CodingKey { case window, hooks }
+    enum CodingKeys: String, CodingKey { case window, hooks, uncertain }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         window = try c.decodeIfPresent(String.self, forKey: .window) ?? ""
         // One bad row degrades instead of failing every count.
         hooks = try c.decode([LossyRow<HookStatsRow>].self, forKey: .hooks).compactMap(\.value)
+        uncertain = Set(try c.decodeIfPresent([String].self, forKey: .uncertain) ?? [])
     }
+
+    /// Whether the rows say which scripts they belong to. An swe from
+    /// before `source_paths` does not, and then no count is any script's.
+    public var identified: Bool { hooks.allSatisfy(\.identified) }
 }
 
 /// One run from `swe hooks log <name> --json`.
@@ -192,7 +219,7 @@ public struct HookRunEvent: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// `swe hooks log <name> --json`: the newest runs first.
+/// `swe hooks log --source=<path> --json`: the newest runs first.
 public struct HookLogReport: Decodable, Sendable, Equatable {
     public let hook: String
     public let events: [HookRunEvent]
@@ -213,8 +240,9 @@ public struct HookLogReport: Decodable, Sendable, Equatable {
     }
 }
 
-/// What one script did in the window, summed over every row that names it
-/// (the same shared script runs on several harnesses).
+/// What one script did in the window: its one `--sum-harnesses` row, every
+/// harness and every name its runs were logged under already folded in by
+/// swe, before it capped the reasons at five. The app adds nothing up.
 public struct HookCounts: Sendable, Equatable {
     public let fires: Int
     public let blocks: Int
@@ -222,37 +250,19 @@ public struct HookCounts: Sendable, Equatable {
     public let errors: Int
     /// The newest block in the window, nil when there was none.
     public let lastBlock: Date?
-    /// The reasons that did not allow, most first, at most `reasonLimit`.
+    /// The reasons that did not allow, most first, as swe ranked them.
     public let topReasons: [HookReason]
 
     public static let reasonLimit = 5
-    public static let none = HookCounts(rows: [])
+    public static let none = HookCounts(row: nil)
 
-    public init(rows: [HookStatsRow]) {
-        fires = rows.reduce(0) { $0 + $1.fires }
-        blocks = rows.reduce(0) { $0 + $1.blocks }
-        warns = rows.reduce(0) { $0 + $1.warns }
-        errors = rows.reduce(0) { $0 + $1.errors }
-        lastBlock = rows.compactMap(\.lastBlock).max()
-        var merged: [String: HookReason] = [:]
-        var order: [String] = []
-        for reason in rows.flatMap(\.topReasons) {
-            if let seen = merged[reason.id] {
-                merged[reason.id] = HookReason(decision: seen.decision, reason: seen.reason,
-                                               count: seen.count + reason.count)
-            } else {
-                merged[reason.id] = reason
-                order.append(reason.id)
-            }
-        }
-        // Count first; ties keep the order swe gave them in.
-        topReasons = Array(order.enumerated()
-            .sorted { a, b in
-                let ca = merged[a.element]?.count ?? 0, cb = merged[b.element]?.count ?? 0
-                return ca != cb ? ca > cb : a.offset < b.offset
-            }
-            .compactMap { merged[$0.element] }
-            .prefix(Self.reasonLimit))
+    public init(row: HookStatsRow?) {
+        fires = row?.fires ?? 0
+        blocks = row?.blocks ?? 0
+        warns = row?.warns ?? 0
+        errors = row?.errors ?? 0
+        lastBlock = row?.lastBlock
+        topReasons = Array((row?.topReasons ?? []).prefix(Self.reasonLimit))
     }
 
     public var hasRuns: Bool { fires > 0 }
@@ -270,52 +280,6 @@ public struct HookCounts: Sendable, Equatable {
     }
 }
 
-/// One script on the page, for matching: `id` is its source file or
-/// folder (two scripts with one basename in different places are two), and
-/// `keys` the `hook` names its runs are logged under, which swe works out
-/// (`stats_keys` on the inventory row). A directory hook is listed by its
-/// folder (`bundle`) while its runs carry its executable's stem (`guard`),
-/// so the list name alone would find nothing.
-public struct HookStatsScript: Sendable, Equatable {
-    public let id: String
-    public let keys: [String]
-
-    public init(id: String, keys: [String]) {
-        self.id = id
-        self.keys = keys
-    }
-
-    /// One entry per distinct source: a shared script is a row per harness
-    /// it deploys to, all with the one source. A row from an swe that sends
-    /// no `stats_keys` falls back to its file stem.
-    public static func scripts(for hooks: [Hook]) -> [HookStatsScript] {
-        var seen: Set<String> = []
-        var out: [HookStatsScript] = []
-        for hook in hooks where seen.insert(hook.source).inserted {
-            out.append(HookStatsScript(id: hook.source,
-                                       keys: hook.statsKeys ?? [HookStatsNames.stem(hook.script)]))
-        }
-        return out
-    }
-}
-
-/// The script names swe's stats use drop the file extension.
-public enum HookStatsNames {
-    /// The extensions swe's `hook_stem` drops.
-    static let extensions = [".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs",
-                             ".ts", ".rb", ".pl"]
-
-    /// `prose-guard` for `prose-guard.py`; folders stay: `a/b.py` is `a/b`.
-    public static func stem(_ name: String) -> String {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        let lowered = trimmed.lowercased()
-        for ext in extensions where lowered.hasSuffix(ext) && trimmed.count > ext.count {
-            return String(trimmed.dropLast(ext.count))
-        }
-        return trimmed
-    }
-}
-
 /// What a row's number columns show.
 public enum HookStatsCells: Sendable, Equatable {
     /// swe has not answered yet: skeleton bars.
@@ -325,47 +289,43 @@ public enum HookStatsCells: Sendable, Equatable {
     case counts(HookCounts)
 }
 
-/// The report for one window, ready to answer for any script on the page.
-/// A script's rows are the stats rows named by its keys, summed.
+/// The report for one window, ready to answer for any script on the page
+/// by its `Hook.source`.
 public struct HookStatsTable: Sendable, Equatable {
-    private let counts: [String: HookCounts]
-    private let names: [String: [String]]
-    private let keyless: Set<String>
+    private let rows: [String: HookStatsRow]
+    private let uncertain: Set<String>
+    /// False for an swe that sends no `source_paths`: then nothing joins.
+    public let identified: Bool
 
-    /// - Parameters:
-    ///   - report: `swe hooks stats --json`.
-    ///   - scripts: every script on the page, each with the keys swe gave it.
-    public init(report: HookStatsReport, scripts: [HookStatsScript]) {
-        var byName: [String: [HookStatsRow]] = [:]
-        for row in report.hooks { byName[row.hook, default: []].append(row) }
-        var counts: [String: HookCounts] = [:]
-        var names: [String: [String]] = [:]
-        var keyless: Set<String> = []
-        for script in scripts {
-            if script.keys.isEmpty { keyless.insert(script.id); continue }
-            let found = Set(script.keys).filter { byName[$0] != nil }.sorted()
-            names[script.id] = found
-            counts[script.id] = HookCounts(rows: found.flatMap { byName[$0] ?? [] })
+    /// - Parameter report: `swe hooks stats --sum-harnesses --json`.
+    public init(report: HookStatsReport) {
+        var rows: [String: HookStatsRow] = [:]
+        for row in report.hooks {
+            // swe gives each script one row; a second would be a contract
+            // break, and taking the first keeps the page from adding up
+            // numbers swe did not.
+            for path in row.sourcePaths where rows[path] == nil { rows[path] = row }
         }
-        self.counts = counts
-        self.names = names
-        self.keyless = keyless
+        self.rows = rows
+        self.uncertain = report.uncertain
+        self.identified = report.identified
     }
 
-    /// The script's counts, summed over its keys and harnesses; zeros when
-    /// nothing was logged under them.
-    public func counts(for id: String) -> HookCounts {
-        counts[id] ?? .none
+    /// The script's counts; zeros when no run was its own.
+    /// - Parameter source: `Hook.source`, the list row's `source_path`.
+    public func counts(for source: String) -> HookCounts {
+        HookCounts(row: rows[source])
     }
 
-    /// The stats names with runs for the script, for `swe hooks log`.
-    public func statsNames(for id: String) -> [String] {
-        names[id] ?? []
+    /// swe saw a run that may be this script's and could not tell, or it
+    /// cannot say whose runs are whose at all: the numbers are not known.
+    public func isUnknown(_ source: String) -> Bool {
+        !identified || uncertain.contains(source)
     }
 
-    /// swe could name no log name for the script, so no count is its own.
-    public func hasNoKeys(_ id: String) -> Bool {
-        keyless.contains(id)
+    /// What the script's number columns show.
+    public func cells(for source: String) -> HookStatsCells {
+        isUnknown(source) ? .dashes : .counts(counts(for: source))
     }
 }
 
@@ -375,12 +335,12 @@ public enum HookStatsState: Sendable, Equatable {
     case unavailable
     case ready(HookStatsTable)
 
-    /// - Parameter id: the script's source, `Hook.source`.
-    public func cells(for id: String) -> HookStatsCells {
+    /// - Parameter source: the script's source, `Hook.source`.
+    public func cells(for source: String) -> HookStatsCells {
         switch self {
         case .loading: .loading
         case .unavailable: .dashes
-        case .ready(let table): table.hasNoKeys(id) ? .dashes : .counts(table.counts(for: id))
+        case .ready(let table): table.cells(for: source)
         }
     }
 }
@@ -404,9 +364,12 @@ extension SweClient {
         try await call(["hooks", "stats", "--since=\(window.since)", "--sum-harnesses", "--json"])
     }
 
-    /// `swe hooks log <name> --since=<window> --limit=<n> --json`, newest first.
-    public func hooksLog(name: String, window: HookStatsWindow, limit: Int = 5) async throws -> HookLogReport {
-        try await call(["hooks", "log", name, "--since=\(window.since)", "--limit=\(limit)", "--json"])
+    /// `swe hooks log --source=<path> --since=<window> --limit=<n> --json`:
+    /// the newest runs of the script whose list row has that `source_path`,
+    /// every name and harness included.
+    public func hooksLog(source: String, window: HookStatsWindow, limit: Int = 5) async throws -> HookLogReport {
+        try await call(["hooks", "log", "--source=\(source)", "--since=\(window.since)",
+                        "--limit=\(limit)", "--json"])
     }
 }
 
@@ -434,9 +397,9 @@ public final class HookStatsModel {
     public init() {}
 
     /// The answer for `window`, as the counts see it: bars until the first
-    /// answer, dashes if it failed, otherwise the table for `scripts`.
-    public func state(for window: HookStatsWindow, scripts: [HookStatsScript]) -> HookStatsState {
-        if let report = reports[window] { return .ready(HookStatsTable(report: report, scripts: scripts)) }
+    /// answer, dashes if it failed, otherwise the table.
+    public func state(for window: HookStatsWindow) -> HookStatsState {
+        if let report = reports[window] { return .ready(HookStatsTable(report: report)) }
         return failed.contains(window) ? .unavailable : .loading
     }
 
@@ -459,44 +422,39 @@ public final class HookStatsModel {
         completed += 1
     }
 
-    /// The newest runs across `names` in `window`: nil until the first
-    /// answer or when swe could not give them.
-    public func recentRuns(names: [String], window: HookStatsWindow) -> [HookRunEvent]? {
-        recent[Self.recentKey(names, window)]
+    /// The newest runs of the script at `source` in `window`: nil until the
+    /// first answer or when swe could not give them.
+    public func recentRuns(source: String, window: HookStatsWindow) -> [HookRunEvent]? {
+        recent[Self.recentKey(source, window)]
     }
 
     /// Whether a run list is still on its way (no answer and no failure).
-    public func recentIsLoading(names: [String], window: HookStatsWindow) -> Bool {
-        let key = Self.recentKey(names, window)
+    public func recentIsLoading(source: String, window: HookStatsWindow) -> Bool {
+        let key = Self.recentKey(source, window)
         return recent[key] == nil && !recentFailed.contains(key)
     }
 
-    /// Runs `swe hooks log` for each of the panel's names, then keeps the
-    /// newest five of all of them together: a directory hook's scripts
-    /// are logged apart, and the latest block can be any of them.
-    public func loadRecent(names: [String], window: HookStatsWindow, swe: SweClient,
-                           for source: String, limit: Int = 5) async {
-        reset(ifNot: source)
-        let key = Self.recentKey(names, window)
+    /// Runs `swe hooks log --source=` for the panel's script: one ask, since
+    /// swe already gathers a directory hook's executables and a script's
+    /// every name under its source.
+    public func loadRecent(source: String, window: HookStatsWindow, swe: SweClient,
+                           for sweSource: String, limit: Int = 5) async {
+        reset(ifNot: sweSource)
+        let key = Self.recentKey(source, window)
         let ticket = issue(key)
         recentFailed.remove(key)
         do {
-            var merged: [HookRunEvent] = []
-            for name in names {
-                merged += try await swe.hooksLog(name: name, window: window, limit: limit).events
-            }
-            guard accept(key, ticket, source) else { return }
-            var newest = Array(merged.sorted { $0.ts > $1.ts }.prefix(limit))
-            for index in newest.indices { newest[index].ordinal = index }
-            recent[key] = newest
+            let log = try await swe.hooksLog(source: source, window: window, limit: limit)
+            guard accept(key, ticket, sweSource) else { return }
+            recent[key] = Array(log.events.prefix(limit))
         } catch {
-            guard accept(key, ticket, source) else { return }
+            guard accept(key, ticket, sweSource) else { return }
             if recent[key] == nil { recentFailed.insert(key) }
         }
     }
 
-    private static func recentKey(_ names: [String], _ window: HookStatsWindow) -> String {
-        "\(window.rawValue)|\(names.joined(separator: "\u{1f}"))"
+    private static func recentKey(_ source: String, _ window: HookStatsWindow) -> String {
+        "\(window.rawValue)|\(source)"
     }
 
     private func issue(_ key: String) -> Int {

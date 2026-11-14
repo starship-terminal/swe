@@ -2,93 +2,114 @@ import Foundation
 import Testing
 @testable import SWECore
 
-/// `swe hooks stats --json` and `swe hooks log <name> --json`, captured from
-/// the real command against a throwaway HOME holding 18 made-up runs (see
-/// swe-hooks-stats*.json and swe-hooks-log.json in Fixtures): prose-guard on
-/// Claude (6 runs, 2 blocks) and Codex (3 runs, 1 block), no-sleep-poll
-/// (4 runs, 4 blocks), command_guard (3 runs, no blocks) and
-/// claude-plugin/on-stop (2 runs from a Claude transcript, 1 error).
+/// `swe hooks stats --json`, `swe hooks list --json` and `swe hooks log
+/// --source=<path> --json`, captured from the real commands against a
+/// throwaway HOME (see swe-hooks-identity-list.json, swe-hooks-stats*.json
+/// and swe-hooks-log.json in Fixtures). The home holds a file hook
+/// (prose-guard.py: 6 runs, 2 blocks), a directory hook (bundle: check.py on
+/// PreToolUse and scripts/on-stop.sh on Stop, 5 runs, 2 blocks, plus an
+/// undeclared lib/util.py), a shared hook deployed to six harnesses
+/// (notify.py: 3 Claude runs logged by the shim and again in the transcript,
+/// 2 Codex runs, 1 block), two foreign files with one basename
+/// (plugins/a/guard.sh with 2 runs, plugins/b/guard.sh with none) and an old
+/// Codex log line named `guard` that could be either, and a
+/// `${CLAUDE_PLUGIN_ROOT}` run no listed script owns.
 @MainActor
 @Suite struct HookStatsTests {
+    private static let home = "/tmp/swe-fixture-home"
+    private static let bundle = "\(home)/.swe/hooks/claude/bundle"
+    private static let prose = "\(home)/.swe/hooks/claude/prose-guard.py"
+    private static let notify = "\(home)/.swe/hooks/shared/notify.py"
+    private static let guardA = "\(home)/plugins/a/guard.sh"
+    private static let guardB = "\(home)/plugins/b/guard.sh"
+
     private func client(_ name: String) throws -> (SweClient, FakeRunner) {
         let runner = FakeRunner(.init(status: 0, stdout: try fixture(name), stderr: ""))
         return (SweClient(runner: runner), runner)
     }
 
+    private func client(json: String) -> SweClient {
+        SweClient(runner: FakeRunner(.init(status: 0, stdout: Data(json.utf8), stderr: "")))
+    }
+
     private func report() async throws -> HookStatsReport {
-        try await client("swe-hooks-stats").0.hooksStats(window: .week)
+        try await client("swe-hooks-stats-summed").0.hooksStats(window: .week)
     }
 
-    /// Scripts whose id is their name and whose key is that name's stem, as
-    /// a file hook's `stats_keys` reads, for tests that do not care about paths.
-    private func S(_ names: String...) -> [HookStatsScript] {
-        names.map { HookStatsScript(id: $0, keys: [HookStatsNames.stem($0)]) }
+    private func table() async throws -> HookStatsTable {
+        HookStatsTable(report: try await report())
     }
 
-    /// The real `swe hooks list --json` of a hub with two directory hooks and
-    /// a file hook (swe-hooks-directory.json), each row carrying `stats_keys`.
+    /// The real `swe hooks list --json` of the same home.
     private func inventory() async throws -> [Hook] {
-        try await client("swe-hooks-directory").0.hooksList().hooks
+        try await client("swe-hooks-identity-list").0.hooksList().hooks
     }
 
-    private func stats(_ rows: [HookStatsRow]) -> HookStatsReport {
-        HookStatsReport(window: "7d", hooks: rows)
+    private func counts(_ cells: HookStatsCells) -> HookCounts? {
+        if case .counts(let counts) = cells { return counts }
+        return nil
     }
 
     // MARK: decoding
 
-    @Test func decodesTheStatsRowsAndAsksForTheWindow() async throws {
-        let (swe, runner) = try client("swe-hooks-stats")
+    @Test func decodesTheSummedRowsAndAsksForTheWindow() async throws {
+        let (swe, runner) = try client("swe-hooks-stats-summed")
         let report = try await swe.hooksStats(window: .month)
         #expect(runner.calls.last == ["hooks", "stats", "--since=30d", "--sum-harnesses", "--json"])
         #expect(report.window == "7d")
-        #expect(report.hooks.count == 5)
-        let claude = try #require(report.hooks.first { $0.hook == "prose-guard" && $0.harness == "claude" })
-        #expect(claude.fires == 6)
-        #expect(claude.blocks == 2)
-        #expect(claude.warns == 1)
-        #expect(claude.allows == 3)
-        #expect(claude.lastBlock != nil)
-        #expect(claude.topReasons.first == HookReason(
+        #expect(report.identified)
+        #expect(report.hooks.count == 6)
+        #expect(Set(report.hooks.map(\.harness)) == [""])
+        let prose = try #require(report.hooks.first { $0.sourcePaths == [Self.prose] })
+        #expect((prose.hook, prose.fires, prose.blocks, prose.warns, prose.allows) == ("prose-guard", 6, 2, 1, 3))
+        #expect(prose.lastBlock != nil)
+        #expect(prose.topReasons.first == HookReason(
             decision: "block", reason: "done-followups: missing Follow-ups", count: 2))
+        #expect(report.uncertain == [Self.guardA, Self.guardB])
     }
 
-    @Test func aHookThatNeverBlockedHasNoLastBlock() async throws {
-        let guardRow = try #require(try await report().hooks.first { $0.hook == "command_guard" })
-        #expect(guardRow.blocks == 0)
-        #expect(guardRow.lastBlock == nil)
-        #expect(guardRow.topReasons.isEmpty)
+    @Test func thePerHarnessReportCarriesTheJoinToo() async throws {
+        let report = try await client("swe-hooks-stats").0.hooksStats(window: .week)
+        let notify = report.hooks.filter { $0.sourcePaths == [Self.notify] }
+        #expect(Set(notify.map(\.harness)) == ["claude", "codex"])
+        #expect(notify.map(\.fires).reduce(0, +) == 5)
+    }
+
+    @Test func runsNoListedScriptOwnsHaveNoSource() async throws {
+        let loose = try await report().hooks.filter(\.sourcePaths.isEmpty)
+        #expect(Set(loose.map(\.hook)) == ["claude-plugin/on-stop", "guard"])
+        #expect(loose.allSatisfy { $0.identified })
     }
 
     @Test func anEmptyWindowDecodesToNoRows() async throws {
         let empty = try await client("swe-hooks-stats-empty").0.hooksStats(window: .day)
         #expect(empty.hooks.isEmpty)
+        #expect(empty.uncertain.isEmpty)
+        #expect(empty.identified)
     }
 
     @Test func oneBadRowDoesNotLoseTheRest() async throws {
-        let json = #"""
+        let decoded = try await client(json: #"""
         {"schema": 1, "data": {"window": "7d", "hooks": [
-          {"hook": "a", "harness": "claude", "fires": 3, "blocks": 1},
+          {"hook": "a", "harness": "", "source_paths": ["/a.py"], "fires": 3, "blocks": 1},
           {"harness": "claude", "fires": "many"},
-          {"hook": "b", "harness": "claude", "fires": 2, "future_field": [1, 2]}]}}
-        """#
-        let swe = SweClient(runner: FakeRunner(.init(status: 0, stdout: Data(json.utf8), stderr: "")))
-        let decoded = try await swe.hooksStats(window: .week)
+          {"hook": "b", "harness": "", "source_paths": [], "fires": 2, "future_field": [1, 2]}]}}
+        """#).hooksStats(window: .week)
         #expect(decoded.hooks.map(\.hook) == ["a", "b"])
+        #expect(decoded.identified)
     }
 
-    @Test func decodesTheRecentRuns() async throws {
+    @Test func decodesTheRecentRunsOfOneSource() async throws {
         let (swe, runner) = try client("swe-hooks-log")
-        let log = try await swe.hooksLog(name: "prose-guard", window: .week)
-        #expect(runner.calls.last == ["hooks", "log", "prose-guard", "--since=7d", "--limit=5", "--json"])
-        #expect(log.hook == "prose-guard")
+        let log = try await swe.hooksLog(source: Self.bundle, window: .week)
+        #expect(runner.calls.last == ["hooks", "log", "--source=\(Self.bundle)", "--since=7d", "--limit=5", "--json"])
+        #expect(log.hook == "bundle")
         #expect(log.events.count == 5)
+        // Both of the folder's executables, newest first: the Stop block
+        // half an hour ago leads the PreToolUse runs.
+        #expect(Set(log.events.map(\.hook)) == ["bundle/on-stop", "check"])
         let first = try #require(log.events.first)
-        #expect(first.decision == "allow")
-        #expect(first.project == "alpha")
-        #expect(first.gitBranch == "main")
-        #expect(first.summary == "Allow · alpha · main")
-        // Newest first.
+        #expect(first.summary == "Block · alpha · main")
         #expect(log.events.map(\.ts) == log.events.map(\.ts).sorted(by: >))
     }
 
@@ -103,55 +124,106 @@ import Testing
                              gitBranch: "").summary == "Allow")
     }
 
-    // MARK: summing across harnesses
-
-    @Test func sumsARowAcrossHarnesses() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: S("prose-guard.py"))
-        let counts = table.counts(for: "prose-guard.py")
-        #expect(counts.fires == 9)
-        #expect(counts.blocks == 3)
-        #expect(counts.warns == 1)
-        #expect(counts.errors == 0)
-        #expect(counts.rateLabel == "33%")
+    @Test func runsAtOneTimestampKeepDistinctIds() async throws {
+        // Parallel tool calls one hook blocked share the record's timestamp.
+        let log = try await client(json: #"""
+        {"schema": 1, "data": {"hook": "x", "window": "7d", "since": 0, "matched": 3, "events": [
+          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block"},
+          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block"},
+          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block", "repo": null}]}}
+        """#).hooksLog(source: "/x.py", window: .week)
+        #expect(log.events.count == 3)
+        #expect(Set(log.events.map(\.id)).count == 3)
     }
 
-    @Test func mergesReasonsAcrossHarnessesMostFirst() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: S("prose-guard.py"))
-        // Ties keep the order swe gave them in (Claude's row first).
-        let reasons = table.counts(for: "prose-guard.py").topReasons
-        #expect(reasons.map(\.reason) == ["done-followups: missing Follow-ups", "long paragraph", "em dash found"])
-        #expect(reasons.map(\.count) == [2, 1, 1])
-        #expect(reasons.map(\.countLabel) == ["2 blocks", "1 warn", "1 block"])
+    // MARK: joining list rows to stats rows
+
+    @Test func everyListRowJoinsByItsSourcePath() async throws {
+        let hooks = try await inventory()
+        let table = try await table()
+        func fires(_ source: String) -> Int? { counts(table.cells(for: source))?.fires }
+        // A directory hook is listed by its folder and counts both of its
+        // declared executables; the helper nothing declares adds nothing.
+        let bundle = try #require(hooks.first { $0.script == "bundle" })
+        #expect(bundle.source == Self.bundle)
+        #expect(fires(bundle.source) == 5)
+        #expect(table.counts(for: bundle.source).blocks == 2)
+        #expect(fires(Self.prose) == 6)
+        // The shared script's six harness rows share one source and so the
+        // one row: the shim's Claude runs and the transcript's copies of
+        // them count once, Codex's are added by swe.
+        let notify = hooks.filter { $0.script == "notify.py" }
+        #expect(notify.count == 6)
+        #expect(Set(notify.map { fires($0.source) }) == [5])
+        #expect(table.counts(for: Self.notify).blocks == 1)
     }
 
-    @Test func theLastBlockIsTheNewestAcrossHarnesses() {
-        let early = Date(timeIntervalSince1970: 100), late = Date(timeIntervalSince1970: 900)
-        let counts = HookCounts(rows: [
-            HookStatsRow(hook: "x", harness: "claude", fires: 1, blocks: 1, lastBlock: early),
-            HookStatsRow(hook: "x", harness: "codex", fires: 1, blocks: 1, lastBlock: late),
-            HookStatsRow(hook: "x", harness: "gemini", fires: 1)])
-        #expect(counts.lastBlock == late)
+    @Test func aDirectoryHooksReasonsComeRankedFromSwe() async throws {
+        let reasons = try await table().counts(for: Self.bundle).topReasons
+        #expect(Set(reasons.map(\.reason)) == ["no force push", "stop-rule: tests not run"])
+        #expect(reasons.allSatisfy { $0.count == 1 && $0.decision == "block" })
     }
 
-    @Test func atMostFiveReasonsKeepTheBiggest() {
-        let reasons = (1...8).map { HookReason(decision: "block", reason: "r\($0)", count: $0) }
-        let counts = HookCounts(rows: [HookStatsRow(hook: "x", harness: "claude", topReasons: reasons)])
-        #expect(counts.topReasons.map(\.reason) == ["r8", "r7", "r6", "r5", "r4"])
+    @Test func twoFilesWithOneBasenameNeverShareAndADoubtShowsDashes() async throws {
+        let hooks = try await inventory()
+        let guards = hooks.filter { $0.script == "guard.sh" }
+        #expect(Set(guards.map(\.source)) == [Self.guardA, Self.guardB])
+        let table = try await table()
+        // a ran twice, b never did, and an old Codex line named `guard`
+        // could be either: swe gives it to neither and marks both.
+        #expect(table.cells(for: Self.guardA) == .dashes)
+        #expect(table.cells(for: Self.guardB) == .dashes)
+        #expect(table.isUnknown(Self.guardA))
+        // Without the doubt, a's own runs and b's none.
+        let sure = HookStatsReport(window: "7d", hooks: try await report().hooks)
+        #expect(HookStatsTable(report: sure).counts(for: Self.guardA).fires == 2)
+        #expect(!HookStatsTable(report: sure).counts(for: Self.guardB).hasRuns)
     }
 
-    @Test func rowsOfOneNameButDifferentHarnessesDoNotLeakIntoOthers() async throws {
-        let table = HookStatsTable(report: try await report(),
-                                   scripts: S("prose-guard.py", "no-sleep-poll.py"))
-        #expect(table.counts(for: "no-sleep-poll.py").fires == 4)
-        #expect(table.counts(for: "no-sleep-poll.py").blocks == 4)
-        #expect(table.counts(for: "no-sleep-poll.py").rateLabel == "100%")
+    @Test func aScriptWithNoRunsOfItsOwnReadsZero() async throws {
+        let table = try await table()
+        let cells = table.cells(for: "\(Self.home)/.swe/hooks/claude/quiet.py")
+        let quiet = try #require(counts(cells))
+        #expect(!quiet.hasRuns)
+        #expect(quiet.rateLabel == "-")
+        #expect(quiet.blockPercent == nil)
+    }
+
+    @Test func namesAreNeverMatched() {
+        // A row whose name is a script's but which names no source (runs no
+        // listed script owns), and one that belongs to another source.
+        let table = HookStatsTable(report: HookStatsReport(window: "7d", hooks: [
+            HookStatsRow(hook: "bundle", fires: 9),
+            HookStatsRow(hook: "prose-guard", sourcePaths: ["/elsewhere/prose-guard.py"], fires: 4)]))
+        #expect(!table.counts(for: Self.bundle).hasRuns)
+        #expect(!table.counts(for: Self.prose).hasRuns)
+        #expect(table.counts(for: "/elsewhere/prose-guard.py").fires == 4)
+    }
+
+    @Test func aSecondRowForOneSourceIsNotAddedUp() {
+        let table = HookStatsTable(report: HookStatsReport(window: "7d", hooks: [
+            HookStatsRow(hook: "x", sourcePaths: ["/x.py"], fires: 3),
+            HookStatsRow(hook: "x", sourcePaths: ["/x.py"], fires: 4)]))
+        #expect(table.counts(for: "/x.py").fires == 3)
+    }
+
+    @Test func anSweWithoutSourcePathsShowsDashesForEveryScript() async throws {
+        // The shape `swe hooks stats` had before the join: rows by name only.
+        let old = try await client(json: #"""
+        {"schema": 1, "data": {"window": "7d", "hooks": [
+          {"hook": "prose-guard", "harness": "", "fires": 6, "blocks": 2}]}}
+        """#).hooksStats(window: .week)
+        #expect(!old.identified)
+        let table = HookStatsTable(report: old)
+        #expect(table.cells(for: Self.prose) == .dashes)
+        #expect(table.isUnknown(Self.prose))
     }
 
     // MARK: rate
 
     @Test func rateReadsAsAWholePercentOrADash() {
         func rate(fires: Int, blocks: Int) -> String {
-            HookCounts(rows: [HookStatsRow(hook: "x", harness: "c", fires: fires, blocks: blocks)]).rateLabel
+            HookCounts(row: HookStatsRow(hook: "x", fires: fires, blocks: blocks)).rateLabel
         }
         #expect(rate(fires: 5, blocks: 0) == "0%")
         #expect(rate(fires: 3, blocks: 1) == "33%")
@@ -163,138 +235,11 @@ import Testing
         #expect(rate(fires: 3, blocks: 2) == "67%")
     }
 
-    @Test func aHookWithNoRowsHasNoRuns() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: S("quiet.py"))
-        let counts = table.counts(for: "quiet.py")
-        #expect(!counts.hasRuns)
-        #expect(counts.rateLabel == "-")
-        #expect(counts.blockPercent == nil)
-        #expect(table.statsNames(for: "quiet.py").isEmpty)
-    }
-
-    // MARK: matching by the keys swe gives
-
-    @Test func theInventoryCarriesTheKeysItsRunsAreLoggedUnder() async throws {
-        let hooks = try await inventory()
-        // A directory hook is listed by its folder, its runs carry the executable.
-        #expect(hooks.map(\.script) == ["bundle", "multi", "prose-guard.py"])
-        #expect(hooks.map(\.statsKeys) == [["guard"], ["check", "scan"], ["prose-guard"]])
-    }
-
-    @Test func aDirectoryHookCountsTheRunsOfItsExecutable() async throws {
-        let hooks = try await inventory()
-        let bundle = try #require(hooks.first { $0.script == "bundle" })
-        let table = HookStatsTable(report: stats([
-            HookStatsRow(hook: "guard", harness: "", fires: 7, blocks: 2),
-            // A helper inside the folder that nothing declares is no key, so
-            // another hook of that name does not leak in.
-            HookStatsRow(hook: "util", harness: "", fires: 50),
-            HookStatsRow(hook: "bundle", harness: "", fires: 9)]),
-            scripts: HookStatsScript.scripts(for: hooks))
-        #expect(table.counts(for: bundle.source).fires == 7)
-        #expect(table.counts(for: bundle.source).blocks == 2)
-        #expect(table.statsNames(for: bundle.source) == ["guard"])
-    }
-
-    @Test func severalKeysAreSummedAndTheirReasonsMergedBeforeTheCap() async throws {
-        let hooks = try await inventory()
-        let multi = try #require(hooks.first { $0.script == "multi" })
-        let table = HookStatsTable(report: stats([
-            HookStatsRow(hook: "check", harness: "", fires: 5, blocks: 3,
-                         lastBlock: Date(timeIntervalSince1970: 100),
-                         topReasons: [HookReason(decision: "block", reason: "shared", count: 3)]),
-            HookStatsRow(hook: "scan", harness: "", fires: 4, blocks: 4,
-                         lastBlock: Date(timeIntervalSince1970: 900),
-                         topReasons: [HookReason(decision: "block", reason: "shared", count: 2)]
-                            + (1...4).map { HookReason(decision: "block", reason: "own-\($0)", count: 1) }
-                            + [HookReason(decision: "warn", reason: "extra", count: 1)])]),
-            scripts: HookStatsScript.scripts(for: hooks))
-        let counts = table.counts(for: multi.source)
-        #expect((counts.fires, counts.blocks) == (9, 7))
-        #expect(counts.lastBlock == Date(timeIntervalSince1970: 900))
-        #expect(counts.topReasons.count == 5)
-        #expect(counts.topReasons.first == HookReason(decision: "block", reason: "shared", count: 5))
-        #expect(table.statsNames(for: multi.source) == ["check", "scan"])
-    }
-
-    @Test func aPrefixedKeyFindsItsRunsInTheRealStats() async throws {
-        // `${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh`: swe gives the row the key
-        // the transcript logged it under.
-        let script = HookStatsScript(id: "/p/on-stop.sh", keys: ["claude-plugin/on-stop"])
-        let table = HookStatsTable(report: try await report(), scripts: [script])
-        #expect(table.counts(for: "/p/on-stop.sh").fires == 2)
-        #expect(table.counts(for: "/p/on-stop.sh").errors == 1)
-    }
-
-    @Test func aRowWithNoKeysShowsDashesNeverAnotherHooksNumbers() async throws {
-        // Two files with one basename: swe gives neither the shared name.
-        let scripts = [HookStatsScript(id: "/a/guard.sh", keys: []), HookStatsScript(id: "/b/guard.sh", keys: [])]
-        let state = HookStatsState.ready(HookStatsTable(report: try await report(), scripts: scripts))
-        #expect(state.cells(for: "/a/guard.sh") == .dashes)
-        #expect(state.cells(for: "/b/guard.sh") == .dashes)
-    }
-
-    @Test func aKeyedRowWithNoRunsReadsZero() async throws {
-        let script = HookStatsScript(id: "/q.py", keys: ["quiet"])
-        let state = HookStatsState.ready(HookStatsTable(report: try await report(), scripts: [script]))
-        guard case .counts(let counts) = state.cells(for: "/q.py") else { Issue.record("expected counts"); return }
-        #expect(!counts.hasRuns)
-    }
-
-    @Test func anSweWithNoKeysFallsBackToTheFileStem() async throws {
-        // The older list fixture has no stats_keys.
-        let hooks = try await client("swe-hooks").0.hooksList().hooks
-        let guard_ = try #require(hooks.first { $0.script == "prose-guard.py" })
-        #expect(guard_.statsKeys == nil)
-        let scripts = HookStatsScript.scripts(for: hooks)
-        #expect(scripts.first { $0.id == guard_.source }?.keys == ["prose-guard"])
-        let table = HookStatsTable(report: try await report(), scripts: scripts)
-        #expect(table.counts(for: guard_.source).fires == 9)
-    }
-
-    @Test func theSameSharedSourceOnTwoHarnessesIsOneScript() {
-        let hooks = [
-            Hook(script: "notify.sh", harness: "claude", source: "/h/.swe/hooks/shared/notify.sh",
-                 destination: "/h/.claude/hooks/notify.sh", state: .linked, statsKeys: ["notify"]),
-            Hook(script: "notify.sh", harness: "codex", source: "/h/.swe/hooks/shared/notify.sh",
-                 destination: "/h/.codex/hooks/notify.sh", state: .linked, statsKeys: ["notify"])]
-        #expect(HookStatsScript.scripts(for: hooks).count == 1)
-    }
-
-    @Test func anExtensionIsDroppedForTheFallbackKey() {
-        #expect(HookStatsNames.stem("prose-guard.py") == "prose-guard")
-        #expect(HookStatsNames.stem("session-start.sh") == "session-start")
-        #expect(HookStatsNames.stem("claude-hook.JS") == "claude-hook")
-        #expect(HookStatsNames.stem("README") == "README")
-        #expect(HookStatsNames.stem(".py") == ".py")
-    }
-
-    // MARK: exact totals and identities
-
-    @Test func theSummedReportHasOneRowPerHookWithNoHarness() async throws {
-        let (swe, runner) = try client("swe-hooks-stats-summed")
-        let report = try await swe.hooksStats(window: .week)
-        #expect(runner.calls.last == ["hooks", "stats", "--since=7d", "--sum-harnesses", "--json"])
-        #expect(report.hooks.map(\.harness) == ["", "", "", ""])
-        let prose = try #require(report.hooks.first { $0.hook == "prose-guard" })
-        // Claude's 6 runs and Codex's 3, folded by swe before it cut the reasons.
-        #expect((prose.fires, prose.blocks) == (9, 3))
-        let counts = HookStatsTable(report: report, scripts: S("prose-guard.py")).counts(for: "prose-guard.py")
-        #expect(counts.topReasons.first?.count == 2)
-    }
-
-    @Test func runsAtOneTimestampKeepDistinctIds() async throws {
-        // Parallel tool calls one hook blocked share the record's timestamp.
-        let json = #"""
-        {"schema": 1, "data": {"hook": "x", "window": "7d", "since": 0, "matched": 3, "events": [
-          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block"},
-          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block"},
-          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block", "repo": null}]}}
-        """#
-        let swe = SweClient(runner: FakeRunner(.init(status: 0, stdout: Data(json.utf8), stderr: "")))
-        let log = try await swe.hooksLog(name: "x", window: .week)
-        #expect(log.events.count == 3)
-        #expect(Set(log.events.map(\.id)).count == 3)
+    @Test func atMostFiveReasonsAreKept() {
+        let reasons = (1...8).map { HookReason(decision: "block", reason: "r\($0)", count: 9 - $0) }
+        let counts = HookCounts(row: HookStatsRow(hook: "x", topReasons: reasons))
+        #expect(counts.topReasons.map(\.reason) == ["r1", "r2", "r3", "r4", "r5"])
+        #expect(HookCounts.none == HookCounts(row: nil))
     }
 
     // MARK: window mapping
@@ -322,21 +267,21 @@ import Testing
 
     private func runner(stats: CommandResult? = nil, log: CommandResult? = nil) throws -> ScriptedRunner {
         ScriptedRunner([
-            (["hooks", "stats"], try stats ?? .init(status: 0, stdout: fixture("swe-hooks-stats"), stderr: "")),
+            (["hooks", "stats"], try stats ?? .init(status: 0, stdout: fixture("swe-hooks-stats-summed"), stderr: "")),
             (["hooks", "log"], try log ?? .init(status: 0, stdout: fixture("swe-hooks-log"), stderr: "")),
         ])
     }
 
     @Test func theModelShowsBarsThenNumbers() async throws {
         let model = HookStatsModel()
-        #expect(model.state(for: .week, scripts: S("prose-guard.py")) == .loading)
+        #expect(model.state(for: .week) == .loading)
         await model.load(window: .week, swe: SweClient(runner: try runner()), for: "/bin/swe")
-        guard case .ready(let table) = model.state(for: .week, scripts: S("prose-guard.py")) else {
+        guard case .ready(let table) = model.state(for: .week) else {
             Issue.record("expected numbers"); return
         }
-        #expect(table.counts(for: "prose-guard.py").fires == 9)
+        #expect(table.counts(for: Self.prose).fires == 6)
         // Another window has not been asked for yet.
-        #expect(model.state(for: .month, scripts: S("prose-guard.py")) == .loading)
+        #expect(model.state(for: .month) == .loading)
         #expect(model.completed == 1)
     }
 
@@ -344,7 +289,7 @@ import Testing
         let model = HookStatsModel()
         let old = CommandResult(status: 1, stdout: Data(), stderr: "Unknown command: 'stats'")
         await model.load(window: .week, swe: SweClient(runner: try runner(stats: old)), for: "/bin/swe")
-        #expect(model.state(for: .week, scripts: S("x.py")) == .unavailable)
+        #expect(model.state(for: .week) == .unavailable)
         #expect(HookStatsState.unavailable.cells(for: "x.py") == .dashes)
         #expect(HookStatsState.loading.cells(for: "x.py") == .loading)
     }
@@ -354,7 +299,7 @@ import Testing
         await model.load(window: .week, swe: SweClient(runner: try runner()), for: "/bin/swe")
         let down = CommandResult(status: 1, stdout: Data(), stderr: "boom")
         await model.load(window: .week, swe: SweClient(runner: try runner(stats: down)), for: "/bin/swe")
-        guard case .ready = model.state(for: .week, scripts: S()) else {
+        guard case .ready = model.state(for: .week) else {
             Issue.record("the numbers should stay"); return
         }
     }
@@ -364,45 +309,31 @@ import Testing
         await model.load(window: .week, swe: SweClient(runner: try runner()), for: "/bin/swe")
         let down = CommandResult(status: 1, stdout: Data(), stderr: "boom")
         await model.load(window: .week, swe: SweClient(runner: try runner(stats: down)), for: "/other/swe")
-        #expect(model.state(for: .week, scripts: S()) == .unavailable)
+        #expect(model.state(for: .week) == .unavailable)
     }
 
-    @Test func recentRunsLoadPerHookAndWindow() async throws {
+    @Test func recentRunsLoadPerSourceAndWindowInOneAsk() async throws {
         let model = HookStatsModel()
-        let swe = SweClient(runner: try runner())
-        #expect(model.recentIsLoading(names: ["prose-guard"], window: .week))
-        await model.loadRecent(names: ["prose-guard"], window: .week, swe: swe, for: "/bin/swe")
-        #expect(model.recentRuns(names: ["prose-guard"], window: .week)?.count == 5)
-        #expect(model.recentRuns(names: ["prose-guard"], window: .day) == nil)
-        #expect(!model.recentIsLoading(names: ["prose-guard"], window: .week))
-    }
-
-    @Test func recentRunsMergeEveryKeyNewestFive() async throws {
-        func log(_ hook: String, _ times: [Int]) -> CommandResult {
-            let events = times.map {
-                #"{"ts": \#($0), "hook": "\#(hook)", "harness": "claude", "decision": "block"}"#
-            }.joined(separator: ",")
-            return .init(status: 0, stdout: Data(
-                #"{"schema": 1, "data": {"hook": "\#(hook)", "events": [\#(events)]}}"#.utf8), stderr: "")
-        }
-        // `guard` ran often yesterday; `check` blocked just now.
-        let runner = ScriptedRunner([
-            (["hooks", "log", "guard"], log("guard", [500, 400, 300, 200, 100])),
-            (["hooks", "log", "check"], log("check", [900, 800]))])
-        let model = HookStatsModel()
-        await model.loadRecent(names: ["check", "guard"], window: .week,
-                               swe: SweClient(runner: runner), for: "/bin/swe")
-        let runs = try #require(model.recentRuns(names: ["check", "guard"], window: .week))
-        #expect(runs.map { Int($0.ts.timeIntervalSince1970) } == [900, 800, 500, 400, 300])
+        let runner = try runner()
+        let swe = SweClient(runner: runner)
+        #expect(model.recentIsLoading(source: Self.bundle, window: .week))
+        await model.loadRecent(source: Self.bundle, window: .week, swe: swe, for: "/bin/swe")
+        let runs = try #require(model.recentRuns(source: Self.bundle, window: .week))
+        #expect(runs.count == 5)
         #expect(Set(runs.map(\.id)).count == 5)
+        #expect(model.recentRuns(source: Self.bundle, window: .day) == nil)
+        #expect(model.recentRuns(source: Self.prose, window: .week) == nil)
+        #expect(!model.recentIsLoading(source: Self.bundle, window: .week))
+        #expect(runner.calls.filter { $0.starts(with: ["hooks", "log"]) }
+                == [["hooks", "log", "--source=\(Self.bundle)", "--since=7d", "--limit=5", "--json"]])
     }
 
     @Test func aFailedLogLeavesTheListOut() async throws {
         let model = HookStatsModel()
         let down = CommandResult(status: 1, stdout: Data(), stderr: "boom")
-        await model.loadRecent(names: ["prose-guard"], window: .week,
+        await model.loadRecent(source: Self.prose, window: .week,
                                swe: SweClient(runner: try runner(log: down)), for: "/bin/swe")
-        #expect(model.recentRuns(names: ["prose-guard"], window: .week) == nil)
-        #expect(!model.recentIsLoading(names: ["prose-guard"], window: .week))
+        #expect(model.recentRuns(source: Self.prose, window: .week) == nil)
+        #expect(!model.recentIsLoading(source: Self.prose, window: .week))
     }
 }
