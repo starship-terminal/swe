@@ -19,9 +19,20 @@ import Testing
         try await client("swe-hooks-stats").0.hooksStats(window: .week)
     }
 
-    /// Scripts whose id is their name, for tests that do not care about paths.
+    /// Scripts whose id is their name and whose key is that name's stem, as
+    /// a file hook's `stats_keys` reads, for tests that do not care about paths.
     private func S(_ names: String...) -> [HookStatsScript] {
-        names.map { HookStatsScript(id: $0, names: [$0]) }
+        names.map { HookStatsScript(id: $0, keys: [HookStatsNames.stem($0)]) }
+    }
+
+    /// The real `swe hooks list --json` of a hub with two directory hooks and
+    /// a file hook (swe-hooks-directory.json), each row carrying `stats_keys`.
+    private func inventory() async throws -> [Hook] {
+        try await client("swe-hooks-directory").0.hooksList().hooks
+    }
+
+    private func stats(_ rows: [HookStatsRow]) -> HookStatsReport {
+        HookStatsReport(window: "7d", hooks: rows)
     }
 
     // MARK: decoding
@@ -158,158 +169,104 @@ import Testing
         #expect(!counts.hasRuns)
         #expect(counts.rateLabel == "-")
         #expect(counts.blockPercent == nil)
-        #expect(table.statsName(for: "quiet.py") == nil)
+        #expect(table.statsNames(for: "quiet.py").isEmpty)
     }
 
-    // MARK: name matching
+    // MARK: matching by the keys swe gives
 
-    @Test func anExtensionIsDroppedFromTheFinalComponent() {
-        #expect(HookStatsNames.stem("prose-guard.py") == "prose-guard")
-        #expect(HookStatsNames.stem("session-start.sh") == "session-start")
-        #expect(HookStatsNames.stem("claude-hook.JS") == "claude-hook")
-        #expect(HookStatsNames.stem("command-guard/command_guard.py") == "command-guard/command_guard")
-        #expect(HookStatsNames.stem("README") == "README")
-        #expect(HookStatsNames.stem(".py") == ".py")
-        #expect(HookStatsNames.lastComponent("claude-plugin/on-stop") == "on-stop")
-        #expect(HookStatsNames.lastComponent("solo") == "solo")
-    }
-
-    @Test func equalStemsMatch() {
-        let matched = HookStatsNames.match(scripts: S("prose-guard.py", "night-watch.sh"),
-                                           statsNames: ["prose-guard", "other"])
-        #expect(matched.names == ["prose-guard.py": ["prose-guard"]])
-        #expect(matched.ambiguous.isEmpty)
-    }
-
-    @Test func aScriptInAFolderMatchesOnItsLastComponentWhenUnambiguous() async throws {
-        let matched = HookStatsNames.match(scripts: S("command-guard/command_guard.py"),
-                                           statsNames: ["command_guard", "prose-guard"])
-        #expect(matched.names == ["command-guard/command_guard.py": ["command_guard"]])
-        // The same through the real report.
-        let table = HookStatsTable(report: try await report(), scripts: S("command-guard/command_guard.py"))
-        #expect(table.counts(for: "command-guard/command_guard.py").fires == 3)
-        #expect(table.statsName(for: "command-guard/command_guard.py") == "command_guard")
-    }
-
-    @Test func aFolderPrefixedStatsNameMatchesTheBareScript() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: S("on-stop.sh"))
-        let counts = table.counts(for: "on-stop.sh")
-        #expect(counts.fires == 2)
-        #expect(counts.errors == 1)
-        #expect(table.statsName(for: "on-stop.sh") == "claude-plugin/on-stop")
-    }
-
-    @Test func twoScriptsWithOneLastComponentMatchNeither() {
-        let matched = HookStatsNames.match(scripts: S("a/on-stop.sh", "b/on-stop.sh"),
-                                           statsNames: ["claude-plugin/on-stop"])
-        #expect(matched.names.isEmpty)
-        #expect(matched.ambiguous == ["a/on-stop.sh", "b/on-stop.sh"])
-    }
-
-    @Test func twoStatsNamesWithOneLastComponentMatchNothing() {
-        let matched = HookStatsNames.match(scripts: S("on-stop.sh"),
-                                           statsNames: ["a/on-stop", "b/on-stop"])
-        #expect(matched.names.isEmpty)
-        #expect(matched.ambiguous == ["on-stop.sh"])
-    }
-
-    @Test func anExactMatchBeatsTheLooserRule() {
-        // `a/on-stop` is exact for its script; the other shares a last
-        // component with it, so it is left ambiguous rather than guessed.
-        let matched = HookStatsNames.match(
-            scripts: [HookStatsScript(id: "/p/a/on-stop.sh", names: ["a/on-stop.sh"]),
-                      HookStatsScript(id: "/p/b/on-stop.sh", names: ["b/on-stop.sh"])],
-            statsNames: ["a/on-stop"])
-        #expect(matched.names == ["/p/a/on-stop.sh": ["a/on-stop"]])
-        #expect(matched.ambiguous == ["/p/b/on-stop.sh"])
-    }
-
-    @Test func theSameSharedSourceOnTwoHarnessesIsOneScript() {
-        // A shared script is a row per harness it deploys to, all with one
-        // source: it is one script, so the last-component rule holds.
-        let hooks = [
-            Hook(script: "notify.sh", harness: "claude", source: "/h/.swe/hooks/shared/notify.sh",
-                 destination: "/h/.claude/hooks/notify.sh", state: .linked),
-            Hook(script: "notify.sh", harness: "codex", source: "/h/.swe/hooks/shared/notify.sh",
-                 destination: "/h/.codex/hooks/notify.sh", state: .linked)]
-        let scripts = HookStatsScript.scripts(for: hooks)
-        #expect(scripts.count == 1)
-        let matched = HookStatsNames.match(scripts: scripts, statsNames: ["herdr/notify"])
-        #expect(matched.names == ["/h/.swe/hooks/shared/notify.sh": ["herdr/notify"]])
-    }
-
-    @Test func twoFilesWithOneBasenameDoNotShareCounts() async throws {
-        // Hook.script is only the basename, so two plugins' on-stop.sh look
-        // alike by name; their sources tell them apart, and neither takes
-        // the one hook's history.
-        let hooks = [
-            Hook(script: "on-stop.sh", harness: "claude", source: "/plugins/a/on-stop.sh",
-                 destination: "/plugins/a/on-stop.sh", state: .keep, tier: .foreign),
-            Hook(script: "on-stop.sh", harness: "claude", source: "/plugins/b/on-stop.sh",
-                 destination: "/plugins/b/on-stop.sh", state: .keep, tier: .foreign)]
-        let table = HookStatsTable(report: try await report(), scripts: HookStatsScript.scripts(for: hooks))
-        for hook in hooks {
-            #expect(table.isAmbiguous(hook.source))
-            #expect(table.statsName(for: hook.source) == nil)
-        }
-        let state = HookStatsState.ready(table)
-        #expect(state.cells(for: "/plugins/a/on-stop.sh") == .dashes)
-        #expect(state.cells(for: "/plugins/b/on-stop.sh") == .dashes)
-    }
-
-    // MARK: directory hooks
-
-    /// `swe hooks list --json` for a hub with `claude/bundle/guard.py`
-    /// (a directory hook declared through `bundle/guard.py`) and a file
-    /// hook; swe-hooks-directory.json. The list names the row after its
-    /// folder, `bundle`, and carries only the folder as its source.
-    private func directoryInventory(home: String) async throws -> [Hook] {
-        var text = String(decoding: try fixture("swe-hooks-directory"), as: UTF8.self)
-        text = text.replacingOccurrences(of: "/tmp/swe-fixture-home", with: home)
-        let swe = SweClient(runner: FakeRunner(.init(status: 0, stdout: Data(text.utf8), stderr: "")))
-        return try await swe.hooksList().hooks
+    @Test func theInventoryCarriesTheKeysItsRunsAreLoggedUnder() async throws {
+        let hooks = try await inventory()
+        // A directory hook is listed by its folder, its runs carry the executable.
+        #expect(hooks.map(\.script) == ["bundle", "multi", "prose-guard.py"])
+        #expect(hooks.map(\.statsKeys) == [["guard"], ["check", "scan"], ["prose-guard"]])
     }
 
     @Test func aDirectoryHookCountsTheRunsOfItsExecutable() async throws {
-        let home = try TempDir()
-        let folder = home.path(".swe/hooks/claude/bundle")
-        try FileManager.default.createDirectory(at: folder.appendingPathComponent("lib"),
-                                                withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: folder.appendingPathComponent("__pycache__"),
-                                                withIntermediateDirectories: true)
-        for file in ["guard.py", "lib/util.py", "README.md", "__pycache__/guard.py"] {
-            try Data("x".utf8).write(to: folder.appendingPathComponent(file))
-        }
-        let hooks = try await directoryInventory(home: home.url.path)
-        // What the inventory really says: the folder's name, the folder as its source.
+        let hooks = try await inventory()
         let bundle = try #require(hooks.first { $0.script == "bundle" })
-        #expect(bundle.source == folder.path)
-
-        let children = HookStatsScript.childNames(of: bundle.source)
-        #expect(children.contains("guard") && children.contains("bundle/guard"))
-        #expect(children.contains("util") && children.contains("lib/util"))
-        #expect(!children.contains("README"))
-        #expect(HookStatsScript.childNames(of: hooks[1].source).isEmpty)
-
-        // Its runs are logged as `guard`, the executable's stem.
-        let report = HookStatsReport(window: "7d", hooks: [
+        let table = HookStatsTable(report: stats([
             HookStatsRow(hook: "guard", harness: "", fires: 7, blocks: 2),
-            HookStatsRow(hook: "prose-guard", harness: "", fires: 3)])
-        let scripts = HookStatsScript.scripts(for: hooks, children: [bundle.source: children])
-        let table = HookStatsTable(report: report, scripts: scripts)
+            // A helper inside the folder that nothing declares is no key, so
+            // another hook of that name does not leak in.
+            HookStatsRow(hook: "util", harness: "", fires: 50),
+            HookStatsRow(hook: "bundle", harness: "", fires: 9)]),
+            scripts: HookStatsScript.scripts(for: hooks))
         #expect(table.counts(for: bundle.source).fires == 7)
         #expect(table.counts(for: bundle.source).blocks == 2)
-        #expect(table.statsName(for: bundle.source) == "guard")
-        // Without the folder's contents the display name finds nothing: the bug.
-        let blind = HookStatsTable(report: report, scripts: HookStatsScript.scripts(for: hooks))
-        #expect(blind.counts(for: bundle.source).fires == 0)
-        // The file hook beside it is unaffected.
-        let prose = try #require(hooks.first { $0.script == "prose-guard.py" })
-        #expect(table.counts(for: prose.source).fires == 3)
+        #expect(table.statsNames(for: bundle.source) == ["guard"])
     }
 
-    @Test func aFolderThatIsGoneHasNoChildren() {
-        #expect(HookStatsScript.childNames(of: "/nonexistent/swe-test/bundle").isEmpty)
+    @Test func severalKeysAreSummedAndTheirReasonsMergedBeforeTheCap() async throws {
+        let hooks = try await inventory()
+        let multi = try #require(hooks.first { $0.script == "multi" })
+        let table = HookStatsTable(report: stats([
+            HookStatsRow(hook: "check", harness: "", fires: 5, blocks: 3,
+                         lastBlock: Date(timeIntervalSince1970: 100),
+                         topReasons: [HookReason(decision: "block", reason: "shared", count: 3)]),
+            HookStatsRow(hook: "scan", harness: "", fires: 4, blocks: 4,
+                         lastBlock: Date(timeIntervalSince1970: 900),
+                         topReasons: [HookReason(decision: "block", reason: "shared", count: 2)]
+                            + (1...4).map { HookReason(decision: "block", reason: "own-\($0)", count: 1) }
+                            + [HookReason(decision: "warn", reason: "extra", count: 1)])]),
+            scripts: HookStatsScript.scripts(for: hooks))
+        let counts = table.counts(for: multi.source)
+        #expect((counts.fires, counts.blocks) == (9, 7))
+        #expect(counts.lastBlock == Date(timeIntervalSince1970: 900))
+        #expect(counts.topReasons.count == 5)
+        #expect(counts.topReasons.first == HookReason(decision: "block", reason: "shared", count: 5))
+        #expect(table.statsNames(for: multi.source) == ["check", "scan"])
+    }
+
+    @Test func aPrefixedKeyFindsItsRunsInTheRealStats() async throws {
+        // `${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh`: swe gives the row the key
+        // the transcript logged it under.
+        let script = HookStatsScript(id: "/p/on-stop.sh", keys: ["claude-plugin/on-stop"])
+        let table = HookStatsTable(report: try await report(), scripts: [script])
+        #expect(table.counts(for: "/p/on-stop.sh").fires == 2)
+        #expect(table.counts(for: "/p/on-stop.sh").errors == 1)
+    }
+
+    @Test func aRowWithNoKeysShowsDashesNeverAnotherHooksNumbers() async throws {
+        // Two files with one basename: swe gives neither the shared name.
+        let scripts = [HookStatsScript(id: "/a/guard.sh", keys: []), HookStatsScript(id: "/b/guard.sh", keys: [])]
+        let state = HookStatsState.ready(HookStatsTable(report: try await report(), scripts: scripts))
+        #expect(state.cells(for: "/a/guard.sh") == .dashes)
+        #expect(state.cells(for: "/b/guard.sh") == .dashes)
+    }
+
+    @Test func aKeyedRowWithNoRunsReadsZero() async throws {
+        let script = HookStatsScript(id: "/q.py", keys: ["quiet"])
+        let state = HookStatsState.ready(HookStatsTable(report: try await report(), scripts: [script]))
+        guard case .counts(let counts) = state.cells(for: "/q.py") else { Issue.record("expected counts"); return }
+        #expect(!counts.hasRuns)
+    }
+
+    @Test func anSweWithNoKeysFallsBackToTheFileStem() async throws {
+        // The older list fixture has no stats_keys.
+        let hooks = try await client("swe-hooks").0.hooksList().hooks
+        let guard_ = try #require(hooks.first { $0.script == "prose-guard.py" })
+        #expect(guard_.statsKeys == nil)
+        let scripts = HookStatsScript.scripts(for: hooks)
+        #expect(scripts.first { $0.id == guard_.source }?.keys == ["prose-guard"])
+        let table = HookStatsTable(report: try await report(), scripts: scripts)
+        #expect(table.counts(for: guard_.source).fires == 9)
+    }
+
+    @Test func theSameSharedSourceOnTwoHarnessesIsOneScript() {
+        let hooks = [
+            Hook(script: "notify.sh", harness: "claude", source: "/h/.swe/hooks/shared/notify.sh",
+                 destination: "/h/.claude/hooks/notify.sh", state: .linked, statsKeys: ["notify"]),
+            Hook(script: "notify.sh", harness: "codex", source: "/h/.swe/hooks/shared/notify.sh",
+                 destination: "/h/.codex/hooks/notify.sh", state: .linked, statsKeys: ["notify"])]
+        #expect(HookStatsScript.scripts(for: hooks).count == 1)
+    }
+
+    @Test func anExtensionIsDroppedForTheFallbackKey() {
+        #expect(HookStatsNames.stem("prose-guard.py") == "prose-guard")
+        #expect(HookStatsNames.stem("session-start.sh") == "session-start")
+        #expect(HookStatsNames.stem("claude-hook.JS") == "claude-hook")
+        #expect(HookStatsNames.stem("README") == "README")
+        #expect(HookStatsNames.stem(".py") == ".py")
     }
 
     // MARK: exact totals and identities
@@ -413,19 +370,39 @@ import Testing
     @Test func recentRunsLoadPerHookAndWindow() async throws {
         let model = HookStatsModel()
         let swe = SweClient(runner: try runner())
-        #expect(model.recentIsLoading(name: "prose-guard", window: .week))
-        await model.loadRecent(name: "prose-guard", window: .week, swe: swe, for: "/bin/swe")
-        #expect(model.recentRuns(name: "prose-guard", window: .week)?.count == 5)
-        #expect(model.recentRuns(name: "prose-guard", window: .day) == nil)
-        #expect(!model.recentIsLoading(name: "prose-guard", window: .week))
+        #expect(model.recentIsLoading(names: ["prose-guard"], window: .week))
+        await model.loadRecent(names: ["prose-guard"], window: .week, swe: swe, for: "/bin/swe")
+        #expect(model.recentRuns(names: ["prose-guard"], window: .week)?.count == 5)
+        #expect(model.recentRuns(names: ["prose-guard"], window: .day) == nil)
+        #expect(!model.recentIsLoading(names: ["prose-guard"], window: .week))
+    }
+
+    @Test func recentRunsMergeEveryKeyNewestFive() async throws {
+        func log(_ hook: String, _ times: [Int]) -> CommandResult {
+            let events = times.map {
+                #"{"ts": \#($0), "hook": "\#(hook)", "harness": "claude", "decision": "block"}"#
+            }.joined(separator: ",")
+            return .init(status: 0, stdout: Data(
+                #"{"schema": 1, "data": {"hook": "\#(hook)", "events": [\#(events)]}}"#.utf8), stderr: "")
+        }
+        // `guard` ran often yesterday; `check` blocked just now.
+        let runner = ScriptedRunner([
+            (["hooks", "log", "guard"], log("guard", [500, 400, 300, 200, 100])),
+            (["hooks", "log", "check"], log("check", [900, 800]))])
+        let model = HookStatsModel()
+        await model.loadRecent(names: ["check", "guard"], window: .week,
+                               swe: SweClient(runner: runner), for: "/bin/swe")
+        let runs = try #require(model.recentRuns(names: ["check", "guard"], window: .week))
+        #expect(runs.map { Int($0.ts.timeIntervalSince1970) } == [900, 800, 500, 400, 300])
+        #expect(Set(runs.map(\.id)).count == 5)
     }
 
     @Test func aFailedLogLeavesTheListOut() async throws {
         let model = HookStatsModel()
         let down = CommandResult(status: 1, stdout: Data(), stderr: "boom")
-        await model.loadRecent(name: "prose-guard", window: .week,
+        await model.loadRecent(names: ["prose-guard"], window: .week,
                                swe: SweClient(runner: try runner(log: down)), for: "/bin/swe")
-        #expect(model.recentRuns(name: "prose-guard", window: .week) == nil)
-        #expect(!model.recentIsLoading(name: "prose-guard", window: .week))
+        #expect(model.recentRuns(names: ["prose-guard"], window: .week) == nil)
+        #expect(!model.recentIsLoading(names: ["prose-guard"], window: .week))
     }
 }

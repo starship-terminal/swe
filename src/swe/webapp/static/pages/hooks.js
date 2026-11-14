@@ -5,7 +5,10 @@
  * shows the stanza to paste; a settings file is never written). The
  * list is #/hooks; one hook is #/hooks?hook=<name>&harness=<h>.
  * Data: /v1/app/hooks, POST /v1/app/hooks/link|replace|new
- * (pages/hooks.py). The bundle runs each page script in its own scope,
+ * (pages/hooks.py). Run counts (fires, blocks, block rate, top reasons,
+ * recent runs) come from /v1/app/hooks?stats=<window>, a read the hub
+ * runs off the request: the list paints first, its number columns fill
+ * in when the stats answer, and a slow read polls ("loading"). The bundle runs each page script in its own scope,
  * so helpers are hk-prefixed and copies, not another page's. */
 "use strict";
 
@@ -15,7 +18,44 @@ const hooksPage = {
   // confirm Replace opens, and the last run's failure (actionError).
   running: null, confirming: false, actionError: null,
   newToken: 0,            // the New hook form on show; older replies are stale
+  // Run stats: the chosen window, what each window last answered
+  // ({state: "loading"|"ready"|"error", rows: {stem: row}, at}), and a
+  // counter that drops the replies of an older ask.
+  window: null, statsBy: {}, statsSeq: 0, forceStats: false,
 };
+
+/* The windows the page offers: [value, option label, "in the last ..."]. */
+const HK_WINDOWS = [
+  ["24h", "Last 24 hours", "24 hours"],
+  ["7d", "Last 7 days", "7 days"],
+  ["30d", "Last 30 days", "30 days"],
+];
+const HK_WINDOW_KEY = "swe.hooks.window";
+const HK_STATS_FRESH_MS = 20000;
+let HK_POLL_MS = 1500;   // how often a loading or refreshing read is asked again
+const HK_DASH = "\u2013";
+
+/* The chosen window, kept per browser. */
+function hkWindow() {
+  const p = hooksPage;
+  if (!p.window) {
+    let saved = null;
+    try { saved = localStorage.getItem(HK_WINDOW_KEY); } catch { /* private window */ }
+    p.window = HK_WINDOWS.some((w) => w[0] === saved) ? saved : "7d";
+  }
+  return p.window;
+}
+const hkWindowSpan = () => (HK_WINDOWS.find((w) => w[0] === hkWindow()) || HK_WINDOWS[1])[2];
+
+/* The one stats row a hook's numbers come from: its row lists the names
+ * its runs may be logged under (``stats_keys``, from the hub), and it owns
+ * a row only when exactly one of them has runs. Anything else is
+ * ambiguous and shows dashes, never another hook's numbers. */
+function hkMatch(keys, s) {
+  if (!s || s.state !== "ready") return null;
+  const found = (keys || []).map((k) => s.rows[k]).filter((r) => r && r.fires);
+  return found.length === 1 ? found[0] : null;
+}
 
 // The app's "link" and "plus" glyphs, and the lock note's.
 const HK_LINK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/></svg>';
@@ -81,6 +121,8 @@ async function renderHooksList() {
   } else {
     paintHooks();
   }
+  // The counts are their own request: the list never waits for them.
+  hooksLoadStats();
   const { status, data } = await api("/v1/app/hooks");
   if (gen !== routeGen || mine !== p.seq) return;
   if (status === 401) return renderGate();
@@ -99,7 +141,8 @@ function hooksHeader(busy) {
 function bindHooksHeader() {
   const add = document.getElementById("hk-new");
   if (add) add.onclick = () => openNewHook();
-  bindRefresh(renderHooks, () => { hooksPage.confirming = false; });
+  // Refresh asks the hub for a new read, not the cached one.
+  bindRefresh(renderHooks, () => { hooksPage.confirming = false; hooksPage.forceStats = true; });
 }
 
 function paintHooks() {
@@ -118,9 +161,11 @@ function paintHooks() {
       ${d.warning ? `<p class="note">${esc(d.warning)}</p>` : ""}
       ${hkLinksStrip(d)}
       ${d.findings.length ? hkFindingsCard(d) : ""}
+      ${d.hooks.length ? hkStatsBar() : ""}
       ${body}
     </div></div>`;
   bindHooksHeader();
+  bindHkWindow();
   const addEmpty = document.getElementById("hk-new-empty");
   if (addEmpty) addEmpty.onclick = () => openNewHook();
   for (const btn of document.querySelectorAll("[data-hk]")) {
@@ -217,7 +262,7 @@ function hkGroupCard(g) {
   else if (g.key === "foreign") head = `<span class="card-title" title="Scripts swe lists but does not manage">Foreign</span>`;
   else head = `<div class="hk-group-head">${hkMark(g.key)}<span class="card-title">${esc(Fmt.harnessName(g.key))}</span>
     <span class="caption">${g.hooks.length === 1 ? "1 hook" : `${g.hooks.length} hooks`}</span></div>`;
-  return `<div class="card hk-group">${head}<div class="hk-rows">${g.hooks.map(hkRow).join("")}</div></div>`;
+  return `<div class="card hk-group">${head}<div class="hk-rows">${hkColsHeader()}${g.hooks.map(hkRow).join("")}</div></div>`;
 }
 
 /* Grouped hook rows in the list's own shape: a card per harness, rows
@@ -227,10 +272,10 @@ function hooksSkeleton() {
     <span class="hk-title">${Sk.bar(120 - (i % 3) * 20, 13)}${Sk.pill(52)}${i % 2 ? Sk.pill(62) : ""}</span>
     ${Sk.bar(`${52 - (i % 4) * 9}%`, 11)}
     ${i % 2 ? `<span class="hk-badges">${Sk.pill(56)}${Sk.pill(72)}</span>` : ""}
-  </span><span class="hk-chevron">${Sk.bar(8, 16)}</span></div>`;
+  </span>${hkNumsWrap([], "loading")}<span class="hk-chevron">${Sk.bar(8, 16)}</span></div>`;
   const group = (n, off) => `<div class="card hk-group"><div class="hk-group-head">${Sk.bar(16, 16)}${Sk.bar(96 + off * 20, 14)}
     <span class="caption">${Sk.bar(52, 11)}</span></div>
-    <div class="hk-rows">${Array.from({ length: n }, (_, i) => row(i + off)).join("")}</div></div>`;
+    <div class="hk-rows">${hkColsHeader()}${Array.from({ length: n }, (_, i) => row(i + off)).join("")}</div></div>`;
   return `<div role="status" aria-label="Loading" class="stack">${group(3, 0)}${group(2, 3)}</div>`;
 }
 
@@ -249,6 +294,7 @@ function hkRow(h) {
       ${h.detail ? `<span class="caption">${esc(h.detail)}</span>` : ""}
       ${declared || events ? `<span class="hk-badges">${declared}${events}</span>` : ""}
     </span>
+    ${hkNumsWrap(h.stats_keys)}
     <span class="hk-chevron" aria-hidden="true">›</span></a>`;
 }
 
@@ -262,6 +308,7 @@ async function renderHookDetail(name, harness, tier) {
     <div class="card hk-doc"><div class="card-subtitle">${Sk.bar(200, 11)}</div>
       <pre class="hk-text"><div class="skel-para">${Sk.linesInner(10)}</div></pre></div></div></div>`;
   bindHooksHeader();
+  hooksLoadStats();
   const q = new URLSearchParams({ hook: name });
   if (harness) q.set("harness", harness);
   if (tier) q.set("tier", tier);
@@ -315,9 +362,211 @@ function paintHookDetail(d) {
         ${declared ? `<div class="hk-decls"><span class="caption">Declared in</span>${declared}</div>` : ""}
         ${events}
       </div>
+      ${hkDetailStats(d.stats_keys)}
       ${doc}
     </div></div>`;
   bindHooksHeader();
+  bindHkWindow();
+}
+
+/* ----------------------------------------------------------- run stats */
+
+const hkDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const hkCount = (n) => Number(n || 0).toLocaleString("en-US");
+
+/* What the current window last answered, or undefined before the first ask. */
+const hkStats = () => hooksPage.statsBy[hkWindow()];
+
+/* One hook's row in the current window, or undefined with no runs. */
+const hkStatRow = (keys) => hkMatch(keys, hkStats());
+
+/* Ask for the current window. A window answered under HK_STATS_FRESH_MS
+ * ago is reused; an older one stays on screen while its refresh runs.
+ * "loading" is the hub saying the read is still going: ask again. */
+async function hooksLoadStats() {
+  const p = hooksPage, w = hkWindow(), mine = ++p.statsSeq;
+  const force = p.forceStats;
+  p.forceStats = false;
+  const have = p.statsBy[w];
+  if (!force && have && have.state === "ready" && Date.now() - have.at < HK_STATS_FRESH_MS) {
+    hkPaintStats(false);
+    return;
+  }
+  if (!have || have.state !== "ready") {
+    p.statsBy[w] = { state: "loading", rows: {}, at: 0 };
+    hkPaintStats(false);
+  }
+  for (let tries = 0; tries < 60; tries++) {
+    // Only the first ask forces: the polls after it just wait for the read.
+    const { status, data } = await api(`/v1/app/hooks?stats=${w}${force && !tries ? "&refresh=1" : ""}`);
+    if (mine !== p.statsSeq || !hooksOnRoute()) return;
+    if (status === 200 && data && data.state === "ready") {
+      const rows = {};
+      for (const r of data.hooks || []) rows[r.hook] = r;
+      // An answer with a newer read behind it shows, but is not fresh.
+      p.statsBy[w] = { state: "ready", rows, at: data.refreshing ? 0 : Date.now() };
+      hkPaintStats(true);
+      if (!data.refreshing) return;
+    } else if (!(status === 200 && data && data.state === "loading")) {
+      if (!have || have.state !== "ready") p.statsBy[w] = { state: "error", rows: {}, at: Date.now() };
+      hkPaintStats(true);
+      return;
+    }
+    await hkDelay(HK_POLL_MS);
+    if (mine !== p.statsSeq || !hooksOnRoute()) return;
+  }
+  if (!p.statsBy[w] || p.statsBy[w].state !== "ready") p.statsBy[w] = { state: "error", rows: {}, at: Date.now() };
+  hkPaintStats(true);
+}
+
+/* The number columns of one row. Loading, error and no runs hold their
+ * three cells at the same width, so nothing moves when the numbers land. */
+function hkNumsHtml(keys, forced) {
+  const s = forced ? { state: forced } : hkStats();
+  const cell = (inner, cls = "") => `<span class="hk-num${cls ? ` ${cls}` : ""}">${inner}</span>`;
+  const dash = cell(HK_DASH, "hk-zero");
+  if (!s || s.state === "loading") return cell(Sk.num(22)) + cell(Sk.num(22)) + cell(Sk.num(24));
+  const row = hkMatch(keys, s);
+  if (!row) return dash + dash + dash;
+  const pct = Math.round(row.block_rate * 100);
+  const rate = row.blocks ? (pct < 1 ? "&lt;1%" : `${pct}%`) : "0%";
+  return cell(hkCount(row.fires))
+    + cell(hkCount(row.blocks), row.blocks ? "hk-bad" : "hk-zero")
+    + cell(rate, row.blocks ? "hk-bad" : "hk-zero");
+}
+
+function hkNumsTitle(keys) {
+  const row = hkStatRow(keys);
+  if (!row) return "";
+  return `${hkCount(row.fires)} ${row.fires === 1 ? "run" : "runs"}, ${hkCount(row.blocks)} ${row.blocks === 1 ? "block" : "blocks"} in the last ${hkWindowSpan()}`;
+}
+
+function hkNumsWrap(keys, forced) {
+  // A forced state is the list's own skeleton: nothing to patch later.
+  if (forced) return `<span class="hk-nums">${hkNumsHtml(keys, forced)}</span>`;
+  const title = hkNumsTitle(keys);
+  return `<span class="hk-nums" data-hk-keys="${esc(JSON.stringify(keys || []))}"${title ? ` title="${esc(title)}"` : ""}>${hkNumsHtml(keys)}</span>`;
+}
+
+/* The column labels over each card's rows. The spacer matches the
+ * chevron, so the labels sit over the numbers. */
+function hkColsHeader() {
+  return `<div class="hk-cols"><span class="hk-cols-gap"></span>
+    <span class="hk-nums"><span class="hk-num">Fires</span><span class="hk-num">Blocks</span><span class="hk-num">Rate</span></span>
+    <span class="hk-chevron" aria-hidden="true"></span></div>`;
+}
+
+function hkWindowSelect() {
+  const w = hkWindow();
+  return `<select class="field hk-window" aria-label="Run counts window">${HK_WINDOWS.map(([v, label]) =>
+    `<option value="${v}"${v === w ? " selected" : ""}>${label}</option>`).join("")}</select>`;
+}
+
+function hkStatsNote() {
+  const s = hkStats();
+  if (s && s.state === "error") return "Run counts are not available right now.";
+  if (s && s.state === "ready" && !Object.keys(s.rows).length) return `No hook runs recorded in the last ${hkWindowSpan()}.`;
+  return "Runs, with every harness added up.";
+}
+
+function hkStatsBar() {
+  return `<div class="hk-statsbar"><span class="caption" id="hk-stats-note">${esc(hkStatsNote())}</span>${hkWindowSelect()}</div>`;
+}
+
+/* The picker: remembers the choice and asks for that window. */
+function bindHkWindow() {
+  for (const sel of document.querySelectorAll(".hk-window")) {
+    sel.onchange = () => {
+      const p = hooksPage;
+      p.window = sel.value;
+      try { localStorage.setItem(HK_WINDOW_KEY, sel.value); } catch { /* private window */ }
+      for (const other of document.querySelectorAll(".hk-window")) other.value = sel.value;
+      hooksLoadStats();
+    };
+  }
+}
+
+/* Patch the numbers in place, so the picker keeps focus and the page does
+ * not repaint. ``animate`` fades the new numbers in (not under reduced
+ * motion, which the stylesheet honours). */
+function hkPaintStats(animate) {
+  const note = document.getElementById("hk-stats-note");
+  if (note) note.textContent = hkStatsNote();
+  for (const box of document.querySelectorAll(".hk-nums[data-hk-keys]")) {
+    const keys = JSON.parse(box.dataset.hkKeys), title = hkNumsTitle(keys);
+    box.innerHTML = hkNumsHtml(keys);
+    if (title) box.title = title; else box.removeAttribute("title");
+    hkFade(box, animate);
+  }
+  const card = document.getElementById("hk-detail-stats");
+  if (card) {
+    // The picker is replaced with the rest: keep the keyboard on it.
+    const focused = card.contains(document.activeElement);
+    card.innerHTML = hkDetailStatsInner(JSON.parse(card.dataset.hkKeys));
+    hkFade(card, animate);
+    bindHkWindow();
+    if (focused) card.querySelector(".hk-window").focus();
+  }
+}
+
+function hkFade(el, animate) {
+  el.classList.remove("hk-fresh");
+  if (!animate) return;
+  void el.offsetWidth;   // restart the animation
+  el.classList.add("hk-fresh");
+}
+
+/* "Last block" and "Recent runs" ages, as the other pages write them. */
+const hkAgo = (ts) => (ts ? Fmt.ago(ts) : HK_DASH);
+
+const HK_DECISION = { block: "hk-bad", warn: "hk-warn", error: "hk-warn", allow: "hk-zero" };
+const HK_REASON_WORD = { block: ["block", "blocks"], warn: ["warn", "warns"], error: ["error", "errors"] };
+
+/* A repo's folder name: the repo root when the run had one, else its cwd. */
+function hkRepoName(run) {
+  const place = String(run.repo || run.cwd || "").replace(/\/+$/, "");
+  return place ? place.split("/").pop() : "";
+}
+
+function hkTile(label, value, cls = "") {
+  return `<div class="hk-tile"><span class="caption">${label}</span>
+    <span class="hk-tile-value${cls ? ` ${cls}` : ""}">${value}</span></div>`;
+}
+
+function hkDetailStatsInner(keys) {
+  const s = hkStats();
+  const head = `<div class="hk-stats-head"><div class="card-title">Runs</div>${hkWindowSelect()}</div>`;
+  if (!s || s.state === "loading") {
+    return `${head}<div class="hk-tiles" role="status" aria-label="Loading">${[0, 1, 2].map(() => `<div class="hk-tile">${Sk.bar(40, 11)}${Sk.bar(54, 18)}</div>`).join("")}</div>`;
+  }
+  if (s.state === "error") {
+    return `${head}<div class="hk-tiles">${hkTile("Fires", HK_DASH, "hk-zero")}${hkTile("Blocks", HK_DASH, "hk-zero")}${hkTile("Last block", HK_DASH, "hk-zero")}</div>
+      <p class="caption">Run counts are not available right now.</p>`;
+  }
+  const row = hkMatch(keys, s);
+  if (!row) {
+    return `${head}<p class="caption hk-none">No runs in the last ${hkWindowSpan()}.</p>`;
+  }
+  const reasons = (row.top_reasons || []).slice(0, 5).map((r) => {
+    const word = (HK_REASON_WORD[r.decision] || [r.decision, r.decision + "s"])[r.count === 1 ? 0 : 1];
+    return `<div class="hk-line-row"><span class="hk-line-text" title="${esc(r.reason)}">${esc(r.reason)}</span>
+      <span class="caption hk-line-side">${hkCount(r.count)} ${esc(word)}</span></div>`;
+  }).join("");
+  const runs = (row.recent || []).slice(0, 5).map((r) => {
+    const repo = hkRepoName(r);
+    const where = [repo, r.git_branch].filter(Boolean).map((t) => esc(t)).join(" · ");
+    return `<div class="hk-line-row"><span class="hk-line-text"><span class="${HK_DECISION[r.decision] || ""}">${esc(r.decision)}</span>${where ? ` · ${where}` : ""}</span>
+      <span class="caption hk-line-side">${esc(hkAgo(r.ts))}</span></div>`;
+  }).join("");
+  return `${head}
+    <div class="hk-tiles">${hkTile("Fires", hkCount(row.fires))}${hkTile("Blocks", hkCount(row.blocks), row.blocks ? "hk-bad" : "hk-zero")}${hkTile("Last block", esc(hkAgo(row.last_block)), row.last_block ? "" : "hk-zero")}</div>
+    ${reasons ? `<div class="hk-sub"><span class="caption">Top reasons</span>${reasons}</div>` : ""}
+    ${runs ? `<div class="hk-sub"><span class="caption">Recent runs</span>${runs}</div>` : ""}`;
+}
+
+/* The detail page's card: the same numbers as the list's row, opened up. */
+function hkDetailStats(keys) {
+  return `<div class="card hk-stats-card" id="hk-detail-stats" data-hk-keys="${esc(JSON.stringify(keys || []))}">${hkDetailStatsInner(keys)}</div>`;
 }
 
 /* ---------------------------------------------------------------- writes */

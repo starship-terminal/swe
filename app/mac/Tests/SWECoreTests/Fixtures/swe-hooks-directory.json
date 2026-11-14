@@ -4,6 +4,9 @@
     "hooks": [
       {
         "name": "bundle",
+        "stats_keys": [
+          "guard"
+        ],
         "harness": "claude",
         "tier": "harness",
         "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/bundle",
@@ -36,7 +39,52 @@
         "summary": ""
       },
       {
+        "name": "multi",
+        "stats_keys": [
+          "check",
+          "scan"
+        ],
+        "harness": "claude",
+        "tier": "harness",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/multi",
+        "dest_path": "/tmp/swe-fixture-home/.claude/hooks/multi",
+        "link_status": "linked",
+        "detail": "",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "PreToolUse",
+            "matcher": "Bash",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          },
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      },
+      {
         "name": "prose-guard.py",
+        "stats_keys": [
+          "prose-guard"
+        ],
         "harness": "claude",
         "tier": "harness",
         "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/prose-guard.py",

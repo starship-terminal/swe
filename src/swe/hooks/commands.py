@@ -31,6 +31,7 @@ from swe import paths as _paths
 from swe.paths import home_relative as _short
 from swe.console import c, sanitize, terminal_width
 from swe.flags import expand_value_flags
+from swe.hooks.stats_keys import stats_keys
 from swe.init.hooks import apply_hook_status, plan_hooks
 from swe.init.layout import (
     LinkIgnoreError,
@@ -179,7 +180,8 @@ def _rows(home: Path) -> tuple[list[HookRow], dict]:
     return all_rows(home, registry, statuses, declared), registry
 
 
-def _row_json(r: HookRow, summaries: dict[Path, str]) -> dict:
+def _row_json(r: HookRow, summaries: dict[Path, str],
+              keys: list[str] | None = None) -> dict:
     """The stable ``swe hooks list --json`` row shape the app page reads.
 
     ``summaries`` caches header lines by source for one listing: a shared
@@ -190,6 +192,7 @@ def _row_json(r: HookRow, summaries: dict[Path, str]) -> dict:
             script_summary(r.source) if r.source.is_file() else "")
     return {
         "name": r.script,
+        "stats_keys": keys or [],
         "harness": r.harness,
         "tier": r.tier,
         "source_path": str(r.source),
@@ -238,6 +241,10 @@ def _list(rest: list[str], json_view: bool, fail) -> int:
         return fail(c("red", f"Unexpected args: {' '.join(rest)}"))
     home = Path.home()
     rows, registry = _rows(home)
+    # Worked out over every row, so a name another harness's file could own
+    # stays unclaimed even under --harness.
+    keys = ({id(r): k for r, k in zip(rows, stats_keys(rows, home))}
+            if json_view else {})
     if harness:
         harness = _resolve_harness(harness, registry, {r.harness for r in rows})
         rows = [r for r in rows if r.harness == harness]
@@ -247,7 +254,8 @@ def _list(rest: list[str], json_view: bool, fail) -> int:
 
     if json_view:
         summaries: dict[Path, str] = {}
-        return emit({"hooks": [_row_json(r, summaries) for r in rows]})
+        return emit({"hooks": [_row_json(r, summaries, keys.get(id(r)))
+                               for r in rows]})
 
     if not rows:
         print(c("dim", "\n  No hook scripts in ~/.swe/hooks yet."))

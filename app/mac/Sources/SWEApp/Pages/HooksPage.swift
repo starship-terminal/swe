@@ -21,10 +21,6 @@ struct HooksPage: View {
     @AppStorage("hooksStatsWindow") private var statsWindow = HookStatsWindow.week
     /// The board's width, for the narrow layout; 0 until the first layout.
     @State private var boardWidth: CGFloat = 0
-    /// What each directory hook's folder holds, by source: its runs are
-    /// logged under those scripts, not the folder's name. Read off the
-    /// main actor when the inventory changes.
-    @State private var folderScripts: [String: [String]] = [:]
 
     /// Under this, the list and a 440pt panel can't sit side by side: the
     /// open hook takes the board's place until it's closed. 900pt windows
@@ -63,15 +59,6 @@ struct HooksPage: View {
         // Counts load with the page, and again when the picker moves or the
         // swe changes; the Refresh button runs them too. Never on a timer.
         .task(id: [statsWindow.rawValue, app.swePath]) { await loadStats() }
-        .task(id: model.hooks.map(\.source)) {
-            let sources = model.hooks.map(\.source)
-            let found = await offMain {
-                Dictionary(sources.map { ($0, HookStatsScript.childNames(of: $0)) },
-                           uniquingKeysWith: { first, _ in first })
-            }
-            guard !Task.isCancelled else { return }
-            folderScripts = found
-        }
         // The ⌘K search's hook pick opens its panel. Retried on each
         // load: the pick can land before the inventory does.
         .task(id: app.pendingHook) { applyPendingHook() }
@@ -130,8 +117,7 @@ struct HooksPage: View {
         let timeline = HookTimeline(harness: current, hooks: hooks, includeForeign: showForeign)
         let idle = HookTimeline.notRunning(in: hooks)
         let wide = boardWidth == 0 || boardWidth >= Self.sideBySideWidth
-        let counts = stats.state(for: statsWindow,
-                                 scripts: HookStatsScript.scripts(for: hooks, children: folderScripts))
+        let counts = stats.state(for: statsWindow, scripts: HookStatsScript.scripts(for: hooks))
         return Group {
             if let opened, !wide {
                 panel(for: opened, in: hooks, counts: counts)
@@ -932,10 +918,10 @@ private struct HookRunsCard: View {
 
     private static let recentLimit = 5
 
-    /// The name swe's stats use for this script, when any row matched.
-    private var name: String? {
-        guard case .ready(let table) = counts else { return nil }
-        return table.isAmbiguous(source) ? nil : table.statsName(for: source)
+    /// The names swe's stats hold runs of this script under.
+    private var names: [String] {
+        guard case .ready(let table) = counts else { return [] }
+        return table.statsNames(for: source)
     }
 
     var body: some View {
@@ -948,8 +934,8 @@ private struct HookRunsCard: View {
             case .ready(let table):
                 let summed = table.counts(for: source)
                 Card(title: "Runs", subtitle: window.title) {
-                    if table.isAmbiguous(source) {
-                        Text("Another script has the same name, so its runs can't be told apart.")
+                    if table.hasNoKeys(source) {
+                        Text("swe can't tell which runs belong to this script.")
                             .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
                     } else if summed.hasRuns { readyBody(summed) } else {
                         Text(window.emptyLine)
@@ -961,14 +947,14 @@ private struct HookRunsCard: View {
         .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: counts)
         // The log is asked for again whenever the counts are: a new window,
         // a refresh, or the panel moving to another hook.
-        .task(id: RecentKey(name: name, window: window, answered: app.hookStats.completed)) {
-            guard let name else { return }
-            await app.hookStats.loadRecent(name: name, window: window, swe: app.swe, for: app.swePath)
+        .task(id: RecentKey(names: names, window: window, answered: app.hookStats.completed)) {
+            guard !names.isEmpty else { return }
+            await app.hookStats.loadRecent(names: names, window: window, swe: app.swe, for: app.swePath)
         }
     }
 
     private struct RecentKey: Equatable {
-        var name: String?
+        var names: [String]
         var window: HookStatsWindow
         var answered: Int
     }
@@ -1019,8 +1005,8 @@ private struct HookRunsCard: View {
     }
 
     @ViewBuilder private var recentRuns: some View {
-        if let name {
-            let runs = app.hookStats.recentRuns(name: name, window: window)
+        if !names.isEmpty {
+            let runs = app.hookStats.recentRuns(names: names, window: window)
             if let runs, !runs.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     sectionLabel("Recent runs")
@@ -1036,7 +1022,7 @@ private struct HookRunsCard: View {
                         }
                     }
                 }
-            } else if runs == nil && app.hookStats.recentIsLoading(name: name, window: window) {
+            } else if runs == nil && app.hookStats.recentIsLoading(names: names, window: window) {
                 VStack(alignment: .leading, spacing: 6) {
                     sectionLabel("Recent runs")
                     ForEach(0..<3, id: \.self) { _ in SkeletonBlock(width: nil, height: 12, radius: 3) }

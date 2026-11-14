@@ -898,6 +898,89 @@ class SumHarnessesTest(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+class ListStatsKeysTest(unittest.TestCase):
+    """``swe hooks list --json`` rows carry ``stats_keys``: the names their
+    runs are logged under, which a directory hook's own name is not."""
+
+    def setUp(self):
+        self.home = temp_dir(self)
+
+    def declare(self, *commands):
+        path = self.home / ".claude" / "settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": c} for c in commands]}]}}))
+
+    def directory_hook(self, files):
+        folder = self.home / ".swe" / "hooks" / "claude" / "bundle"
+        for rel in files:
+            (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+            (folder / rel).write_text("#!/bin/sh\n")
+        dest = self.home / ".claude" / "hooks" / "bundle"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.symlink_to(folder)
+        return dest
+
+    def foreign(self, rel):
+        path = self.home / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n")
+        return str(path)
+
+    def rows(self, *extra):
+        code, out, err = _run(self.home, "list", "--json", *extra)
+        self.assertEqual(code, 0, err)
+        return json.loads(out)["data"]["hooks"]
+
+    def row(self, name):
+        return next(r for r in self.rows() if r["name"] == name)
+
+    def test_a_file_hook_is_its_stem(self):
+        folder = self.home / ".swe" / "hooks" / "claude"
+        folder.mkdir(parents=True)
+        (folder / "prose-guard.py").write_text("#!/bin/sh\n")
+        self.assertEqual(self.row("prose-guard.py")["stats_keys"],
+                         ["prose-guard"])
+
+    def test_a_directory_hook_is_named_by_its_declared_executable(self):
+        dest = self.directory_hook(["guard.py", "lib/prose-guard.py"])
+        self.declare(f'python3 "{dest}/guard.py"')
+        # The helper nothing declares gets no key of its own.
+        self.assertEqual(self.row("bundle")["stats_keys"], ["guard"])
+
+    def test_an_extensionless_executable_in_a_directory_hook(self):
+        dest = self.directory_hook(["guard"])
+        self.declare(f"{dest}/guard")
+        self.assertEqual(self.row("bundle")["stats_keys"], ["guard"])
+
+    def test_a_directory_hook_nothing_declares_has_no_key(self):
+        self.directory_hook(["guard.py"])
+        self.assertEqual(self.row("bundle")["stats_keys"], [])
+
+    def test_two_files_with_one_basename_share_no_key(self):
+        a = self.foreign("plugins/a/guard.sh")
+        b = self.foreign("plugins/b/guard.sh")
+        self.declare(a, b)
+        by_source = {r["source_path"]: r["stats_keys"] for r in self.rows()}
+        self.assertEqual((by_source[a], by_source[b]), ([], []))
+
+    def test_a_plugin_root_command_names_the_prefixed_hook(self):
+        src = self.foreign(".claude/plugins/x/hooks/on-stop.sh")
+        self.declare(src, "${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh")
+        (row,) = [r for r in self.rows() if r["name"] == "on-stop.sh"]
+        self.assertIn("claude-plugin/on-stop", row["stats_keys"])
+
+    def test_the_harness_filter_keeps_the_same_keys(self):
+        a = self.foreign("plugins/a/guard.sh")
+        b = self.foreign("plugins/b/guard.sh")
+        self.declare(a, b)
+        every = {r["source_path"]: r["stats_keys"] for r in self.rows()}
+        only = {r["source_path"]: r["stats_keys"]
+                for r in self.rows("--harness=claude")}
+        for source, keys in only.items():
+            self.assertEqual(keys, every[source])
+
+
 class HelperUnitTest(unittest.TestCase):
     def test_hook_stem_and_since(self):
         self.assertEqual(events.hook_stem("prose-guard.py"), "prose-guard")

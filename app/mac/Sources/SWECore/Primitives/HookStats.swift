@@ -272,80 +272,34 @@ public struct HookCounts: Sendable, Equatable {
 
 /// One script on the page, for matching: `id` is its source file or
 /// folder (two scripts with one basename in different places are two), and
-/// `names` what its runs might be logged under, the display name first. A
-/// directory hook is listed by its folder (`bundle`) while its runs are
-/// named after the executable inside (`guard`), so its names also carry the
-/// scripts found in the folder.
+/// `keys` the `hook` names its runs are logged under, which swe works out
+/// (`stats_keys` on the inventory row). A directory hook is listed by its
+/// folder (`bundle`) while its runs carry its executable's stem (`guard`),
+/// so the list name alone would find nothing.
 public struct HookStatsScript: Sendable, Equatable {
     public let id: String
-    public let names: [String]
+    public let keys: [String]
 
-    public init(id: String, names: [String]) {
+    public init(id: String, keys: [String]) {
         self.id = id
-        self.names = names
+        self.keys = keys
     }
 
     /// One entry per distinct source: a shared script is a row per harness
-    /// it deploys to, all with the one source.
-    /// - Parameter children: for a directory hook's source, the names
-    ///   `childNames(of:)` found inside it.
-    public static func scripts(for hooks: [Hook], children: [String: [String]] = [:]) -> [HookStatsScript] {
+    /// it deploys to, all with the one source. A row from an swe that sends
+    /// no `stats_keys` falls back to its file stem.
+    public static func scripts(for hooks: [Hook]) -> [HookStatsScript] {
         var seen: Set<String> = []
         var out: [HookStatsScript] = []
         for hook in hooks where seen.insert(hook.source).inserted {
-            out.append(HookStatsScript(id: hook.source, names: [hook.script] + (children[hook.source] ?? [])))
+            out.append(HookStatsScript(id: hook.source,
+                                       keys: hook.statsKeys ?? [HookStatsNames.stem(hook.script)]))
         }
         return out
     }
-
-    /// For a directory hook, the names its scripts log under: each script
-    /// file's stem, and `folder/stem` for the generic stems swe prefixes
-    /// (`bundle/on-stop`). Empty for a file or a path that is gone. Reads
-    /// the disk: call it off the main actor.
-    public static func childNames(of source: String, limit: Int = 400) -> [String] {
-        let fm = FileManager.default
-        var directory: ObjCBool = false
-        guard fm.fileExists(atPath: source, isDirectory: &directory), directory.boolValue,
-              let walker = fm.enumerator(at: URL(fileURLWithPath: source),
-                                         includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles, .skipsPackageDescendants])
-        else { return [] }
-        var names: [String] = []
-        var seen = 0
-        for case let url as URL in walker {
-            if ["node_modules", "__pycache__"].contains(url.lastPathComponent) {
-                walker.skipDescendants()
-                continue
-            }
-            seen += 1
-            if seen > limit { break }
-            let file = url.lastPathComponent
-            let stem = HookStatsNames.stem(file)
-            guard stem != file, (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-            else { continue }
-            let parent = url.deletingLastPathComponent().lastPathComponent
-            for name in [stem, "\(parent)/\(stem)"] where !names.contains(name) { names.append(name) }
-        }
-        return names
-    }
 }
 
-/// Matching a script on the page to the names swe's stats use.
-///
-/// The page lists script files (`prose-guard.py`, or `command-guard/
-/// command_guard.py` inside a folder); the stats name a hook by its script
-/// name without the extension (`prose-guard`, `command_guard`), and a hook
-/// another installer declared can carry a folder prefix
-/// (`claude-plugin/on-stop`). The rule:
-///
-/// 1. Drop a script extension from the final component of each of the
-///    script's names. Equal names match.
-/// 2. Otherwise two names match on their last component alone, only when
-///    that is unambiguous: exactly one script (by source, not by name) and
-///    exactly one stats name end in it. Where it is not (`a/on-stop` and
-///    `b/on-stop`, or two files called `on-stop.sh` in different folders),
-///    the script is reported as ambiguous and shows dashes, since a count
-///    must never land on the wrong script.
+/// The script names swe's stats use drop the file extension.
 public enum HookStatsNames {
     /// The extensions swe's `hook_stem` drops.
     static let extensions = [".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs",
@@ -360,52 +314,6 @@ public enum HookStatsNames {
         }
         return trimmed
     }
-
-    /// `on-stop` for `claude-plugin/on-stop`.
-    public static func lastComponent(_ name: String) -> String {
-        name.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? name
-    }
-
-    public struct Matches: Sendable, Equatable {
-        /// Script id to the stats names it matched, sorted.
-        public let names: [String: [String]]
-        /// Scripts whose only candidates are shared with another script or
-        /// another stats name: no count is theirs to show.
-        public let ambiguous: Set<String>
-    }
-
-    public static func match(scripts: [HookStatsScript], statsNames: [String]) -> Matches {
-        let stats = Set(statsNames)
-        var byId: [String: Set<String>] = [:]
-        for script in scripts { byId[script.id, default: []].formUnion(script.names.map(stem)) }
-        var idsByLast: [String: Set<String>] = [:]
-        for (id, stems) in byId { for stem in stems { idsByLast[lastComponent(stem), default: []].insert(id) } }
-        var statsByLast: [String: Set<String>] = [:]
-        for name in stats { statsByLast[lastComponent(name), default: []].insert(name) }
-
-        var matched: [String: [String]] = [:]
-        var ambiguous: Set<String> = []
-        for (id, stems) in byId {
-            let exact = stems.intersection(stats)
-            if !exact.isEmpty {
-                matched[id] = exact.sorted()
-                continue
-            }
-            var loose: Set<String> = []
-            var clash = false
-            for stem in stems {
-                let last = lastComponent(stem)
-                guard let candidates = statsByLast[last] else { continue }
-                if idsByLast[last]?.count == 1, candidates.count == 1 {
-                    loose.formUnion(candidates)
-                } else {
-                    clash = true
-                }
-            }
-            if !loose.isEmpty { matched[id] = loose.sorted() } else if clash { ambiguous.insert(id) }
-        }
-        return Matches(names: matched, ambiguous: ambiguous)
-    }
 }
 
 /// What a row's number columns show.
@@ -418,45 +326,46 @@ public enum HookStatsCells: Sendable, Equatable {
 }
 
 /// The report for one window, ready to answer for any script on the page.
+/// A script's rows are the stats rows named by its keys, summed.
 public struct HookStatsTable: Sendable, Equatable {
     private let counts: [String: HookCounts]
-    private let names: [String: String]
-    private let ambiguous: Set<String>
+    private let names: [String: [String]]
+    private let keyless: Set<String>
 
     /// - Parameters:
     ///   - report: `swe hooks stats --json`.
-    ///   - scripts: every script on the page (all harnesses), so the
-    ///     last-component rule can tell whether a name is ambiguous.
+    ///   - scripts: every script on the page, each with the keys swe gave it.
     public init(report: HookStatsReport, scripts: [HookStatsScript]) {
         var byName: [String: [HookStatsRow]] = [:]
         for row in report.hooks { byName[row.hook, default: []].append(row) }
-        let matches = HookStatsNames.match(scripts: scripts, statsNames: Array(byName.keys))
-        ambiguous = matches.ambiguous
-        counts = matches.names.mapValues { HookCounts(rows: $0.flatMap { byName[$0] ?? [] }) }
-        // Runs of the matched name with the most fires are the ones to list.
-        names = matches.names.compactMapValues { matched in
-            matched.max { a, b in
-                let fa = byName[a]?.reduce(0) { $0 + $1.fires } ?? 0
-                let fb = byName[b]?.reduce(0) { $0 + $1.fires } ?? 0
-                return fa != fb ? fa < fb : a > b
-            }
+        var counts: [String: HookCounts] = [:]
+        var names: [String: [String]] = [:]
+        var keyless: Set<String> = []
+        for script in scripts {
+            if script.keys.isEmpty { keyless.insert(script.id); continue }
+            let found = Set(script.keys).filter { byName[$0] != nil }.sorted()
+            names[script.id] = found
+            counts[script.id] = HookCounts(rows: found.flatMap { byName[$0] ?? [] })
         }
+        self.counts = counts
+        self.names = names
+        self.keyless = keyless
     }
 
-    /// The script's counts, summed over harnesses; zeros when nothing matched.
+    /// The script's counts, summed over its keys and harnesses; zeros when
+    /// nothing was logged under them.
     public func counts(for id: String) -> HookCounts {
         counts[id] ?? .none
     }
 
-    /// The stats name the script matched, for `swe hooks log`.
-    public func statsName(for id: String) -> String? {
-        names[id]
+    /// The stats names with runs for the script, for `swe hooks log`.
+    public func statsNames(for id: String) -> [String] {
+        names[id] ?? []
     }
 
-    /// The script shares its only candidate name with another script, so
-    /// no count belongs to it for certain.
-    public func isAmbiguous(_ id: String) -> Bool {
-        ambiguous.contains(id)
+    /// swe could name no log name for the script, so no count is its own.
+    public func hasNoKeys(_ id: String) -> Bool {
+        keyless.contains(id)
     }
 }
 
@@ -471,7 +380,7 @@ public enum HookStatsState: Sendable, Equatable {
         switch self {
         case .loading: .loading
         case .unavailable: .dashes
-        case .ready(let table): table.isAmbiguous(id) ? .dashes : .counts(table.counts(for: id))
+        case .ready(let table): table.hasNoKeys(id) ? .dashes : .counts(table.counts(for: id))
         }
     }
 }
@@ -550,36 +459,44 @@ public final class HookStatsModel {
         completed += 1
     }
 
-    /// The newest runs of `name` in `window`: nil until the first answer or
-    /// when swe could not give them.
-    public func recentRuns(name: String, window: HookStatsWindow) -> [HookRunEvent]? {
-        recent[Self.recentKey(name, window)]
+    /// The newest runs across `names` in `window`: nil until the first
+    /// answer or when swe could not give them.
+    public func recentRuns(names: [String], window: HookStatsWindow) -> [HookRunEvent]? {
+        recent[Self.recentKey(names, window)]
     }
 
     /// Whether a run list is still on its way (no answer and no failure).
-    public func recentIsLoading(name: String, window: HookStatsWindow) -> Bool {
-        let key = Self.recentKey(name, window)
+    public func recentIsLoading(names: [String], window: HookStatsWindow) -> Bool {
+        let key = Self.recentKey(names, window)
         return recent[key] == nil && !recentFailed.contains(key)
     }
 
-    /// Runs `swe hooks log` for the panel's hook.
-    public func loadRecent(name: String, window: HookStatsWindow, swe: SweClient, for source: String) async {
+    /// Runs `swe hooks log` for each of the panel's names, then keeps the
+    /// newest five of all of them together: a directory hook's scripts
+    /// are logged apart, and the latest block can be any of them.
+    public func loadRecent(names: [String], window: HookStatsWindow, swe: SweClient,
+                           for source: String, limit: Int = 5) async {
         reset(ifNot: source)
-        let key = Self.recentKey(name, window)
+        let key = Self.recentKey(names, window)
         let ticket = issue(key)
         recentFailed.remove(key)
         do {
-            let log = try await swe.hooksLog(name: name, window: window)
+            var merged: [HookRunEvent] = []
+            for name in names {
+                merged += try await swe.hooksLog(name: name, window: window, limit: limit).events
+            }
             guard accept(key, ticket, source) else { return }
-            recent[key] = log.events
+            var newest = Array(merged.sorted { $0.ts > $1.ts }.prefix(limit))
+            for index in newest.indices { newest[index].ordinal = index }
+            recent[key] = newest
         } catch {
             guard accept(key, ticket, source) else { return }
             if recent[key] == nil { recentFailed.insert(key) }
         }
     }
 
-    private static func recentKey(_ name: String, _ window: HookStatsWindow) -> String {
-        "\(window.rawValue)|\(name)"
+    private static func recentKey(_ names: [String], _ window: HookStatsWindow) -> String {
+        "\(window.rawValue)|\(names.joined(separator: "\u{1f}"))"
     }
 
     private func issue(_ key: String) -> Int {

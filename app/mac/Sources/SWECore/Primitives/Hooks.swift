@@ -79,11 +79,15 @@ public struct Hook: Codable, Sendable, Equatable, Identifiable {
     /// The script's header line (docstring or leading comment); empty when
     /// it has none or swe predates the field.
     public let summary: String
+    /// The `hook` names `swe hooks stats` logs this row's runs under, when
+    /// swe says (a directory hook's runs carry its executable's name, not
+    /// its folder's); nil from an swe that predates the field.
+    public let statsKeys: [String]?
 
     public init(script: String, harness: String, source: String, destination: String,
                 state: LinkState, detail: String = "", declared: [HookDeclaration] = [],
                 tier: Tier? = nil, enabled: Bool? = nil, eventsSupported: [String]? = nil,
-                summary: String = "") {
+                summary: String = "", statsKeys: [String]? = nil) {
         self.script = script
         self.harness = harness
         self.source = source
@@ -95,6 +99,7 @@ public struct Hook: Codable, Sendable, Equatable, Identifiable {
         self.enabled = enabled
         self.eventsSupported = eventsSupported
         self.summary = summary
+        self.statsKeys = statsKeys
     }
 
     /// Linked into a harness but declared by no settings file, so it will
@@ -105,7 +110,7 @@ public struct Hook: Codable, Sendable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case script, harness, source, destination, state, detail, declared
-        case tier, enabled, eventsSupported, summary
+        case tier, enabled, eventsSupported, summary, statsKeys
     }
 
     /// The names swe's list row took in #787 (`name`, `source_path`,
@@ -132,6 +137,7 @@ public struct Hook: Codable, Sendable, Equatable, Identifiable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled)
         eventsSupported = try c.decodeIfPresent([String].self, forKey: .eventsSupported)
         summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        statsKeys = try c.decodeIfPresent([String].self, forKey: .statsKeys)
     }
 }
 
