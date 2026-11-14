@@ -733,6 +733,7 @@ hooksPage.statsBy[w] = { state: "error", rows: {}, at: 0 };
 out.error = cells(hkNumsHtml("g.py"));
 hooksPage.statsBy[w] = { state: "loading", rows: {}, at: 0 };
 out.loading = hkNumsHtml("g.py");
+out.sharedTrack = [(hkColsHeader().match(/class="hk-nums"/g) || []).length ? (hkColsHeader().match(/class="hk-num"/g) || []).length : 0, (hkNumsWrap("g.py").match(/class="hk-num[ "]/g) || []).length];
 out.header = hkColsHeader().replace(/<[^>]+>/g, " ").trim().split(/\\s+/);
 process.stdout.write(JSON.stringify(out));
 """)
@@ -745,6 +746,7 @@ process.stdout.write(JSON.stringify(out));
         self.assertEqual(out["loading"].count('class="hk-num"'), 3)
         self.assertEqual(out["loading"].count("skel"), 3)
         self.assertEqual(out["header"], ["Fires", "Blocks", "Rate"])
+        self.assertEqual(out["sharedTrack"], [3, 3])
 
     def test_the_picker_offers_three_windows_and_remembers_one(self):
         out = self.run_js("""
@@ -799,8 +801,11 @@ process.stdout.write(JSON.stringify(out));
     def test_phone_width_keeps_the_columns_and_truncates_the_name(self):
         css = (Path(page.__file__).resolve().parents[1] / "static/pages/hooks.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.hk-row \.hk-title \.name \{[^}]*text-overflow: ellipsis")
-        self.assertRegex(css, r"\.hk-num \{[^}]*width: 46px")
-        self.assertRegex(css, r"@media \(max-width: 480px\) \{ \.hk-num \{ width: 40px; \} \}")
+        # Header and rows share one track: the same .hk-nums grid of three
+        # fixed columns, so labels sit over their numbers at every width.
+        self.assertRegex(css, r"\.hk-nums \{ --hk-col: 46px; display: grid; grid-template-columns: repeat\(3, var\(--hk-col\)\)")
+        self.assertRegex(css, r"@media \(max-width: 480px\) \{\s*\.hk-nums \{ --hk-col: 44px; \}")
+        self.assertRegex(css, r"\.hk-tiles \{[^}]*repeat\(3, minmax\(0, 1fr\)\)")
         self.assertRegex(css, r"@media \(prefers-reduced-motion: reduce\) \{ \.hk-fresh \{ animation: none; \} \}")
         # Numbers never wrap or collapse: the name gives way, not them.
         self.assertRegex(css, r"\.hk-nums \{[^}]*flex: none")

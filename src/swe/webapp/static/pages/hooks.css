@@ -102,9 +102,9 @@ dialog.hk-new-sheet { width: min(480px, calc(100vw - 32px)); }
 .hk-statsbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .hk-statsbar .caption { flex: 1 1 200px; min-width: 0; }
 select.field.hk-window { flex: 0 0 auto; }
-.hk-nums { display: flex; flex: none; }
+.hk-nums { --hk-col: 46px; display: grid; grid-template-columns: repeat(3, var(--hk-col)); flex: none; }
 .hk-num {
-  width: 46px; display: flex; justify-content: flex-end; align-items: center;
+  min-width: 0; display: flex; justify-content: flex-end; align-items: center;
   font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .hk-cols {
@@ -120,7 +120,13 @@ select.field.hk-window { flex: 0 0 auto; }
 .hk-fresh { animation: hk-fade-in .18s ease-out; }
 @keyframes hk-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .hk-fresh { animation: none; } }
-@media (max-width: 480px) { .hk-num { width: 40px; } }
+@media (max-width: 480px) {
+  .hk-nums { --hk-col: 44px; }
+  .hk-cols .hk-num { font-size: 11px; }
+  .hk-tiles { gap: 6px; }
+  .hk-tile { padding: 8px; }
+  .hk-tile-value { font-size: 15px; }
+}
 
 /* The detail page's stats card. */
 .hk-stats-card { display: flex; flex-direction: column; gap: 12px; }
