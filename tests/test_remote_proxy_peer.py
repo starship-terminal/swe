@@ -63,6 +63,12 @@ class TestForgedForwardedFor(_Owner):
                      "as root the test client really is a root peer")
     @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"),
                          "the OS peer check covers macOS and Linux")
+    @unittest.skipUnless(
+        peer.owner_lookup_works(),
+        "this process cannot see socket owners on this host (macOS hides "
+        "the TCP table from ad-hoc-signed programs and their children, "
+        "#1944), so the real check can't be shown to name this process; "
+        "it still fails closed")
     def test_local_process_cannot_claim_the_phone(self):
         # No stub: the real OS check sees this test process, not
         # tailscaled, on the far end of the loopback connection. The
@@ -429,6 +435,188 @@ class TestMalformedTables(unittest.TestCase):
         # Inside the bundle but gone: stat fails, so no.
         self.assertFalse(
             peer.app_store_binary(str(app / "Contents" / "gone"), str(app)))
+
+
+class TestOwnerLookupWorks(unittest.TestCase):
+    """Whether this host's socket-owner lookup can see anything (#1944).
+    It only feeds a warning and a test skip: is_proxy never reads it."""
+
+    def test_lookup_that_names_this_process_works(self):
+        seen = []
+
+        def lookup(server, peer_addr):
+            seen.append((server, peer_addr))
+            return 42
+
+        self.assertTrue(peer.owner_lookup_works(lookup, 42))
+        # Asked about a real loopback connection: the listener's address,
+        # then the client end this process holds.
+        (server, peer_addr), = seen
+        self.assertEqual(server[0], "127.0.0.1")
+        self.assertEqual(peer_addr[0], "127.0.0.1")
+        self.assertNotEqual(server[1], peer_addr[1])
+
+    def test_connection_is_open_while_asked(self):
+        def lookup(server, peer_addr):
+            # A second dial proves the listener is still up; the probe's
+            # own client socket is the one whose owner is asked for.
+            with socket.create_connection(server, timeout=2):
+                pass
+            return 7
+
+        self.assertTrue(peer.owner_lookup_works(lookup, 7))
+
+    def test_blind_lookup_does_not_work(self):
+        self.assertFalse(peer.owner_lookup_works(lambda s, p: None, 42))
+
+    def test_someone_else_named_does_not_work(self):
+        self.assertFalse(peer.owner_lookup_works(lambda s, p: 1, 42))
+
+    def test_errors_do_not_work_and_never_raise(self):
+        def boom(server, peer_addr):
+            raise OSError("netstat missing")
+
+        self.assertFalse(peer.owner_lookup_works(boom, 42))
+        with patch.object(peer.socket, "create_server",
+                          side_effect=OSError("no loopback")):
+            self.assertFalse(peer.owner_lookup_works(lambda s, p: 42, 42))
+
+    def test_darwin_asks_netstat_for_this_pid(self):
+        # The same lookup is_proxy uses on macOS: netstat_pid over
+        # ``netstat -anv -p tcp``, compared with this process's pid.
+        with patch.object(peer.sys, "platform", "darwin"), \
+                patch.object(peer, "_run", return_value="") as run, \
+                patch.object(peer, "netstat_pid",
+                             side_effect=[os.getpid(), None]):
+            self.assertTrue(peer.owner_lookup_works())
+            self.assertFalse(peer.owner_lookup_works())
+        run.assert_called_with([peer._NETSTAT, "-anv", "-p", "tcp"])
+
+    def test_linux_asks_proc_for_this_uid(self):
+        with patch.object(peer.sys, "platform", "linux"), \
+                patch.object(peer, "linux_uid",
+                             side_effect=[os.getuid(), None]):
+            self.assertTrue(peer.owner_lookup_works())
+            self.assertFalse(peer.owner_lookup_works())
+
+    def test_other_platforms_have_no_lookup(self):
+        with patch.object(peer.sys, "platform", "win32"), \
+                patch.object(peer, "linux_uid") as uid, \
+                patch.object(peer, "netstat_pid") as pid:
+            self.assertFalse(peer.owner_lookup_works())
+        uid.assert_not_called()
+        pid.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "/proc/net/tcp is Linux's")
+    def test_linux_sees_its_own_socket(self):
+        # /proc/net/tcp is world-readable, so on Linux (CI) the detector
+        # must say yes: a detector broken to "no" would otherwise skip
+        # the real-check test everywhere without anyone noticing.
+        self.assertTrue(peer.owner_lookup_works())
+
+
+class TestBlindLookupWarning(unittest.TestCase):
+    """``swe remote serve`` warns once when it trusts tailscale serve's
+    headers but cannot see who sent them (#1944)."""
+
+    def setUp(self):
+        self.state = hub_mod.HubState(temp_dir(self))
+        self.state.whois = MagicMock(return_value=dict(_PEERS[_HUB_IP]))
+        self.asked = 0
+
+    def works(self, answer):
+        def probe():
+            self.asked += 1
+            return answer
+        return probe
+
+    def warning(self, platform="darwin", answer=False):
+        self.state.proxy_lookup_works = self.works(answer)
+        with patch.object(hub_mod.sys, "platform", platform):
+            return hub_mod.proxy_lookup_warning(self.state)
+
+    def test_blind_lookup_behind_serve_warns(self):
+        self.state.trust_proxy = True
+        text = self.warning()
+        self.assertIn("tailscale serve", text)
+        self.assertIn("tailnet identity", text)
+        self.assertIn("Developer-ID", text)
+        self.assertNotIn("\u2014", text)
+        self.assertEqual(self.asked, 1)
+
+    def test_linux_names_its_own_fix(self):
+        self.state.trust_proxy = True
+        text = self.warning("linux")
+        self.assertIn("/proc/net/tcp", text)
+        self.assertNotIn("Developer-ID", text)
+
+    def test_working_lookup_is_quiet(self):
+        self.state.trust_proxy = True
+        self.assertEqual(self.warning(answer=True), "")
+
+    def test_without_proxy_trust_nothing_is_probed(self):
+        # No --public-url (or a tailnet-IP bind): the check never runs.
+        self.assertFalse(self.state.trust_proxy)
+        self.assertEqual(self.warning(), "")
+        self.assertEqual(self.asked, 0)
+
+    def test_platforms_without_the_check_are_quiet(self):
+        self.state.trust_proxy = True
+        self.assertEqual(self.warning("win32"), "")
+        self.assertEqual(self.asked, 0)
+
+    def test_a_failing_probe_reads_as_blind(self):
+        self.state.trust_proxy = True
+
+        def broken():
+            raise OSError("boom")
+
+        self.state.proxy_lookup_works = broken
+        with patch.object(hub_mod.sys, "platform", "darwin"):
+            self.assertIn("Developer-ID",
+                          hub_mod.proxy_lookup_warning(self.state))
+
+    def test_warning_never_changes_what_the_check_accepts(self):
+        self.state.trust_proxy = True
+        before = self.state.proxy_peer
+        self.warning()
+        self.assertIs(self.state.proxy_peer, before)
+        self.assertIs(self.state.proxy_peer, peer.is_proxy)
+        self.assertTrue(self.state.trust_proxy)
+
+    def serve(self, url, answer):
+        import io
+
+        server = MagicMock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+        self.state.start = MagicMock()
+        self.state.stop = MagicMock()
+        self.state.proxy_lookup_works = self.works(answer)
+        err = io.StringIO()
+        with patch.object(hub_mod, "make_server", return_value=server), \
+                patch.object(hub_mod.sys, "platform", "darwin"), \
+                patch.object(hub_mod.catalog_mod, "tailscale_ip",
+                             return_value=_HUB_IP), \
+                patch.object(hub_mod.sys, "stderr", err):
+            hub_mod.serve(self.state, "127.0.0.1", 8477, url)
+        return err.getvalue()
+
+    def test_serve_behind_tailscale_serve_warns_once(self):
+        out = self.serve("https://box.ts.net:8477", answer=False)
+        self.assertEqual(out.count("Developer-ID"), 1, out)
+        self.assertIn("warning:", out)
+        self.assertEqual(self.asked, 1)
+
+    def test_serve_without_public_url_does_not_probe(self):
+        out = self.serve("", answer=False)
+        self.assertNotIn("Developer-ID", out)
+        self.assertEqual(self.asked, 0)
+
+    def test_serve_with_a_working_lookup_is_quiet(self):
+        out = self.serve("https://box.ts.net:8477", answer=True)
+        self.assertNotIn("warning:", out)
+        self.assertEqual(self.asked, 1)
 
 
 class TestElsewhere(unittest.TestCase):

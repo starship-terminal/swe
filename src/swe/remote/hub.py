@@ -456,6 +456,10 @@ class HubState:
         # X-Forwarded-For names the client: any other local process
         # could write one. Tests stub it.
         self.proxy_peer = peer_mod.is_proxy
+        # Whether that check can see socket owners on this host at all
+        # (peer.owner_lookup_works). serve() asks once, only to warn;
+        # proxy_peer is the same either way. Tests stub it.
+        self.proxy_lookup_works = peer_mod.owner_lookup_works
         # session key -> request_id of its newest approval.requested
         # that has not yet been answered — local panes and satellites
         # both flow through emit(), so the inbox sees them uniformly.
@@ -4526,6 +4530,38 @@ def configure(state: HubState, host: str, port: int,
             state.owner_login = str(peer.get("login") or "")
 
 
+def proxy_lookup_warning(state: HubState) -> str:
+    """The start-up warning for a hub that trusts ``tailscale serve``'s
+    forwarded client but whose socket-owner lookup is blind on this host
+    (#1944), else "". Probes only when the proxy check matters
+    (``trust_proxy``, set by ``configure``) on a platform that has one,
+    and changes nothing the check accepts: a blind hub keeps failing
+    closed, and this only says so."""
+    if not state.trust_proxy:
+        return ""
+    if sys.platform == "darwin":
+        # An ad-hoc-signed parent blinds its children too, so the shell
+        # that starts the hub counts (Nix's bash is ad-hoc signed).
+        fix = ("run the hub with a Developer-ID-signed Python, such as "
+               "python.org's, started by launchd or a signed shell")
+    elif sys.platform.startswith("linux"):
+        fix = "run the hub where it can read /proc/net/tcp"
+    else:
+        return ""
+    try:
+        works = bool(state.proxy_lookup_works())
+    except Exception:  # noqa: BLE001 - a probe that fails is blind
+        works = False
+    if works:
+        return ""
+    return (
+        "this hub cannot see which process owns a loopback connection, "
+        "so requests through tailscale serve lose their tailnet identity "
+        "(the owner's devices need a paired credential and pair requests "
+        f"need a pair token); {fix}"
+    )
+
+
 def serve(state: HubState, host: str, port: int,
           public_url: str = "") -> int:
     """Blocking entry point for ``swe remote serve``."""
@@ -4540,6 +4576,12 @@ def serve(state: HubState, host: str, port: int,
     # start() registers this machine, reconciles kept sessions, retires
     # ntfy credentials and starts loops that would fight the running hub.
     server = make_server(state, host, port)
+    # Said once, after the bind, so a second serve that fails to bind
+    # stays quiet: the hub still serves, without tailnet identity.
+    warning = proxy_lookup_warning(state)
+    if warning:
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  warning: {warning}",
+              file=sys.stderr, flush=True)
     state.start()
     # Auto clean quits orphans without a browser ever opening Compute:
     # its switch is hub state, so the background sampler starts at boot
