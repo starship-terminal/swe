@@ -420,15 +420,37 @@ def is_script_token(token: str) -> bool:
     return base.endswith(_SCRIPT_EXTS)
 
 
-def expand_command_path(token: str, home: Path) -> Path | None:
+_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def expand_command_path(token: str, home: Path,
+                        variables: dict[str, str] | None = None) -> Path | None:
     """Resolve a command token to a filesystem path, or None if unverifiable.
 
     ``~`` and the ``$HOME`` spellings expand against ``home``; any other
     variable (``$SUPERSET_HOME_DIR`` is the real one in the wild) stays
     literal after ``expandvars`` and marks the token unverifiable — a path
     swe cannot resolve is "unknown", never "missing".
+
+    ``variables`` are values the caller knows (a plugin's install folder
+    for ``$CLAUDE_PLUGIN_ROOT``). They go into the token as it was already
+    parsed, after every other expansion, so a value's quotes, spaces, ``$``
+    and backslashes are kept as they are, never read as shell or as
+    another variable.
     """
-    text = _HOME_VAR_RE.sub(str(home), token.strip("'\"").rstrip(";"))
+    text = token.strip("'\"").rstrip(";")
+    marks: dict[str, str] = {}
+    if variables:
+        def hold(match):
+            name = match.group(1) or match.group(2)
+            if name not in variables:
+                return match.group(0)
+            mark = f"\x00{len(marks)}\x00"
+            marks[mark] = variables[name]
+            return mark
+
+        text = _VAR_RE.sub(hold, text)
+    text = _HOME_VAR_RE.sub(str(home), text)
     if text == "~" or text.startswith("~/"):
         text = str(home) + text[1:]
     elif text.startswith("~"):
@@ -439,6 +461,8 @@ def expand_command_path(token: str, home: Path) -> Path | None:
     text = os.path.expandvars(text)
     if "$" in text:
         return None
+    for mark, value in marks.items():
+        text = text.replace(mark, value)
     # A relative token (hooks/x.sh, ./x.sh) resolves against a cwd swe does
     # not know: unverifiable.
     if not Path(text).is_absolute():

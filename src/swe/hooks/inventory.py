@@ -334,7 +334,8 @@ def _command_lines(command: str) -> list[str]:
 
 
 def _executed_scripts(
-    command: str, home: Path, depth: int = 0, must_exist: bool = True
+    command: str, home: Path, depth: int = 0, must_exist: bool = True,
+    variables: dict[str, str] | None = None,
 ) -> list[Path]:
     """The file a hook command actually runs — one per shell segment.
 
@@ -346,6 +347,7 @@ def _executed_scripts(
     read for the script its body runs, never as the shell binary itself.
     ``must_exist=False`` (``hooks/identity.py``, naming a past run) keeps a
     path whose file is gone: it is still the script that ran.
+    ``variables`` go to ``expand_command_path`` for each parsed token.
     """
     scripts: list[Path] = []
     for line in _command_lines(command):
@@ -359,9 +361,10 @@ def _executed_scripts(
                 segment.append((token, raw))
             if ends or not token or token in _SEGMENT_BREAKS:
                 scripts.extend(_segment_scripts(segment, home, depth,
-                                                must_exist))
+                                                must_exist, variables))
                 segment = []
-        scripts.extend(_segment_scripts(segment, home, depth, must_exist))
+        scripts.extend(_segment_scripts(segment, home, depth, must_exist,
+                                        variables))
     return scripts
 
 
@@ -386,7 +389,7 @@ def _command_start(words: list[str]) -> int:
 
 def _segment_scripts(
     segment: list[tuple[str, str]], home: Path, depth: int,
-    must_exist: bool = True,
+    must_exist: bool = True, variables: dict[str, str] | None = None,
 ) -> list[Path]:
     """What one segment runs: its first path, or what its ``-c`` body runs."""
     words = [token for token, _raw in segment]
@@ -401,16 +404,16 @@ def _segment_scripts(
             if depth >= 2:
                 return []
             return _executed_scripts(segment[i + 2][1], home, depth + 1,
-                                     must_exist)
+                                     must_exist, variables)
         if not (_COMMAND_POSITION_RE.fullmatch(base)
                 or _ASSIGNMENT_RE.fullmatch(words[i])):
             break
-    first = _first_path(words[start:], home, must_exist)
+    first = _first_path(words[start:], home, must_exist, variables)
     return [first] if first is not None else []
 
 
-def _first_path(segment: list[str], home: Path,
-                must_exist: bool = True) -> Path | None:
+def _first_path(segment: list[str], home: Path, must_exist: bool = True,
+                variables: dict[str, str] | None = None) -> Path | None:
     """The first existing file a command segment runs, if any (with
     ``must_exist=False``, the first path that is not a folder)."""
     for token in segment:
@@ -418,7 +421,7 @@ def _first_path(segment: list[str], home: Path,
         if _COMMAND_POSITION_RE.fullmatch(base) \
                 or _ASSIGNMENT_RE.fullmatch(token):
             continue
-        path = expand_command_path(token, home)
+        path = expand_command_path(token, home, variables)
         if path is not None:
             # The executed file: later tokens are its arguments, so the
             # first resolvable path wins even when it is missing (a

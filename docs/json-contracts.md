@@ -522,9 +522,19 @@ Timestamps are epoch seconds (floats). Counts cover the window
   list` reads a declared command: quotes and spaces, `~` and `$HOME`, a
   variable set once to a path (`f="$HOME/x.py"; python3 "$f"`), symlinks
   resolved, and a generated wrapper resolved to the shared script it wraps
-  (its runs are named after that script, as the log names them). A command
-  whose path holds a variable swe cannot know (`${CLAUDE_PLUGIN_ROOT}`) or
-  is relative has no script, and so does a command that runs two scripts
+  (its runs are named after that script, as the log names them), and a
+  wrapper path whose whole `_generated` folder is gone to the shared
+  script of that name, only when nothing is at the path, it is
+  `<a harness's hooks root>/_generated/<name>` and
+  `~/.swe/hooks/shared/<name>` exists. Claude Code's two hook variables
+  resolve where they are knowable: `${CLAUDE_PLUGIN_ROOT}` to the install
+  folder of the one plugin in `~/.claude/plugins/installed_plugins.json`
+  whose `hooks/hooks.json` (or manifest `hooks`) declares that exact
+  command (a transcript stores the command unexpanded and nothing else
+  about the plugin), and `$CLAUDE_PROJECT_DIR` to the session's project,
+  the first `cwd` its transcript records. A command whose path still holds
+  a variable (two plugins declaring one command, any other variable) or is
+  relative has no script, and so does a command that runs two scripts
   (`a.py && b.py`: one run, and swe cannot say which file decided it). A
   run with a script belongs to the list row whose source is that file (a
   harness link to it resolves there), whose shared wrapper path holds a
@@ -538,9 +548,18 @@ Timestamps are epoch seconds (floats). Counts cover the window
   declared through a path swe cannot resolve), narrowed to the
   rows on the run's harness when any answers; a transcript run to the
   `command_hook` names of a row's declared commands that have no
-  resolvable path. A name or path two sources answer to belongs to
-  neither (`uncertain`). Ownership is worked out over every row whatever
-  `--harness` says, so a row's `source_paths` never change with a filter.
+  resolvable path. That name fallback is only for what stays unknowable,
+  and only when exactly one source answers: a name or path two sources
+  answer to belongs to neither (`uncertain`). Ownership is worked out over
+  every row whatever `--harness` says, so a row's `source_paths` never
+  change with a filter.
+- The transcript backfill reads through a parse cache,
+  `~/.swe/cache/hooks/transcripts.sqlite` (see docs/data-model.md): a
+  transcript whose size, mtime, ctime and inode are unchanged is not read
+  again. It keeps only what the file's bytes say; what each command runs,
+  the plugin and project behind a variable, and each cwd's repository are
+  worked out on every read, so a change on disk shows at once. The answer
+  is the same with the cache on or off (`SWE_HOOK_CACHE=0`).
 - `--hook=<name>` and `swe hooks log <name>` take a name exactly as the
   runs were logged (`claude-plugin/on-stop`, a folder prefix included,
   wins over the bare `on-stop`) or a stats row's `hook` (`bundle` finds
