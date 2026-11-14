@@ -446,6 +446,52 @@ import Testing
         #expect(try h.sessions().count == 1)
     }
 
+    /// A live whole read that retires a copy row stages its pieces on the
+    /// copy's session. When the scan stops for a reason of its own (the
+    /// ledger's store failing, so `scanFile` rethrows) or another read
+    /// takes the slot, the pieces go, as swe's `_read` takes them back in
+    /// its `finally`: left behind they would repeat text on the old
+    /// session, where no drain reaches them.
+    @Test func anAbandonedStagedReadTakesBackItsPieces() async throws {
+        let h = try H(bufferBudget: 40)
+        let a = try h.claude(H.claudeID, "ibis", folder: "-a")
+        try h.mirrorPass()
+        try FileManager.default.removeItem(at: a)
+        try await h.scan()
+        let marks = try h.store.copyMarks()
+        let b = try h.claude(H.claudeID, "ibis", "pangolin one", "pangolin two", "pangolin three",
+                             folder: "-b", mtime: H.mtime + 100)
+        let before = try h.snapshot()
+        for leave in [{ (i: SearchIndexer) in i.abandonFile(path: b.path) },
+                      { (i: SearchIndexer) in i.beginFile(path: "/elsewhere/x.jsonl", harness: .claude) }] {
+            let drop = SearchMirror.copiedRows(store: h.store, marks: marks, harness: "claude", path: b.path)
+            #expect(drop.count == 1)
+            h.indexer.beginFile(path: b.path, harness: .claude, drop: drop)
+            try JSONLReader().read(b, from: 0) { h.indexer.consume(line: $0) }
+            #expect(h.indexer.midReadFlushes > 0)
+            leave(h.indexer)
+            #expect(try h.hits("pangolin").isEmpty)
+            #expect(try h.snapshot() == before)
+        }
+    }
+
+    /// A copy the index cannot read says so in the scan's notes, as a
+    /// failed live read does, instead of leaving the session silently
+    /// missing from search.
+    @Test func aFailedCopyReadIsAScanNote() async throws {
+        let h = try H()
+        let source = try h.claude(H.claudeID, "quokka")
+        try h.mirrorPass()
+        try FileManager.default.removeItem(at: source)
+        let copy = h.mirrorRoot.appending(path: "claude/-work-proj/\(H.claudeID).jsonl")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: copy.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: copy.path) }
+        let report = try await h.scan()
+        #expect(report.notes.contains { $0.hasPrefix("Index failed ") && $0.contains(copy.lastPathComponent)
+            && $0.contains("for \(source.path)") })
+        #expect(try h.hits("quokka").isEmpty)
+    }
+
     /// The source comes back mid read: no piece and no switch commits.
     @Test func aSourceRestoredMidReadStopsTheRead() async throws {
         let h = try H(bufferBudget: 40)

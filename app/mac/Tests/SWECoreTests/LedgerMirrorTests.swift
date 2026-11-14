@@ -11,9 +11,9 @@ import Testing
     typealias H = MirrorHome
 
     /// The totals a scan of the same transcripts, all live, gives.
-    private func reference(_ build: (H) throws -> Void) async throws -> UsageTotals {
+    private func reference(_ build: (H) async throws -> Void) async throws -> UsageTotals {
         let h = try H()
-        try build(h)
+        try await build(h)
         try await h.scan(withMirror: false, index: false)
         return await h.ledger.totals(in: allTime)
     }
@@ -67,6 +67,34 @@ import Testing
         try FileManager.default.removeItem(at: source)
         try await h.scan(index: false)
         #expect(await h.ledger.totals(in: allTime) == expected)
+        try await h.scan(index: false)
+        #expect(await h.ledger.totals(in: allTime) == expected)
+    }
+
+    /// The harness rewrote the transcript after the ledger read it (new
+    /// usage, a shorter file), swe mirrored the rewrite, then the harness
+    /// pruned it. The source's cursor reads past the copy's size, which
+    /// proves nothing about its bytes: the copy is read, and its new event
+    /// counts once.
+    @Test func aRewrittenThenPrunedTranscriptKeepsItsNewUsage() async throws {
+        func rewrite(_ h: H, _ url: URL) throws {
+            try h.write(H.claudeLines(H.claudeID, ["x"], start: 5, usage: true), to: url, mtime: H.mtime + 100)
+        }
+        let expected = try await reference { h in
+            let url = try h.claude(H.claudeID, "a", "b", usage: true)
+            try await h.scan(withMirror: false, index: false)
+            try rewrite(h, url)
+        }
+        let h = try H()
+        let source = try h.claude(H.claudeID, "a", "b", usage: true)
+        try await h.scan(index: false)
+        try rewrite(h, source)
+        #expect(try Data(contentsOf: source).count < H.claudeLines(H.claudeID, ["a", "b"], usage: true).utf8.count)
+        try h.mirrorPass()
+        try FileManager.default.removeItem(at: source)
+        try await h.scan(index: false)
+        #expect(await h.ledger.totals(in: allTime) == expected)
+        #expect(await h.ledger.totals(in: allTime).eventCount == 3)
         try await h.scan(index: false)
         #expect(await h.ledger.totals(in: allTime) == expected)
     }

@@ -30,6 +30,8 @@ enum SearchMirror {
         var indexed = 0
         var moved = 0
         var failed = 0
+        /// One scan note per failed copy read: the copy and why.
+        var failures: [String] = []
     }
 
     /// Whether `row` already holds at least what a file at `stat` would
@@ -183,7 +185,9 @@ enum SearchMirror {
             case .indexed: counts.indexed += 1
             case .current: counts.current += 1
             case .moved: counts.moved += 1
-            case .failed: counts.failed += 1
+            case .failed(let reason):
+                counts.failed += 1
+                counts.failures.append("Index failed \(best.pruned.copy.path) (for \(key)): \(reason)")
             case .skip: break
             }
         }

@@ -209,6 +209,9 @@ public final class SearchIndexer: @unchecked Sendable {
         path: String, harness: SearchDecoder.Harness,
         appending: Bool = false, sessionID: String? = nil, drop: [SearchFileRow] = []
     ) {
+        // A read that never finished must not leave its staged pieces
+        // behind when this one takes the slot.
+        if let stale = pending { abandonFile(path: stale.path) }
         let fileRow = try? store.fileRow(for: path)
         var decoder = SearchDecoder(harness)
         if appending {
@@ -573,7 +576,9 @@ public final class SearchIndexer: @unchecked Sendable {
 
     /// What one copy read did, as swe's `index_copy` reports it.
     public enum CopyOutcome: Sendable, Equatable {
-        case skip, current, indexed, moved, failed
+        case skip, current, indexed, moved
+        /// The read or its commit threw; the reason is the error's text.
+        case failed(String)
     }
 
     /// `readNeed` from a `files` row alone, with no ledger cursor: swe's
@@ -608,6 +613,7 @@ public final class SearchIndexer: @unchecked Sendable {
         case .current: return .current
         case .append, .whole: break
         }
+        if let stale = pending { abandonFile(path: stale.path) }
         pending = Pending(path: path, harness: harness, appending: false, fileRow: row,
                           decoder: SearchDecoder(harness))
         pending!.drop = drop
@@ -623,7 +629,7 @@ public final class SearchIndexer: @unchecked Sendable {
                 ? .indexed : .moved
         } catch {
             failFile(path: path, mtimeMs: stat.mtimeMs)
-            return .failed
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -634,6 +640,19 @@ public final class SearchIndexer: @unchecked Sendable {
     func retireCopies(path: String, drop: [SearchFileRow]) {
         guard !drop.isEmpty, let row = try? store.fileRow(for: path), row.sessionRowID != nil else { return }
         _ = try? store.retire(keep: row, rows: drop)
+    }
+
+    /// Drops the read in flight for `path` without counting a failure (the
+    /// scan stopped for a reason of its own, such as the ledger's store
+    /// failing), taking back exactly the messages a staged read parked:
+    /// swe's `_read` discards them in its `finally` on every path that
+    /// does not commit.
+    func abandonFile(path: String) {
+        guard let file = pending, file.path == path else { return }
+        if let host = file.host, !file.stagedIDs.isEmpty {
+            try? store.discardStaged(host: host, ids: file.stagedIDs)
+        }
+        pending = nil
     }
 
     /// A read that never committed. Counted against the mtime it failed at:

@@ -473,6 +473,8 @@ public actor Ledger {
                 let counts = SearchMirror.indexCopies(indexer: indexer, pruned: pruned,
                                                       shouldStop: { Task.isCancelled })
                 report.filesIndexed += counts.indexed
+                // As a live file's failed index read does.
+                report.notes += counts.failures
             }
         }
         if let indexer {
@@ -1475,7 +1477,11 @@ public actor Ledger {
         } catch let failure as SQLiteDatabase.Failure {
             // SWE's own store failing aborts the scan, same as a
             // database source's cache failure: the round is not complete.
+            // A staged index read takes its pieces back first, as swe's
+            // `_read` does in its `finally`: left on the old session they
+            // would repeat its text, and no drain reaches them.
             store.rollback()
+            indexer?.abandonFile(path: path)
             throw failure
         } catch {
             // The file itself was unreadable — gone or locked mid-scan,
@@ -1542,7 +1548,8 @@ public actor Ledger {
             if Task.isCancelled { throw CancellationError() }
             guard let home = mirror.home(for: copy.copy.rel, harness: copy.copy.harness),
                   let info = FileInfo(path: copy.copy.path) else { continue }
-            if let cursor = try store.cursor(for: copy.source), cursor.offset >= info.size { continue }
+            if let cursor = try store.cursor(for: copy.source),
+               Self.cursor(cursor, covers: info, copy: copy.copy.path) { continue }
             let url = URL(fileURLWithPath: copy.copy.path)
             if copy.copy.harness == "claude" {
                 try scanFile(url, accountHome: home.home.path, parser: ClaudeFileParser.self, seen: &seen,
@@ -1553,6 +1560,18 @@ public actor Ledger {
             }
             await Task.yield()
         }
+    }
+
+    /// Whether the source's cursor proves the ledger already read exactly
+    /// the copy's bytes: the copy keeps its source's size and mtime, the
+    /// cursor read to that size, and its head, middle and tail samples
+    /// match the copy. A source rewritten after the ledger read it (same
+    /// or smaller size, new usage) fails one of these, so its copy is read
+    /// and event keys drop the lines the ledger already holds. Never a
+    /// bare offset comparison: a shorter rewrite would pass it.
+    static func cursor(_ cursor: FileCursor, covers info: FileInfo, copy path: String) -> Bool {
+        cursor.size == info.size && cursor.offset == info.size && cursor.modified == info.modified
+            && fingerprintsMatch(cursor, path: path)
     }
 
     /// Bytes each fingerprint sample covers. Head, middle and tail of the
