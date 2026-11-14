@@ -32,7 +32,7 @@ and the fixture that pins the shape. Fixtures live under
 | `swe hooks delete <name> [--harness=<id>] [--foreign] [--yes] --json` | `{"deleted": [str], "declarations_left": [file]}` — deletes need `--yes` or a tty confirm; foreign files need `--foreign` | |
 | `swe hooks disable <name>` / `swe hooks enable <name>` `[--harness=<id>] --json` | `{"name", "state": "disabled"|"enabled", "sources": [path], "links": {state: count}}` | |
 | `swe hooks new <harness> <name> --json` | `{"path", "harness", "command", "settings": [file], "stanza"}`; `swe hooks new shared <name> --json` returns `{"path", "harness": "shared", "tier", "commands": {h: cmd}, "deploys_to": [h], "stanza"}` | |
-| `swe hooks stats [--since=<span>] [--hook=<name>] [--harness=<id>] [--repo=<path>] [--no-backfill] --json` | `{"window", "since", "until", "filters": {"hook", "harness", "repo"}, "sources": {"helper", "transcript", "duplicates", "backfill"}, "totals": {...}, "hooks": [HookStats]}`; see "`swe hooks stats` shape" below | |
+| `swe hooks stats [--since=<span>] [--hook=<name>] [--harness=<id>] [--repo=<path>] [--no-backfill] [--sum-harnesses] --json` | `{"window", "since", "until", "filters": {"hook", "harness", "repo"}, "sources": {"helper", "transcript", "duplicates", "backfill"}, "totals": {...}, "hooks": [HookStats]}`; see "`swe hooks stats` shape" below | |
 | `swe hooks log <name> [--since=<span>] [--harness=<id>] [--repo=<path>] [--decision=<d>] [--limit=<n>] [--no-backfill] --json` | `{"hook", "window", "since", "matched", "events": [HookEvent]}`, newest first; see "`swe hooks stats` shape" below | |
 | `swe mcp list --json` · `swe mcp status --json` | `McpInventory` — each `servers[]` row also carries `type`: the hub entry's `swe mcp set-type` label, or null when none is set (a transport word like `sse` is the wire marker, never a label), and `adopted_from`: the harness a sync/discover adoption pulled the hub entry from, or null | `swe-mcp-list.json`, `swe-mcp-status.json` |
 | `swe mcp sync ... --no-interactive --json` | `McpSyncReport` — plus `adopted`: the harness-only servers the run pulled into the hub at the end (each scoped off for the harnesses that lack it, `swe.adopted_from` holds the donor); `[]` when none or `--no-adopt` | |
@@ -479,5 +479,14 @@ Timestamps are epoch seconds (floats). Counts cover the window
   `reason`, `duration_ms`, `exit_code`, `stop_hook_active` (null when
   unknown), `source` (`helper` or `transcript`). Any of the strings and
   `duration_ms`/`exit_code` can be null.
+- `--sum-harnesses` (stats only) folds every harness into one row per hook
+  before the counts and the five-reason cap, so a reason split across
+  harnesses totals exactly; each row's `harness` is `""` and `totals` is
+  unchanged. The Mac app asks for it.
+- `--hook=<name>` and `swe hooks log <name>` take a name exactly as the
+  stats print it (`claude-plugin/on-stop`, a folder prefix included), which
+  wins over the bare `on-stop`; a script file name (`prose-guard.py`, a
+  path) still finds its hook. `swe hooks log --json` echoes the name it
+  matched.
 - A bad `--since`, `--limit` or `--decision` exits 1 with the reason on
   stderr and nothing on stdout.

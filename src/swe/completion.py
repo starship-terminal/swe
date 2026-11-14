@@ -331,6 +331,7 @@ _COMMAND_FLAGS: dict[str, list[tuple[str, str]]] = {
         ("--harness=", "Only one harness"),
         ("--repo=", "Only runs in one repository"),
         ("--no-backfill", "Skip the Claude Code transcripts"),
+        ("--sum-harnesses", "One row per hook, every harness folded in"),
         ("--json", "Per-hook counts, rates and reasons as JSON"),
     ],
     "hooks log": [

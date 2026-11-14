@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "data": {
+    "hooks": [
+      {
+        "name": "bundle",
+        "harness": "claude",
+        "tier": "harness",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/bundle",
+        "dest_path": "/tmp/swe-fixture-home/.claude/hooks/bundle",
+        "link_status": "linked",
+        "detail": "",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "PreToolUse",
+            "matcher": "Bash",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      },
+      {
+        "name": "prose-guard.py",
+        "harness": "claude",
+        "tier": "harness",
+        "source_path": "/tmp/swe-fixture-home/.swe/hooks/claude/prose-guard.py",
+        "dest_path": "/tmp/swe-fixture-home/.claude/hooks/prose-guard.py",
+        "link_status": "linked",
+        "detail": "",
+        "enabled": true,
+        "declared": [
+          {
+            "event": "Stop",
+            "matcher": "",
+            "file": "/tmp/swe-fixture-home/.claude/settings.json"
+          }
+        ],
+        "events_supported": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PostCompact",
+          "TeammateIdle"
+        ],
+        "summary": ""
+      }
+    ]
+  }
+}

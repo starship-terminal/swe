@@ -140,7 +140,12 @@ def _filtered(home: Path, values: dict, backfill: bool, now: float,
 
 def stats(rest: list[str], json_view: bool, fail) -> int:
     usage = "Usage: swe hooks stats [--since=7d] [--hook=<name>] " \
-            "[--harness=<h>] [--repo=<path>] [--no-backfill] [--json]"
+            "[--harness=<h>] [--repo=<path>] [--no-backfill] " \
+            "[--sum-harnesses] [--json]"
+    # One row per hook with every harness folded in before the per-row
+    # reason cap, for a reader that wants exact totals (the Mac app).
+    sum_harnesses = "--sum-harnesses" in rest
+    rest = [a for a in rest if a != "--sum-harnesses"]
     try:
         values, backfill, extra = _parse(
             rest, {"--since", "--hook", "--harness", "--repo"}, usage)
@@ -155,6 +160,8 @@ def stats(rest: list[str], json_view: bool, fail) -> int:
             home, values, backfill, now, values.get("--hook"))
     except ValueError as exc:
         return fail(c("red", str(exc)))
+    if sum_harnesses:
+        selected = [{**e, "harness": ""} for e in selected]
     result = _events.build_stats(selected)
     window = values.get("--since", DEFAULT_SINCE)
 
@@ -199,7 +206,8 @@ def stats(rest: list[str], json_view: bool, fail) -> int:
         rate = _pct(r["block_rate"])
         table.add_row({
             "hook": sanitize(r["hook"]),
-            "harness": sanitize(r["harness"]) or "-",
+            "harness": sanitize(r["harness"]) or
+                       ("all" if sum_harnesses else "-"),
             "fires": r["fires"],
             "blocks": r["blocks"],
             "rate": c("red", rate) if r["blocks"] else c("dim", rate),
@@ -275,10 +283,12 @@ def log(rest: list[str], json_view: bool, fail) -> int:
     except ValueError as exc:
         return fail(c("red", str(exc)))
     recent = sorted(selected, key=lambda e: e["ts"], reverse=True)[:limit]
+    shown = selected[0]["hook"] if selected else \
+        _events.strip_script_extension(names[0])
 
     if json_view:
         return emit({
-            "hook": _events.hook_stem(names[0]),
+            "hook": shown,
             "window": values.get("--since", DEFAULT_SINCE),
             "since": since,
             "matched": len(selected),
@@ -286,7 +296,7 @@ def log(rest: list[str], json_view: bool, fail) -> int:
         })
 
     counts = f"{len(recent)} of {len(selected)} runs, newest first"
-    print(f"\n{c('bold', sanitize(_events.hook_stem(names[0])))}  "
+    print(f"\n{c('bold', sanitize(shown))}  "
           f"{c('dim', counts)}\n")
     if not recent:
         print(c("dim", "  No runs of that hook in this window.\n"))

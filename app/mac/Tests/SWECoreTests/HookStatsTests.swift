@@ -19,12 +19,17 @@ import Testing
         try await client("swe-hooks-stats").0.hooksStats(window: .week)
     }
 
+    /// Scripts whose id is their name, for tests that do not care about paths.
+    private func S(_ names: String...) -> [HookStatsScript] {
+        names.map { HookStatsScript(id: $0, names: [$0]) }
+    }
+
     // MARK: decoding
 
     @Test func decodesTheStatsRowsAndAsksForTheWindow() async throws {
         let (swe, runner) = try client("swe-hooks-stats")
         let report = try await swe.hooksStats(window: .month)
-        #expect(runner.calls.last == ["hooks", "stats", "--since=30d", "--json"])
+        #expect(runner.calls.last == ["hooks", "stats", "--since=30d", "--sum-harnesses", "--json"])
         #expect(report.window == "7d")
         #expect(report.hooks.count == 5)
         let claude = try #require(report.hooks.first { $0.hook == "prose-guard" && $0.harness == "claude" })
@@ -90,7 +95,7 @@ import Testing
     // MARK: summing across harnesses
 
     @Test func sumsARowAcrossHarnesses() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: ["prose-guard.py"])
+        let table = HookStatsTable(report: try await report(), scripts: S("prose-guard.py"))
         let counts = table.counts(for: "prose-guard.py")
         #expect(counts.fires == 9)
         #expect(counts.blocks == 3)
@@ -100,7 +105,7 @@ import Testing
     }
 
     @Test func mergesReasonsAcrossHarnessesMostFirst() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: ["prose-guard.py"])
+        let table = HookStatsTable(report: try await report(), scripts: S("prose-guard.py"))
         // Ties keep the order swe gave them in (Claude's row first).
         let reasons = table.counts(for: "prose-guard.py").topReasons
         #expect(reasons.map(\.reason) == ["done-followups: missing Follow-ups", "long paragraph", "em dash found"])
@@ -125,7 +130,7 @@ import Testing
 
     @Test func rowsOfOneNameButDifferentHarnessesDoNotLeakIntoOthers() async throws {
         let table = HookStatsTable(report: try await report(),
-                                   scripts: ["prose-guard.py", "no-sleep-poll.py"])
+                                   scripts: S("prose-guard.py", "no-sleep-poll.py"))
         #expect(table.counts(for: "no-sleep-poll.py").fires == 4)
         #expect(table.counts(for: "no-sleep-poll.py").blocks == 4)
         #expect(table.counts(for: "no-sleep-poll.py").rateLabel == "100%")
@@ -148,7 +153,7 @@ import Testing
     }
 
     @Test func aHookWithNoRowsHasNoRuns() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: ["quiet.py"])
+        let table = HookStatsTable(report: try await report(), scripts: S("quiet.py"))
         let counts = table.counts(for: "quiet.py")
         #expect(!counts.hasRuns)
         #expect(counts.rateLabel == "-")
@@ -170,23 +175,24 @@ import Testing
     }
 
     @Test func equalStemsMatch() {
-        let matched = HookStatsNames.match(scripts: ["prose-guard.py", "night-watch.sh"],
+        let matched = HookStatsNames.match(scripts: S("prose-guard.py", "night-watch.sh"),
                                            statsNames: ["prose-guard", "other"])
-        #expect(matched == ["prose-guard.py": "prose-guard"])
+        #expect(matched.names == ["prose-guard.py": ["prose-guard"]])
+        #expect(matched.ambiguous.isEmpty)
     }
 
     @Test func aScriptInAFolderMatchesOnItsLastComponentWhenUnambiguous() async throws {
-        let matched = HookStatsNames.match(scripts: ["command-guard/command_guard.py"],
+        let matched = HookStatsNames.match(scripts: S("command-guard/command_guard.py"),
                                            statsNames: ["command_guard", "prose-guard"])
-        #expect(matched == ["command-guard/command_guard.py": "command_guard"])
+        #expect(matched.names == ["command-guard/command_guard.py": ["command_guard"]])
         // The same through the real report.
-        let table = HookStatsTable(report: try await report(), scripts: ["command-guard/command_guard.py"])
+        let table = HookStatsTable(report: try await report(), scripts: S("command-guard/command_guard.py"))
         #expect(table.counts(for: "command-guard/command_guard.py").fires == 3)
         #expect(table.statsName(for: "command-guard/command_guard.py") == "command_guard")
     }
 
     @Test func aFolderPrefixedStatsNameMatchesTheBareScript() async throws {
-        let table = HookStatsTable(report: try await report(), scripts: ["on-stop.sh"])
+        let table = HookStatsTable(report: try await report(), scripts: S("on-stop.sh"))
         let counts = table.counts(for: "on-stop.sh")
         #expect(counts.fires == 2)
         #expect(counts.errors == 1)
@@ -194,31 +200,144 @@ import Testing
     }
 
     @Test func twoScriptsWithOneLastComponentMatchNeither() {
-        let matched = HookStatsNames.match(scripts: ["a/on-stop.sh", "b/on-stop.sh"],
-                                           statsNames: ["on-stop"])
-        #expect(matched.isEmpty)
+        let matched = HookStatsNames.match(scripts: S("a/on-stop.sh", "b/on-stop.sh"),
+                                           statsNames: ["claude-plugin/on-stop"])
+        #expect(matched.names.isEmpty)
+        #expect(matched.ambiguous == ["a/on-stop.sh", "b/on-stop.sh"])
     }
 
     @Test func twoStatsNamesWithOneLastComponentMatchNothing() {
-        let matched = HookStatsNames.match(scripts: ["on-stop.sh"],
+        let matched = HookStatsNames.match(scripts: S("on-stop.sh"),
                                            statsNames: ["a/on-stop", "b/on-stop"])
-        #expect(matched.isEmpty)
+        #expect(matched.names.isEmpty)
+        #expect(matched.ambiguous == ["on-stop.sh"])
     }
 
     @Test func anExactMatchBeatsTheLooserRule() {
-        // `a/on-stop` is exact for its script; `b/on-stop.sh` shares a last
-        // component with it, so it stays unmatched rather than guessing.
-        let matched = HookStatsNames.match(scripts: ["a/on-stop.sh", "b/on-stop.sh"],
-                                           statsNames: ["a/on-stop"])
-        #expect(matched == ["a/on-stop.sh": "a/on-stop"])
+        // `a/on-stop` is exact for its script; the other shares a last
+        // component with it, so it is left ambiguous rather than guessed.
+        let matched = HookStatsNames.match(
+            scripts: [HookStatsScript(id: "/p/a/on-stop.sh", names: ["a/on-stop.sh"]),
+                      HookStatsScript(id: "/p/b/on-stop.sh", names: ["b/on-stop.sh"])],
+            statsNames: ["a/on-stop"])
+        #expect(matched.names == ["/p/a/on-stop.sh": ["a/on-stop"]])
+        #expect(matched.ambiguous == ["/p/b/on-stop.sh"])
     }
 
-    @Test func theSameScriptOnTwoHarnessesIsOneScript() {
-        // herdr's script sits in the Claude and Codex folders: one name, so
-        // the last-component rule is not ambiguous.
-        let matched = HookStatsNames.match(scripts: ["herdr/notify.sh", "herdr/notify.sh"],
-                                           statsNames: ["notify"])
-        #expect(matched == ["herdr/notify.sh": "notify"])
+    @Test func theSameSharedSourceOnTwoHarnessesIsOneScript() {
+        // A shared script is a row per harness it deploys to, all with one
+        // source: it is one script, so the last-component rule holds.
+        let hooks = [
+            Hook(script: "notify.sh", harness: "claude", source: "/h/.swe/hooks/shared/notify.sh",
+                 destination: "/h/.claude/hooks/notify.sh", state: .linked),
+            Hook(script: "notify.sh", harness: "codex", source: "/h/.swe/hooks/shared/notify.sh",
+                 destination: "/h/.codex/hooks/notify.sh", state: .linked)]
+        let scripts = HookStatsScript.scripts(for: hooks)
+        #expect(scripts.count == 1)
+        let matched = HookStatsNames.match(scripts: scripts, statsNames: ["herdr/notify"])
+        #expect(matched.names == ["/h/.swe/hooks/shared/notify.sh": ["herdr/notify"]])
+    }
+
+    @Test func twoFilesWithOneBasenameDoNotShareCounts() async throws {
+        // Hook.script is only the basename, so two plugins' on-stop.sh look
+        // alike by name; their sources tell them apart, and neither takes
+        // the one hook's history.
+        let hooks = [
+            Hook(script: "on-stop.sh", harness: "claude", source: "/plugins/a/on-stop.sh",
+                 destination: "/plugins/a/on-stop.sh", state: .keep, tier: .foreign),
+            Hook(script: "on-stop.sh", harness: "claude", source: "/plugins/b/on-stop.sh",
+                 destination: "/plugins/b/on-stop.sh", state: .keep, tier: .foreign)]
+        let table = HookStatsTable(report: try await report(), scripts: HookStatsScript.scripts(for: hooks))
+        for hook in hooks {
+            #expect(table.isAmbiguous(hook.source))
+            #expect(table.statsName(for: hook.source) == nil)
+        }
+        let state = HookStatsState.ready(table)
+        #expect(state.cells(for: "/plugins/a/on-stop.sh") == .dashes)
+        #expect(state.cells(for: "/plugins/b/on-stop.sh") == .dashes)
+    }
+
+    // MARK: directory hooks
+
+    /// `swe hooks list --json` for a hub with `claude/bundle/guard.py`
+    /// (a directory hook declared through `bundle/guard.py`) and a file
+    /// hook; swe-hooks-directory.json. The list names the row after its
+    /// folder, `bundle`, and carries only the folder as its source.
+    private func directoryInventory(home: String) async throws -> [Hook] {
+        var text = String(decoding: try fixture("swe-hooks-directory"), as: UTF8.self)
+        text = text.replacingOccurrences(of: "/tmp/swe-fixture-home", with: home)
+        let swe = SweClient(runner: FakeRunner(.init(status: 0, stdout: Data(text.utf8), stderr: "")))
+        return try await swe.hooksList().hooks
+    }
+
+    @Test func aDirectoryHookCountsTheRunsOfItsExecutable() async throws {
+        let home = try TempDir()
+        let folder = home.path(".swe/hooks/claude/bundle")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("lib"),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("__pycache__"),
+                                                withIntermediateDirectories: true)
+        for file in ["guard.py", "lib/util.py", "README.md", "__pycache__/guard.py"] {
+            try Data("x".utf8).write(to: folder.appendingPathComponent(file))
+        }
+        let hooks = try await directoryInventory(home: home.url.path)
+        // What the inventory really says: the folder's name, the folder as its source.
+        let bundle = try #require(hooks.first { $0.script == "bundle" })
+        #expect(bundle.source == folder.path)
+
+        let children = HookStatsScript.childNames(of: bundle.source)
+        #expect(children.contains("guard") && children.contains("bundle/guard"))
+        #expect(children.contains("util") && children.contains("lib/util"))
+        #expect(!children.contains("README"))
+        #expect(HookStatsScript.childNames(of: hooks[1].source).isEmpty)
+
+        // Its runs are logged as `guard`, the executable's stem.
+        let report = HookStatsReport(window: "7d", hooks: [
+            HookStatsRow(hook: "guard", harness: "", fires: 7, blocks: 2),
+            HookStatsRow(hook: "prose-guard", harness: "", fires: 3)])
+        let scripts = HookStatsScript.scripts(for: hooks, children: [bundle.source: children])
+        let table = HookStatsTable(report: report, scripts: scripts)
+        #expect(table.counts(for: bundle.source).fires == 7)
+        #expect(table.counts(for: bundle.source).blocks == 2)
+        #expect(table.statsName(for: bundle.source) == "guard")
+        // Without the folder's contents the display name finds nothing: the bug.
+        let blind = HookStatsTable(report: report, scripts: HookStatsScript.scripts(for: hooks))
+        #expect(blind.counts(for: bundle.source).fires == 0)
+        // The file hook beside it is unaffected.
+        let prose = try #require(hooks.first { $0.script == "prose-guard.py" })
+        #expect(table.counts(for: prose.source).fires == 3)
+    }
+
+    @Test func aFolderThatIsGoneHasNoChildren() {
+        #expect(HookStatsScript.childNames(of: "/nonexistent/swe-test/bundle").isEmpty)
+    }
+
+    // MARK: exact totals and identities
+
+    @Test func theSummedReportHasOneRowPerHookWithNoHarness() async throws {
+        let (swe, runner) = try client("swe-hooks-stats-summed")
+        let report = try await swe.hooksStats(window: .week)
+        #expect(runner.calls.last == ["hooks", "stats", "--since=7d", "--sum-harnesses", "--json"])
+        #expect(report.hooks.map(\.harness) == ["", "", "", ""])
+        let prose = try #require(report.hooks.first { $0.hook == "prose-guard" })
+        // Claude's 6 runs and Codex's 3, folded by swe before it cut the reasons.
+        #expect((prose.fires, prose.blocks) == (9, 3))
+        let counts = HookStatsTable(report: report, scripts: S("prose-guard.py")).counts(for: "prose-guard.py")
+        #expect(counts.topReasons.first?.count == 2)
+    }
+
+    @Test func runsAtOneTimestampKeepDistinctIds() async throws {
+        // Parallel tool calls one hook blocked share the record's timestamp.
+        let json = #"""
+        {"schema": 1, "data": {"hook": "x", "window": "7d", "since": 0, "matched": 3, "events": [
+          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block"},
+          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block"},
+          {"ts": 1000, "hook": "x", "harness": "claude", "decision": "block", "repo": null}]}}
+        """#
+        let swe = SweClient(runner: FakeRunner(.init(status: 0, stdout: Data(json.utf8), stderr: "")))
+        let log = try await swe.hooksLog(name: "x", window: .week)
+        #expect(log.events.count == 3)
+        #expect(Set(log.events.map(\.id)).count == 3)
     }
 
     // MARK: window mapping
@@ -253,14 +372,14 @@ import Testing
 
     @Test func theModelShowsBarsThenNumbers() async throws {
         let model = HookStatsModel()
-        #expect(model.state(for: .week, scripts: ["prose-guard.py"]) == .loading)
+        #expect(model.state(for: .week, scripts: S("prose-guard.py")) == .loading)
         await model.load(window: .week, swe: SweClient(runner: try runner()), for: "/bin/swe")
-        guard case .ready(let table) = model.state(for: .week, scripts: ["prose-guard.py"]) else {
+        guard case .ready(let table) = model.state(for: .week, scripts: S("prose-guard.py")) else {
             Issue.record("expected numbers"); return
         }
         #expect(table.counts(for: "prose-guard.py").fires == 9)
         // Another window has not been asked for yet.
-        #expect(model.state(for: .month, scripts: ["prose-guard.py"]) == .loading)
+        #expect(model.state(for: .month, scripts: S("prose-guard.py")) == .loading)
         #expect(model.completed == 1)
     }
 
@@ -268,7 +387,7 @@ import Testing
         let model = HookStatsModel()
         let old = CommandResult(status: 1, stdout: Data(), stderr: "Unknown command: 'stats'")
         await model.load(window: .week, swe: SweClient(runner: try runner(stats: old)), for: "/bin/swe")
-        #expect(model.state(for: .week, scripts: ["x.py"]) == .unavailable)
+        #expect(model.state(for: .week, scripts: S("x.py")) == .unavailable)
         #expect(HookStatsState.unavailable.cells(for: "x.py") == .dashes)
         #expect(HookStatsState.loading.cells(for: "x.py") == .loading)
     }
@@ -278,7 +397,7 @@ import Testing
         await model.load(window: .week, swe: SweClient(runner: try runner()), for: "/bin/swe")
         let down = CommandResult(status: 1, stdout: Data(), stderr: "boom")
         await model.load(window: .week, swe: SweClient(runner: try runner(stats: down)), for: "/bin/swe")
-        guard case .ready = model.state(for: .week, scripts: []) else {
+        guard case .ready = model.state(for: .week, scripts: S()) else {
             Issue.record("the numbers should stay"); return
         }
     }
@@ -288,7 +407,7 @@ import Testing
         await model.load(window: .week, swe: SweClient(runner: try runner()), for: "/bin/swe")
         let down = CommandResult(status: 1, stdout: Data(), stderr: "boom")
         await model.load(window: .week, swe: SweClient(runner: try runner(stats: down)), for: "/other/swe")
-        #expect(model.state(for: .week, scripts: []) == .unavailable)
+        #expect(model.state(for: .week, scripts: S()) == .unavailable)
     }
 
     @Test func recentRunsLoadPerHookAndWindow() async throws {

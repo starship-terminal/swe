@@ -21,6 +21,10 @@ struct HooksPage: View {
     @AppStorage("hooksStatsWindow") private var statsWindow = HookStatsWindow.week
     /// The board's width, for the narrow layout; 0 until the first layout.
     @State private var boardWidth: CGFloat = 0
+    /// What each directory hook's folder holds, by source: its runs are
+    /// logged under those scripts, not the folder's name. Read off the
+    /// main actor when the inventory changes.
+    @State private var folderScripts: [String: [String]] = [:]
 
     /// Under this, the list and a 440pt panel can't sit side by side: the
     /// open hook takes the board's place until it's closed. 900pt windows
@@ -59,6 +63,15 @@ struct HooksPage: View {
         // Counts load with the page, and again when the picker moves or the
         // swe changes; the Refresh button runs them too. Never on a timer.
         .task(id: [statsWindow.rawValue, app.swePath]) { await loadStats() }
+        .task(id: model.hooks.map(\.source)) {
+            let sources = model.hooks.map(\.source)
+            let found = await offMain {
+                Dictionary(sources.map { ($0, HookStatsScript.childNames(of: $0)) },
+                           uniquingKeysWith: { first, _ in first })
+            }
+            guard !Task.isCancelled else { return }
+            folderScripts = found
+        }
         // The ⌘K search's hook pick opens its panel. Retried on each
         // load: the pick can land before the inventory does.
         .task(id: app.pendingHook) { applyPendingHook() }
@@ -117,7 +130,8 @@ struct HooksPage: View {
         let timeline = HookTimeline(harness: current, hooks: hooks, includeForeign: showForeign)
         let idle = HookTimeline.notRunning(in: hooks)
         let wide = boardWidth == 0 || boardWidth >= Self.sideBySideWidth
-        let counts = stats.state(for: statsWindow, scripts: hooks.map(\.script))
+        let counts = stats.state(for: statsWindow,
+                                 scripts: HookStatsScript.scripts(for: hooks, children: folderScripts))
         return Group {
             if let opened, !wide {
                 panel(for: opened, in: hooks, counts: counts)
@@ -337,7 +351,7 @@ private struct TimelineCard: View {
                         if let lane = lanes[event] {
                             ForEach(lane.entries) { entry in
                                 EntryRow(entry: entry, isOpen: opened?.rowKey == entry.hook.rowKey,
-                                         cells: counts.cells(for: entry.hook.script)) {
+                                         cells: counts.cells(for: entry.hook.source)) {
                                     open(entry.hook)
                                 }
                             }
@@ -687,7 +701,7 @@ private struct HookDetailView: View {
                 PrimitiveLockNote(text: "Only scripts inside ~/.swe/hooks can be edited, so \(hook.script) is read-only.")
             }
             header
-            HookRunsCard(script: hook.script, counts: counts, window: window)
+            HookRunsCard(source: hook.source, counts: counts, window: window)
             if let check {
                 if !check.exists {
                     Card {
@@ -910,7 +924,8 @@ private struct HookDetailView: View {
 /// cannot answer; the panel is whole without it.
 private struct HookRunsCard: View {
     @Environment(AppModel.self) private var app
-    var script: String
+    /// The hook's source, which the counts are keyed by.
+    var source: String
     var counts: HookStatsState
     var window: HookStatsWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -920,7 +935,7 @@ private struct HookRunsCard: View {
     /// The name swe's stats use for this script, when any row matched.
     private var name: String? {
         guard case .ready(let table) = counts else { return nil }
-        return table.statsName(for: script)
+        return table.isAmbiguous(source) ? nil : table.statsName(for: source)
     }
 
     var body: some View {
@@ -931,9 +946,12 @@ private struct HookRunsCard: View {
             case .loading:
                 Card(title: "Runs", subtitle: window.title) { loadingBody }
             case .ready(let table):
-                let summed = table.counts(for: script)
+                let summed = table.counts(for: source)
                 Card(title: "Runs", subtitle: window.title) {
-                    if summed.hasRuns { readyBody(summed) } else {
+                    if table.isAmbiguous(source) {
+                        Text("Another script has the same name, so its runs can't be told apart.")
+                            .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                    } else if summed.hasRuns { readyBody(summed) } else {
                         Text(window.emptyLine)
                             .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
                     }

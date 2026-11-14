@@ -53,6 +53,35 @@ def hook_stem(name: str) -> str:
     return base
 
 
+def strip_script_extension(name: str) -> str:
+    """``claude-plugin/on-stop`` for ``claude-plugin/on-stop.sh``: the
+    extension goes, a folder prefix stays (the stats name of a hook another
+    installer declared carries one)."""
+    name = str(name or "").strip()
+    lowered = name.lower()
+    for ext in SCRIPT_EXTENSIONS:
+        if lowered.endswith(ext) and len(name) > len(ext):
+            return name[:-len(ext)]
+    return name
+
+
+def resolve_hook_name(requested: str, names) -> str:
+    """The hook name ``requested`` means, among the ``names`` events carry.
+
+    A name exactly as ``swe hooks stats`` prints it wins (so
+    ``claude-plugin/on-stop`` finds that hook, not the bare ``on-stop``);
+    then the name without its script extension; then the bare script stem,
+    which also takes ``/x/hooks/prose-guard.py`` and a name nothing ran
+    under yet.
+    """
+    names = set(names)
+    exact = str(requested or "").strip()
+    for candidate in (exact, strip_script_extension(exact)):
+        if candidate in names:
+            return candidate
+    return hook_stem(exact)
+
+
 def parse_since(text: str, now: float) -> float | None:
     """The epoch second ``--since=<n><s|m|h|d|w>`` starts at; None for ``all``.
 
@@ -264,7 +293,8 @@ def filter_events(events: list[dict], *, hook: str | None = None,
                   decision: str | None = None,
                   since: float | None = None) -> list[dict]:
     """The events matching every given filter, order kept."""
-    wanted = hook_stem(hook) if hook else None
+    wanted = resolve_hook_name(hook, {e["hook"] for e in events}) \
+        if hook else None
     in_repo = repo_filter(repo) if repo else None
     out = []
     for event in events:
