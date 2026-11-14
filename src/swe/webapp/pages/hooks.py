@@ -41,6 +41,8 @@ reads above never touch it.
 
 from __future__ import annotations
 
+import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -57,7 +59,7 @@ _WRITE_LOCK = threading.Lock()
 def get(ctx, args: dict) -> dict:
     home = home_path(ctx)
     if args.get("stats"):
-        return stats_view(home, args["stats"])
+        return stats_view(home, args["stats"], force=args.get("refresh") == "1")
     if args.get("hook"):
         return detail(ctx, home, args)
     return listing(ctx, home)
@@ -104,9 +106,11 @@ def _inventory(home: Path):
     return all_rows(home, registry, statuses, declared), registry, patterns, warning
 
 
-def _row_json(r) -> dict:
-    """``commands._row_json`` plus the row's own ``detail`` note."""
+def _row_json(r, keys: list[str] | None = None) -> dict:
+    """``commands._row_json`` plus the row's own ``detail`` note and the
+    stats names its run counts come from."""
     return {
+        "stats_keys": keys or [],
         "name": r.script,
         "harness": r.harness,
         "tier": r.tier,
@@ -148,13 +152,86 @@ def listing(ctx, home: Path) -> dict:
     return {
         "machine": ctx.machine.get("name"),
         "home": str(home),
-        "hooks": [_row_json(r) for r in rows],
+        "hooks": [_row_json(r, k) for r, k in zip(rows, _stats_keys(rows, home))],
         "findings": findings,
         "check_error": check_error,
         "warning": warning,
         "blocked": blocked_now(home),
         "harnesses": _harnesses(registry, rows),
     }
+
+
+# -- which stats a row owns ------------------------------------------------
+
+_TOKEN_BREAKS = re.compile(r"[\s\"'`;|&()<>=]+")
+
+
+def _expand(token: str, home: Path) -> str:
+    for var in ("$HOME", "${HOME}"):
+        token = token.replace(var, str(home))
+    return str(home) + token[1:] if token == "~" or token.startswith("~/") else token
+
+
+def _real(path: str) -> str:
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError):
+        return path
+
+
+def _stats_keys(rows, home: Path) -> list[list[str]]:
+    """For each row, the names its runs may be logged under, never one
+    another row's.
+
+    The log names a run by its script (``events.hook_stem``; a generic
+    stem takes its folder, ``transcripts.command_hook``), so a row cannot
+    just use its list name: a directory hook is named after its folder
+    while its runs carry the executable's stem, and two scripts with one
+    basename share a stem. A row's names are its own file's stem and
+    ``command_hook`` of its path, plus ``command_hook`` of every declared
+    command that points at it (inside it, for a directory) or, when the
+    command's path holds an unresolved variable, that has its basename. A
+    name that more than one distinct source file could own is dropped.
+    """
+    from swe.hooks.events import SCRIPT_EXTENSIONS, hook_stem
+    from swe.hooks.transcripts import command_hook
+
+    out: list[list[str]] = []
+    owners: dict[str, set[str]] = {}
+    for r in rows:
+        src = Path(r.source)
+        is_dir = src.is_dir()
+        real_src, real_dest = _real(str(r.source)), _real(str(r.dest))
+        keys: list[str] = []
+
+        def add(key: str) -> None:
+            if key and key not in keys:
+                keys.append(key)
+
+        if not is_dir:
+            add(hook_stem(src.name))
+            for path in (str(src), str(r.dest)):
+                add(command_hook(path))
+        for decl in getattr(r, "declared", []):
+            for token in _TOKEN_BREAKS.split(decl.command or ""):
+                if not token.lower().endswith(SCRIPT_EXTENSIONS) or len(token) <= 3:
+                    continue
+                path = _expand(token, home)
+                if "$" in path:
+                    # A plugin root the log resolved and the row cannot:
+                    # the basename is all there is to go on.
+                    mine = not is_dir and hook_stem(os.path.basename(path)) == hook_stem(src.name)
+                else:
+                    real = _real(path)
+                    roots = (real_src, real_dest)
+                    mine = (any(real.startswith(root.rstrip(os.sep) + os.sep) for root in roots)
+                            if is_dir else real in roots)
+                if mine:
+                    add(command_hook(token))
+        for key in keys:
+            owners.setdefault(key, set()).add(real_src)
+        out.append(keys)
+    return [[k for k in keys if len(owners[k]) == 1] for keys in out]
 
 
 # -- one hook -------------------------------------------------------------
@@ -179,6 +256,7 @@ def detail(ctx, home: Path, args: dict) -> dict:
         raise PageError(404, "unknown_hook",
                         f"No hook script named {args['hook']} under ~/.swe/hooks.")
     row = matches[0]
+    keys = {id(r): k for r, k in zip(rows, _stats_keys(rows, home))}[id(row)]
     source = Path(row.source)
     exists = source.exists()
     # A foreign hook's command can name any file on disk; a paired
@@ -187,7 +265,7 @@ def detail(ctx, home: Path, args: dict) -> dict:
     return {
         "machine": ctx.machine.get("name"),
         "home": str(home),
-        **_row_json(row),
+        **_row_json(row, keys),
         "declared": [{
             "event": d.event,
             "matcher": d.matcher,
@@ -309,9 +387,12 @@ _STATS_LOCK = threading.Lock()
 _STATS: dict[tuple[str, str], dict] = {}
 
 
-def stats_view(home: Path, window: str) -> dict:
-    """``GET ?stats=<window>``: the payload, or ``{"state": "loading"}``
-    while the first read runs. A request never runs the read itself, and
+def stats_view(home: Path, window: str, force: bool = False) -> dict:
+    """``GET ?stats=<window>[&refresh=1]``: the payload, or ``{"state":
+    "loading"}`` while the first read runs. ``refreshing`` is true while a
+    newer read is running behind an older answer, so a client keeps
+    asking until it is false; ``force`` (the Refresh button) starts that
+    read even inside the TTL. A request never runs the read itself, and
     at most one runs per (home, window)."""
     if window not in STATS_WINDOWS:
         raise PageError(422, "bad_window",
@@ -323,7 +404,7 @@ def stats_view(home: Path, window: str) -> dict:
         running = thread is not None and thread.is_alive()
         ttl = STATS_TTL_S if "error" not in entry else STATS_ERROR_TTL_S
         fresh = "at" in entry and time.monotonic() - entry["at"] < ttl
-        if not fresh and not running:
+        if (not fresh or force) and not running:
             thread = threading.Thread(
                 target=_stats_worker, args=(key, home, window),
                 name="hooks-stats", daemon=True)
@@ -338,7 +419,9 @@ def stats_view(home: Path, window: str) -> dict:
     with _STATS_LOCK:
         entry = _STATS.get(key, {})
         if "payload" in entry:
-            return entry["payload"]
+            thread = entry.get("thread")
+            return {**entry["payload"],
+                    "refreshing": thread is not None and thread.is_alive()}
         if "error" in entry:
             raise PageError(503, "stats_unavailable", entry["error"])
     return {"state": "loading", "window": window}

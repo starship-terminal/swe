@@ -117,7 +117,21 @@ asks for the list and the counts as two requests, a background thread (one
 per window) does the read, and the answer is kept 30 seconds. A request
 that finds nothing ready answers `{state: "loading"}` after a quarter of a
 second and the page asks again every 1.5 seconds; an older answer is served
-while the next read runs. A bad window is 422 `bad_window`, a failed read
+while the next read runs. An answer older than 30 seconds is still served, with `refreshing: true`,
+while the next read runs, and the page keeps asking until it is false;
+Refresh adds `&refresh=1` to force that read.
+
+Each list and detail row carries `stats_keys`, the names its runs may be
+logged under: the file's stem, `command_hook` of its path, and
+`command_hook` of each declared command that points at it (inside the
+folder, for a directory hook, so `bundle` is counted under its
+executable's `guard`). A name more than one source file could own is
+dropped, and a row counts only when exactly one of its names has runs;
+anything else shows dashes. The counts are folded by the logged name, not
+through `swe hooks log`'s name filter, so a prefixed name such as
+`claude-plugin/on-stop` finds its top reasons and recent runs.
+
+A bad window is 422 `bad_window`, a failed read
 503 `stats_unavailable`.
 
 ## Differences from the Mac app

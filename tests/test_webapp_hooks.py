@@ -587,7 +587,7 @@ class TestStatsRead(_StatsHome):
             first = page.get(SimpleNamespace(home=self.home), {"stats": "7d"})
             second = page.get(SimpleNamespace(home=self.home), {"stats": "7d"})
         self.assertEqual((first["state"], first["hooks"][0]["hook"]), ("ready", "g"))
-        self.assertIs(first, second)
+        self.assertEqual(first, second)
         self.assertEqual(built.call_count, 1)
 
     def test_a_bad_window_is_422(self):
@@ -648,10 +648,129 @@ class TestStatsRead(_StatsHome):
             return real(home, window, now)
 
         with patch.object(page, "STATS_TTL_S", 0.0), patch.object(page, "build_stats_payload", side_effect=slow):
-            self.assertIs(page.get(ctx, {"stats": "7d"}), first)
+            self.assertEqual(page.get(ctx, {"stats": "7d"}), {**first, "refreshing": True})
             thread = page._STATS[(str(self.home), "7d")]["thread"]
             gate.set()
             thread.join(10)
+
+
+class TestStatsFreshness(_StatsHome):
+    """An answer past its TTL is marked refreshing until the new read lands,
+    and the Refresh button can force one."""
+
+    def setUp(self):
+        super().setUp()
+        _write_events(self.home, [_event(self.now, HOUR, "g", "block", reason="a")])
+        patcher = patch.object(page, "FIRST_WAIT_S", 5.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.ctx = SimpleNamespace(home=self.home)
+
+    def fires(self, answer):
+        return answer["hooks"][0]["fires"]
+
+    def test_a_stale_answer_says_it_is_refreshing_until_the_new_one_lands(self):
+        first = page.get(self.ctx, {"stats": "7d"})
+        self.assertEqual((first["state"], first["refreshing"], self.fires(first)), ("ready", False, 1))
+        _write_events(self.home, [_event(self.now, HOUR, "g", "block", reason="a"),
+                                  _event(self.now, 2 * HOUR, "g", "allow")])
+        gate, real = threading.Event(), page.build_stats_payload
+
+        def slow(home, window, now=None):
+            gate.wait(10)
+            return real(home, window, now)
+
+        with patch.object(page, "STATS_TTL_S", 0.0), patch.object(page, "build_stats_payload", side_effect=slow):
+            stale = page.get(self.ctx, {"stats": "7d"})
+            self.assertEqual((stale["state"], stale["refreshing"], self.fires(stale)), ("ready", True, 1))
+            thread = page._STATS[(str(self.home), "7d")]["thread"]
+            gate.set()
+            thread.join(10)
+        fresh = page.get(self.ctx, {"stats": "7d"})
+        self.assertEqual((fresh["refreshing"], self.fires(fresh)), (False, 2))
+
+    def test_refresh_forces_a_new_read_even_inside_the_ttl(self):
+        real = page.build_stats_payload
+        with patch.object(page, "build_stats_payload", side_effect=real) as built:
+            page.get(self.ctx, {"stats": "7d"})
+            again = page.get(self.ctx, {"stats": "7d"})
+            self.assertEqual((built.call_count, again["refreshing"]), (1, False))
+            forced = page.get(self.ctx, {"stats": "7d", "refresh": "1"})
+            self.assertEqual(forced["state"], "ready")
+            page._STATS[(str(self.home), "7d")].get("thread") and page._STATS[(str(self.home), "7d")]["thread"].join(10)
+            self.assertEqual(built.call_count, 2)
+        self.assertFalse(page.get(self.ctx, {"stats": "7d"})["refreshing"])
+
+
+class TestStatsAggregation(_StatsHome):
+    def test_reasons_add_up_across_harnesses_before_the_cap(self):
+        rows = [_event(self.now, i * 60, "g", "block", reason="split") for i in range(1, 3)]
+        rows += [_event(self.now, i * 60, "g", "block", reason="split", harness="codex") for i in range(3, 5)]
+        for n, reason in enumerate("abcde"):
+            rows += [_event(self.now, (10 + n) * 60, "g", "block", reason=reason)] * 3
+        _write_events(self.home, rows)
+        reasons = self.row(self.payload(), "g")["top_reasons"]
+        # 2 + 2 summed beats every single-harness reason (3), then the cap of five.
+        self.assertEqual(reasons[0], {"decision": "block", "reason": "split", "count": 4})
+        self.assertEqual(len(reasons), 5)
+
+
+class TestStatsKeys(_HooksHome, unittest.TestCase):
+    """Which stats names a row's numbers come from (``stats_keys``)."""
+
+    def keys(self, name=None):
+        d = page.get(self.ctx, {})
+        return [(h["source_path"], h["stats_keys"]) for h in d["hooks"] if name in (None, h["name"])]
+
+    def foreign(self, rel, command):
+        path = self.home / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n")
+        return str(path), command
+
+    def declare(self, commands):
+        _settings(self.home, ".claude/settings.json", {"Stop": [{"hooks": [
+            {"type": "command", "command": c} for c in commands]}]})
+
+    def test_a_file_hook_is_its_stem(self):
+        _hook(self.home, "claude", "prose-guard.py")
+        self.assertEqual(self.keys("prose-guard.py")[0][1], ["prose-guard"])
+
+    def test_a_directory_hook_is_named_by_its_executable(self):
+        folder = self.home / ".swe/hooks/claude/bundle"
+        folder.mkdir(parents=True)
+        (folder / "guard.py").write_text("print(1)\n")
+        dest = self.home / ".claude/hooks/bundle"
+        dest.parent.mkdir(parents=True)
+        dest.symlink_to(folder)
+        self.declare([f'python3 "{dest}/guard.py"'])
+        rows = page.get(self.ctx, {})["hooks"]
+        bundle = next(h for h in rows if h["name"] == "bundle")
+        self.assertEqual(bundle["stats_keys"], ["guard"])
+
+    def test_same_basename_in_two_places_never_shares(self):
+        a, ca = self.foreign("plugins/a/on-stop.sh", None)
+        b, cb = self.foreign("plugins/b/on-stop.sh", None)
+        ga, _ = self.foreign("plugins/a/guard.sh", None)
+        gb, _ = self.foreign("plugins/b/guard.sh", None)
+        self.declare([a, b, ga, gb])
+        by_source = dict(self.keys())
+        self.assertEqual(by_source[a], ["a/on-stop"])
+        self.assertEqual(by_source[b], ["b/on-stop"])
+        # A non-generic basename logs as plain "guard" for both: neither may claim it.
+        self.assertEqual((by_source[ga], by_source[gb]), ([], []))
+
+    def test_a_variable_prefixed_name_matches_its_one_row(self):
+        src, _ = self.foreign(".claude/plugins/x/hooks/on-stop.sh", None)
+        self.declare([src, "${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh"])
+        rows = [h for h in page.get(self.ctx, {})["hooks"] if h["name"] == "on-stop.sh"]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("claude-plugin/on-stop", rows[0]["stats_keys"])
+        self.assertIn("x/on-stop", rows[0]["stats_keys"])
+
+    def test_the_detail_carries_the_keys_too(self):
+        _hook(self.home, "claude", "prose-guard.py")
+        self.assertEqual(page.get(self.ctx, {"hook": "prose-guard.py"})["stats_keys"], ["prose-guard"])
 
 
 class TestStatsRoute(HubBase):
@@ -712,9 +831,16 @@ const row = (o) => Object.assign({ hook: "g", fires: 12, blocks: 3, warns: 1, er
 const ready = (rows) => ({ state: "ready", rows, at: Date.now() });
 """
 
-    def test_a_script_name_loses_its_extension(self):
-        out = self.run_js('process.stdout.write(JSON.stringify(["prose-guard.py", "command_guard.sh", "/h/x/no-sleep-poll.py", "plain", ".py", "a.b.py"].map(hkStem)));')
-        self.assertEqual(out, ["prose-guard", "command_guard", "no-sleep-poll", "plain", ".py", "a.b"])
+    def test_a_row_owns_a_stats_row_only_when_exactly_one_name_has_runs(self):
+        out = self.run_js(self.ROWS + """
+const s = ready({ guard: row({ hook: "guard", fires: 4 }), "a/on-stop": row({ hook: "a/on-stop", fires: 2 }),
+  "claude-plugin/on-stop": row({ hook: "claude-plugin/on-stop", fires: 7 }) });
+const fires = (keys) => { const r = hkMatch(keys, s); return r ? r.fires : null; };
+process.stdout.write(JSON.stringify([fires(["guard"]), fires(["a/on-stop", "on-stop"]), fires(["claude-plugin/on-stop", "x/on-stop"]),
+  fires(["guard", "a/on-stop"]), fires(["b/on-stop"]), fires([]), fires(undefined), hkMatch(["guard"], { state: "loading", rows: {} })]));
+""")
+        # one name present: its row; two present (ambiguous), none, no names: nothing.
+        self.assertEqual(out, [4, 2, 7, None, None, None, None, None])
 
     def test_the_three_columns_per_state(self):
         out = self.run_js(self.ROWS + """
@@ -724,16 +850,16 @@ const w = hkWindow();
 const out = {};
 hooksPage.statsBy[w] = ready({ g: row({}), calm: row({ hook: "calm", fires: 5, blocks: 0, block_rate: 0 }),
   tiny: row({ hook: "tiny", fires: 400, blocks: 1, block_rate: 0.0025 }), idle: row({ hook: "idle", fires: 0, blocks: 0 }) });
-out.busy = cells(hkNumsHtml("g.py"));
-out.calm = cells(hkNumsHtml("calm.sh"));
-out.tiny = cells(hkNumsHtml("tiny.py"));
-out.idle = cells(hkNumsHtml("idle.py"));
-out.none = cells(hkNumsHtml("never-ran.py"));
+out.busy = cells(hkNumsHtml(["g"]));
+out.calm = cells(hkNumsHtml(["calm"]));
+out.tiny = cells(hkNumsHtml(["tiny"]));
+out.idle = cells(hkNumsHtml(["idle"]));
+out.none = cells(hkNumsHtml(["never-ran"]));
 hooksPage.statsBy[w] = { state: "error", rows: {}, at: 0 };
-out.error = cells(hkNumsHtml("g.py"));
+out.error = cells(hkNumsHtml(["g"]));
 hooksPage.statsBy[w] = { state: "loading", rows: {}, at: 0 };
-out.loading = hkNumsHtml("g.py");
-out.sharedTrack = [(hkColsHeader().match(/class="hk-nums"/g) || []).length ? (hkColsHeader().match(/class="hk-num"/g) || []).length : 0, (hkNumsWrap("g.py").match(/class="hk-num[ "]/g) || []).length];
+out.loading = hkNumsHtml(["g"]);
+out.sharedTrack = [(hkColsHeader().match(/class="hk-nums"/g) || []).length ? (hkColsHeader().match(/class="hk-num"/g) || []).length : 0, (hkNumsWrap(["g"]).match(/class="hk-num[ "]/g) || []).length];
 out.header = hkColsHeader().replace(/<[^>]+>/g, " ").trim().split(/\\s+/);
 process.stdout.write(JSON.stringify(out));
 """)
@@ -772,16 +898,16 @@ const runs = Array.from({ length: 7 }, (_, i) => ({ ts: 2000 - i, decision: i ? 
 hooksPage.statsBy["7d"] = ready({ g: row({ top_reasons: [
   { decision: "block", reason: "no em dash", count: 2 }, { decision: "warn", reason: "long reply", count: 1 },
   { decision: "error", reason: "boom", count: 4 }], recent: runs }) });
-out.full = text(hkDetailStatsInner("g.py"));
-out.recentRows = (hkDetailStatsInner("g.py").match(/hk-line-row/g) || []).length;
-out.blocksBad = /hk-tile-value hk-bad">3</.test(hkDetailStatsInner("g.py"));
-out.noRuns = text(hkDetailStatsInner("other.py"));
+out.full = text(hkDetailStatsInner(["g"]));
+out.recentRows = (hkDetailStatsInner(["g"]).match(/hk-line-row/g) || []).length;
+out.blocksBad = /hk-tile-value hk-bad">3</.test(hkDetailStatsInner(["g"]));
+out.noRuns = text(hkDetailStatsInner(["other"]));
 hooksPage.window = "24h"; hooksPage.statsBy["24h"] = ready({});
-out.noRuns24 = text(hkDetailStatsInner("g.py"));
+out.noRuns24 = text(hkDetailStatsInner(["g"]));
 hooksPage.statsBy["24h"] = ready({ g: row({ blocks: 0, last_block: null, block_rate: 0 }) });
-out.never = text(hkDetailStatsInner("g.py"));
+out.never = text(hkDetailStatsInner(["g"]));
 hooksPage.statsBy["24h"] = { state: "error", rows: {}, at: 0 };
-out.error = text(hkDetailStatsInner("g.py"));
+out.error = text(hkDetailStatsInner(["g"]));
 process.stdout.write(JSON.stringify(out));
 """)
         full = out["full"]
@@ -797,6 +923,42 @@ process.stdout.write(JSON.stringify(out));
         self.assertIn("No runs in the last 24 hours.", out["noRuns24"])
         self.assertIn("Last block|–", out["never"])
         self.assertIn("not available", out["error"])
+
+    def test_polling_waits_out_a_refresh_and_refresh_forces_a_read(self):
+        out = self.run_js(self.ROWS + """
+HK_POLL_MS = 1;
+const location = { hash: "#/hooks" };
+const document = { getElementById: () => null, querySelectorAll: () => [], activeElement: null };
+const answers = [];
+const urls = [];
+const api = async (url) => { urls.push(url); return { status: 200, data: answers.shift() }; };
+const reply = (fires, extra) => Object.assign({ state: "ready", hooks: [row({ fires })] }, extra);
+(async () => {
+  const out = {};
+  // The hub answers an old result marked refreshing, then the new one.
+  answers.push(reply(1, { refreshing: true }), reply(1, { refreshing: true }), reply(5, { refreshing: false }));
+  await hooksLoadStats();
+  out.fires = hooksPage.statsBy["7d"].rows.g.fires;
+  out.calls = urls.length;
+  out.fresh = hooksPage.statsBy["7d"].at > 0;
+  // A fresh answer is reused without a request, until Refresh forces one.
+  urls.length = 0;
+  await hooksLoadStats();
+  out.reused = urls.length;
+  hooksPage.forceStats = true;
+  answers.push(reply(6, { refreshing: true }), reply(6, { refreshing: false }));
+  await hooksLoadStats();
+  out.forced = urls.slice();
+  out.after = hooksPage.statsBy["7d"].rows.g.fires;
+  out.flagCleared = hooksPage.forceStats;
+  process.stdout.write(JSON.stringify(out));
+})();
+""")
+        self.assertEqual((out["fires"], out["calls"], out["fresh"]), (5, 3, True))
+        self.assertEqual(out["reused"], 0)
+        # Only the first ask carries refresh=1; the poll after it does not.
+        self.assertEqual(out["forced"], ["/v1/app/hooks?stats=7d&refresh=1", "/v1/app/hooks?stats=7d"])
+        self.assertEqual((out["after"], out["flagCleared"]), (6, False))
 
     def test_phone_width_keeps_the_columns_and_truncates_the_name(self):
         css = (Path(page.__file__).resolve().parents[1] / "static/pages/hooks.css").read_text(encoding="utf-8")
