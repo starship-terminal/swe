@@ -115,7 +115,10 @@ enum WidgetSummary {
                      at: Date) -> WidgetSnapshot {
         var waiting: [String: WidgetSnapshot.Row] = [:]
         var stamps: [String: Double] = [:]
-        for item in inbox where InboxGrouping.section(of: item) == .waiting {
+        // A mirrored copy has nothing live to wait on, even when the inbox
+        // still holds an approval for its key.
+        let mirrored = Set(sessions.filter(\.isMirrored).map(\.key))
+        for item in inbox where InboxGrouping.section(of: item) == .waiting && !mirrored.contains(item.key) {
             waiting[item.key] = .init(key: item.key, title: item.displayTitle, harness: item.harnessName, status: item.status)
             stamps[item.key] = item.lastActiveAt ?? 0
         }

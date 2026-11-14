@@ -12,7 +12,7 @@ struct InboxView: View {
     @State private var swipes = SwipeCoordinator()
 
     var body: some View {
-        let groups = InboxGrouping.groups(app.inbox)
+        let groups = InboxGrouping.groups(app.inboxRows)
         PageScroll {
             if !app.loadedOnce {
                 LoadingRow(text: "Loading inbox")

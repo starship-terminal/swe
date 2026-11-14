@@ -243,7 +243,7 @@ final class ChatModel {
             return try await client.commands(self.key)
         }
         attachments.upload = { [weak self] name, file, progress in
-            guard let self, let client = self.hubClient else { throw HubError.network(CancellationError()) }
+            guard let self, !self.isMirrored, let client = self.hubClient else { throw HubError.network(CancellationError()) }
             return try await client.uploadAttachment(self.key, name: name, file: file, progress: progress)
         }
     }
@@ -259,6 +259,8 @@ final class ChatModel {
     /// no live stream, queue or approvals. Read from the row each time, so
     /// a chat opened before the list loaded settles when the row arrives.
     var isMirrored: Bool { row?.isMirrored == true }
+    /// A live event stream is open or opening.
+    var hasStream: Bool { streamTask != nil }
 
     /// The page a tool card's Preview opened. The sheet hangs off the
     /// chat, not the card, so a card folding into a run of tool calls
@@ -303,7 +305,9 @@ final class ChatModel {
         // menu opens filled; a list kept from an earlier open shows at
         // once and is still refreshed. A mirrored copy has no prompt box.
         if !isMirrored { commands.warm() }
-        if items.isEmpty || loadError != nil || backfillCut { await backfill(client) }
+        // A mirrored copy always reloads: it has no stream to fill what
+        // came in while the chat was closed.
+        if items.isEmpty || loadError != nil || backfillCut || isMirrored { await backfill(client) }
         guard gen == generation else { return }
         // Nothing live to follow for a mirrored copy: no sends queue, no
         // approvals, no stream. The history above is all there is.
@@ -312,7 +316,8 @@ final class ChatModel {
         // after history, so the list is no older than what's shown; a send
         // that leaves after this has its echo and result in the replay.
         let sends = try? await client.queue(key)
-        guard gen == generation else { return }
+        // The row may have turned out mirrored while the queue was out.
+        guard gen == generation, !isMirrored else { return }
         if let sends { mergeQueue(sends.sends) }
         // The turn may already be running when the chat opens; the row
         // is current by now, so the clock can start from this open.
@@ -348,6 +353,8 @@ final class ChatModel {
     /// the stream, since a mirrored copy has no events.
     func mirroredLearned() {
         guard isMirrored else { return }
+        // A start still waiting on an answer must not open one after this.
+        generation += 1
         streamTask?.cancel()
         streamTask = nil
         live = false
@@ -508,7 +515,7 @@ final class ChatModel {
             for item in keep where !items.contains(where: { $0.id == item.id }) { items.append(item) }
             // Opened from the inbox while an approval waits: the request
             // may predate the stream's replay window, so show it now.
-            if let rid = app?.inbox.first(where: { $0.key == key })?.requestId, !rid.isEmpty, !hasApproval(rid) {
+            if !isMirrored, let rid = app?.inbox.first(where: { $0.key == key })?.requestId, !rid.isEmpty, !hasApproval(rid) {
                 items.append(ChatItem(id: "approval-\(rid)", kind: .approval(requestId: rid, prompt: "Approval requested", state: .pending)))
             }
             loadError = nil
@@ -935,7 +942,7 @@ final class ChatModel {
     }
 
     private func send(_ text: String, files: [String] = []) async {
-        guard let client = hubClient else { return }
+        guard !isMirrored, let client = hubClient else { return }
         let cid = UUID().uuidString
         let route = Self.route(agentActive: row?.sessionStatus == .active, holdsSends: row?.holdsQueuedSends ?? true)
         stage(text, clientId: cid, toTray: route.toTray, files: files)
@@ -1080,6 +1087,7 @@ final class ChatModel {
     /// Remove: gone from the tray at once, back with a note if the hub
     /// refuses. Its `command.result` says `cancelled`, never a failure.
     func remove(_ cid: String) async {
+        guard !isMirrored else { return }
         guard let i = queued.firstIndex(where: { $0.clientId == cid }) else { return }
         switch queued[i].phase {
         case .posting, .sendingNow, .removing:
@@ -1192,6 +1200,7 @@ final class ChatModel {
     }
 
     func saveEdit() async {
+        guard !isMirrored else { return }
         guard let cid = editingId, !savingEdit else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -1243,7 +1252,7 @@ final class ChatModel {
     /// An older hub can't edit in place: remove the message, then queue the
     /// new text, which lands at the end.
     private func requeueEdit(_ cid: String, text: String) async {
-        guard let client = hubClient else { return }
+        guard !isMirrored, let client = hubClient else { return }
         // The replacement carries the same files: still staged on the hub.
         let files = queued.first { $0.clientId == cid }?.attachments ?? sentFiles[cid] ?? []
         do {
@@ -1275,6 +1284,7 @@ final class ChatModel {
     /// Sends a failed bubble again, with the files it carried: they stay
     /// staged on the hub, so nothing uploads twice.
     func retry(_ item: ChatItem) async {
+        guard !isMirrored else { return }
         guard case .user(let text, .failed) = item.kind else { return }
         items.removeAll { $0.id == item.id }
         let files = item.id.hasPrefix("send-") ? sentFiles.removeValue(forKey: String(item.id.dropFirst(5))) : nil
@@ -1282,7 +1292,7 @@ final class ChatModel {
     }
 
     func decide(_ requestId: String, decision: String) async {
-        guard let client = hubClient else { return }
+        guard !isMirrored, let client = hubClient else { return }
         updateApproval(requestId) { .submitting }
         do {
             let queued = try await client.approve(key, requestId: requestId, decision: decision)

@@ -446,6 +446,7 @@ private struct ChatItemView: View {
             let echo = AttachmentRules.splitEcho(text)
             UserBubble(text: echo.text, files: echo.names.isEmpty ? model.fileNames(for: item.id) : echo.names,
                        send: send) { Task { await model.retry(item) } }
+                .disabled(model.isMirrored)
         case .assistant(let text):
             AssistantReply(text: text)
         case .thinking(let text, let seconds):
@@ -456,6 +457,8 @@ private struct ChatItemView: View {
             ApprovalCard(prompt: prompt, state: state, options: model.approvalOptions[rid] ?? []) { decision in
                 Task { await model.decide(rid, decision: decision) }
             }
+            .disabled(model.isMirrored)
+            .accessibilityHint(model.isMirrored ? Mirrored.composerPlaceholder : "")
         case .compaction:
             HStack(spacing: 8) {
                 Rectangle().fill(Theme.border).frame(height: 1)

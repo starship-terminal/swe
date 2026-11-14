@@ -172,4 +172,160 @@ final class MirroredSessionTests: XCTestCase {
         XCTAssertNil(chat.attachError)
         XCTAssertTrue(chat.items.isEmpty, "no error line either")
     }
+
+    // MARK: Review fixes (a cached chat, a late flag, every write, the inbox)
+
+    private func hubApp(_ rows: [SessionRow]) -> AppModel {
+        let app = AppModel(hub: PairedHub(baseURL: URL(string: "http://127.0.0.1:8477")!,
+                                          credential: Credential(deviceId: "d", credential: "c", name: nil)))
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MirrorHubStub.self]
+        app.clientSession = URLSession(configuration: config)
+        app.applyLists(sessions: rows, machines: nil, inbox: [], attachedAtStart: [])
+        MirrorHubStub.reset()
+        return app
+    }
+
+    private func settle(_ until: () -> Bool) async {
+        for _ in 0..<400 where !until() { try? await Task.sleep(nanoseconds: 5_000_000) }
+    }
+
+    func testACachedChatThatBecameMirroredReloadsItsHistory() async {
+        let app = hubApp([row(mirrored: nil, ownership: "observed")])
+        MirrorHubStub.messages = [MirrorHubStub.message(1, "first")]
+        let chat = app.chat("claude:1")
+        await chat.start()
+        chat.stop()
+        XCTAssertEqual(chat.items.count, 1)
+        // The harness deleted the transcript; a message arrived meanwhile.
+        app.applyLists(sessions: [row()], machines: nil, inbox: [], attachedAtStart: [])
+        MirrorHubStub.messages = [MirrorHubStub.message(1, "first"), MirrorHubStub.message(2, "second")]
+        MirrorHubStub.reset()
+        await chat.start()
+        XCTAssertEqual(chat.items.count, 2, "the cached mirrored chat loads what it missed")
+        XCTAssertFalse(chat.hasStream)
+        XCTAssertFalse(MirrorHubStub.paths.contains { $0.hasSuffix("/queue") }, "no queue read for a copy")
+        chat.stop()
+    }
+
+    func testAFlagArrivingDuringTheQueueReadOpensNoStream() async {
+        let app = hubApp([row(mirrored: nil, ownership: "observed")])
+        MirrorHubStub.messages = [MirrorHubStub.message(1, "first")]
+        MirrorHubStub.holdQueue = true
+        let chat = app.chat("claude:1")
+        let started = Task { await chat.start() }
+        await settle { MirrorHubStub.paths.contains { $0.hasSuffix("/queue") } }
+        // The list lands and says mirrored while the queue is still out.
+        app.applyLists(sessions: [row()], machines: nil, inbox: [], attachedAtStart: [])
+        chat.mirroredLearned()
+        MirrorHubStub.releaseQueue()
+        await started.value
+        XCTAssertFalse(chat.hasStream, "the pending start must not open a stream")
+        chat.stop()
+    }
+
+    func testEveryWritePathRefusesAMirroredChat() async {
+        let app = hubApp([row(ownership: "attached")])
+        let chat = app.chat("claude:1")
+        chat.draft = "hi"
+        await chat.send()
+        await chat.sendNow("c1")
+        await chat.remove("c1")
+        await chat.saveEdit()
+        await chat.retry(ChatItem(id: "send-x", kind: .user(text: "hi", send: .failed("Couldn't send"))))
+        await chat.decide("r1", decision: "allow")
+        await chat.switchModel(to: "claude-opus-4-5")
+        await chat.interrupt()
+        await chat.attach()
+        let upload = try? await chat.attachments.upload("a.txt", URL(fileURLWithPath: "/dev/null"), { _ in })
+        XCTAssertNil(upload)
+        XCTAssertTrue(MirrorHubStub.paths.isEmpty, "nothing reached the hub: \(MirrorHubStub.paths)")
+        XCTAssertEqual(chat.draft, "hi")
+    }
+
+    func testTheInboxLeavesOutApprovalsForMirroredSessions() {
+        let app = AppModel(hub: nil)
+        let gh = InboxItem(key: "gh:1", machineId: nil, harness: nil, agent: nil, title: "PR", cwd: nil,
+                           status: nil, lastActiveAt: 7, requestId: nil, kind: "github")
+        let stale = InboxItem(key: "claude:1", machineId: "m1", harness: "claude", agent: nil, title: "old", cwd: "/w",
+                              status: "approval", lastActiveAt: 5, requestId: "r1", kind: nil)
+        let live = InboxItem(key: "claude:2", machineId: "m1", harness: "claude", agent: nil, title: "live", cwd: "/w",
+                             status: "approval", lastActiveAt: 6, requestId: "r2", kind: nil)
+        app.applyLists(sessions: [row("claude:1", mirrored: true, status: nil),
+                                  row("claude:2", mirrored: nil, status: "approval")],
+                       machines: nil, inbox: [stale, live, gh], attachedAtStart: [])
+        XCTAssertEqual(app.inboxRows.map(\.key), ["claude:2", "gh:1"], "the page drops the copy and keeps GitHub rows")
+        XCTAssertEqual(app.waitingOnYou.map(\.key), ["claude:2"])
+        XCTAssertEqual(app.inboxBadge, 1, "the badge agrees with the widget")
+        let rows = app.displaySessions
+        XCTAssertEqual(rows.first { $0.key == "claude:1" }?.status, nil, "not marked approval in the list")
+        XCTAssertEqual(rows.first { $0.key == "claude:2" }?.status, "approval")
+    }
+
+    func testAnOutstandingApprovalDoesNotCountForAMirroredWidgetRow() {
+        let mirrored = row("claude:1", mirrored: true, status: nil)
+        let live = row("claude:2", mirrored: nil, status: "approval")
+        let items = [
+            InboxItem(key: "claude:1", machineId: "m1", harness: "claude", agent: nil, title: "old", cwd: "/w",
+                      status: "approval", lastActiveAt: 5, requestId: "r1", kind: nil),
+            InboxItem(key: "claude:2", machineId: "m1", harness: "claude", agent: nil, title: "live", cwd: "/w",
+                      status: "approval", lastActiveAt: 6, requestId: "r2", kind: nil),
+        ]
+        let s = WidgetSummary.make(hubId: "h", hubName: "mac", sessions: [mirrored, live], inbox: items,
+                                   at: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(s.needsYou.map(\.key), ["claude:2"])
+        XCTAssertEqual(s.needsYouCount, 1)
+    }
+}
+
+/// Answers the hub's chat routes from memory and records each path.
+final class MirrorHubStub: URLProtocol {
+    private static let lock = NSLock()
+    private static var _paths: [String] = []
+    private static var _messages: [String] = []
+    private static var _holdQueue = false
+    private static var held: [MirrorHubStub] = []
+    static var paths: [String] { lock.withLock { _paths } }
+    static var messages: [String] {
+        get { lock.withLock { _messages } }
+        set { lock.withLock { _messages = newValue } }
+    }
+    static var holdQueue: Bool {
+        get { lock.withLock { _holdQueue } }
+        set { lock.withLock { _holdQueue = newValue } }
+    }
+    static func reset() { lock.withLock { _paths = []; _holdQueue = false; held = [] } }
+    static func message(_ seq: Int, _ text: String) -> String {
+        #"{"type":"message.appended","seq":\#(seq),"data":{"kind":"assistant","text":"\#(text)"}}"#
+    }
+    static func releaseQueue() {
+        let pending = lock.withLock { () -> [MirrorHubStub] in _holdQueue = false; let h = held; held = []; return h }
+        for stub in pending { stub.answer(#"{"sends":[]}"#) }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let hold = Self.lock.withLock { () -> Bool in
+            Self._paths.append(path)
+            if path.hasSuffix("/queue"), Self._holdQueue { Self.held.append(self); return true }
+            return false
+        }
+        if hold { return }
+        if path.hasSuffix("/queue") { return answer(#"{"sends":[]}"#) }
+        if path.hasSuffix("/messages") {
+            let list = Self.messages.joined(separator: ",")
+            return answer(#"{"messages":[\#(list)],"hasMore":false}"#)
+        }
+        answer("{}")
+    }
+    private func answer(_ body: String) {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                       headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
 }
