@@ -188,6 +188,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The web app's usage keeps sessions Claude Code or Codex pruned before the hub read them.** The hub's usage ledger (the web Overview, Models and Calendar pages, and the daily totals a satellite reports) read only live transcripts, so a session that ran and was deleted by its harness between two scans, or before the hub first scanned, or rewritten after its last scan, lost its usage. Each scan now reads such a session's mirror copy under `~/.swe/data/transcripts/` once, as the Mac app's ledger already does: only when no live transcript carries the session and its source file is gone, skipping a copy the ledger provably read already, and never counting an event twice, since events keep their content keys. A copy that cannot be read is reported with the other unreadable logs and retried. No new setting, and the ledger file is unchanged ([#1918](https://github.com/starship-terminal/swe/issues/1918)).
+
 - **The Mac app recognises sessions in `starship-terminal/swe` worktrees again.**
   After the rebrand, the issue Resolve dialog stopped matching checkouts and
   `starship-terminal__swe-…` worktrees to this repo, so it no longer
