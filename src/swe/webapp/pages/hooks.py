@@ -214,7 +214,9 @@ def _stats_keys(rows, home: Path) -> list[list[str]]:
                 add(command_hook(path))
         for decl in getattr(r, "declared", []):
             for token in _TOKEN_BREAKS.split(decl.command or ""):
-                if not token.lower().endswith(SCRIPT_EXTENSIONS) or len(token) <= 3:
+                scripted = token.lower().endswith(SCRIPT_EXTENSIONS) and len(token) > 3
+                # A directory's executable may have no extension at all.
+                if not scripted and not (is_dir and "/" in token):
                     continue
                 path = _expand(token, home)
                 if "$" in path:

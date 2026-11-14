@@ -748,6 +748,17 @@ class TestStatsKeys(_HooksHome, unittest.TestCase):
         bundle = next(h for h in rows if h["name"] == "bundle")
         self.assertEqual(bundle["stats_keys"], ["guard"])
 
+    def test_a_directory_hook_with_an_extensionless_executable(self):
+        folder = self.home / ".swe/hooks/claude/bundle"
+        folder.mkdir(parents=True)
+        (folder / "guard").write_text("#!/bin/sh\n")
+        dest = self.home / ".claude/hooks/bundle"
+        dest.parent.mkdir(parents=True)
+        dest.symlink_to(folder)
+        self.declare([f"{dest}/guard"])
+        bundle = next(h for h in page.get(self.ctx, {})["hooks"] if h["name"] == "bundle")
+        self.assertEqual(bundle["stats_keys"], ["guard"])
+
     def test_same_basename_in_two_places_never_shares(self):
         a, ca = self.foreign("plugins/a/on-stop.sh", None)
         b, cb = self.foreign("plugins/b/on-stop.sh", None)
