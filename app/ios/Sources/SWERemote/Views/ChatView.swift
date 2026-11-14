@@ -73,6 +73,11 @@ struct ChatView: View {
             Text("Typed into the session as /model <id>. The header shows it once a reply runs on it.")
         }
         .onDisappear { model?.stop() }
+        // Opened from a link before the list loaded: the row arrives
+        // later and may say the session is a mirrored copy.
+        .onChange(of: app.session(key)?.isMirrored == true) { _, mirrored in
+            if mirrored { model?.mirroredLearned() }
+        }
         .onChange(of: phase) { _, new in
             guard let model else { return }
             switch streamGate.phase(new) {
@@ -146,16 +151,25 @@ private struct ChatBody: View {
 
     var body: some View {
         let entries = ChatEntry.fold(model.items)
+        let empty = ChatEmpty.of(row: model.row, loading: model.loading, loadError: model.loadError,
+                                 hasItems: !model.items.isEmpty, hasStreaming: !model.streaming.isEmpty)
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 10) {
-                if model.loading {
+                switch empty {
+                case .skeleton:
                     ChatSkeleton()
-                } else if let error = model.loadError, model.items.isEmpty {
+                case .error(let error):
                     StateCard(icon: "exclamationmark.triangle", title: "Couldn't load this session", message: error, tone: .error)
-                } else if model.items.isEmpty, model.streaming.isEmpty {
+                case .noMessages:
                     StateCard(icon: "text.bubble", title: "No messages yet", message: "New messages appear here as the agent works.")
-                } else if model.hasEarlier {
-                    EarlierRow(model: model).onAppear { model.wantsEarlier = true }
+                case .mirroredUnavailable:
+                    // Calm: nothing failed, the copy just isn't readable yet.
+                    StateCard(icon: "doc.on.doc", title: Mirrored.chatUnavailable)
+                        .transition(.opacity)
+                case nil:
+                    if model.hasEarlier {
+                        EarlierRow(model: model).onAppear { model.wantsEarlier = true }
+                    }
                 }
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                     Group {
@@ -195,6 +209,13 @@ private struct ChatBody: View {
             model.mentions.dismiss()
             model.commands.dismiss()
         })
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.isMirrored {
+                MirroredNotice()
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.isMirrored)
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(item: $model.previewing) { target in
             PagePreviewSheet(target: target) { try await model.loadPreview($0) }
@@ -210,10 +231,10 @@ private struct ChatBody: View {
         let row = model.row
         VStack(spacing: 0) {
             Rectangle().fill(Theme.border).frame(height: 1)
-            if row?.isAttached == true {
-                Composer(model: model)
-            } else {
-                AttachCard(model: model, row: row)
+            switch ChatBar.of(row) {
+            case .composer: Composer(model: model)
+            case .attachCard: AttachCard(model: model, row: row)
+            case .mirroredComposer: MirroredComposer()
             }
         }
         .background(Theme.wash)
@@ -990,6 +1011,68 @@ private struct MenuRowButtonStyle: ButtonStyle {
             .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
                 .strokeBorder(Theme.borderStrong, lineWidth: 1))
             .opacity(enabled ? 1 : 0.45)
+    }
+}
+
+// MARK: - Mirrored sessions
+
+/// The one-line notice above a mirrored chat's transcript. It is
+/// information, not a warning: muted text on the page, no alert colour.
+private struct MirroredNotice: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Label {
+                Text(Mirrored.notice)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "doc.on.doc")
+            }
+            .labelStyle(.titleAndIcon)
+            .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.gutter)
+            .padding(.vertical, 10)
+            Rectangle().fill(Theme.border).frame(height: 1)
+        }
+        .background(Theme.wash)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isStaticText)
+    }
+}
+
+/// A mirrored chat's prompt box: present and dimmed, so the screen keeps
+/// its shape, with the reason as its placeholder. Nothing here can type or
+/// send; VoiceOver hears the same reason.
+private struct MirroredComposer: View {
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(Mirrored.composerPlaceholder, text: .constant(""), axis: .vertical)
+                .font(Theme.body)
+                .lineLimit(1...3)
+                .disabled(true)
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .background(Theme.field, in: .rect(cornerRadius: 22))
+                .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Theme.border, lineWidth: 1))
+                .accessibilityLabel("Message the session")
+                .accessibilityValue(Mirrored.composerPlaceholder)
+            Button {} label: {
+                ZStack {
+                    Circle().fill(Theme.primaryBackground)
+                    Image(systemName: "arrow.up").font(Theme.font(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.primaryForeground)
+                }
+                .frame(width: 40, height: 40)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .opacity(0.4)
+            }
+            .buttonStyle(.plain)
+            .disabled(true)
+            .accessibilityLabel("Send")
+            .accessibilityHint(Mirrored.composerPlaceholder)
+        }
+        .padding(.horizontal, Theme.gutter)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
     }
 }
 

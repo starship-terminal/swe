@@ -255,6 +255,10 @@ final class ChatModel {
     }
 
     var row: SessionRow? { app?.session(key) }
+    /// A copy of a transcript the harness deleted (#1918): read-only, with
+    /// no live stream, queue or approvals. Read from the row each time, so
+    /// a chat opened before the list loaded settles when the row arrives.
+    var isMirrored: Bool { row?.isMirrored == true }
 
     /// The page a tool card's Preview opened. The sheet hangs off the
     /// chat, not the card, so a card folding into a run of tool calls
@@ -297,10 +301,13 @@ final class ChatModel {
         streamTask = nil
         // The / menu's list is fetched now, not on the first /, so the
         // menu opens filled; a list kept from an earlier open shows at
-        // once and is still refreshed.
-        commands.warm()
+        // once and is still refreshed. A mirrored copy has no prompt box.
+        if !isMirrored { commands.warm() }
         if items.isEmpty || loadError != nil || backfillCut { await backfill(client) }
         guard gen == generation else { return }
+        // Nothing live to follow for a mirrored copy: no sends queue, no
+        // approvals, no stream. The history above is all there is.
+        if isMirrored { return }
         // The tray survives the app closing: the hub holds the sends. Read
         // after history, so the list is no older than what's shown; a send
         // that leaves after this has its echo and result in the replay.
@@ -334,6 +341,18 @@ final class ChatModel {
                 }
             }
         }
+    }
+
+    /// The sessions list just said this chat is mirrored, after the live
+    /// stream had started (the chat opened before the list loaded): end
+    /// the stream, since a mirrored copy has no events.
+    func mirroredLearned() {
+        guard isMirrored else { return }
+        streamTask?.cancel()
+        streamTask = nil
+        live = false
+        mentions.reset()
+        commands.reset()
     }
 
     func stop() {
@@ -886,6 +905,7 @@ final class ChatModel {
     // MARK: Actions
 
     func send() async {
+        guard !isMirrored else { return }
         if editingId != nil { return await saveEdit() }
         guard !attachments.blocksSend else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1033,6 +1053,7 @@ final class ChatModel {
     /// Send now: the hub stops holding it and writes it into the running
     /// turn. It shows "Sending now" until its result or echo arrives.
     func sendNow(_ cid: String) async {
+        guard !isMirrored else { return }
         guard let client = hubClient, markSendingNow(cid) else { return }
         trayNote = nil
         if editingId == cid { cancelEdit() }
@@ -1295,7 +1316,7 @@ final class ChatModel {
     /// Picking the model it already runs (with nothing pending) sends
     /// nothing; an invalid id never leaves the phone.
     func switchModel(to text: String) async {
-        guard let client = hubClient, let value = ModelSwitchOptions.validValue(text) else { return }
+        guard !isMirrored, let client = hubClient, let value = ModelSwitchOptions.validValue(text) else { return }
         if pendingModel == nil, value == row?.model { return }
         // Pending before the POST: a satellite's failed result can reach
         // the event stream before the hub's 202 does, and must find the
@@ -1311,7 +1332,7 @@ final class ChatModel {
     }
 
     func interrupt() async {
-        guard let client = hubClient else { return }
+        guard !isMirrored, let client = hubClient else { return }
         do { try await client.control(key, op: "interrupt") } catch {
             items.append(ChatItem(id: UUID().uuidString, kind: .system((error as? HubError)?.message ?? "Interrupt failed")))
         }
@@ -1328,7 +1349,7 @@ final class ChatModel {
     /// cancels a `when_idle` detach still waiting on the turn.
     func attach() async {
         // hubClient is nil once the chat's hub is no longer on screen.
-        guard let app, hubClient != nil else { return }
+        guard let app, hubClient != nil, !isMirrored else { return }
         attaching = true
         attachError = nil
         defer { attaching = false }

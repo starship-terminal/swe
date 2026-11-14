@@ -289,6 +289,11 @@ final class AppModel {
     /// Returns true when the hub queued it for a satellite (202).
     @discardableResult
     func attach(_ key: String) async throws -> Bool {
+        // A mirrored copy has no process to attach to; no caller offers it,
+        // and a stale one reaching here must not call the hub.
+        if session(key)?.isMirrored == true {
+            throw HubError(status: 409, code: "mirrored", message: Mirrored.notice)
+        }
         guard let queued = try await onSameHub({ try await $0.control(key, op: "attach") }) else { return false }
         // An attach also cancels a detach waiting on the turn.
         pendingDetaches[key] = nil

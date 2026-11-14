@@ -45,6 +45,8 @@ enum SessionAction: String, Hashable, Identifiable {
     /// chat — the edge action stays the takeover, with Open beside it on
     /// a half swipe; a row that can't attach offers Open alone.
     static func leading(_ row: SessionRow) -> [SessionAction] {
+        // A mirrored copy can only be read.
+        if row.isMirrored { return [.open] }
         if row.isAttached { return [.detach, .open] }
         if row.canAttach { return [.attach, .open] }
         return [.open]
@@ -53,7 +55,7 @@ enum SessionAction: String, Hashable, Identifiable {
     /// Swipe left, the first one at the edge (a full swipe runs it).
     static func trailing(_ row: SessionRow) -> [SessionAction] {
         var out: [SessionAction] = [row.isPinned ? .unpin : .pin, .rename]
-        if row.canFork == true { out.append(.fork) }
+        if row.offersFork { out.append(.fork) }
         return out
     }
 
