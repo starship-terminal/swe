@@ -219,6 +219,11 @@ def build(rows: list[dict], usage: dict[tuple[str, str], dict], hub_machine_id: 
             projects[(here, cwd)] = project_of(cwd, local=here)
         project = projects[(here, cwd)]
         machine = machines.get(str(row.get("machine_id") or "")) or {}
+        # The harness deleted the transcript; swe lists its read-only copy
+        # (#1918). Nothing can resume, attach or fork it, and with its
+        # source gone the ledger has no usage for it, which must not read
+        # as an accidental empty session.
+        mirrored = bool(row.get("mirrored"))
         out.append({
             "key": row.get("key"),
             "id": sid,
@@ -235,12 +240,13 @@ def build(rows: list[dict], usage: dict[tuple[str, str], dict], hub_machine_id: 
             "machine_id": row.get("machine_id"),
             "machine": machine.get("name") or row.get("machine_id"),
             "remote": not here,
-            "resume": row.get("resume"),
+            "resume": None if mirrored else row.get("resume"),
+            "mirrored": mirrored,
             # Remote control: whether the hub can write to it now
             # (attached) or could take it over (attachable). The chat
             # re-reads both from /v1/sessions when it opens.
             "ownership": row.get("ownership") or "observed",
-            "attachable": bool(row.get("attachable")),
+            "attachable": bool(row.get("attachable")) and not mirrored,
             # Supervision detail for the chat chip and the details sheet:
             # the attach mode, the swe-… pane name, and whether an observed
             # row's pane was kept running.
@@ -257,10 +263,10 @@ def build(rows: list[dict], usage: dict[tuple[str, str], dict], hub_machine_id: 
             "harness_title": row.get("harness_title") or "",
             "pinned": bool(row.get("pinned")),
             "pinned_at": row.get("pinned_at") if row.get("pinned") else None,
-            "can_fork": bool(row.get("can_fork")),
+            "can_fork": bool(row.get("can_fork")) and not mirrored,
             "usage": u and {k: v for k, v in u.items() if k != "cwd"},
             "duration_s": (u["last_ts"] - u["first_ts"]) if u else None,
-            "trivial": (is_trivial(harness, u, scanned,
+            "trivial": (not mirrored and is_trivial(harness, u, scanned,
                                    covered=ledger_covers(row, home, droid_ids))
                         if here else False),
         })
