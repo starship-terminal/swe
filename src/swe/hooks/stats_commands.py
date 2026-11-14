@@ -267,7 +267,7 @@ def _shown_name(name: str | None, source: str | None,
     if name:
         wanted = _events.resolve_hook_name(
             name, {e["hook"] for e in selected}
-            | {e["_owner_name"] for e in selected if e.get("_owner_name")})
+            | set(_events.group_names(selected).values()))
         return wanted if selected else _events.strip_script_extension(name)
     for event in selected:
         if event.get("_owner_name"):

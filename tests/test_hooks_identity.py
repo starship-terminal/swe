@@ -471,6 +471,91 @@ class OldFormatTest(_IdentityHome):
         self.assertEqual(self.fires(self.source("prose-guard.py")), 1)
 
 
+class ReviewRoundFourTest(_IdentityHome):
+    """Greptile's fourth round on #1928: an owner that was never
+    registered, an owner claimed without checking, recovery across one
+    folder's scripts, and a stats name that misses its row's runs."""
+
+    def record_as(self, path, hook, ago, session, harness="codex"):
+        with mock.patch.object(sys, "argv", [str(path)]):
+            self.assertTrue(shim_runtime.record(
+                hook, "allow", harness=harness, event="Stop",
+                session_id=session, cwd="/w/app", ts=self.now - ago))
+        log = paths.hook_events_file_for(self.home)
+        self.log_rows = [json.loads(x) for x in log.read_text().splitlines()]
+
+    def test_one_declaration_running_two_executables_registers_both(self):
+        a = self.hub("bundle/a.py")
+        b = self.hub("bundle/b.py")
+        cmd = self.declare(f'python3 "{a}" && python3 "{b}"')
+        self.record_as(a, "a", HOUR, "c1")
+        self.record_as(b, "b", 2 * HOUR, "c2")
+        # The transcript run of the whole command is one run with no single
+        # script; it still belongs to the folder.
+        self.ran(cmd, 3 * HOUR, session="t1")
+        data = self.stats()
+        self.assertEqual(self.fires(self.source("bundle"), data), 3)
+        self.assertEqual(self.swe("log", f"--source={self.source('bundle')}")
+                         ["matched"], 3)
+
+    def test_a_foreign_file_at_the_wrapper_path_is_not_the_shared_hook(self):
+        source = _shared.shared_dir(self.home) / "notify.py"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("# events: [Stop]\nprint('{}')\n")
+        # Another installer's own _generated folder sits where swe would
+        # link its wrappers, with a notify.py of its own.
+        theirs = self.home / ".claude" / "hooks" / "_generated" / "notify.py"
+        theirs.parent.mkdir(parents=True)
+        theirs.write_text("print('theirs')\n")
+        with mock.patch.object(Path, "home", staticmethod(lambda: self.home)):
+            _shared.apply_deploy(self.home, {})
+        cmd = self.declare(f'python3 "{theirs}"')
+        self.ran(cmd, HOUR)
+        self.ran(cmd, 2 * HOUR, session="s2")
+        data = self.stats()
+        self.assertIsNone(self.counted(self.source("notify.py"), data))
+        self.assertEqual(data["totals"]["fires"], 2)
+
+    def test_recovery_is_per_script_inside_one_folder(self):
+        x = self.hub("bundle/x.sh", "#!/bin/sh\n")
+        y = self.hub("bundle/y.sh", "#!/bin/sh\n")
+        cx, cy = self.declare(f"bash {x}"), self.declare(f"bash {y}")
+        # x blocks, then y (which never blocked) allows: no recovery.
+        self.blocked(cx, 2 * HOUR, "x says no")
+        self.ran(cy, HOUR)
+        row = self.counted(self.source("bundle"))
+        self.assertEqual((row["fires"], row["blocks"], row["recovered"]),
+                         (2, 1, 0))
+        # x itself allows next: that is its recovery.
+        self.ran(cx, HOUR - 60)
+        self.assertEqual(self.counted(self.source("bundle"))["recovered"], 1)
+
+    def test_an_unresolvable_declaration_still_registers_its_stem(self):
+        # The folder's executable is declared through a variable swe cannot
+        # resolve; the inventory still joins it to the folder by name, so
+        # an old log line named after the executable is the folder's, just
+        # as the transcript's run of that command is.
+        self.hub("bundle/guard.py")
+        cmd = self.declare('python3 "$HOOKS_DIR/bundle/guard.py"')
+        self.logged("guard", HOUR, harness="codex", session="c")
+        self.ran(cmd, 2 * HOUR, session="t")
+        data = self.stats()
+        self.assertEqual(self.fires(self.source("bundle"), data), 2)
+        self.assertEqual(data["uncertain"], [])
+
+    def test_a_stats_name_finds_every_run_its_row_counts(self):
+        # A script no listed row owns, logged under two names: its own
+        # record() call says on-stop, the transcript tools/on-stop.
+        script = self.foreign("tools/on-stop.py")
+        self.record_as(script, "on-stop", HOUR, "c1")
+        self.ran(f"python3 {script}", 2 * HOUR, session="t1")
+        (row,) = self.stats()["hooks"]
+        self.assertEqual((row["hook"], row["fires"]), ("on-stop", 2))
+        self.assertEqual(self.swe("log", row["hook"])["matched"], 2)
+        (only,) = self.stats(f"--hook={row['hook']}")["hooks"]
+        self.assertEqual(only["fires"], 2)
+
+
 class ResolverTest(_IdentityHome):
     """The script a command runs, read the way ``swe hooks list`` reads it."""
 

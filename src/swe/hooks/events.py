@@ -300,6 +300,28 @@ def identity_key(event: dict) -> tuple:
     return ("name", event["hook"])
 
 
+def script_key(event: dict) -> tuple:
+    """The one script a run was, finer than ``identity_key`` inside a
+    directory hook: its executables recover apart, though they count in
+    one row. A run with no script of its own, or the file a file row is,
+    falls back to the row's identity."""
+    script = event.get("script")
+    if script and script != event.get("_owner"):
+        return ("script", script)
+    return identity_key(event)
+
+
+def group_names(events: list[dict]) -> dict[tuple, str]:
+    """The name ``build_stats`` prints for each hook in ``events``, by
+    ``identity_key`` and by (identity, harness)."""
+    groups: dict[tuple, list[dict]] = {}
+    for event in events:
+        key = identity_key(event)
+        groups.setdefault(key, []).append(event)
+        groups.setdefault((key, event["harness"]), []).append(event)
+    return {key: _row_name(group) for key, group in groups.items()}
+
+
 def assign_identities(events: list[dict]) -> None:
     """Set ``_identity`` on every event (see ``identity_key``).
 
@@ -342,7 +364,7 @@ def mark_recovered(events: list[dict]) -> None:
         event["recovered"] = False
         if _base_event(event["event"]) not in ("Stop", "SubagentStop"):
             continue
-        key = (event["session_id"], identity_key(event), event["event"])
+        key = (event["session_id"], script_key(event), event["event"])
         after_block = previous.get(key) == "block"
         if event["stop_hook_active"] is None:
             event["stop_hook_active"] = after_block
@@ -415,13 +437,14 @@ def filter_events(events: list[dict], *, hook: str | None = None,
                   source: str | None = None) -> list[dict]:
     """The events matching every given filter, order kept.
 
-    ``hook`` takes a name the events were logged under or the list name of
-    the row that owns them (``bundle`` for its executables' runs), so a
-    name ``swe hooks stats`` prints finds every run its row counts.
+    ``hook`` takes a name the events were logged under or a name
+    ``swe hooks stats`` prints for a row (``bundle`` for its executables'
+    runs, an unowned script's most common name for every name it ran
+    under), and then finds every run that row counts.
     """
+    names = group_names(events) if hook else {}
     wanted = resolve_hook_name(
-        hook, {e["hook"] for e in events}
-        | {e["_owner_name"] for e in events if e.get("_owner_name")}) \
+        hook, {e["hook"] for e in events} | set(names.values())) \
         if hook else None
     in_repo = repo_filter(repo) if repo else None
     owned = source_filter(source) if source else None
@@ -430,7 +453,8 @@ def filter_events(events: list[dict], *, hook: str | None = None,
         if since is not None and event["ts"] < since:
             continue
         if wanted and event["hook"] != wanted \
-                and event.get("_owner_name") != wanted:
+                and names.get(identity_key(event)) != wanted \
+                and names.get((identity_key(event), event["harness"])) != wanted:
             continue
         if harness and event["harness"] != harness:
             continue

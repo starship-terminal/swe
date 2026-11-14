@@ -475,7 +475,9 @@ Timestamps are epoch seconds (floats). Counts cover the window
   blocked in the same session ("blocked, then the rewrite was accepted").
   `stop_hook_active` alone is not enough, since the harness sets it when
   any Stop hook blocked; transcript runs carry no flag, so it is inferred
-  from that same-hook rule. The window reads an hour back so a retry just
+  from that same-hook rule; inside a directory hook each executable
+  recovers on its own runs, though all count in the folder's row. The
+  window reads an hour back so a retry just
   inside it still sees its block.
 - `top_reasons` ranks the non-allow runs by `(decision, reason)`, at most
   five, count descending. `reason` is the first line of the hook's own
@@ -519,12 +521,18 @@ Timestamps are epoch seconds (floats). Counts cover the window
   resolved, and a generated wrapper resolved to the shared script it wraps
   (its runs are named after that script, as the log names them). A command
   whose path holds a variable swe cannot know (`${CLAUDE_PLUGIN_ROOT}`) or
-  is relative has no script. A run with a script belongs to the list row
-  whose source is that file (or whose harness link or shared wrapper
-  resolves to it), or whose folder holds it as a declared executable: an
-  undeclared helper inside a directory hook owns nothing. A run with no
+  is relative has no script, and so does a command that runs two scripts
+  (`a.py && b.py`: one run, and swe cannot say which file decided it). A
+  run with a script belongs to the list row whose source is that file (a
+  harness link to it resolves there), whose shared wrapper path holds a
+  generated wrapper for it (or holds nothing now and is where swe writes
+  that wrapper; another file at that path keeps its own runs), or whose
+  folder holds it as a declared executable, every file a declaration runs
+  inside the folder counting, two in one command included: an undeclared
+  helper inside a directory hook owns nothing. A run with no
   script falls back to its name: a log line to the stems a row is logged
-  under (its file's, a directory's declared executables'), narrowed to the
+  under (its file's, a directory's declared executables', including one
+  declared through a path swe cannot resolve), narrowed to the
   rows on the run's harness when any answers; a transcript run to the
   `command_hook` names of a row's declared commands that have no
   resolvable path. A name or path two sources answer to belongs to
@@ -533,7 +541,8 @@ Timestamps are epoch seconds (floats). Counts cover the window
 - `--hook=<name>` and `swe hooks log <name>` take a name exactly as the
   runs were logged (`claude-plugin/on-stop`, a folder prefix included,
   wins over the bare `on-stop`) or a stats row's `hook` (`bundle` finds
-  every run its row counts); a script file name (`prose-guard.py`, a path)
+  every run its row counts, and so does an unowned script's printed name
+  for every name its runs carry); a script file name (`prose-guard.py`, a path)
   still finds its hook. `--source=<path>` takes a list row's
   `source_path` instead and selects exactly the runs its stats row counts:
   the clients use it, never a name. `swe hooks log --json` echoes the name

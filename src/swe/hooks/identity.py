@@ -119,18 +119,31 @@ class Resolver:
 
     def __init__(self, home: Path):
         self.home = Path(home)
-        self._cache: dict[str, tuple[str | None, bool]] = {}
+        self._cache: dict[str, tuple[tuple[str, bool], ...]] = {}
+
+    def scripts(self, command: str) -> list[str]:
+        """Every resolved script ``command`` runs, in order, one per file
+        (``a.py && b.py`` runs two)."""
+        return list(dict.fromkeys(path for path, _ in self._found(command)))
 
     def script(self, command: str) -> tuple[str | None, bool]:
-        """(the resolved script ``command`` runs or None, whether it was
-        reached through a generated wrapper)."""
+        """(the one resolved script ``command`` runs, or None when it runs
+        none or several; whether it was reached through a generated
+        wrapper). A run of a command with two scripts is neither's: it is
+        one run, and swe cannot say which file made its decision."""
+        found = self._found(command)
+        if len({path for path, _ in found}) != 1:
+            return None, False
+        return found[0]
+
+    def _found(self, command: str) -> tuple[tuple[str, bool], ...]:
         command = command or ""
         hit = self._cache.get(command)
         if hit is None:
             hit = self._cache[command] = self._resolve(command)
         return hit
 
-    def _resolve(self, command: str) -> tuple[str | None, bool]:
+    def _resolve(self, command: str) -> tuple[tuple[str, bool], ...]:
         from swe.hooks.inventory import _executed_scripts
 
         try:
@@ -139,19 +152,13 @@ class Resolver:
             found = _executed_scripts(_splice(command), self.home,
                                       must_exist=False)
         except Exception:  # noqa: BLE001 - an odd command has no script
-            return None, False
-        resolved = set()
-        wrapped = False
+            return ()
+        out = []
         for path in found:
             real = _real(str(path))
             shared = wrapped_source(real)
-            if shared:
-                real, wrapped = shared, True
-            resolved.add(real)
-        if len(resolved) != 1:
-            # Nothing, or two scripts in one command: no one identity.
-            return None, False
-        return resolved.pop(), wrapped
+            out.append((shared, True) if shared else (real, False))
+        return tuple(out)
 
     def name(self, command: str) -> tuple[str, str | None]:
         """(hook name, script) for a transcript's command: a wrapper's run
@@ -222,28 +229,58 @@ class Owners:
             if is_dir:
                 self._folders.add(owner)
             else:
+                # The file itself; a harness link to it resolves here too.
                 claim(paths, owner, owner)
-                dest = str(row.dest)
-                # The file the harness runs, when it stands for this
-                # source: a link to it, a shared script's wrapper, or a
-                # path with nothing there now (a run from before it went).
-                # A real file of its own in the way is another script.
-                if getattr(row, "tier", "") == "shared" \
-                        or not os.path.lexists(dest) or _real(dest) == owner:
-                    claim(paths, _real(dest), owner)
+                wrapper = self._wrapper_path(row, owner, resolver.home)
+                if wrapper:
+                    claim(paths, wrapper, owner)
                 claim(helper, hook_stem(row.source.name), owner)
             for decl in getattr(row, "declared", []):
                 script, _wrapped = resolver.script(decl.command)
                 if script is None:
-                    claim(transcript, command_hook(decl.command), owner)
-                elif is_dir and _inside(script, owner):
-                    # Resolved, so a path through the harness's link to
-                    # the folder lands inside it too.
-                    claim(paths, script, owner)
-                    claim(helper, hook_stem(os.path.basename(script)), owner)
+                    # No one script (a variable, or several files): the
+                    # transcript names the run by its command.
+                    name = command_hook(decl.command)
+                    claim(transcript, name, owner)
+                    if is_dir and not resolver.scripts(decl.command):
+                        # Nothing resolvable at all, and the inventory
+                        # joined it to this folder by name: a log line of
+                        # that executable carries its bare stem.
+                        claim(helper, name.rsplit("/", 1)[-1], owner)
+                if is_dir:
+                    # Every file the declaration runs inside the folder is
+                    # one of its executables, even two in one command: a
+                    # run each logs for itself is the folder's. Resolved,
+                    # so a path through the harness's link lands inside.
+                    for path in resolver.scripts(decl.command):
+                        if _inside(path, owner):
+                            claim(paths, path, owner)
+                            claim(helper, hook_stem(os.path.basename(path)),
+                                  owner)
         self._paths = paths
         self._helper = helper
         self._transcript = transcript
+
+    @staticmethod
+    def _wrapper_path(row, owner: str, home: Path) -> str | None:
+        """The resolved path of a shared row's wrapper, when runs through it
+        are this script's: the file there is a generated wrapper for this
+        source, or nothing is there now and the path is where swe writes
+        its wrapper (a run from before it was pruned). Anything else at
+        that path (a link conflict, another installer's ``_generated``
+        folder) is another script, and keeps its own runs."""
+        if getattr(row, "tier", "") != "shared":
+            return None
+        dest = _real(str(row.dest))
+        if dest == owner:
+            return None
+        if os.path.lexists(dest):
+            return dest if wrapped_source(dest) == owner else None
+        from swe.hooks import shared as _shared
+
+        expected = _real(str(_shared.generated_dir(home, row.harness)
+                             / row.source.name))
+        return dest if dest == expected else None
 
     def canonical(self, script: str | None) -> str | None:
         """``script`` as the one file it stands for: the source of the file
