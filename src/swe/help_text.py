@@ -233,9 +233,14 @@ HELP = {
   {c('cyan', 'swe session index --on|--off')} Whether the remote hub keeps the index current
   {c('cyan', 'swe session index --status')}   What the index holds, without a pass
   {c('cyan', 'swe session mirror')}           Copy Claude Code and Codex transcripts into ~/.swe so they outlive
-                                            the harnesses' 30-day pruning (nothing is ever deleted)
+                                            the harnesses' 30-day pruning (a pass never deletes a copy)
   {c('cyan', 'swe session mirror --on|--off')} Whether the hub and swe session index keep mirroring (default on)
   {c('cyan', 'swe session mirror --status')}  What the mirror holds, without a pass
+  {c('cyan', 'swe session mirror --purge=<N|id>')} Delete one mirrored session's copies, backups and manifest
+                                            entries; lists the files and asks first (--yes skips the prompt)
+  {c('cyan', 'swe session mirror --sweep-tmp')} Remove the mirror's own temp files a crash left over a day ago
+  {c('cyan', 'swe session restore <N|id>')}   Put a mirrored transcript back where its harness kept it, so the
+                                            session resumes again; never overwrites an existing file
 
 {c('bold', 'Flags')}
   {c('cyan', '--agent=<name>')}               Filter by agent (claude, codex, opencode, droid, ...)
@@ -265,7 +270,9 @@ HELP = {
   swe session --search=login
   swe session 30 -q refactor
   swe session index --on
-  swe session mirror --json"""
+  swe session mirror --json
+  swe session restore 3
+  swe session mirror --purge=3"""
     ),
     "report": (
         "Summarize coding sessions and manage follow-ups",

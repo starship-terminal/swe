@@ -214,6 +214,97 @@ def issue_findings(home: Path | None = None) -> list[DoctorFinding]:
     return findings
 
 
+def mirror_audit(home: Path | None = None) -> dict | None:
+    """The transcript mirror's state for ``swe doctor``
+    (``transcript_mirror.audit``), or None when it cannot be read."""
+    from swe.sessions import transcript_mirror
+
+    try:
+        return transcript_mirror.audit(home or Path.home())
+    except (OSError, ValueError):
+        return None
+
+
+def _size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{n} B"  # pragma: no cover
+
+
+def _count(n: int, noun: str, plural: str | None = None) -> str:
+    return f"{n:,} {noun if n == 1 else (plural or noun + 's')}"
+
+
+def mirror_lines(audit: dict | None) -> list[tuple[str, str]]:
+    """``(label, value)`` rows for the human ``swe doctor`` section."""
+    if audit is None:
+        return [("state", "unreadable")]
+    root = tilde(audit.get("root") or "")
+    rows = [("state", f"{'on' if audit.get('enabled') else 'off'}  ({root})"),
+            ("copies", f"{_count(audit.get('entries', 0), 'copy', 'copies')} "
+                       f"({_size(audit.get('bytes', 0))})"),
+            ("orphans", f"{_count(audit.get('orphaned', 0), 'orphan')} "
+                        f"({_size(audit.get('orphaned_bytes', 0))}), kept after "
+                        "the harness deleted the source")]
+    last = audit.get("last_pass")
+    if isinstance(last, dict) and last.get("finished_at"):
+        import time
+
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(last["finished_at"])))
+        made = int(last.get("copied") or 0) + int(last.get("cloned") or 0)
+        rows.append(("last pass", f"{when} · {_count(int(last.get('files') or 0), 'file')}, "
+                                  f"{made:,} copied, {int(last.get('failed') or 0):,} failed"))
+    else:
+        rows.append(("last pass", "none yet"))
+    return rows
+
+
+def mirror_findings(audit: dict | None) -> list[DoctorFinding]:
+    """What ``swe doctor`` flags about the transcript mirror. Never an
+    error: the mirror's state cannot fail doctor's exit status."""
+    if audit is None:
+        return []
+    source = tilde(audit.get("root") or "~/.swe/data/transcripts")
+    findings: list[DoctorFinding] = []
+    if not audit.get("enabled"):
+        findings.append(DoctorFinding(
+            "mirror.off", "info",
+            "The transcript mirror is off, so Claude Code and Codex transcripts are lost "
+            "when the harness prunes them",
+            "swe session mirror --on", source=source))
+    last = audit.get("last_pass")
+    failed = int(last.get("failed") or 0) if isinstance(last, dict) else 0
+    if failed:
+        findings.append(DoctorFinding(
+            "mirror.failed", "warning",
+            f"The last mirror pass could not copy {_count(failed, 'transcript')}",
+            "swe session mirror", source=source))
+    untracked = audit.get("untracked") or []
+    if untracked:
+        findings.append(DoctorFinding(
+            "mirror.untracked", "info",
+            f"{_count(len(untracked), 'mirror copy', 'mirror copies')} not in the manifest: "
+            "they list and read, but swe cannot restore or purge them",
+            None, source=source))
+    missing = audit.get("missing") or []
+    if missing:
+        findings.append(DoctorFinding(
+            "mirror.missing", "info",
+            f"{_count(len(missing), 'manifest entry', 'manifest entries')} name a copy that "
+            "is no longer on disk",
+            "swe session mirror", source=source))
+    stale = audit.get("stale_temps") or []
+    if stale:
+        findings.append(DoctorFinding(
+            "mirror.stale-tmp", "warning",
+            f"{_count(len(stale), 'temp file')} left in the mirror by an interrupted copy",
+            "swe session mirror --sweep-tmp", source=source))
+    return findings
+
+
 def setup_findings(home: Path | None = None) -> list[DoctorFinding]:
     """Setup-state checks ``swe doctor`` runs after the path probes.
 

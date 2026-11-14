@@ -15,10 +15,15 @@ Layout keeps the source's structure::
 
 Rules that keep user data safe, in the order they matter:
 
-- **A mirror copy is never deleted here.** Not when its source disappears
-  (that is the feature), not when a copy fails, not to make room. The one
-  thing a pass removes is its own half-written temp file. There is no
-  purge path yet.
+- **A mirror copy is never deleted by a pass.** Not when its source
+  disappears (that is the feature), not when a copy fails, not to make
+  room. The one thing a pass removes is its own half-written temp file.
+  :func:`purge` is the only code that deletes a copy: one session the
+  user named, whose source is gone, only the files the manifest ties to
+  it, never through a symlink (``swe session mirror --purge=<id>``).
+- **A restore never overwrites.** :func:`restore` puts a copy back at
+  the source path the manifest recorded, only when nothing is there, and
+  its last step is a hard link that fails if a file appeared meanwhile.
 - **A copy is a clone where it can be.** On APFS ``clonefile(2)`` makes a
   copy-on-write clone: no bytes move, no extra disk is used while the
   source exists, and the blocks outlive the source. Anywhere else (or on
@@ -50,6 +55,8 @@ import errno
 import hashlib
 import json
 import os
+import re
+import stat as stat_mod
 import sys
 import uuid
 import time
@@ -323,10 +330,17 @@ def _clone(source: str, target: str) -> None:
         raise OSError(code, os.strerror(code), source)
 
 
-def _copy(source: str, dest: Path, root: Path) -> tuple[os.stat_result, int, str]:
+def _copy(source: str, dest: Path, root: Path, *,
+          exclusive: bool = False) -> tuple[os.stat_result, int, str]:
     """Put a copy of ``source`` at ``dest`` atomically: a clone where the
     filesystem can, else a streamed copy. Returns ``(stat, bytes, how)``
     with ``how`` ``"cloned"`` or ``"copied"``.
+
+    ``exclusive`` is the restore direction: ``dest`` must not exist and
+    is never replaced. Its folder must resolve to itself (no symlink on
+    the way, since the recorded source path is already resolved), and the
+    last step is a hard link, which fails with ``FileExistsError`` if a
+    file appeared at ``dest`` meanwhile.
 
     The stat is what the manifest records, and it never claims more than
     the copy holds. Cloning: the source is stat'ed *before* the clone, so
@@ -335,7 +349,17 @@ def _copy(source: str, dest: Path, root: Path) -> tuple[os.stat_result, int, str
     again. Streaming: the stat comes from the open handle before the
     first byte is read, for the same reason. ``bytes`` is the copy's own
     size (``mirror_size``), never the source's."""
+    if exclusive:
+        # Check before creating anything, so no folder is made through a
+        # link, and again after, in case one was swapped in meanwhile.
+        existing = dest.parent
+        while not os.path.lexists(existing) and existing != existing.parent:
+            existing = existing.parent
+        if not _resolves_to_itself(str(existing)):
+            raise OSError(errno.ELOOP, "a folder on the way is a symlink", str(existing))
     _ensure_dir(dest.parent, root)
+    if exclusive and not _resolves_to_itself(str(dest.parent)):
+        raise OSError(errno.ELOOP, "a folder on the way is a symlink", str(dest.parent))
     # A name nothing has created: clonefile refuses an existing target.
     tmp = str(dest.parent / f".{dest.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp")
     try:
@@ -364,6 +388,10 @@ def _copy(source: str, dest: Path, root: Path) -> tuple[os.stat_result, int, str
         # paths to the stat the manifest records.
         os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
         os.chmod(tmp, 0o600)
+        if exclusive:
+            _link_new(tmp, dest)
+            os.unlink(tmp)
+            return st, written, how
         _keep_shrunk(dest, written)
         os.replace(tmp, dest)
         return st, written, how
@@ -372,6 +400,14 @@ def _copy(source: str, dest: Path, root: Path) -> tuple[os.stat_result, int, str
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def _link_new(tmp: str, dest: Path) -> None:
+    """Give ``tmp`` the name ``dest`` without ever replacing a file
+    there: a hard link fails with ``FileExistsError`` when ``dest``
+    exists. A filesystem that refuses hard links fails the restore
+    rather than fall back to a rename, which would replace."""
+    os.link(tmp, dest, follow_symlinks=False)
 
 
 def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) -> MirrorResult:
@@ -501,6 +537,377 @@ def run_pass(home: Path | None = None, should_stop=None, *, wait: bool = True) -
 
     home = Path(home) if home is not None else Path.home()
     return sync(home, search_writer.sources(home), should_stop, wait=wait)
+
+
+# -- restore, purge and upkeep -------------------------------------------
+#
+# The only code here that writes outside the mirror root is restore, and
+# only at the source path the manifest recorded, only when nothing is
+# there. The only code that deletes a copy is purge.
+
+
+class Refused(Exception):
+    """A restore, purge or sweep that would not be safe; the message says
+    why, in words a user can act on."""
+
+
+# The temp names this module writes: a copy's (``_copy``) beside its
+# target, and ``atomic_write_text``'s for the two state files in the root.
+_COPY_TMP = re.compile(r"^\..+\.\d+-[0-9a-f]{32}\.tmp$")
+_STATE_TMP = re.compile(r"^\.(?:manifest|mirror)\.json\.[A-Za-z0-9_]+\.tmp$")
+STALE_TMP_S = 24 * 3600
+
+
+def _under(path: str, folder: str) -> bool:
+    return path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _real_root(home: Path | None) -> str:
+    return os.path.realpath(transcripts_dir_for(home))
+
+
+def _resolves_to_itself(path: str) -> bool:
+    """No ``..``, and no symlink anywhere on the way to ``path``."""
+    norm = os.path.normpath(path)
+    return path == norm and os.path.realpath(norm) == norm
+
+
+def _inside(path: str, root: str) -> bool:
+    """``path`` is a regular file (not a symlink) inside ``root``, spelled
+    without ``..``, and no folder between them is a symlink."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (stat_mod.S_ISREG(st.st_mode) and _under(path, root)
+            and _resolves_to_itself(path))
+
+
+def _session_rels(entries: dict, session, home: Path | None) -> tuple[list[str], list[str]]:
+    """``(main, extra)`` mirror-relative paths the manifest ties to
+    ``session``: its own transcript copies (several for a Claude session
+    resumed from another folder, every rollout for a Codex thread) and
+    the subagent transcripts in the folder Claude keeps beside one."""
+    base = mirror_dir(session.tool_name, session.account_home, home)
+    if base is None:
+        return [], []
+    root = _real_root(home)
+    group = os.path.realpath(base)
+    stem = Path(session.session_id).stem
+    thread = ""
+    if session.tool_name == "codex":
+        from swe.sessions.parsers import codex_thread_id  # function-local: parsers imports this module
+
+        thread = codex_thread_id(stem)
+    main: list[str] = []
+    for rel, entry in entries.items():
+        if entry.get("harness") != session.tool_name:
+            continue
+        path = os.path.join(root, rel)
+        if os.path.normpath(path) != path or not _under(path, group):
+            continue  # a key spelled with ``..``, or another account's
+        name = os.path.basename(rel)
+        if not name.endswith(".jsonl"):
+            continue
+        if thread:
+            from swe.sessions.parsers import codex_thread_id
+
+            same = codex_thread_id(name[:-len(".jsonl")]) == thread
+        else:
+            same = name == f"{stem}.jsonl"
+        if same:
+            main.append(rel)
+    extra: list[str] = []
+    if session.tool_name == "claude":
+        folders = tuple(f"{rel[:-len('.jsonl')]}/" for rel in main)
+        extra = [rel for rel, entry in entries.items()
+                 if rel not in main and entry.get("harness") == "claude"
+                 and rel.startswith(folders)] if folders else []
+    return sorted(main), sorted(extra)
+
+
+def restore(home: Path | None, session) -> dict:
+    """Put the mirror copy a read of ``session`` would use (the one
+    :func:`find_copy` picks, which the listing shows) back at the source
+    path its manifest entry recorded, so the harness can resume it.
+
+    Refuses (:class:`Refused`) when anything is at that path, when the
+    manifest does not say where the copy came from, when the copy is not
+    a plain file inside the mirror, and for a source outside the harness
+    roots unless its folder is still there and a link in the harness
+    root still points at it (otherwise the restored file would not
+    list). Never overwrites: see ``_copy(exclusive=True)``. Raises
+    :class:`MirrorBusy` while a pass runs."""
+    home = Path(home) if home is not None else Path(os.path.expanduser("~"))
+    copy = find_copy(session.tool_name, session.session_id, session.account_home, home)
+    if copy is None:
+        raise Refused("swe has no mirror copy of this session")
+    root = _real_root(home)
+    copy_path = os.path.join(os.path.realpath(copy.parent), copy.name)
+    if not _inside(copy_path, root):
+        raise Refused(f"the mirror copy {copy} is not a plain file inside {root}")
+    rel = copy_path[len(root) + 1:]
+    with _pass_lock(home, wait=False):
+        entries, _corrupt = _read_manifest(manifest_path(home))
+        entry = entries.get(rel)
+        if entry is None:
+            raise Refused(f"the manifest has no record of where {rel} was copied from, "
+                          "so swe cannot tell where to put it back")
+        target = entry.get("source") or ""
+        if not os.path.isabs(target) or os.path.normpath(target) != target:
+            raise Refused(f"the manifest's source path for {rel} is not a usable path")
+        if os.path.lexists(target):
+            raise Refused(f"{target} already exists; swe never overwrites a transcript")
+        stop = _restore_stop(home, session.tool_name, target)
+        try:
+            taken, written, how = _copy(copy_path, Path(target), stop, exclusive=True)
+        except FileExistsError:
+            raise Refused(f"{target} appeared while restoring; swe left it alone") from None
+        except OSError as exc:
+            raise Refused(f"could not restore to {target}: {exc.strerror or exc}") from None
+        # The restored file is the source now: record its stat, so the
+        # next pass finds the copy current instead of cloning it again.
+        with contextlib.suppress(OSError):
+            now = os.stat(target)
+            entries[rel] = {**entry, "ino": now.st_ino, "mtime_ns": now.st_mtime_ns,
+                            "size": now.st_size}
+            _write_manifest(home, entries)
+    return {"harness": session.tool_name, "session_id": session.session_id,
+            "account_home": session.account_home or None, "copy": copy_path,
+            "target": target, "bytes": written, "how": how}
+
+
+def _restore_stop(home: Path, harness: str, target: str) -> Path:
+    """The folder restore may create ``target``'s parents down from, or
+    :class:`Refused` when it may not write there at all."""
+    table = [root for root in roots(home) if root.harness == harness]
+    for root in table:
+        if _under(target, root.path):
+            if not os.path.isdir(root.home):
+                raise Refused(f"{root.home} does not exist, so {harness} is not set up "
+                              "there any more")
+            return Path(root.home)
+    # A source outside every harness root was reached through a link.
+    parent = os.path.dirname(target)
+    stop = None
+    if os.path.isdir(parent):
+        stop = Path(parent)
+    else:
+        for root in table:
+            home_dir = os.path.realpath(root.home)
+            if os.path.isdir(home_dir) and _under(target, home_dir):
+                stop = Path(home_dir)
+                break
+    if stop is None:
+        raise Refused(f"{parent} is gone and is outside {harness}'s home; "
+                      "swe will not recreate it")
+    if not _linked_from(table, target):
+        raise Refused(f"no link in {harness}'s session folders points at {target} any more, "
+                      "so a restored file would not list; swe left it alone")
+    return stop
+
+
+def _linked_from(table: list[Root], target: str) -> bool:
+    """Whether a symlink inside one of ``table``'s roots resolves to
+    ``target``. Only the roots are walked, without following links."""
+    for root in table:
+        for folder, dirs, files in os.walk(root.path):
+            for name in files + dirs:
+                path = os.path.join(folder, name)
+                if os.path.islink(path) and os.path.realpath(path) == target:
+                    return True
+    return False
+
+
+def purge_plan(home: Path | None, session) -> dict:
+    """What :func:`purge` would remove for ``session``, without removing
+    anything: ``{harness, session_id, account_home, entries, files,
+    bytes, untracked}``.
+
+    ``entries`` are the manifest entries tied to the session, ``files``
+    the plain files inside the mirror root they name, plus each one's
+    ``.shrunk-*`` backups. ``untracked`` are copies of the session the
+    manifest does not know: they are named, never removed. Refuses
+    (:class:`Refused`) while any of the session's own transcripts still
+    exists at its source, and when any file it would remove is a symlink
+    or sits behind one."""
+    home = Path(home) if home is not None else Path(os.path.expanduser("~"))
+    entries = load_manifest(home)
+    main, extra = _session_rels(entries, session, home)
+    if not main:
+        raise Refused("the manifest ties no mirror copy to this session")
+    live = [entries[rel]["source"] for rel in main if not _is_gone(entries[rel])]
+    if live:
+        raise Refused(f"its transcript is still at {live[0]}; a purge only removes the copy "
+                      "of a session its harness has deleted")
+    # A subagent transcript still on disk is copied again by the next
+    # pass anyway: leave its entry and copy.
+    rels = main + [rel for rel in extra if _is_gone(entries[rel])]
+    root = _real_root(home)
+    files: list[str] = []
+    skipped: list[str] = []
+    for rel in rels:
+        path = os.path.join(root, rel)
+        if not os.path.lexists(path):
+            continue
+        if not _inside(path, root):
+            skipped.append(path)
+            continue
+        files.append(path)
+        folder, name = os.path.split(path)
+        with contextlib.suppress(OSError):
+            for child in sorted(os.listdir(folder)):
+                if child.startswith(name + SHRUNK_SUFFIX) and child[len(name + SHRUNK_SUFFIX):].isdigit():
+                    backup = os.path.join(folder, child)
+                    (files if _inside(backup, root) else skipped).append(backup)
+    known = {os.path.join(root, rel) for rel in entries}
+    untracked = []
+    base = mirror_dir(session.tool_name, session.account_home, home)
+    if base is not None:
+        names = {os.path.basename(rel) for rel in main}
+        for folder, _dirs, names_here in os.walk(os.path.realpath(base)):
+            for name in names_here:
+                path = os.path.join(folder, name)
+                if name in names and path not in known:
+                    untracked.append(path)
+    if skipped:
+        raise Refused(f"{skipped[0]} is a symlink or not a plain file inside the mirror; "
+                      "swe never follows one out of the mirror, so nothing was removed")
+    size = 0
+    for path in files:
+        with contextlib.suppress(OSError):
+            size += os.lstat(path).st_size
+    return {"harness": session.tool_name, "session_id": session.session_id,
+            "account_home": session.account_home or None, "entries": rels,
+            "files": files, "bytes": size, "untracked": sorted(untracked)}
+
+
+def purge(home: Path | None, plan: dict) -> dict:
+    """Remove what ``plan`` (from :func:`purge_plan`) listed, and drop its
+    manifest entries. The plan is worked out again under the pass lock and
+    must name the same files and entries, so nothing is removed that was
+    not shown. The copies go first, then the entries: a crash in between
+    leaves entries with no copy (``swe doctor`` reports them), never a
+    copy that lists again without its record. Raises :class:`MirrorBusy`
+    while a pass runs."""
+    home = Path(home) if home is not None else Path(os.path.expanduser("~"))
+    from swe.sessions.models import Session
+
+    session = Session(timestamp=0, agent="", path="", session_id=plan["session_id"],
+                      tool_name=plan["harness"], account_home=plan.get("account_home") or "")
+    root = _real_root(home)
+    with _pass_lock(home, wait=False):
+        _manifest_cache.pop(str(manifest_path(home)), None)
+        again = purge_plan(home, session)
+        if (again["files"], again["entries"]) != (plan["files"], plan["entries"]):
+            raise Refused("the mirror changed since the list was shown; nothing was removed, "
+                          "run it again")
+        removed: list[str] = []
+        for path in again["files"]:
+            if not _inside(path, root):
+                continue
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                continue
+            removed.append(path)
+        entries, corrupt = _read_manifest(manifest_path(home))
+        if not corrupt:
+            for rel in again["entries"]:
+                entries.pop(rel, None)
+            _write_manifest(home, entries)
+    return {**again, "removed": removed, "search": _forget_searched(home, again)}
+
+
+def _forget_searched(home: Path, plan: dict) -> str:
+    """Drop the purged session from the search index once its copies are
+    gone (copies first, or a pass in between reads them again). A search
+    writer without ``forget_session`` (it indexes no copies) has nothing
+    to forget. Returns ``"forgotten"``, ``"none"`` or the reason it could
+    not; a purge never fails over it."""
+    from swe.sessions import search_writer  # function-local: it imports this module
+
+    forget = getattr(search_writer, "forget_session", None)
+    if forget is None:
+        return "none"
+    # Every purged copy's own id: the Claude id, each rollout of a Codex
+    # thread, and the subagent transcripts beside a Claude session.
+    stems = sorted({Path(rel).stem for rel in plan["entries"]})
+    try:
+        for stem in stems or [Path(plan["session_id"]).stem]:
+            forget(home, plan["harness"], stem)
+    except Exception as exc:  # IndexBusy, IndexUnavailable, a broken index
+        return f"not removed from search: {exc}"
+    return "forgotten"
+
+
+def _age(st: os.stat_result, now: float) -> float:
+    """How long ago a temp file was last touched. ``_copy`` sets a temp's
+    mtime to its source's before the rename, so the mtime alone can be
+    years old for a file written a moment ago: the newer of mtime and
+    ctime is the age."""
+    return now - max(st.st_mtime, st.st_ctime)
+
+
+def temp_files(home: Path | None = None, older_than: float = STALE_TMP_S) -> list[str]:
+    """This module's own temp files under the mirror root that nothing
+    has touched for ``older_than`` seconds: what a hard crash mid-copy
+    leaves. Plain files only; symlinked folders are not entered."""
+    root = _real_root(home)
+    if not os.path.isdir(root):
+        return []
+    now = time.time()
+    found: list[str] = []
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if not (_COPY_TMP.match(name) or (folder == root and _STATE_TMP.match(name))):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            if stat_mod.S_ISREG(st.st_mode) and _age(st, now) >= older_than:
+                found.append(path)
+    return sorted(found)
+
+
+def sweep_temps(home: Path | None = None) -> list[str]:
+    """Remove :func:`temp_files` under the pass lock, so no copy in flight
+    can lose its temp. Returns what was removed. Raises
+    :class:`MirrorBusy` while a pass runs."""
+    home = Path(home) if home is not None else Path(os.path.expanduser("~"))
+    if not os.path.isdir(_real_root(home)):
+        return []
+    root = _real_root(home)
+    removed: list[str] = []
+    with _pass_lock(home, wait=False):
+        for path in temp_files(home):
+            if not _inside(path, root):
+                continue
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
+                removed.append(path)
+    return removed
+
+
+def audit(home: Path | None = None) -> dict:
+    """:func:`status` plus what ``swe doctor`` checks: ``untracked``
+    (copies on disk the manifest does not know), ``missing`` (entries
+    whose copy is gone) and ``stale_temps``. Read-only."""
+    body = status(home)
+    root = _real_root(home)
+    entries = load_manifest(home)
+    on_disk: set[str] = set()
+    if os.path.isdir(root):
+        for folder, _dirs, files in os.walk(root):
+            for name in files:
+                if name.endswith(".jsonl"):
+                    on_disk.add(os.path.relpath(os.path.join(folder, name), root))
+    body["untracked"] = sorted(on_disk - set(entries))
+    body["missing"] = sorted(rel for rel in entries if not os.path.isfile(os.path.join(root, rel)))
+    body["stale_temps"] = temp_files(home)
+    return body
 
 
 # -- read side -----------------------------------------------------------

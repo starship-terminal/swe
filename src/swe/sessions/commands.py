@@ -11,6 +11,7 @@ from swe.console import c, cpad, fit_widths, sanitize, terminal_width, tilde, tr
 from swe.flags import expand_value_flags
 from swe.json_output import emit, error_stream, take_json_flag
 from swe.markdown import render_markdown
+from swe.paths import transcripts_dir_for
 from swe.sessions import failures
 from swe.sessions import search_index
 from swe.sessions.aggregator import get_all_sessions
@@ -682,18 +683,198 @@ def _bytes(n: int) -> str:
     return f"{n} B"  # pragma: no cover
 
 
-_MIRROR_FLAGS = {"--on", "--off", "--status", "--json"}
+_MIRROR_FLAGS = {"--on", "--off", "--status", "--json", "--yes", "--sweep-tmp"}
+
+
+def _listed_session(want: str):
+    """The one listed session ``want`` names: its ``#`` in the default
+    ``swe session`` listing, its id, or for Codex its thread uuid.
+    Returns ``(session, None)`` or ``(None, message)``."""
+    from swe.sessions.parsers import codex_thread_id
+
+    want = want.strip()
+    if not want:
+        return None, "name a session: its # from swe session, or its id"
+    if want.isdigit():
+        index = int(want)
+        sessions = get_all_sessions(limit=max(index, 10))
+        if index < 1 or index > len(sessions):
+            return None, (f"Invalid session index: {index}. "
+                          f"Pick a number between 1 and {len(sessions)}.")
+        return sessions[index - 1], None
+    lowered = want.lower()
+    matches = [
+        s for s in get_all_sessions(limit=None)
+        if s.session_id == want
+        or (s.tool_name == "codex" and codex_thread_id(s.session_id) == lowered)
+    ]
+    if not matches:
+        return None, f"no session has the id {want} (swe session lists them)"
+    if len(matches) > 1:
+        return None, (f"{want} names {len(matches)} sessions (one per account home); "
+                      "use its # from swe session instead")
+    return matches[0], None
+
+
+def _session_label(session) -> str:
+    label = f"{sanitize(session.agent)} session {sanitize(session.session_id)}"
+    if session.account_home:
+        label += f" ({tilde(session.account_home)})"
+    return label
+
+
+def cmd_session_restore(args) -> int:
+    """``swe session restore <N|id>``: copy a mirrored transcript back to
+    where its harness kept it, so the session resumes again. Only when
+    nothing is there: an existing file is never overwritten."""
+    from swe.sessions import aggregator, transcript_mirror
+
+    args, json_view = take_json_flag(args)
+    out = error_stream(json_view)
+    flags = [a for a in args if a.startswith("-")]
+    if flags:
+        print(c("red", f"Unknown option for swe session restore: {flags[0]}"), file=out)
+        return 1
+    if len(args) != 1:
+        print(c("red", "Usage: swe session restore <N|id>  (N is the # column from swe session)"),
+              file=out)
+        return 1
+    session, problem = _listed_session(args[0])
+    if session is None:
+        print(c("red", problem), file=out)
+        return 1
+    if not getattr(session, "mirrored", False):
+        print(c("red", f"{_session_label(session)} is not mirrored: its harness still has the "
+                       "transcript, so there is nothing to restore."), file=out)
+        return 1
+    try:
+        restored = transcript_mirror.restore(Path.home(), session)
+    except transcript_mirror.MirrorBusy as exc:
+        print(c("red", f"Transcript mirror: {exc}; try again in a moment."), file=out)
+        return 1
+    except transcript_mirror.Refused as exc:
+        print(c("red", f"Not restored: {sanitize(str(exc))}"), file=out)
+        return 1
+    aggregator.invalidate_cache()
+    if json_view:
+        return emit({"restored": restored})
+    print(f"Restored {tilde(restored['copy'])}")
+    print(f"      to {tilde(restored['target'])} ({_bytes(restored['bytes'])}).")
+    print(c("dim", "It lists as live again (swe session); swe session use <N> resumes it."))
+    return 0
+
+
+def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool) -> int:
+    """``swe session mirror --purge=<N|id>``: remove one mirrored
+    session's copies, their ``.shrunk-*`` backups and manifest entries,
+    after showing exactly which files go."""
+    from swe.sessions import aggregator, transcript_mirror
+
+    out = error_stream(json_view)
+    if json_view and not yes:
+        print(c("red", "--purge with --json needs --yes: there is no prompt to answer"),
+              file=out)
+        return 1
+    session, problem = _listed_session(want)
+    if session is None:
+        print(c("red", problem), file=out)
+        return 1
+    if not getattr(session, "mirrored", False):
+        print(c("red", f"{_session_label(session)} is not mirrored: its harness still has the "
+                       "transcript, so its copy would only be made again. Nothing was removed."),
+              file=out)
+        return 1
+    try:
+        plan = transcript_mirror.purge_plan(home, session)
+    except transcript_mirror.Refused as exc:
+        print(c("red", f"Not purged: {sanitize(str(exc))}"), file=out)
+        return 1
+    if not json_view:
+        print(f"Purging the mirror copy of {_session_label(session)} removes "
+              f"{len(plan['files'])} file{'' if len(plan['files']) == 1 else 's'} "
+              f"({_bytes(plan['bytes'])}):")
+        for path in plan["files"]:
+            print(f"  {tilde(path)}")
+        entries = len(plan["entries"])
+        print(f"and {entries} manifest entr{'y' if entries == 1 else 'ies'}. "
+              "The session will no longer list.")
+        for path in plan["untracked"]:
+            print(c("yellow", f"  left alone (not in the manifest): {tilde(path)}"))
+    if not yes:
+        if not sys.stdin.isatty():
+            print(c("red", "Nothing was removed: pass --yes to purge without a prompt."))
+            return 1
+        from swe.prompt import read_line
+
+        try:
+            answer = read_line(f"Remove {'it' if len(plan['files']) == 1 else 'them'}? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Nothing was removed.")
+            return 1
+    try:
+        done = transcript_mirror.purge(home, plan)
+    except transcript_mirror.MirrorBusy as exc:
+        print(c("red", f"Transcript mirror: {exc}; nothing was removed, try again."), file=out)
+        return 1
+    except transcript_mirror.Refused as exc:
+        print(c("red", f"Not purged: {sanitize(str(exc))}"), file=out)
+        return 1
+    aggregator.invalidate_cache()
+    if json_view:
+        return emit({"purged": done})
+    print(f"Removed {len(done['removed'])} file{'' if len(done['removed']) == 1 else 's'} "
+          f"({_bytes(done['bytes'])}).")
+    if done.get("search", "").startswith("not removed"):
+        print(c("yellow", f"The session was {done['search']}, so swe session --search "
+                          "may still find it."))
+    return 0
+
+
+def _mirror_sweep(home: Path, json_view: bool) -> int:
+    """``swe session mirror --sweep-tmp``: remove the mirror's own temp
+    files a crash left, once nothing has touched them for a day."""
+    from swe.sessions import transcript_mirror
+
+    out = error_stream(json_view)
+    try:
+        swept = transcript_mirror.sweep_temps(home)
+    except transcript_mirror.MirrorBusy as exc:
+        print(c("red", f"Transcript mirror: {exc}; try again in a moment."), file=out)
+        return 1
+    if json_view:
+        return emit({"swept": swept})
+    for path in swept:
+        print(f"  removed {tilde(path)}")
+    print(f"Removed {len(swept)} stale temp file{'' if len(swept) == 1 else 's'} from "
+          f"{tilde(str(transcripts_dir_for(home)))}.")
+    return 0
 
 
 def cmd_session_mirror(args) -> int:
     """``swe session mirror``: copy new and changed Claude Code and Codex
     transcripts into ``~/.swe/data/transcripts/`` so they outlive the
     harnesses' 30-day pruning, or with ``--on``/``--off`` choose whether
-    the hub and ``swe session index`` keep doing it. Nothing is deleted."""
+    the hub and ``swe session index`` keep doing it. A pass deletes
+    nothing; ``--purge=<N|id>`` is the one deliberate delete."""
     from swe.sessions import transcript_mirror
 
     args, json_view = take_json_flag(args)
     out = error_stream(json_view)
+    try:
+        args = expand_value_flags(args, {"--purge"})
+    except ValueError as exc:
+        print(c("red", str(exc)), file=out)
+        return 1
+    purge = None
+    if "--purge" in args:
+        at = args.index("--purge")
+        purge = args[at + 1]
+        args = args[:at] + args[at + 2:]
+        if "--purge" in args:
+            print(c("red", "--purge names one session"), file=out)
+            return 1
     unknown = [a for a in args if a not in _MIRROR_FLAGS]
     if unknown:
         print(c("red", f"Unknown option for swe session mirror: {unknown[0]}"), file=out)
@@ -701,7 +882,22 @@ def cmd_session_mirror(args) -> int:
     if "--on" in args and "--off" in args:
         print(c("red", "pick one of --on and --off"), file=out)
         return 1
+    actions = [a for a in ("--on", "--off", "--status", "--sweep-tmp") if a in args]
+    if purge is not None and actions:
+        print(c("red", f"--purge cannot be combined with {actions[0]}"), file=out)
+        return 1
+    if "--sweep-tmp" in args and len(actions) > 1:
+        print(c("red", "--sweep-tmp cannot be combined with "
+                       f"{[a for a in actions if a != '--sweep-tmp'][0]}"), file=out)
+        return 1
+    if "--yes" in args and purge is None:
+        print(c("red", "--yes only goes with --purge"), file=out)
+        return 1
     home = Path.home()
+    if purge is not None:
+        return _mirror_purge(home, purge, "--yes" in args, json_view)
+    if "--sweep-tmp" in args:
+        return _mirror_sweep(home, json_view)
     if "--on" in args or "--off" in args:
         transcript_mirror.set_enabled(home, "--on" in args)
     result = None
@@ -740,12 +936,13 @@ def cmd_session_mirror(args) -> int:
 
 
 def cmd_session(args):
-    if args and args[0] in ("index", "mirror"):
+    if args and args[0] in ("index", "mirror", "restore"):
         if any(a in ("-h", "--help", "help") for a in args[1:]):
             from swe.help_text import cmd_help
 
             return cmd_help(["session"]) or 0
-        return (cmd_session_index if args[0] == "index" else cmd_session_mirror)(args[1:])
+        return {"index": cmd_session_index, "mirror": cmd_session_mirror,
+                "restore": cmd_session_restore}[args[0]](args[1:])
     # `session --help` mid-listing (`session use --help`, `session -i -h`)
     # still prints help; bare `help` counts only in first position and
     # flag values are skipped, so `--search help` / `--search -h` search.
