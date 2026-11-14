@@ -299,6 +299,8 @@ comments in <code>--json</code> gain <code>association</code>.</p>
 </ul>
 <h3 id="fixed"><a class="anchor" href="#fixed"></a>Fixed</h3>
 <ul>
+<li><p><strong>The Mac app no longer reads a mirror copy of a session that is still live in an account home no profile names.</strong> When deciding whether a pruned session's copy may stand in for it, the app's scan looked only at the account homes registered in <code>~/.swe/accounts/profiles.json</code>, while swe counts every <code>~/.swe/accounts/&lt;vendor&gt;/&lt;id&gt;/home</code> on disk. So a session live only in an unregistered account home could have its older copy indexed for search and read for usage. The app now counts those homes too, following links as swe does, for both search and the usage ledger; it still does not index or count usage from an unregistered home itself (<a href="https://github.com/starship-terminal/swe/issues/1918">#1918</a>).</p>
+</li>
 <li><p><strong>The Mac app recognises sessions in <code>starship-terminal/swe</code> worktrees again.</strong>
 After the rebrand, the issue Resolve dialog stopped matching checkouts and
 <code>starship-terminal__swe-…</code> worktrees to this repo, so it no longer

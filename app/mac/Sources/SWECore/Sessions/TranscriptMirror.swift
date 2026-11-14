@@ -76,10 +76,16 @@ public struct TranscriptMirror: Sendable, Equatable {
 
     public var root: URL
     public var homes: [Home]
+    /// SWE's accounts root (`~/.swe/accounts`). Every
+    /// `<vendor>/<id>/home` under it counts for liveness, registered in
+    /// profiles.json or not, as swe's `account_homes_for` counts it. Nil
+    /// counts none, so a mirror built for a test never sweeps real accounts.
+    public var accounts: URL?
 
-    public init(root: URL, homes: [Home]) {
+    public init(root: URL, homes: [Home], accounts: URL? = nil) {
         self.root = root
         self.homes = homes
+        self.accounts = accounts
     }
 
     /// `<home>/.swe/data/transcripts`, or `SWE_TRANSCRIPTS_DIR` when set.
@@ -94,8 +100,10 @@ public struct TranscriptMirror: Sendable, Equatable {
     /// The mirror for the ledger's Claude and Codex homes. The first of
     /// each list is the harness's own home; every other one is an SWE
     /// account home (`.../accounts/<vendor>/<id>/home`), whose copies sit
-    /// under `accounts/<vendor>/<id>`.
-    public static func standard(root: URL, claudeHomes: [URL], codexHomes: [URL]) -> TranscriptMirror {
+    /// under `accounts/<vendor>/<id>`. `accounts` is SWE's accounts root,
+    /// whose every account home counts for liveness (`pruned`).
+    public static func standard(root: URL, claudeHomes: [URL], codexHomes: [URL],
+                                accounts: URL? = nil) -> TranscriptMirror {
         func homes(_ harness: String, _ urls: [URL]) -> [Home] {
             urls.enumerated().map { index, url in
                 Home(harness: harness, home: url, prefix: index == 0 ? harness
@@ -103,7 +111,8 @@ public struct TranscriptMirror: Sendable, Equatable {
             }
         }
         return TranscriptMirror(root: root,
-                                homes: homes("claude", claudeHomes) + homes("codex", codexHomes))
+                                homes: homes("claude", claudeHomes) + homes("codex", codexHomes),
+                                accounts: accounts)
     }
 
     // MARK: - Identity
@@ -317,6 +326,45 @@ public struct TranscriptMirror: Sendable, Equatable {
         return found
     }
 
+    // MARK: - Account homes
+
+    /// Every account home on disk for `harness`, by name: each
+    /// `<accounts>/<harness>/<id>/home` that is a directory once links are
+    /// followed, hidden ids included (swe's `account_homes_for`, a
+    /// `glob("*/home")` kept by `is_dir()`).
+    func accountHomes(_ harness: String) -> [URL] {
+        guard let accounts else { return [] }
+        let base = accounts.appending(path: harness)
+        return Self.names(in: base.path).compactMap { name in
+            let home = base.appending(path: name).appending(path: "home")
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: home.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { return nil }
+            return home
+        }
+    }
+
+    /// `(harness, identity)` of every transcript in an account home that
+    /// `homes` leaves out (one no profile registers). The scan never reads
+    /// such a home but swe's pass does, so its sessions are live for
+    /// `pruned`. Each is walked as swe walks a home (`_walk` over its
+    /// resolved `projects/`, `sessions/` and `archived_sessions/`).
+    func liveInUnlistedHomes() -> Set<SessionIdentity> {
+        var live = Set<SessionIdentity>()
+        for harness in Self.harnesses {
+            let listed = Set(homes.filter { $0.harness == harness }.map { Self.resolved($0.home) })
+            let subdirs = harness == "claude" ? ["projects"] : ["sessions", "archived_sessions"]
+            for home in accountHomes(harness) where !listed.contains(Self.resolved(home)) {
+                for sub in subdirs {
+                    for path in Self.walk(Self.resolved(home.appending(path: sub))) {
+                        live.insert(SessionIdentity(harness: harness, path: path))
+                    }
+                }
+            }
+        }
+        return live
+    }
+
     // MARK: - Pruned sessions
 
     /// A copy whose source the harness deleted, with the source path its
@@ -352,15 +400,18 @@ public struct TranscriptMirror: Sendable, Equatable {
     }
 
     /// The copies of sessions no live file carries and whose source is
-    /// gone: swe's candidate step, shared by search and the ledger. A
-    /// copy named for a live session is dropped before any lookup (a copy
-    /// keeps its source's file name), then again once its source path is
-    /// known. A copy with no known source, or one that points inside the
-    /// root, is left alone.
+    /// gone: swe's candidate step, shared by search and the ledger. `live`
+    /// is the caller's enumeration of `homes`; the sessions of every
+    /// account home `homes` leaves out count too (`liveInUnlistedHomes`),
+    /// as swe lists every account home on disk. A copy named for a live
+    /// session is dropped before any lookup (a copy keeps its source's
+    /// file name), then again once its source path is known. A copy with
+    /// no known source, or one that points inside the root, is left alone.
     public func pruned(live: Set<SessionIdentity>, known: (String) -> Bool = { _ in false }) -> [Pruned] {
         guard let real = resolvedRoot else { return [] }
         let found = copies()
         guard !found.isEmpty else { return [] }
+        let live = live.union(liveInUnlistedHomes())
         let manifest = manifest()
         // swe records `realpath` forms, which keep `/private`; the app's
         // resolution drops it. A key inside the root in either form is the

@@ -188,6 +188,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Mac app no longer reads a mirror copy of a session that is still live in an account home no profile names.** When deciding whether a pruned session's copy may stand in for it, the app's scan looked only at the account homes registered in `~/.swe/accounts/profiles.json`, while swe counts every `~/.swe/accounts/<vendor>/<id>/home` on disk. So a session live only in an unregistered account home could have its older copy indexed for search and read for usage. The app now counts those homes too, following links as swe does, for both search and the usage ledger; it still does not index or count usage from an unregistered home itself ([#1918](https://github.com/starship-terminal/swe/issues/1918)).
+
 - **The Mac app recognises sessions in `starship-terminal/swe` worktrees again.**
   After the rebrand, the issue Resolve dialog stopped matching checkouts and
   `starship-terminal__swe-…` worktrees to this repo, so it no longer

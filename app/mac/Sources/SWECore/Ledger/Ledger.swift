@@ -91,7 +91,8 @@ public struct LedgerRoots: Sendable, Equatable {
             clineSessions: [home.appendingPathComponent(".cline/data/sessions")],
             transcriptRoots: transcriptRoots,
             mirror: .standard(root: TranscriptMirror.defaultRoot(home: home),
-                              claudeHomes: claudeHomes, codexHomes: codexHomes))
+                              claudeHomes: claudeHomes, codexHomes: codexHomes,
+                              accounts: home.appendingPathComponent(".swe/accounts")))
     }
 }
 
@@ -457,7 +458,8 @@ public actor Ledger {
         }
         // Copies of sessions the harnesses pruned: only on a full scan,
         // whose enumeration names every live session, so a copy never
-        // stands for one a capped list left out.
+        // stands for one a capped list left out. `pruned` adds the
+        // sessions of account homes no profile registers, as swe does.
         if recentLimit == nil, let mirror = roots.mirror {
             let live = Self.liveIdentities(claude: claudeFiles.flatMap(\.1), codex: codexFiles.flatMap(\.1))
             // One walk of the mirror for both consumers. A Codex copy the

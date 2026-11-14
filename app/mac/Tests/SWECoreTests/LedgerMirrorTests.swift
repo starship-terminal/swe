@@ -115,6 +115,19 @@ import Testing
         #expect(await h.ledger.totals(in: allTime) == expected)
     }
 
+    /// A session live only in an account home no profile names: the scan
+    /// reads no usage there, and its copy is not read in its place.
+    @Test func aCopyOfASessionLiveOnlyInAnUnregisteredAccountHomeIsNeverRead() async throws {
+        let h = try H()
+        let gone = try h.claude(H.claudeID, "a", "b", folder: "-gone", usage: true)
+        try h.mirrorPass()
+        try FileManager.default.removeItem(at: gone)
+        try h.write(H.claudeLines(H.claudeID, ["a", "b"], usage: true),
+                    to: h.account("claude", "spare").appending(path: "projects/-p/\(H.claudeID).jsonl"))
+        try await h.scan(index: false)
+        #expect(await h.ledger.totals(in: allTime).eventCount == 0)
+    }
+
     @Test func aLostManifestStillFindsTheCopyAndCountsItOnce() async throws {
         let expected = try await reference { try $0.claude(H.claudeID, "a", "b", usage: true) }
         for loss in [H.Loss.missing, .corrupt] {
