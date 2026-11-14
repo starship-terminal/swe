@@ -686,10 +686,32 @@ def _bytes(n: int) -> str:
 _MIRROR_FLAGS = {"--on", "--off", "--status", "--json", "--yes", "--sweep-tmp"}
 
 
-def _listed_session(want: str, by_index: bool = True):
+def _account_name(session) -> str:
+    """How ``--account=`` names a session's home: ``default`` for the
+    harness's own, else the account's id, the ``<id>`` folder in
+    ``~/.swe/accounts/<vendor>/<id>/home``."""
+    return Path(session.account_home).parent.name if session.account_home else "default"
+
+
+def _in_account(session, account: str) -> bool:
+    """Whether ``--account=<account>`` names ``session``'s home: by the
+    word ``default``, the account's id, or its home path as
+    ``swe session --json`` prints it in ``account_home``."""
+    if account == "default":
+        return not session.account_home
+    if not session.account_home:
+        return False
+    if account == _account_name(session):
+        return True
+    return os.path.normpath(os.path.expanduser(account)) == os.path.normpath(session.account_home)
+
+
+def _listed_session(want: str, by_index: bool = True, account: str | None = None):
     """The one listed session ``want`` names: its ``#`` in the default
     ``swe session`` listing (when ``by_index``), its id, or for Codex its
-    thread uuid. Returns ``(session, None)`` or ``(None, message)``."""
+    thread uuid, in the home ``account`` names when given (see
+    :func:`_in_account`). Returns ``(session, None)`` or
+    ``(None, message)``."""
     from swe.sessions.parsers import codex_thread_id
 
     want = want.strip()
@@ -702,6 +724,8 @@ def _listed_session(want: str, by_index: bool = True):
         return None, (f"--purge takes a session id (or a Codex thread id), not a # from the "
                       f"listing: swe session --json shows each row's id. Nothing was removed.")
     if want.isdigit():
+        if account is not None:
+            return None, "--account= goes with a session id, not a # from the listing"
         index = int(want)
         sessions = get_all_sessions(limit=max(index, 10))
         if index < 1 or index > len(sessions):
@@ -716,9 +740,15 @@ def _listed_session(want: str, by_index: bool = True):
     ]
     if not matches:
         return None, f"no session has the id {want} (swe session lists them)"
+    homes = ", ".join(sorted({_account_name(s) for s in matches}))
+    if account is not None:
+        picked = [s for s in matches if _in_account(s, account)]
+        if not picked:
+            return None, f"{want} is not in account {account}; it is in: {homes}"
+        matches = picked
     if len(matches) > 1:
-        return None, (f"{want} names {len(matches)} sessions (one per account home); "
-                      "use its # from swe session instead")
+        return None, (f"{want} names {len(matches)} sessions, one per home ({homes}); "
+                      f"name one with --account=<{'|'.join(sorted({_account_name(s) for s in matches}))}>")
     return matches[0], None
 
 
@@ -737,15 +767,25 @@ def cmd_session_restore(args) -> int:
 
     args, json_view = take_json_flag(args)
     out = error_stream(json_view)
+    try:
+        args = expand_value_flags(args, {"--account"})
+    except ValueError as exc:
+        print(c("red", str(exc)), file=out)
+        return 1
+    account = None
+    if "--account" in args:
+        at = args.index("--account")
+        account = args[at + 1]
+        args = args[:at] + args[at + 2:]
     flags = [a for a in args if a.startswith("-")]
     if flags:
         print(c("red", f"Unknown option for swe session restore: {flags[0]}"), file=out)
         return 1
     if len(args) != 1:
-        print(c("red", "Usage: swe session restore <N|id>  (N is the # column from swe session)"),
-              file=out)
+        print(c("red", "Usage: swe session restore <N|id> [--account=<id|default>]  "
+                       "(N is the # column from swe session)"), file=out)
         return 1
-    session, problem = _listed_session(args[0])
+    session, problem = _listed_session(args[0], account=account)
     if session is None:
         print(c("red", problem), file=out)
         return 1
@@ -770,7 +810,8 @@ def cmd_session_restore(args) -> int:
     return 0
 
 
-def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool) -> int:
+def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool,
+                  account: str | None = None) -> int:
     """``swe session mirror --purge=<id>``: remove one mirrored
     session's copies, their ``.shrunk-*`` backups and manifest entries,
     after showing exactly which files go."""
@@ -781,7 +822,7 @@ def _mirror_purge(home: Path, want: str, yes: bool, json_view: bool) -> int:
         print(c("red", "--purge with --json needs --yes: there is no prompt to answer"),
               file=out)
         return 1
-    session, problem = _listed_session(want, by_index=False)
+    session, problem = _listed_session(want, by_index=False, account=account)
     if session is None:
         print(c("red", problem), file=out)
         return 1
@@ -872,7 +913,7 @@ def cmd_session_mirror(args) -> int:
     args, json_view = take_json_flag(args)
     out = error_stream(json_view)
     try:
-        args = expand_value_flags(args, {"--purge"})
+        args = expand_value_flags(args, {"--purge", "--account"})
     except ValueError as exc:
         print(c("red", str(exc)), file=out)
         return 1
@@ -884,6 +925,11 @@ def cmd_session_mirror(args) -> int:
         if "--purge" in args:
             print(c("red", "--purge names one session"), file=out)
             return 1
+    account = None
+    if "--account" in args:
+        at = args.index("--account")
+        account = args[at + 1]
+        args = args[:at] + args[at + 2:]
     unknown = [a for a in args if a not in _MIRROR_FLAGS]
     if unknown:
         print(c("red", f"Unknown option for swe session mirror: {unknown[0]}"), file=out)
@@ -902,9 +948,12 @@ def cmd_session_mirror(args) -> int:
     if "--yes" in args and purge is None:
         print(c("red", "--yes only goes with --purge"), file=out)
         return 1
+    if account is not None and purge is None:
+        print(c("red", "--account= only goes with --purge"), file=out)
+        return 1
     home = Path.home()
     if purge is not None:
-        return _mirror_purge(home, purge, "--yes" in args, json_view)
+        return _mirror_purge(home, purge, "--yes" in args, json_view, account)
     if "--sweep-tmp" in args:
         return _mirror_sweep(home, json_view)
     if "--on" in args or "--off" in args:

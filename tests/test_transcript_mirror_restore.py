@@ -158,6 +158,21 @@ class RestoreTests(RestoreCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
 
+    def test_an_ambiguous_restore_takes_the_account_flag(self):
+        default = self.mirrored_claude()
+        account = self.home / ".swe/accounts/claude/work/home"
+        in_account = write_jsonl(account / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
+                                 claude_records("account text"))
+        self.sync()
+        in_account.unlink()
+        refused = self.restore(CLAUDE_ID)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("--account=", refused.stdout + refused.stderr)
+        result = self.restore(CLAUDE_ID, f"--account={account}")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(in_account.is_file())
+        self.assertFalse(default.exists())
+
     def test_a_codex_thread_id_restores_its_dated_rollout(self):
         codex = self.codex()
         self.sync()
@@ -405,16 +420,48 @@ class PurgeTests(PurgeCase):
         self.assertIn("session id", result.stdout + result.stderr)
         self.assertTrue((self.mirror_root / "claude/-work-proj" / source.name).is_file())
 
-    def test_an_ambiguous_id_is_refused(self):
-        self.mirrored_claude()
+    def both_homes(self):
+        """One Claude id mirrored in the default home and in account "work"."""
+        default = self.mirrored_claude()
         account = self.home / ".swe/accounts/claude/work/home"
         in_account = write_jsonl(account / "projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
-                                 claude_records())
+                                 claude_records("account text"))
         self.sync()
         in_account.unlink()
+        return default, in_account
+
+    def test_an_ambiguous_id_names_the_account_flag_and_both_homes(self):
+        self.both_homes()
         result = self.purge(f"--purge={CLAUDE_ID}", "--yes")
         self.assertEqual(result.returncode, 1)
+        said = result.stdout + result.stderr
+        self.assertIn("--account=", said)
+        self.assertIn("default", said)
+        self.assertIn("work", said)
+
+    def test_the_account_flag_picks_the_account_row(self):
+        self.both_homes()
+        result = self.purge(f"--purge={CLAUDE_ID}", "--account=work", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(set(mirror.load_manifest(self.home)),
+                         {f"claude/-work-proj/{CLAUDE_ID}.jsonl"})
+
+    def test_the_account_flag_picks_the_default_row(self):
+        self.both_homes()
+        result = self.purge(f"--purge={CLAUDE_ID}", "--account=default", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(set(mirror.load_manifest(self.home)),
+                         {f"accounts/claude/work/-work-proj/{CLAUDE_ID}.jsonl"})
+
+    def test_an_unknown_account_is_refused(self):
+        self.both_homes()
+        result = self.purge(f"--purge={CLAUDE_ID}", "--account=nope", "--yes")
+        self.assertEqual(result.returncode, 1)
         self.assertEqual(len(mirror.load_manifest(self.home)), 2)
+
+    def test_the_account_flag_only_goes_with_purge(self):
+        self.mirrored_claude()
+        self.assertEqual(self.purge("--account=work").returncode, 1)
 
     def test_a_symlinked_copy_is_never_followed_out_of_the_mirror(self):
         source = self.mirrored_claude()
@@ -563,6 +610,20 @@ class PurgeTests(PurgeCase):
             done = mirror.purge(self.home, mirror.purge_plan(self.home, self.purged_session()))
         self.assertIn("index busy", done["search"])
         self.assertFalse((self.mirror_root / "claude/-work-proj" / source.name).exists())
+
+
+class StatusTests(PurgeCase):
+    def test_a_manifest_with_bad_numbers_still_reports_status(self):
+        self.mirrored_claude()
+        manifest = json.loads(mirror.manifest_path(self.home).read_text())
+        for entry in manifest["files"].values():
+            entry.update(mirror_size="big", source=12)
+        mirror.manifest_path(self.home).write_text(json.dumps(manifest))
+        result = self.purge("--status", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = decode(result)["data"]
+        self.assertEqual((data["entries"], data["bytes"]), (1, 0))
+        self.assertEqual(self.purge("--status").returncode, 0)
 
 
 class SweepTests(PurgeCase):

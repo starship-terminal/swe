@@ -1072,16 +1072,26 @@ def find_copy(harness: str, session_id: str, account_home: str = "",
 
 
 def status(home: Path | None = None) -> dict:
-    """What the mirror holds and how its last pass went. Read-only."""
+    """What the mirror holds and how its last pass went. Read-only. A
+    manifest field in the wrong shape (a size that is not a number, a
+    source that is not a path) counts as 0 or as not orphaned; it never
+    raises."""
+    def size(entry: dict) -> int:
+        value = entry.get("mirror_size")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value \
+                or value in (float("inf"), float("-inf")):
+            return 0
+        return int(value)
+
     entries = load_manifest(home)
     state = load_state(home)
-    gone = [e for e in entries.values() if _is_gone(e)]
+    gone = [e for e in entries.values() if isinstance(e.get("source"), str) and _is_gone(e)]
     return {
         "enabled": is_enabled(home),
         "root": str(transcripts_dir_for(home)),
         "entries": len(entries),
-        "bytes": sum(int(e.get("mirror_size") or 0) for e in entries.values()),
+        "bytes": sum(size(e) for e in entries.values()),
         "orphaned": len(gone),
-        "orphaned_bytes": sum(int(e.get("mirror_size") or 0) for e in gone),
+        "orphaned_bytes": sum(size(e) for e in gone),
         "last_pass": state.get("last_pass"),
     }

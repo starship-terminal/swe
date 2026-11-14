@@ -146,10 +146,12 @@ _COMMAND_FLAGS: dict[str, list[tuple[str, str]]] = {
         ("--status", "Show what the mirror holds, without a pass"),
         ("--purge=", "Delete one mirrored session's copies by id (asks first)"),
         ("--yes", "Purge without a prompt"),
+        ("--account=", "The home the purged id is in: an account id or default"),
         ("--sweep-tmp", "Remove temp files a crashed copy or restore left"),
         ("--json", "Print the mirror status as JSON"),
     ],
     "session restore": [
+        ("--account=", "The home the id is in: an account id or default"),
         ("--json", "Print what was restored and where as JSON"),
     ],
     "remote serve": [
