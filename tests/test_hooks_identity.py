@@ -556,6 +556,201 @@ class ReviewRoundFourTest(_IdentityHome):
         self.assertEqual(only["fires"], 2)
 
 
+class KnowableVariablesTest(_IdentityHome):
+    """``${CLAUDE_PLUGIN_ROOT}`` and ``$CLAUDE_PROJECT_DIR`` resolved where
+    Claude Code leaves enough on disk or in the transcript to know them."""
+
+    PLUGIN = '"${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.sh"'
+
+    def install_plugin(self, name: str, commands: list[str]) -> Path:
+        folder = self.home / ".claude" / "plugins" / "cache" / "mk" / name / "1.0.0"
+        (folder / "hooks").mkdir(parents=True)
+        (folder / "hooks" / "on-stop.sh").write_text("#!/bin/sh\n")
+        (folder / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": c}
+                                for c in commands]}]}}))
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        data = json.loads(record.read_text()) if record.exists() else {
+            "version": 2, "plugins": {}}
+        data["plugins"][f"{name}@mk"] = [{"scope": "user",
+                                          "installPath": str(folder),
+                                          "version": "1.0.0"}]
+        record.write_text(json.dumps(data))
+        return folder / "hooks" / "on-stop.sh"
+
+    def test_a_plugin_command_resolves_to_the_plugin_that_declares_it(self):
+        # A hub hook of the same basename, joined to the plugin command by
+        # name: before, the plugin's runs were the hub hook's.
+        self.hub("on-stop.sh", "#!/bin/sh\n")
+        self.declare(self.PLUGIN)
+        script = self.install_plugin("x", [self.PLUGIN])
+        self.ran(self.PLUGIN, HOUR)
+        self.ran(self.PLUGIN, 2 * HOUR, session="s2")
+        data = self.stats()
+        self.assertIsNone(self.counted(self.source("on-stop.sh"), data))
+        (row,) = data["hooks"]
+        self.assertEqual((row["fires"], row["scripts"], row["source_paths"]),
+                         (2, [os.path.realpath(script)], []))
+
+    def test_a_plugin_folder_with_quotes_and_spaces_keeps_its_path(self):
+        # The install folder is substituted into the parsed path, never
+        # into the command text: its quotes, spaces, $ and backslashes stay.
+        folder = self.home / ".claude" / "plugins" / "cache" / 'my "odd" $x\\dir'
+        (folder / "hooks").mkdir(parents=True)
+        script = folder / "hooks" / "on-stop.sh"
+        script.write_text("#!/bin/sh\n")
+        (folder / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": self.PLUGIN}]}]}}))
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        record.write_text(json.dumps({"plugins": {"odd@mk": [{
+            "scope": "user", "installPath": str(folder)}]}}))
+        self.ran(self.PLUGIN, HOUR)
+        (row,) = self.stats()["hooks"]
+        self.assertEqual(row["scripts"], [os.path.realpath(script)])
+
+    def test_a_project_folder_with_quotes_keeps_its_path(self):
+        project = self.home / "work" / 'My "Demo" App $1'
+        hook = project / ".claude" / "hooks" / "check.py"
+        hook.parent.mkdir(parents=True)
+        hook.write_text("print(1)\n")
+        cmd = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/check.py"'
+        self.lines.append(_rec(self.now - 3 * HOUR, "user", cwd=str(project),
+                               message={"role": "user", "content": "hi"}))
+        self.ran(cmd, HOUR)
+        (row,) = self.stats()["hooks"]
+        self.assertEqual(row["scripts"], [os.path.realpath(hook)])
+
+    def test_a_directory_marketplace_plugin_runs_from_its_source(self):
+        # Claude Code loads a plugin from a directory marketplace straight
+        # from the marketplace folder; the cache copy is never run.
+        market = self.home / "markets" / "local"
+        (market / ".claude-plugin").mkdir(parents=True)
+        (market / ".claude-plugin" / "marketplace.json").write_text(json.dumps(
+            {"plugins": [{"name": "x", "source": "./x"}]}))
+        extra = '"${CLAUDE_PLUGIN_ROOT}/hooks/only-in-source.sh"'
+        source = market / "x" / "hooks"
+        source.mkdir(parents=True)
+        for name in ("on-stop.sh", "only-in-source.sh"):
+            (source / name).write_text("#!/bin/sh\n")
+        (source / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+            {"hooks": [{"type": "command", "command": c}
+                       for c in (self.PLUGIN, extra)]}]}}))
+        cached = self.install_plugin("x", [self.PLUGIN])  # the stale copy
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        data = json.loads(record.read_text())
+        data["plugins"]["x@local"] = data["plugins"].pop("x@mk")
+        record.write_text(json.dumps(data))
+        (self.home / ".claude" / "plugins" / "known_marketplaces.json").write_text(
+            json.dumps({"local": {"source": {"source": "directory",
+                                             "path": str(market)}}}))
+        self.ran(self.PLUGIN, HOUR)
+        self.ran(extra, 2 * HOUR, session="s2")
+        scripts = sorted(p for r in self.stats()["hooks"] for p in r["scripts"])
+        self.assertEqual(scripts, sorted(os.path.realpath(source / n) for n in (
+            "on-stop.sh", "only-in-source.sh")))
+        self.assertNotIn(os.path.realpath(cached), scripts)
+
+    def test_two_plugins_with_one_command_stay_unknowable(self):
+        self.install_plugin("x", [self.PLUGIN])
+        self.install_plugin("y", [self.PLUGIN])
+        self.ran(self.PLUGIN, HOUR)
+        (row,) = self.stats()["hooks"]
+        self.assertEqual((row["hook"], row["scripts"]),
+                         ("claude-plugin/on-stop", []))
+
+    def test_the_project_dir_is_the_sessions_first_cwd(self):
+        self.hub("check.py")
+        cmd = self.declare('python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/check.py"')
+        project = self.home / "w" / "app"
+        (project / ".claude" / "hooks").mkdir(parents=True)
+        (project / ".claude" / "hooks" / "check.py").write_text("print(1)\n")
+        self.lines.append(_rec(self.now - 3 * HOUR, "user", cwd=str(project),
+                               message={"role": "user", "content": "hi"}))
+        self.ran(cmd, HOUR)
+        data = self.stats()
+        # The hub's check.py is another file: it gets none of these runs.
+        self.assertIsNone(self.counted(self.source("check.py"), data))
+        (row,) = data["hooks"]
+        self.assertEqual(row["scripts"], [os.path.realpath(
+            project / ".claude" / "hooks" / "check.py")])
+
+    def test_an_unknowable_name_two_rows_could_own_is_uncertain(self):
+        a = self.foreign("plugins/a/guard.sh")
+        b = self.foreign("plugins/b/guard.sh")
+        self.declare(f"bash {a}")
+        self.declare(f"bash {b}")
+        cmd = self.declare('bash "$SOME_TOOL_DIR/guard.sh"')
+        self.ran(cmd, HOUR)
+        data = self.stats()
+        self.assertIsNone(self.counted(str(a), data))
+        self.assertIsNone(self.counted(str(b), data))
+        self.assertEqual(data["uncertain"], sorted([str(a), str(b)]))
+
+    def test_an_unknowable_name_one_row_can_own_stays_its(self):
+        a = self.foreign("plugins/a/guard.sh")
+        self.declare(f"bash {a}")
+        cmd = self.declare('bash "$SOME_TOOL_DIR/guard.sh"')
+        self.ran(cmd, HOUR)
+        data = self.stats()
+        self.assertEqual(self.fires(str(a), data), 1)
+        self.assertEqual(data["uncertain"], [])
+
+
+class VanishedGeneratedFolderTest(_IdentityHome):
+    """A past run through ``~/.claude/hooks/_generated/<name>`` after the
+    whole folder link is gone still meets the shim's copy of it."""
+
+    def test_the_run_counts_once(self):
+        wrapper = self.shared("notify.py")
+        cmd = self.declare(f'python3 "{wrapper}"')
+        shared = os.path.realpath(_shared.shared_dir(self.home) / "notify.py")
+        self.logged("notify", HOUR, script=shared)
+        self.ran(cmd, HOUR - 0.5)
+        (self.home / ".claude" / "hooks" / "_generated").unlink()
+        data = self.stats()
+        self.assertEqual(data["totals"]["fires"], 1)
+        self.assertEqual(data["sources"]["duplicates"], 1)
+        (row,) = data["hooks"]
+        self.assertEqual((row["hook"], row["scripts"]), ("notify", [shared]))
+
+    def test_a_file_at_that_path_is_never_taken_for_the_wrapper(self):
+        wrapper = self.shared("notify.py")
+        cmd = self.declare(f'python3 "{wrapper}"')
+        link = self.home / ".claude" / "hooks" / "_generated"
+        link.unlink()
+        link.mkdir()
+        (link / "notify.py").write_text("print('theirs')\n")
+        shared = os.path.realpath(_shared.shared_dir(self.home) / "notify.py")
+        self.logged("notify", HOUR, script=shared)
+        self.ran(cmd, HOUR - 0.5)
+        self.assertEqual(self.stats()["totals"]["fires"], 2)
+
+    def test_no_shared_script_of_that_name_means_no_match(self):
+        cmd = f'python3 "{self.home}/.claude/hooks/_generated/gone.py"'
+        self.logged("gone", HOUR, script=str(self.home / ".swe/hooks/shared/gone.py"))
+        self.ran(cmd, HOUR - 0.5)
+        self.assertEqual(self.stats()["totals"]["fires"], 2)
+
+
+class StopErrorTest(_IdentityHome):
+    """A Stop summary's error names one command; it is that hook's only."""
+
+    def test_an_error_goes_to_its_exact_command_not_its_namesakes(self):
+        a = self.foreign("plugins/a/guard.py")
+        b = self.foreign("plugins/b/guard.py")
+        self.declare(f"python3 {a}")
+        self.declare(f"python3 {b}")
+        self.lines.append(_rec(self.now - HOUR, "system", sessionId="s1",
+                               subtype="stop_hook_summary",
+                               hookInfos=[{"command": f"python3 {a}"},
+                                          {"command": f"python3 {b}"}],
+                               hookErrors=[f"[python3 {a}]: a failed"]))
+        self._write_transcript()
+        data = self.stats()
+        self.assertEqual(self.counted(str(a), data)["errors"], 1)
+        self.assertEqual(self.counted(str(b), data)["errors"], 0)
+
+
 class ResolverTest(_IdentityHome):
     """The script a command runs, read the way ``swe hooks list`` reads it."""
 
