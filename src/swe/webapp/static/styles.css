@@ -378,6 +378,8 @@ select.field { flex: 0 1 auto; max-width: 240px; border-radius: var(--select-rad
 .row-menu-item { border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px;
   text-align: left; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
 .row-menu-item:hover, .row-menu-item:focus-visible { background: var(--hover); outline: none; }
+.row-menu-item[aria-disabled="true"] { color: var(--text-muted); cursor: default; }
+.row-menu-item[aria-disabled="true"]:hover { background: transparent; }
 /* The rename and fork sheets: paragraphs sit on the sheet's own gap. */
 .action-sheet p { margin: 0; }
 .rename-label { display: flex; justify-content: space-between; margin-bottom: -8px; }
@@ -412,6 +414,9 @@ select.field { flex: 0 1 auto; max-width: 240px; border-radius: var(--select-rad
 .badge.status-error { color: var(--danger-text); }
 .badge.status-followup { color: var(--warning-text); }
 .badge.status-interrupted { color: var(--text-muted); }
+/* A mirrored session (#1918): quiet like the app's other neutral tags. */
+.badge.mirrored { color: var(--text-secondary); font-weight: 400; cursor: help; }
+.mirrored-note { margin: 0; }
 .fold, .link { border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; padding: 6px 8px; }
 .fold:hover, .link:hover { color: var(--text-primary); }
 .link { padding: 0; text-decoration: underline; }
@@ -441,6 +446,8 @@ pre.command { margin: 0; background: var(--subtle); border-radius: var(--block-r
   .session-row { grid-template-columns: 16px minmax(0, 1fr) auto 64px; }
   .session-head { grid-template-columns: minmax(0, 1fr) 64px; }
   .session-row .spend, .session-head span:last-child { display: none; }
+  /* The tag stays one short word wide so the title keeps its room. */
+  .session-title .badge.mirrored { padding: 0 6px; font-size: 11px; }
   .chips.five { grid-template-columns: repeat(3, 1fr); }
 }
 

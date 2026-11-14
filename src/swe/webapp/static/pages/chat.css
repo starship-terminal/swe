@@ -49,6 +49,10 @@ body.chat-open .panel { display: flex; min-height: 0; overflow: hidden; }
 .chat-banner .caption { margin-top: 4px; }
 .chat-banner-text { min-width: 0; }
 .chat-banner-actions { display: flex; gap: 6px; flex: none; }
+/* The mirrored notice is information, not a warning (#1918). */
+.chat-banner.calm { border-color: var(--border); background: var(--subtle); }
+.chat-banner.calm p { color: var(--text-secondary); }
+.chat-empty-calm { color: var(--text-secondary); }
 
 /* The tmux pane name as a chip in the bar's badges; click copies
  * `tmux attach -t swe-…` (Fmt.copyTick swaps the icon for a tick). */
