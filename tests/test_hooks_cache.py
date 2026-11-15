@@ -364,27 +364,58 @@ class RacyWindowTest(_CacheCase):
             self.read()
         self.assertEqual(self.stored(), 0)
 
+    def test_a_racy_reader_does_not_erase_a_newer_settled_row(self):
+        parse = transcripts._raw_file
+        path = str(self.path)
+        with self.at(3_000_000_000):
+            old = transcript_cache.TranscriptCache(self.home)
+            old.events(path, parse)
+            old.close()
+        self.write(3, duration_ms=7)  # same size, new content and stat
+        a = transcript_cache.TranscriptCache(self.home)
+        b = transcript_cache.TranscriptCache(self.home)
+        with self.at(1_000_000):
+            # a saw the old row and a fresh file: it queues a drop.
+            self.assertEqual({e["duration_ms"] for e in a.events(path, parse)},
+                             {7})
+        with self.at(3_000_000_000):
+            # b settles the new content and stores it first.
+            b.events(path, parse)
+            b.close()
+        a.close()
+        self.assertEqual(self.stored(), 1)
+        parsed = []
+        with self.at(3_000_000_000):
+            c = transcript_cache.TranscriptCache(self.home)
+            events = c.events(path, lambda p: parsed.append(p) or parse(p))
+            c.close()
+        self.assertEqual({e["duration_ms"] for e in events}, {7})
+        self.assertEqual(parsed, [])
+
     def test_rewrite_inside_one_coarse_clock_tick_is_read_again(self):
         # A coarse kernel clock or a 1 s or 2 s filesystem gives two writes
         # in the same tick one ctime and one mtime, so a same-size rewrite
         # leaves size, mtime, ctime and inode all equal. Model it by
-        # quantising the stat to one tick, as the filesystem would.
-        tick_ns = 2_000_000_000
+        # pinning the mtime and ctime to one fixed tick (never the live
+        # clock, whose two writes could straddle a tick boundary) and the
+        # lookup clock to a moment inside that tick.
+        tick = 2_000_000_000
         real = transcript_cache._signature
 
         def coarse(st):
-            size, mtime, ctime, ino = real(st)
-            return (size, mtime - mtime % tick_ns, ctime - ctime % tick_ns, ino)
+            size, _mtime, _ctime, ino = real(st)
+            return (size, tick, tick, ino)
 
         patcher = mock.patch.object(transcript_cache, "_signature", coarse)
         patcher.start()
         self.addCleanup(patcher.stop)
-        before = self.read()
-        first = self.path.stat()
-        self.write(3, duration_ms=7)
-        self.assertEqual(self.path.stat().st_size, first.st_size)
-        self.assertEqual(coarse(self.path.stat()), coarse(first))
-        after = self.read()
+        with self.at(1_000_000):
+            before = self.read()
+            first = self.path.stat()
+            self.write(3, duration_ms=7)
+            self.assertEqual(self.path.stat().st_size, first.st_size)
+            self.assertEqual(coarse(self.path.stat()), coarse(first))
+            after = self.read()
         self.assertEqual({e["duration_ms"] for e in before}, {5})
         self.assertEqual({e["duration_ms"] for e in after}, {7})
 

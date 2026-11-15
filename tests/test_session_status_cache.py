@@ -161,13 +161,14 @@ class TailCacheTest(unittest.TestCase):
         # filesystem gives two writes in the same tick one ctime and one
         # mtime. Restoring the mtime then leaves size, mtime, ctime and
         # inode all equal, so no stat can tell the rewrite apart. Model it
-        # by quantising the stat to one tick, as the filesystem would.
+        # by pinning the stat's times to one fixed tick (not the live
+        # clock, whose two writes could straddle a tick boundary).
         tick_ns = 2_000_000_000
         real = parse_cache._signature
 
         def coarse(st):
-            size, mtime, ctime, ino = real(st)
-            return [size, mtime - mtime % tick_ns, ctime - ctime % tick_ns, ino]
+            size, _mtime, _ctime, ino = real(st)
+            return [size, tick_ns, tick_ns, ino]
 
         patcher = patch.object(parse_cache, "_signature", coarse)
         patcher.start()

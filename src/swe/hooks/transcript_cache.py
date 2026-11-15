@@ -219,7 +219,7 @@ class TranscriptCache:
         self._pending: list[tuple] = []
         self._pending_bytes = 0
         self._hits: list[str] = []
-        self._drops: list[str] = []
+        self._drops: list[tuple[str, tuple]] = []
         window, self._is_racy = _racy_rule()
         self._racy_ns = window()
         if os.environ.get("SWE_HOOK_CACHE", "").strip().lower() in _OFF_VALUES:
@@ -284,10 +284,12 @@ class TranscriptCache:
                     pass
         found = parse(path)
         if racy:
-            # Parsed and handed back, but not remembered, and an older row
-            # for the file goes: see the module docstring.
+            # Parsed and handed back, but not remembered, and the row seen
+            # goes, but only if it is still that row when the drop runs: a
+            # reader that settled the file meanwhile keeps its newer one.
+            # See the module docstring.
             if row is not None and self._db is not None:
-                self._drops.append(path)
+                self._drops.append((path, tuple(row[:4])))
             return found if found is not None else []
         if found is not None and self._db is not None:
             try:
@@ -313,8 +315,9 @@ class TranscriptCache:
             now = time.time()
             db.execute("BEGIN IMMEDIATE")
             db.executemany(
-                "DELETE FROM files WHERE version = ? AND path = ?",
-                [(self.version, p) for p in drops])
+                "DELETE FROM files WHERE version = ? AND path = ? "
+                "AND size = ? AND mtime_ns = ? AND ctime_ns = ? AND inode = ?",
+                [(self.version, p, *sig) for p, sig in drops])
             db.executemany(
                 "INSERT OR REPLACE INTO files (version, path, size, mtime_ns, "
                 "ctime_ns, inode, events, bytes, used) "
