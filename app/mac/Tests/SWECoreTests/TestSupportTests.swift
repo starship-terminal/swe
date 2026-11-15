@@ -71,23 +71,54 @@ import Testing
         // Written whole, then moved into place, so the file never shows half a pid.
         let file = temp.path("grandchild").path
         process.arguments = ["-c", "sleep 30 & echo $! > '\(file).tmp' && mv '\(file).tmp' '\(file)'; wait"]
-        try process.run()
+        let child = try ChildProcess(starting: process)
         // The grandchild exists once its pid is written.
         #expect(await fileAppears("grandchild", in: temp.url))
         let text = (try? String(contentsOf: temp.path("grandchild"), encoding: .utf8)) ?? ""
         let grandchild = try #require(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)))
-        withKnownIssue("the child is still running at the timeout") {
-            waitForExit(process, timeout: .milliseconds(200))
+        await withKnownIssue("the child is still running at the timeout") {
+            await child.waitForExit(timeout: .milliseconds(200))
         }
         #expect(!process.isRunning)
         #expect(await processEnds(grandchild))
     }
 
-    @Test(.timeLimit(.minutes(1))) func waitForExitReturnsAtOnceWhenTheChildEnds() throws {
+    @Test(.timeLimit(.minutes(1))) func runToExitReturnsOnceTheChildEnds() async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
-        try process.run()
-        waitForExit(process)
+        try await runToExit(process)
+        #expect(!process.isRunning)
+        #expect(process.terminationStatus == 0)
+    }
+
+    /// More waits at once than the pool has threads all end: a wait parks
+    /// rather than holding a thread, so none needs another to finish.
+    @Test(.timeLimit(.minutes(1))) func manyWaitsAtOnceAllEnd() async throws {
+        let runs = ProcessInfo.processInfo.activeProcessorCount * 3
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<runs {
+                group.addTask {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+                    try await runToExit(process)
+                    #expect(process.terminationStatus == 0)
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
+    /// An exit that lands before anyone waits is still seen: the handler
+    /// is on before the child starts.
+    @Test(.timeLimit(.minutes(1))) func anExitBeforeTheWaitIsStillSeen() async throws {
+        let temp = try TempDir()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "touch '\(temp.path("ran").path)'"]
+        let child = try ChildProcess(starting: process)
+        #expect(await fileAppears("ran", in: temp.url))
+        #expect(await processEnds(process.processIdentifier))
+        #expect(await child.exited())
         #expect(process.terminationStatus == 0)
     }
 }

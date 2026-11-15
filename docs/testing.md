@@ -84,7 +84,7 @@ Required steps for any feature that adds files or changes `cmd_*` handlers:
 
 1. **Write tests** and run `HOME="$(mktemp -d)" python3 -m unittest discover -s tests -p 'test_*.py'`.
 2. **Reinstall the package** with `pip install -e .` (or `pipx install --force git+...` for pipx installs). With an editable install new files are picked up automatically, but a stale non-editable install won't see them until you reinstall.
-3. **Verify e2e** by running the actual `swe <command>` against a temp HOME, not just `PYTHONPATH=src python -m swe.cli <command>`. CI does the same on every PR (the editable install on Linux), and `release.yml` repeats it on a tag for a built wheel in a clean venv on Linux and macOS, the Nix derivation's output and the bundled app, each against a `mktemp -d` home. The native-only checks that used to sit on the PR path (the macOS install smoke test and the app unit tests) run nightly, on merge_group and on demand in `native.yml`; the Nix build runs on every PR in `ci.yml`. Read `.github/workflows/ci.yml` and `release.yml` for the exact commands rather than assuming; that list gets trimmed from time to time.
+3. **Verify e2e** by running the actual `swe <command>` against a temp HOME, not just `PYTHONPATH=src python -m swe.cli <command>`. CI does the same on every PR (the editable install on Linux), and `release.yml` repeats it on a tag for a built wheel in a clean venv on Linux and macOS, the Nix derivation's output and the bundled app, each against a `mktemp -d` home. The native-only checks that used to sit on the PR path (the macOS install smoke test and the app unit tests) run nightly, on merge_group and on demand in `native.yml`; the Nix build runs on every PR in `ci.yml`, and the app unit tests also run on a PR that changes `app/mac/` (`mac-unit-tests.yml`). Read `.github/workflows/ci.yml` and `release.yml` for the exact commands rather than assuming; that list gets trimmed from time to time.
 4. **Open a PR**, one concern per PR, with a clear description of what changed and why.
 
 Common pitfall: if a feature works with `PYTHONPATH=src python -m swe.cli` but not with the installed `swe` command, the installed copy is stale (likely a non-editable install). Re-run `pip install -e .` to switch to editable mode and sync with the source tree.
@@ -168,8 +168,21 @@ Tests use Swift Testing (`@Suite` / `@Test` / `#expect`). Conventions:
   internal `interpreter` parameter on the code that launches it, or a test
   runner that puts the script first in `/bin/sh`'s arguments), or link the
   stub name to a system binary. A child that has to be a real executable
-  (the signed impostor in `FanTests`) is waited on with `waitForExit`,
-  which kills its tree at `gateTimeout` instead of hanging the suite.
+  (the signed impostor in `FanTests`) still has its exit bounded: it
+  is killed with its tree at `gateTimeout` instead of hanging the suite.
+- Never block a thread while a test waits on a child process or on
+  other work: no `waitUntilExit`, no semaphore wait, no read to EOF in
+  the test body. Every test runs on the cooperative pool, which has one
+  thread per core, three on a CI runner. Three tests blocked at once
+  stall the whole suite, and they also hold back every default-QoS
+  `DispatchQueue.global()` block, so a wait answered through one never
+  ends until its timeout: v1.2.3's release run stalled for minutes that
+  way while every developer Mac, with more cores, passed. Start a child
+  with `runToExit` or `ChildProcess` (`TestGates.swift`), which park on
+  its termination handler, and send output a test reads to a file or a
+  small pipe read after the exit. `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1
+  swift test` runs the suite on a one-thread pool and finds a test that
+  blocks the pool on work that needs the pool.
 
 ### Capturing swe contract fixtures
 
@@ -204,6 +217,6 @@ xcrun llvm-cov report \
 Filter the report rows by `Sources/SWECore` or `Sources/SWEWidgetsUI`
 for a per-target total. `SWEApp` is mostly views; `SWEAppUITests`
 covers the parts with logic worth pinning. There is no Swift coverage
-floor in CI, and the macOS unit tests run nightly, not on pull requests,
-so run the suites a change touches before pushing. The report is a guide
+floor in CI, and the macOS unit tests run on pull requests only when they
+change `app/mac/`, so run the suites a change touches before pushing. The report is a guide
 for where to add tests.

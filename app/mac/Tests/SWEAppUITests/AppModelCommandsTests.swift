@@ -56,7 +56,7 @@ import Testing
 
     /// The line runs as the argv it shows: a quote, `;` or `$()` in the
     /// checkout path or the registry command never runs as shell.
-    @Test func metacharactersStayDataWhenTheLineRuns() throws {
+    @Test func metacharactersStayDataWhenTheLineRuns() async throws {
         let scratch = try TempDir()
         let checkout = scratch.url.appending(path: "it's; touch pwned1; $(touch pwned2)")
         try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
@@ -67,11 +67,12 @@ import Testing
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
         task.arguments = ["-c", line]
         task.currentDirectoryURL = scratch.url
+        // A small pipe, read once the shell has ended: the wait parks on
+        // the exit rather than blocking a pool thread.
         let out = Pipe()
         task.standardOutput = out
-        try task.run()
+        try await runToExit(task)
         let printed = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        task.waitUntilExit()
 
         #expect(task.terminationStatus == 0)
         #expect(printed == "$(touch pwned3) ;touch pwned4 `id`\n")

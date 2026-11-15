@@ -27,8 +27,8 @@ actor CountGate {
         for waiter in ready.values { waiter.cont.resume(returning: true) }
     }
 
-    /// True once the count reaches `target`, false after `gateTimeout`.
-    func reach(_ target: Int) async -> Bool {
+    /// True once the count reaches `target`, false after `timeout`.
+    func reach(_ target: Int, within timeout: Duration = gateTimeout) async -> Bool {
         await withCheckedContinuation { cont in
             if count >= target {
                 cont.resume(returning: true)
@@ -37,14 +37,14 @@ actor CountGate {
             nextID += 1
             let id = nextID
             waiters[id] = (target, cont)
-            Task { await self.expire(id) }
+            Task { await self.expire(id, after: timeout) }
         }
     }
 
     /// The timeout resumes only its own waiter, and only if a `bump` has
     /// not already answered it.
-    private func expire(_ id: Int) async {
-        try? await Task.sleep(for: gateTimeout)
+    private func expire(_ id: Int, after timeout: Duration) async {
+        try? await Task.sleep(for: timeout)
         waiters.removeValue(forKey: id)?.cont.resume(returning: false)
     }
 }
@@ -195,25 +195,55 @@ func isLive(_ pid: pid_t) -> Bool {
     return info.pbi_status != SZOMB
 }
 
-/// Waits for `process` to exit, at most `timeout`. Past that it and every
-/// process under it are killed and the test fails, rather than hang the
-/// suite on a child that never ends (a freshly written executable can sit
-/// in `_dyld_start` for minutes on a loaded machine). Blocks the calling
-/// thread, like `waitUntilExit`; the wait itself is a semaphore, not a poll.
-func waitForExit(_ process: Process, timeout: Duration = gateTimeout) {
-    let ended = DispatchSemaphore(value: 0)
-    DispatchQueue.global().async {
-        process.waitUntilExit()
-        ended.signal()
+/// A child process a test started, whose exit is awaited without holding
+/// any thread: its termination handler, set before it starts, bumps a
+/// gate the test parks on.
+///
+/// Never wait on a child by blocking (`waitUntilExit`, a semaphore, a
+/// read to EOF) inside a test. Every test runs on the cooperative pool,
+/// which has one thread per core: three on a CI runner. Three tests
+/// blocked at once stop the whole suite, and they also hold back every
+/// default-QoS `DispatchQueue.global()` block, so a wait whose answer
+/// comes through one never ends. v1.2.3's release run sat out that
+/// deadlock for minutes, 60 seconds per wave.
+final class ChildProcess: Sendable {
+    let process: Process
+    private let exits = CountGate()
+
+    /// Starts `process`. The handler goes on first, so an exit that lands
+    /// before anyone waits is still counted, and once it has run the
+    /// process is reaped and `terminationStatus` can be read.
+    init(starting process: Process) throws {
+        self.process = process
+        let exits = self.exits
+        process.terminationHandler = { _ in Task { await exits.bump() } }
+        try process.run()
     }
-    let (seconds, attoseconds) = timeout.components
-    let interval = Double(seconds) + Double(attoseconds) / 1e18
-    guard ended.wait(timeout: .now() + interval) == .timedOut else { return }
-    killTree(process.processIdentifier)
-    Issue.record("a child was still running after \(timeout); killed it")
-    // SIGKILL cannot be ignored, so this is the kernel reaping, bounded
-    // all the same.
-    _ = ended.wait(timeout: .now() + 10)
+
+    /// True once the child has exited, false after `timeout`.
+    func exited(within timeout: Duration = gateTimeout) async -> Bool {
+        await exits.reach(1, within: timeout)
+    }
+
+    /// Waits for the exit, at most `timeout`. Past that the child and
+    /// every process under it are killed and the test fails, rather than
+    /// hang the suite on a child that never ends (a freshly written
+    /// executable can sit in `_dyld_start` for minutes on a loaded
+    /// machine).
+    func waitForExit(timeout: Duration = gateTimeout) async {
+        guard await !exited(within: timeout) else { return }
+        killTree(process.processIdentifier)
+        Issue.record("a child was still running after \(timeout); killed it")
+        // SIGKILL cannot be ignored, so this is the kernel reaping,
+        // bounded all the same.
+        _ = await exited(within: .seconds(10))
+    }
+}
+
+/// Starts `process` and waits for it to exit, at most `timeout`, as
+/// `ChildProcess.waitForExit` does.
+func runToExit(_ process: Process, timeout: Duration = gateTimeout) async throws {
+    try await ChildProcess(starting: process).waitForExit(timeout: timeout)
 }
 
 /// SIGKILLs `pid` and every process under it, leaves first, so nothing it
