@@ -20,15 +20,19 @@ permissions:
   contents: read
 
 # This workflow checks a change, and only what is fast enough to check a
-# change: the Linux unittest shards, the coverage gate and the
-# editable-install e2e.  It is the fast lane on purpose — a PR needs to
-# turn green in minutes because agent turns poll CI to completion.
+# change: the Linux unittest shards, the coverage gate, the
+# editable-install e2e and the Nix derivation build.  It is the fast lane
+# on purpose: a PR needs to turn green in minutes because agent turns
+# poll CI to completion.
 #
 # The native lane moved off this path (issue #749): the macOS app unit
-# tests, the macOS install smoke test and the Nix derivation build now
-# run in native.yml (nightly on main, on merge_group, on demand) and
-# again on every `v*` tag in release.yml, which builds and verifies the
-# shipping artifacts (wheel, Nix derivation, SWE.app and its DMG).
+# tests and the macOS install smoke test run in native.yml (nightly on
+# main, on merge_group, on demand) and again on every `v*` tag in
+# release.yml, which builds and verifies the shipping artifacts (wheel,
+# Nix derivation, SWE.app and its DMG).  The Nix build came back here:
+# off the PR path it rotted for weeks unseen and then failed the v1.2.3
+# tag, and it runs in parallel with the test shards in about the same
+# time (~4 minutes), so it costs a PR no wall-clock time.
 
 env:
   # How many jobs each interpreter's suite is split across.  Must match the
@@ -219,3 +223,28 @@ jobs:
             HOME="$test_home" "$HOME/.local/bin/swe" list
           '
 
+  nix:
+    # The same derivation check release.yml runs on a tag.  Its checkPhase
+    # runs the whole unittest suite inside the Nix build sandbox, which has
+    # no /usr/bin/env, nothing in /usr/bin and only the files flake.nix's
+    # source filter lists, so it catches a test that leans on the host or
+    # on a file the filter leaves out before a release tag does.
+    name: Nix flake build and check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - name: Build the package (runs the unittest suite in the sandbox)
+        run: nix build --print-build-logs
+
+      - name: Exercise the built binary
+        run: |
+          test_home="$(mktemp -d)"
+          HOME="$test_home" ./result/bin/swe --help
+          HOME="$test_home" ./result/bin/swe init --check
+
+      - name: nix flake check
+        run: nix flake check --print-build-logs
