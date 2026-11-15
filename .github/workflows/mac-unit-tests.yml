@@ -1,0 +1,64 @@
+# The macOS app's Swift suite on a pull request that changes the app.
+#
+# The suite otherwise runs only nightly (native.yml) and on a release tag
+# (release.yml's macos-app job), so a change that breaks it on a CI runner
+# was first seen when a release failed: v1.2.3's "Unit tests" step stalled
+# on the 3-core runner although the suite passed on every developer Mac.
+# This runs the same script on the same macos-26 image before the merge.
+#
+# Only for changes under app/mac/ (and this file), so the rest of the PR
+# lane stays the fast Linux checks in ci.yml (issue #749). It builds the
+# test targets first, so a run takes about 10 minutes, nearly all of it
+# the build. The repository is public, so its standard macOS runner
+# minutes are not billed.
+name: macOS unit tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/mac/**"
+      - ".github/workflows/mac-unit-tests.yml"
+  workflow_dispatch:
+
+# A new push to the PR makes the run in flight obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: macOS app unit tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app/mac
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache SwiftPM
+        # Same paths and key as release.yml and native.yml, so a PR can
+        # start from main's compiled products.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            app/mac/.build
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('app/mac/Package.swift', 'app/mac/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Unit tests
+        # The step release.yml runs before it signs anything. test.sh
+        # stops a run still going after 10 minutes and prints its thread
+        # stacks first.
+        timeout-minutes: 25
+        run: script/test.sh

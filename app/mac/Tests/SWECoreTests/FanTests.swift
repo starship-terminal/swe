@@ -611,7 +611,7 @@ import Testing
 
     /// The check itself, run: a helper that isn't the team's (here an
     /// ad-hoc signed copy) is deleted and the script stops with a reason.
-    @Test func aHelperWithoutTheTeamsSignatureIsRefusedAndDeleted() throws {
+    @Test func aHelperWithoutTheTeamsSignatureIsRefusedAndDeleted() async throws {
         let tool = scratch.url.appending(path: "it's a helper").path
         try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: tool)
         let process = Process()
@@ -621,8 +621,7 @@ import Testing
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
-        try process.run()
-        waitForExit(process)
+        try await runToExit(process)
         #expect(process.terminationStatus == 1)
         #expect(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).isEmpty)
         #expect(String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
@@ -981,7 +980,7 @@ import Testing
     /// binary run from outside the system volume a few milliseconds
     /// after it starts: the checks below then raced that kill and failed
     /// now and then on a gone process (1 run in 3 under load).
-    @Test func theOwnerIsCheckedBySignatureNotName() throws {
+    @Test func theOwnerIsCheckedBySignatureNotName() async throws {
         let check = try #require(FanOwnerCheck(pin: try FanOwnerPin.current()))
         #expect(check.isOwner(getpid()))
         #expect(!check.isOwner(Int32.max))
@@ -994,17 +993,17 @@ import Testing
         sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
         sign.arguments = ["--force", "--sign", "-", impostor.path]
         sign.standardError = FileHandle.nullDevice
-        try sign.run()
-        waitForExit(sign)
+        try await runToExit(sign)
         try #require(sign.terminationStatus == 0, "couldn't sign the impostor ad hoc")
         let process = Process()
         process.executableURL = impostor
         process.arguments = ["30"]
-        try process.run()
         // The impostor has to be the signed copy itself, so it cannot be
         // run through /bin/sh like the stubs elsewhere; its exit is
-        // bounded instead, and killed if it never comes.
-        defer { process.terminate(); waitForExit(process) }
+        // bounded instead, and killed if it never comes. A check that
+        // throws before the end still stops it.
+        let child = try ChildProcess(starting: process)
+        defer { process.terminate() }
         let pid = process.processIdentifier
         #expect(!check.isOwner(pid))
         #expect(!(FanOwnerCheck(pin: .team("ABCDE12345", identifier: "com.cwenlong.swe"))?.isOwner(pid) ?? true))
@@ -1021,6 +1020,8 @@ import Testing
         #expect(FanOwnerCheck(pin: own)?.isOwner(pid) == true)
         // Every answer above was about a live process, not a gone one.
         #expect(process.isRunning)
+        process.terminate()
+        await child.waitForExit()
     }
 
     /// The signature is checked once per process, not on every call: the
