@@ -107,7 +107,7 @@ the far end of the connection is the Tailscale daemon (`peer.py`):
 | Platform | The proxy is |
 |---|---|
 | Linux | the socket whose owner in `/proc/net/tcp` is root |
-| macOS | the pid `netstat -anv` names for the socket, when it runs as root and its executable (from the kernel, `proc_pidpath`) is the daemon's own: the Standalone variant's system extension under `/Library/SystemExtensions/<UUID>/io.tailscale.ipn.macsys.network-extension.systemextension/`, open-source `tailscaled`, or the App Store variant's `Contents/PlugIns/IPNExtension.appex/Contents/MacOS/IPNExtension` inside a root-owned `/Applications/Tailscale.app` |
+| macOS | the pid `netstat -anv` names for the socket (or, where netstat's table is blind, the daemon pid `nettop` lists it under; see below), when it runs as root and its executable (from the kernel, `proc_pidpath`) is the daemon's own: the Standalone variant's system extension under `/Library/SystemExtensions/<UUID>/io.tailscale.ipn.macsys.network-extension.systemextension/`, open-source `tailscaled`, or the App Store variant's `Contents/PlugIns/IPNExtension.appex/Contents/MacOS/IPNExtension` inside a root-owned `/Applications/Tailscale.app` |
 
 No other executable in `Tailscale.app` counts on macOS, whoever runs
 it: the app itself (`Contents/MacOS/Tailscale`), its updater, widgets
@@ -127,19 +127,35 @@ the connection, and a request whose peer fails the check, or that the
 check can't place, is read as the loopback client it is: no tailnet
 identity, bearer credentials unaffected.
 
-The macOS lookup can be blind ([#1944](https://github.com/starship-terminal/swe/issues/1944)).
-On macOS 27 a process that is ad-hoc signed, or has a live ad-hoc-signed
-ancestor, sees an empty TCP table: `netstat -anv` lists no sockets, so
-the check never places tailscaled and every request through serve reads
-as loopback. Homebrew's Python and Nix's shells are ad-hoc signed; a
-Developer-ID-signed Python (python.org's installer) started by launchd
-or a signed shell sees the table. The check still fails closed, so
-nothing is let in that should not be: the owner's devices need a paired
-credential and `POST /v1/pair/request` answers `403 not_tailnet`
-(pair with a token instead). At start, `swe remote serve` behind serve
-asks the lookup about a loopback connection of its own
-(`peer.owner_lookup_works`) and, when it comes back empty, prints one
-line to stderr (`serve.log` under the LaunchAgent):
+The macOS `netstat` table can be blind ([#1944](https://github.com/starship-terminal/swe/issues/1944), [#1950](https://github.com/starship-terminal/swe/issues/1950)).
+On macOS 27 a process that is ad-hoc or Apple-Development signed, or
+has a live ancestor that is, sees an empty TCP table: `netstat -anv`
+lists no sockets. Homebrew's Python, Nix's shells and the Python bundled
+in a locally installed SWE.app (`app/mac/script/install-app.sh` signs it
+for development) are all signed that way. When netstat's table is
+empty, and only then, the hub asks `nettop` (NetworkStatistics), which
+such a process can still read:
+
+| Step | What the hub requires |
+|---|---|
+| Find the daemon | processes whose executable, from the kernel, is the daemon's own (the same paths as the table above) and that run as root; process names never pick one |
+| Ask about each | `nettop -p <pid>` lists exactly one row for exactly this connection (local end the peer, far end the hub), and it is `Established` |
+| Read the listing | by its fixed shape: known leading columns, that pid's own row first, socket rows after, every row the header's width; anything else is "can't tell" |
+| Check the pid kept still | its executable, uid and start time are the same after the listing as before it |
+
+More than one daemon pid holding the connection, `nettop` missing, slow
+(over 2 s) or printing anything unexpected, all count as "can't tell".
+Whichever tool names the pid, the same final check decides: root and
+the daemon's own executable. A table netstat can see is never
+second-guessed: a "no" from it stands.
+
+If neither can see, the check still fails closed, so nothing is let in
+that should not be: the owner's devices need a paired credential and
+`POST /v1/pair/request` answers `403 not_tailnet` (pair with a token
+instead). At start, `swe remote serve` behind serve asks the same
+lookup (netstat, then nettop when netstat is blind) about a loopback
+connection of its own (`peer.owner_lookup_works`) and, when no source
+sees it, prints one line to stderr (`serve.log` under the LaunchAgent):
 
 ```
 2026-11-15 10:42:07  warning: this hub cannot see which process owns a loopback connection, so requests through tailscale serve lose their tailnet identity (the owner's devices need a paired credential and pair requests need a pair token); run the hub with a Developer-ID-signed Python, such as python.org's, started by launchd or a signed shell
@@ -147,6 +163,13 @@ line to stderr (`serve.log` under the LaunchAgent):
 
 The probe only feeds that line; the check accepts exactly what it
 accepts without it.
+
+What the check cannot tell apart, on either platform or with either
+tool: a connection the daemon itself opens on a local caller's behalf
+really is the daemon's. A daemon feature that dials a local port for
+another local process, rather than for a tailnet client, would reach
+the hub as the proxy. The CLI's relay (`tailscale nc`) is not one: the
+CLI process holds that connection, so it is refused.
 
 `X-Forwarded-Proto` keeps the loopback rule, since it only feeds the
 `Origin` check a local process can pass anyway. Owner identity
