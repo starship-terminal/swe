@@ -64,7 +64,11 @@ def _tool_use():
 class TailCacheTest(unittest.TestCase):
     def setUp(self):
         self.home = str(temp_dir(self))
-        patcher = patch.dict(os.environ, {"HOME": self.home})
+        # Files these tests just wrote count as settled; the racy rule has
+        # its own tests.
+        patcher = patch.dict(
+            os.environ, {"HOME": self.home, "SWE_CACHE_RACY_WINDOW_MS": "0"}
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
         self.cache = session_status_cache_file_for(Path(self.home))
@@ -147,6 +151,36 @@ class TailCacheTest(unittest.TestCase):
         sessions = [_session("claude", "s")]
         self.assertEqual(session_statuses(sessions, now=NOW), [DONE])
         # Same byte count, mtime put back: only ctime (and content) moved.
+        self.write_claude("s", [_assistant("Finished all?")])
+        self.assertEqual(os.path.getsize(path), before.st_size)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(session_statuses(sessions, now=NOW), [FOLLOWUP])
+
+    def test_rewrite_inside_one_coarse_clock_tick_is_read_again(self):
+        # A coarse kernel clock (a few ms on Linux) or a 1 s or 2 s
+        # filesystem gives two writes in the same tick one ctime and one
+        # mtime. Restoring the mtime then leaves size, mtime, ctime and
+        # inode all equal, so no stat can tell the rewrite apart. Model it
+        # by quantising the stat to one tick, as the filesystem would.
+        tick_ns = 2_000_000_000
+        real = parse_cache._signature
+
+        def coarse(st):
+            size, mtime, ctime, ino = real(st)
+            return [size, mtime - mtime % tick_ns, ctime - ctime % tick_ns, ino]
+
+        patcher = patch.object(parse_cache, "_signature", coarse)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # The default window, as a user has it.
+        env = patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("SWE_CACHE_RACY_WINDOW_MS")
+        path = self.write_claude("s", [_assistant("All finished.")])
+        before = os.stat(path)
+        sessions = [_session("claude", "s")]
+        self.assertEqual(session_statuses(sessions, now=NOW), [DONE])
         self.write_claude("s", [_assistant("Finished all?")])
         self.assertEqual(os.path.getsize(path), before.st_size)
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))

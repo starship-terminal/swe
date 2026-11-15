@@ -16,6 +16,17 @@ Rules that keep it from ever showing a stale session:
   every content change and cannot be set back from userland, so a write that
   restores the old mtime (``touch -m``, ``cp -p``) still invalidates; an
   atomic replace changes the inode.
+- **A file written just now is not stored.** Two writes inside one clock
+  tick (a few ms on a coarse Linux kernel clock, 1 s or 2 s on some
+  filesystems) share a ctime and an mtime, and a same-size rewrite with the
+  mtime put back then matches the stored signature in all four fields; no
+  stat can tell it apart. So a value is stored only once the file's ctime
+  is at least ``_RACY_WINDOW_NS`` older than the lookup (2 s;
+  ``SWE_CACHE_RACY_WINDOW_MS`` overrides it, ``0`` for a test that spawns
+  ``swe`` on files it just wrote), the rule git's
+  index uses for "racily clean" entries. A file that fresh is read again
+  on the next listing, which a live session's growing transcript needs
+  anyway.
 - **Only what a file says is cached.** Anything a parser derives from other
   state (a sidecar index, a sqlite store, whether a directory exists, the
   clock) is applied after the lookup, on every run, or keyed by that
@@ -113,6 +124,28 @@ def _signature(st: os.stat_result) -> list[int]:
     return [st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino]
 
 
+# A file changed within this long of a lookup may still be rewritten inside
+# the same timestamp tick, so its signature proves nothing yet. Wider than
+# the coarsest filesystem tick in use (2 s on FAT).
+_RACY_WINDOW_NS = 2_000_000_000
+
+
+def _racy_window_ns() -> int:
+    raw = os.environ.get("SWE_CACHE_RACY_WINDOW_MS", "").strip()
+    try:
+        return max(0, int(raw)) * 1_000_000 if raw else _RACY_WINDOW_NS
+    except ValueError:
+        return _RACY_WINDOW_NS
+
+
+def _is_racy(st: os.stat_result, window_ns: int) -> bool:
+    """True while a rewrite could still hide inside ``st``'s timestamp tick.
+
+    A ctime in the future (a clock that stepped back) counts as racy.
+    """
+    return not (st.st_ctime_ns <= time.time_ns() - window_ns)
+
+
 class _Store:
     def __init__(self, path: Path, fingerprint: str | None = None) -> None:
         self.path = path
@@ -125,6 +158,7 @@ class _Store:
         self.ran: set[str] = set()
         self.dirty = False
         self.read_failed = False
+        self.racy_ns = _racy_window_ns()
 
     def load(self) -> None:
         try:
@@ -145,6 +179,7 @@ class _Store:
 
     def lookup(self, namespace: str, path: str, st: os.stat_result, compute, valid):
         sig = _signature(st)
+        racy = _is_racy(st, self.racy_ns)
         self.touched.setdefault(namespace, set()).add(path)
         files = self.entries.setdefault(namespace, {})
         entry = files.get(path)
@@ -152,6 +187,10 @@ class _Store:
             isinstance(entry, list)
             and len(entry) == 2
             and entry[0] == sig
+            # A stored entry was settled when it was written, so this only
+            # bites when the clock stepped back or the window grew: then the
+            # signature proves nothing, and the file is read again.
+            and not racy
             and (valid is None or _is_valid(valid, entry[1]))
         ):
             return entry[1]
@@ -170,6 +209,12 @@ class _Store:
             # A read that failed (the file vanished, a transient EIO or
             # EMFILE) would otherwise pin its empty result to a signature
             # that never changes; leave it to be read again next time.
+            if files.pop(path, None) is not None:
+                self.dirty = True
+            return stored
+        if racy:
+            # Computed fresh and handed back, but not remembered: see the
+            # module docstring.
             if files.pop(path, None) is not None:
                 self.dirty = True
             return stored

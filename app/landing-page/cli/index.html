@@ -1039,9 +1039,16 @@ Source of truth  ~/.swe/mcp.json
 <pre><code class="language-text">  swe autocomplete zsh    Generate + inject zsh completion
   swe autocomplete bash   Generate + inject bash completion
   swe autocomplete fish   Generate + inject fish completion
+  swe autocomplete &lt;shell&gt; --print   Print the script to stdout, install nothing
 
   Writes a completion script to ~/.swe/completions/ and adds a
-  source line to your shell profile (~/.zshrc, ~/.bashrc, or fish config).
+  source line to your shell profile (~/.zshrc, ~/.bashrc, or fish config),
+  then says which two files it wrote or edited. Running it again is safe:
+  the source line is added once.
+
+  --print writes the script to stdout and touches nothing on disk (no
+  file under ~/.swe, no profile edit), so you can read it first or source
+  it yourself: source &lt;(swe autocomplete zsh --print)
 
   After running, restart your terminal or run:
     source ~/.zshrc  (or the equivalent for your shell)

@@ -11,6 +11,7 @@ from unittest.mock import patch
 from swe.remote import catalog as catalog_mod
 from swe.remote import session_model
 from swe.sessions.models import Session
+from tests._settled import settle_cache
 
 
 def _session(sid, tool, ts=1000, account_home=""):
@@ -110,6 +111,7 @@ class TestFileHarnesses(_Home):
             ["glm-4.6"])
 
     def test_unchanged_transcript_is_read_once(self):
+        settle_cache(self)
         path = self.claude_file("c5", [_claude("claude-opus-4-5")])
         session = _session("c5", "claude")
         real = session_model.tail_model
