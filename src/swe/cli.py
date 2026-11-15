@@ -105,14 +105,17 @@ def cmd_complete(args):
 
 
 def cmd_autocomplete(args):
-    """Generate and inject shell completion script."""
+    """Generate and inject shell completion script (or print it with --print)."""
     from swe.completion_scripts import SHELL_CONFIGS
     from swe.console import c
-    from swe.paths import COMPLETION_DIR
+
+    # --print is a boolean: check it on raw argv, wherever it sits.
+    print_only = "--print" in args
+    args = [a for a in args if a != "--print"]
 
     supported = list(SHELL_CONFIGS.keys())
     if not args or args[0] not in supported:
-        print(f"Usage: swe autocomplete [{'|'.join(supported)}]")
+        print(f"Usage: swe autocomplete [{'|'.join(supported)}] [--print]")
         if args and args[0] not in supported:
             print(c("red", f"Unsupported shell: '{args[0]}'"))
         return 1
@@ -123,6 +126,15 @@ def cmd_autocomplete(args):
     shell = args[0]
     config = SHELL_CONFIGS[shell]
     import os
+
+    if print_only:
+        # Preview: the script only, nothing on disk, no rc edit.
+        sys.stdout.write(config["script"])
+        return 0
+
+    # Imported only here: importing swe.paths migrates a legacy ~/.quiver, so
+    # --print must return before it.
+    from swe.paths import COMPLETION_DIR
 
     # 1. Write completion script to ~/.swe/completions/
     script_dir = os.path.expanduser(str(COMPLETION_DIR))
@@ -162,9 +174,13 @@ def cmd_autocomplete(args):
             print(f"    {source_line}")
             return 1
 
-    # 3. Print success message
-    print(f"Autocomplete script generated and injected successfully.")
-    print(f"Please source your {shell} profile to apply the changes or restart your terminal.")
+    # 3. Say what was written and edited
+    print(f"Wrote {script_path}.")
+    if already_present:
+        print(f"{profile_path} already has the source line, so I left it alone.")
+    else:
+        print(f"Added a source line to {profile_path}.")
+    print(f"Source your {shell} profile to apply the changes or restart your terminal.")
     print(f"For manual sourcing, use: {config['profile_instructions']}")
     return 0
 

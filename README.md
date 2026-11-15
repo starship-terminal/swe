@@ -236,6 +236,7 @@ swe models                   # model usage across all tools
 swe models -t -p             # grouped by tool, with provider prefix
 
 swe autocomplete zsh         # generate + inject shell tab-completion
+swe autocomplete zsh --print # print the script, install nothing
 
 swe skills list              # every SKILL.md across all skill roots
 swe skills refactor          # filter skills by name or scope
@@ -271,7 +272,7 @@ swe mcp sync opencode cursor # copy MCP servers between tools
 | `swe harness discover [--apply\|--apply-all] [--json] [--all]` | | Scan PATH and home dirs for unregistered AI coding CLIs |
 | `swe discover [--apply]` | | Alias for `swe harness discover` |
 | `swe find [amd\|skills\|plugins\|mcps] [--full] [--scope=global\|local\|all] [--harness=active\|all]` | | Read-only view of shared assets and what links to them |
-| `swe autocomplete [zsh\|bash\|fish]` | | Generate + inject shell tab-completion |
+| `swe autocomplete [zsh\|bash\|fish] [--print]` | | Generate + inject shell tab-completion; `--print` prints the script and installs nothing |
 | `swe use <name\|alias> [args…]` | `run` | Launch a tool (replaces current process) |
 | `swe session [N] [use N] [-i] [--agent X] [--here] [--search T] [date flags]` | | List, browse, or resume recent sessions |
 | `swe report daily\|weekly [date flags]` | | Preview and summarize coding sessions |
@@ -339,7 +340,7 @@ the normal daily or weekly cursor.
 swe autocomplete zsh    # or bash, fish
 ```
 
-Generates a completion script and injects it into your shell profile. After running, restart your terminal or `source ~/.zshrc` (or equivalent). The completion provides:
+Generates a completion script, writes it to `~/.swe/completions/` and adds one `source` line to your shell profile (`~/.zshrc`, `~/.bashrc` or the fish config), then prints the two paths. `swe autocomplete zsh --print` writes the script to stdout instead and changes nothing on disk. After running, restart your terminal or `source ~/.zshrc` (or equivalent). The completion provides:
 
 - Subcommand names with descriptions (`swe <TAB>`)
 - Tool names and aliases from your registry (`swe use <TAB>`)
