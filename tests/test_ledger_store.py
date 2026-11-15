@@ -196,6 +196,15 @@ class TestDatabaseSources(unittest.TestCase):
         conn.close()
         return path
 
+    @staticmethod
+    def _settle(path):
+        """Age a database and its WAL a minute, as one nobody has written
+        to lately: only such a stamp is trusted to skip a scan (#1930)."""
+        for f in (path, Path(str(path) + "-wal")):
+            if f.exists():
+                old = f.stat().st_mtime_ns - 60_000_000_000
+                os.utime(f, ns=(old, old))
+
     def _rows(self):
         return {r[0]: r[1:] for r in self.store.db.execute(
             "SELECT key, harness, model, input, output, reasoning, cache_read, cost, cwd FROM events")}
@@ -215,6 +224,7 @@ class TestDatabaseSources(unittest.TestCase):
             INSERT INTO message VALUES ('m2', 's1', 1790000000000, 2, '{old}');
             INSERT INTO message VALUES ('m3', 's1', 1790000000000, 3, '{user}');
         """)
+        self._settle(self.home / ".local/share/opencode/opencode.db")
         scan(self.store, self.home)
         rows = self._rows()
         self.assertEqual(rows["opencode:m1"], ("opencode", "gpt-x", 10, 5, 2, 3, 0.5, "/w"))
@@ -409,6 +419,34 @@ class TestDatabaseSources(unittest.TestCase):
         scan(self.store, self.home)
         self._write(path, "INSERT INTO message_nodes VALUES (3, 'd1', 0, ?)", self._node("r3"))
         self.assertEqual(scan(self.store, self.home).records, 1)
+
+    def test_a_write_that_keeps_the_scans_stamp_is_still_read(self):
+        # A filesystem that stamps writes from a coarse clock (ext4 ticks
+        # every few milliseconds, HFS+ every second) gives a write that
+        # lands in the same tick as a scan the inode, size and mtime that
+        # scan saw (#1930). utime puts that stamp back here.
+        path = self._devin((1, "d1", self._node("r1")), (2, "d1", self._node("r2")))
+        before = path.stat()
+        self.assertEqual(scan(self.store, self.home).records, 2)
+        self._write(path, "INSERT INTO message_nodes VALUES (3, 'd1', 0, ?)", self._node("r3"))
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = path.stat()
+        self.assertEqual((after.st_ino, after.st_size, after.st_mtime_ns),
+                         (before.st_ino, before.st_size, before.st_mtime_ns))
+        self.assertEqual(scan(self.store, self.home).records, 1)
+        # Read again while unsettled, nothing is counted twice.
+        scan(self.store, self.home)
+        self.assertEqual(self.store.db.execute(
+            "SELECT COUNT(*), SUM(input) FROM events").fetchone(), (3, 21))
+
+    def test_a_settled_database_is_skipped_until_it_moves(self):
+        path = self._devin((1, "d1", self._node("r1")), (2, "d1", self._node("r2")))
+        self._settle(path)
+        self.assertEqual(scan(self.store, self.home).records, 2)
+        self.assertEqual(scan(self.store, self.home).files_read, 0)
+        self._write(path, "INSERT INTO message_nodes VALUES (3, 'd1', 0, ?)", self._node("r3"))
+        self.assertEqual(scan(self.store, self.home).records, 1)
+        self.assertIn("devin:r3", self._rows())
 
     def test_a_devin_database_rebuilt_in_place_is_read_from_the_start(self):
         path = self._devin(*[(i, "d1", self._node(f"r{i}")) for i in (1, 2, 3)])

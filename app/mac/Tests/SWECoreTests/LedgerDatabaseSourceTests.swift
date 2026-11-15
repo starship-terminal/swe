@@ -15,6 +15,30 @@ func execute(_ sql: String, on url: URL) throws {
     try SQLiteDatabase(url: url).execute(sql)
 }
 
+/// Ages a database and its WAL a minute, as one nobody has written to
+/// lately: only such a stamp is trusted to skip a scan (#1930).
+func settle(_ url: URL) throws {
+    for path in [url.path, url.path + "-wal"] where FileManager.default.fileExists(atPath: path) {
+        let modified = try #require(
+            FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)
+        try FileManager.default.setAttributes(
+            [.modificationDate: modified.addingTimeInterval(-60)], ofItemAtPath: path)
+    }
+}
+
+/// Puts back a file's exact modification time, nanoseconds and all, as a
+/// filesystem whose clock had not ticked since `stamp` would have left it.
+func restoreModified(_ url: URL, to stamp: stat) throws {
+    var times = [stamp.st_atimespec, stamp.st_mtimespec]
+    #expect(utimensat(AT_FDCWD, url.path, &times, 0) == 0)
+}
+
+func fileStat(_ url: URL) throws -> stat {
+    var info = stat()
+    try #require(stat(url.path, &info) == 0)
+    return info
+}
+
 @Suite struct LedgerOpenCodeTests {
     @Test func assistantMessagesBecomeEventsWithTheirRecordedCost() async throws {
         let temp = try TempDir()
@@ -195,6 +219,51 @@ func execute(_ sql: String, on url: URL) throws {
         #expect(await ledger.totals(in: allTime).totalTokens == 1_160 + 450 + 10)
     }
 
+    /// A filesystem that stamps writes from a coarse clock (ext4 ticks every
+    /// few milliseconds, HFS+ every second) gives a write landing in the
+    /// same tick as a scan the inode, size and mtime that scan saw (#1930).
+    @Test func aWriteThatKeepsTheScansStampIsStillRead() throws {
+        let temp = try TempDir()
+        defer { withExtendedLifetime(temp) {} }
+        let db = temp.path("devin/cli/sessions.db")
+        try makeDatabase("devin.sql", at: db)
+        let store = try LedgerStore(url: temp.path("cache/ledger.sqlite"))
+        let before = try fileStat(db)
+        let stamp = try #require(DatabaseSources.Fingerprint(db))
+        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try store.events(in: allTime).count == 2)
+
+        try execute("""
+            UPDATE message_nodes SET chat_message = json_set(chat_message, '$.metadata.metrics',
+              json('{"input_tokens":5,"output_tokens":5}')) WHERE node_id = 5;
+            """, on: db)
+        try restoreModified(db, to: before)
+        #expect(try #require(DatabaseSources.Fingerprint(db)).text == stamp.text)
+
+        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try store.events(in: allTime).count == 3)
+        // Read again while unsettled, nothing is counted twice.
+        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try store.events(in: allTime).reduce(0) { $0 + $1.totalTokens } == 1_160 + 450 + 10)
+    }
+
+    @Test func aSettledDatabaseIsSkippedUntilItMoves() throws {
+        let temp = try TempDir()
+        defer { withExtendedLifetime(temp) {} }
+        let db = temp.path("devin/cli/sessions.db")
+        try makeDatabase("devin.sql", at: db)
+        try settle(db)
+        let store = try LedgerStore(url: temp.path("cache/ledger.sqlite"))
+        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try DatabaseSources.scanDevin(db, store: store) == false)
+        try execute("""
+            UPDATE message_nodes SET chat_message = json_set(chat_message, '$.metadata.metrics',
+              json('{"input_tokens":5,"output_tokens":5}')) WHERE node_id = 5;
+            """, on: db)
+        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try store.events(in: allTime).count == 3)
+    }
+
     @Test func aReplacedDatabaseIsReadFromTheStart() async throws {
         let temp = try TempDir()
         defer { withExtendedLifetime(temp) {} }
@@ -280,6 +349,7 @@ func execute(_ sql: String, on url: URL) throws {
             return (events.count, events.reduce(0) { $0 + $1.totalTokens },
                     events.reduce(0) { $0 + ($1.costUSD ?? 0) })
         }
+        try settle(db)
         let before: (events: Int, tokens: Int, cost: Double)
         do {
             let store = try LedgerStore(url: ledgerURL)

@@ -8,10 +8,11 @@ keys make that idempotent. Pi logs and the Droid and Cline session files
 are read whole when they change, also keyed — the session files hold one
 authoritative total each, so a re-read replaces and a now-empty file
 deletes. OpenCode and Devin databases are skipped while they and their
-WALs are unchanged, and otherwise read only past a watermark. Cursor's
-usage is not a file: the web app polls it in the background on the
-feed's own cadence (``CursorUsageFeed.keepFresh``), so a scan never
-waits on network replies and a missed round keeps the stored rows.
+WALs are unchanged and settled, and otherwise read only past a
+watermark. Cursor's usage is not a file: the web app polls it in the
+background on the feed's own cadence (``CursorUsageFeed.keepFresh``), so
+a scan never waits on network replies and a missed round keeps the
+stored rows.
 
 Claude Code and Codex prune their transcripts; swe's mirror keeps a copy
 of each (``~/.swe/data/transcripts``, #1918). Events already recorded
@@ -401,6 +402,13 @@ def _scan_whole(store: LedgerStore, path: Path, result: ScanResult, read) -> Non
     store.db.commit()
 
 
+# FAT keeps two-second modification times, the coarsest of any local
+# filesystem (HFS+ keeps one second, ext4 a clock tick of a few
+# milliseconds). A stamp whose times are older than this when it is taken
+# cannot be shared by a later write; a younger one can.
+_SETTLE_NS = 2_000_000_000
+
+
 def _scan_database(store: LedgerStore, path: Path, result: ScanResult, read,
                    key_suffix: str) -> None:
     """One harness database, read past its watermark (the source pass in
@@ -412,13 +420,21 @@ def _scan_database(store: LedgerStore, path: Path, result: ScanResult, read,
     returns the rows past the watermark the cursor's ``offset`` slot keeps
     and the next one. A different inode is a recreated or restored file
     whose row ids and timestamps start over, so it is read from 0; every
-    row is keyed, so reading one again is harmless."""
+    row is keyed, so reading one again is harmless.
+
+    A stamp is saved only once it is settled (#1930): a write in the
+    same clock tick as the stat can leave inode, size and mtime as they
+    were (a row that fits the last page), and skipping on that stamp
+    would miss the row until the file next moved. An unsettled database
+    is read past its watermark again on the next scan instead."""
+    now = time.time_ns()  # before the stat: a write after it is newer
     st = _stat(path)
     if st is None:
         return
     inode, size, mtime = st
     wal = _stat(Path(str(path) + "-wal"))
     fingerprint = f"{inode}:{size}:{mtime}:{wal[1] if wal else 0}:{wal[2] if wal else 0}"
+    settled = now - max(mtime, wal[2] if wal else 0) > _SETTLE_NS
     key = str(path) + key_suffix
     cursor = store.file_cursor(key)
     if cursor is not None and cursor[4] == fingerprint:
@@ -432,7 +448,8 @@ def _scan_database(store: LedgerStore, path: Path, result: ScanResult, read,
     for rec in records:
         store.upsert(rec)
     result.records += len(records)
-    store.set_file_cursor(key, inode, size, mtime, watermark, fp=fingerprint)
+    store.set_file_cursor(key, inode, size, mtime, watermark,
+                          fp=fingerprint if settled else None)
     result.files_read += 1
     store.db.commit()
 
