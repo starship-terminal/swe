@@ -31,8 +31,10 @@ from swe.worktrees.settings import Settings
 SLUG = "acme/widget"
 URL = f"https://github.com/{SLUG}.git"
 
-FAKE_GH = textwrap.dedent("""\
-    #!/usr/bin/env python3
+# The shebang is this interpreter, never ``/usr/bin/env python3``: the Nix
+# build sandbox has no /usr/bin/env, so that stub failed to exec and every
+# PR lookup came back as "gh is not installed".
+FAKE_GH = "#!" + sys.executable + "\n" + textwrap.dedent("""\
     import json, os, sys
     if os.environ.get("FAKE_GH_FAIL"):
         sys.stderr.write("API rate limit exceeded\\n")
