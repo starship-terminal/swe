@@ -1,8 +1,10 @@
 """The hook backfill's parse cache (``hooks/transcript_cache.py``).
 
 A transcript is parsed once and read back while its size, mtime, ctime
-and inode stay the same; what a command runs is worked out on every read,
-so a change on disk shows even when the transcript did not change.
+and inode stay the same and the file has settled (its ctime is older than
+the racy window, as in ``sessions/parse_cache.py``); what a command runs is
+worked out on every read, so a change on disk shows even when the
+transcript did not change.
 """
 
 import json
@@ -17,6 +19,7 @@ from unittest import mock
 from swe.hooks import transcript_cache, transcripts
 from swe.hooks.identity import Resolver
 
+from tests._settled import settle_cache
 from tests._tempdir import temp_dir
 from tests.test_hooks_stats import _rec
 
@@ -28,7 +31,7 @@ def _db(path):
     return sqlite3.connect(path, isolation_level=None)
 
 
-class TranscriptCacheTest(unittest.TestCase):
+class _CacheCase(unittest.TestCase):
     def connect(self, path):
         db = _db(path)
         self.addCleanup(db.close)
@@ -48,11 +51,12 @@ class TranscriptCacheTest(unittest.TestCase):
         self.command = f'python3 "{self.home}/.claude/hooks/_generated/notify.py"'
         self.write(3)
 
-    def write(self, runs: int) -> None:
+    def write(self, runs: int, duration_ms: int = 5) -> None:
         self.path.write_text("\n".join(
             _rec(self.now - i * HOUR, "attachment", attachment={
                 "type": "hook_success", "hookName": "Stop", "hookEvent": "Stop",
-                "command": self.command, "exitCode": 0, "durationMs": 5,
+                "command": self.command, "exitCode": 0,
+                "durationMs": duration_ms,
                 "stderr": "", "stdout": ""})
             for i in range(runs)) + "\n")
 
@@ -64,6 +68,14 @@ class TranscriptCacheTest(unittest.TestCase):
         spy = mock.patch.object(transcripts, "_raw_file",
                                 wraps=transcripts._raw_file)
         return spy
+
+
+class TranscriptCacheTest(_CacheCase):
+    def setUp(self):
+        # Files these tests just wrote count as settled; the racy rule has
+        # its own tests below.
+        settle_cache(self)
+        super().setUp()
 
     def test_a_second_read_parses_nothing_and_answers_the_same(self):
         with self.parses() as spy:
@@ -280,6 +292,132 @@ class TranscriptCacheTest(unittest.TestCase):
         self.assertEqual(set(transcript_cache._FINGERPRINT_MODULES), {
             "swe.hooks.transcript_cache", "swe.hooks.transcripts",
             "swe.hooks.events", "swe.hooks.shim_runtime"})
+
+
+class RacyWindowTest(_CacheCase):
+    """A parse is stored and reused only once the file's ctime is older than
+    the racy window (``sessions/parse_cache.py``'s rule and knob)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("SWE_CACHE_RACY_WINDOW_MS", None)
+
+    def at(self, offset_ns: int):
+        """The clock ``offset_ns`` after the transcript's ctime."""
+        return mock.patch.object(
+            time, "time_ns",
+            return_value=self.path.stat().st_ctime_ns + offset_ns)
+
+    def stored(self) -> int:
+        db = self.connect(transcript_cache.cache_file_for(self.home))
+        return db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+
+    def test_a_file_written_just_now_is_parsed_every_time(self):
+        with self.at(1_000_000):
+            with self.parses() as spy:
+                self.read()
+                self.read()
+            self.assertEqual(spy.call_count, 2)
+        self.assertEqual(self.stored(), 0)
+
+    def test_a_file_older_than_the_window_is_stored_and_reused(self):
+        with self.at(3_000_000_000):
+            with self.parses() as spy:
+                first = self.read()
+                second = self.read()
+            self.assertEqual(spy.call_count, 1)
+        self.assertEqual(first, second)
+        self.assertEqual(self.stored(), 1)
+
+    def test_a_ctime_in_the_future_counts_as_fresh(self):
+        with self.at(-10_000_000_000), self.parses() as spy:
+            self.read()
+            self.read()
+        self.assertEqual(spy.call_count, 2)
+        self.assertEqual(self.stored(), 0)
+
+    def test_the_window_can_be_set_by_the_environment(self):
+        with mock.patch.dict(os.environ, {"SWE_CACHE_RACY_WINDOW_MS": "100"}):
+            with self.at(50_000_000), self.parses() as spy:
+                self.read()
+                self.read()
+            self.assertEqual(spy.call_count, 2)
+            with self.at(150_000_000), self.parses() as spy:
+                self.read()
+                self.read()
+            self.assertEqual(spy.call_count, 1)
+
+    def test_a_hit_on_a_file_that_became_fresh_is_parsed_again(self):
+        with self.at(3_000_000_000):
+            self.read()
+        self.assertEqual(self.stored(), 1)
+        # The clock stepped back: the same stored signature proves nothing.
+        with self.at(1_000_000), self.parses() as spy:
+            self.assertEqual(len(self.read()), 3)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_a_racy_read_drops_the_row_it_replaces(self):
+        with self.at(3_000_000_000):
+            self.read()
+        self.assertEqual(self.stored(), 1)
+        with self.at(1_000_000):
+            self.read()
+        self.assertEqual(self.stored(), 0)
+
+    def test_a_racy_reader_does_not_erase_a_newer_settled_row(self):
+        parse = transcripts._raw_file
+        path = str(self.path)
+        with self.at(3_000_000_000):
+            old = transcript_cache.TranscriptCache(self.home)
+            old.events(path, parse)
+            old.close()
+        self.write(3, duration_ms=7)  # same size, new content and stat
+        a = transcript_cache.TranscriptCache(self.home)
+        b = transcript_cache.TranscriptCache(self.home)
+        with self.at(1_000_000):
+            # a saw the old row and a fresh file: it queues a drop.
+            self.assertEqual({e["duration_ms"] for e in a.events(path, parse)},
+                             {7})
+        with self.at(3_000_000_000):
+            # b settles the new content and stores it first.
+            b.events(path, parse)
+            b.close()
+        a.close()
+        self.assertEqual(self.stored(), 1)
+        parsed = []
+        with self.at(3_000_000_000):
+            c = transcript_cache.TranscriptCache(self.home)
+            events = c.events(path, lambda p: parsed.append(p) or parse(p))
+            c.close()
+        self.assertEqual({e["duration_ms"] for e in events}, {7})
+        self.assertEqual(parsed, [])
+
+    def test_rewrite_inside_one_coarse_clock_tick_is_read_again(self):
+        # A coarse kernel clock or a 1 s or 2 s filesystem gives two writes
+        # in the same tick one ctime and one mtime, so a same-size rewrite
+        # leaves size, mtime, ctime and inode all equal. Model it by
+        # pinning the mtime and ctime to one fixed tick (never the live
+        # clock, whose two writes could straddle a tick boundary) and the
+        # lookup clock to a moment inside that tick.
+        tick = 2_000_000_000
+        real = transcript_cache._signature
+
+        def coarse(st):
+            size, _mtime, _ctime, ino = real(st)
+            return (size, tick, tick, ino)
+
+        patcher = mock.patch.object(transcript_cache, "_signature", coarse)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with self.at(1_000_000):
+            before = self.read()
+            first = self.path.stat()
+            self.write(3, duration_ms=7)
+            self.assertEqual(self.path.stat().st_size, first.st_size)
+            self.assertEqual(coarse(self.path.stat()), coarse(first))
+            after = self.read()
+        self.assertEqual({e["duration_ms"] for e in before}, {5})
+        self.assertEqual({e["duration_ms"] for e in after}, {7})
 
 
 if __name__ == "__main__":
