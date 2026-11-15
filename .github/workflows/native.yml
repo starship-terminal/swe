@@ -8,6 +8,8 @@
 # a macOS runner standing in front of every PR.  Release tags exercise
 # the same ground through release.yml, which verifies the wheel on macOS,
 # builds SWE.app and runs the Nix derivation before anything attaches.
+# The Nix build used to live here too; it moved back to ci.yml so every
+# PR runs it (it is a Linux job about as fast as the test shards).
 name: Native
 
 on:
@@ -128,27 +130,3 @@ jobs:
           xcodebuild -project SWERemote.xcodeproj -scheme SWERemote \
             -destination "id=$udid" -derivedDataPath build-sim \
             -only-testing:SWERemoteTests test
-
-  nix:
-    # Same derivation check release.yml runs on a tag.  Here it keeps the
-    # flake honest on main: its checkPhase runs the unittest suite in the
-    # sandbox, too slow for the PR lane but cheap enough nightly.
-    name: Nix flake build and check
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
-
-      - name: Build the package (runs the unittest suite in the sandbox)
-        run: nix build --print-build-logs
-
-      - name: Exercise the built binary
-        run: |
-          test_home="$(mktemp -d)"
-          HOME="$test_home" ./result/bin/swe --help
-          HOME="$test_home" ./result/bin/swe init --check
-
-      - name: nix flake check
-        run: nix flake check --print-build-logs

@@ -1,5 +1,6 @@
 """app/mac/script/bundle-licenses.sh: the licence texts SWE.app must carry."""
 
+import os
 import shutil
 import subprocess
 import unittest
@@ -9,9 +10,13 @@ from tests._tempdir import temp_dir
 
 MAC = Path(__file__).resolve().parents[1] / "app" / "mac"
 SCRIPT = MAC / "script" / "bundle-licenses.sh"
+# Resolved once against the test's own PATH: the Nix sandbox has no
+# /bin/bash or /usr/bin, so neither a hardcoded path nor a lookup on a
+# trimmed PATH finds it there.
+BASH = shutil.which("bash")
 
 
-@unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+@unittest.skipUnless(BASH, "bash is not installed")
 class TestBundleLicenses(unittest.TestCase):
     def setUp(self):
         self.tmp = temp_dir(self)
@@ -22,9 +27,13 @@ class TestBundleLicenses(unittest.TestCase):
         self.bundle = self.tmp / "SWE.app"
 
     def run_script(self, *args):
-        env = {"PATH": "/usr/bin:/bin", "SWE_LICENSES_SRC": str(self.src),
+        # The script needs mkdir, cp and dirname, which live wherever the
+        # test's PATH says (coreutils in the Nix store, /bin on a Mac), so
+        # the PATH is passed through; the rest of the environment is not.
+        env = {"PATH": os.environ.get("PATH", os.defpath),
+               "SWE_LICENSES_SRC": str(self.src),
                "SWE_SPARKLE_LICENSE": str(self.sparkle)}
-        return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True,
+        return subprocess.run([BASH, str(SCRIPT), *args], capture_output=True,
                               text=True, env=env, timeout=60)
 
     def names(self):

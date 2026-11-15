@@ -374,9 +374,9 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/swe-signing.keychain-db" || true
 
   nix:
-    # Not on PRs: the derivation's checkPhase runs the same unittest suite
-    # ci.yml already runs, so per PR it only repeated a 6-minute job.  On a
-    # tag it proves the flake still builds before anything is attached.
+    # ci.yml runs this same job on every PR and push to main.  On a tag it
+    # proves the flake still builds from the tagged tree before anything
+    # is attached.
     name: Nix flake build and check
     runs-on: ubuntu-latest
 

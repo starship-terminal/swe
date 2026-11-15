@@ -60,6 +60,15 @@ Conventions that keep the suite working:
   very end of the file. Anything below it is skipped when the file is run
   directly, even though discovery still finds it. `tests/test_agent_rules.py`
   enforces it.
+- The suite also runs inside the Nix build sandbox (`nix build`, the
+  `Nix flake build and check` job on every PR). There is no `/usr/bin/env`
+  and nothing in `/usr/bin` or `/bin` but `/bin/sh`; Python, git, bash and
+  coreutils come from the store and are only on the inherited `PATH`. So a
+  stub executable a test writes starts with `#!` plus `sys.executable` (or
+  `#!/bin/sh` using only shell builtins), a script is run through
+  `shutil.which("bash")`, and a test that trims `PATH` keeps the tools it
+  needs. A test that reads a file outside `src/` and `tests/` needs that
+  file in the source filter in `flake.nix`.
 
 ### Interpreter matrix
 
@@ -75,7 +84,7 @@ Required steps for any feature that adds files or changes `cmd_*` handlers:
 
 1. **Write tests** and run `HOME="$(mktemp -d)" python3 -m unittest discover -s tests -p 'test_*.py'`.
 2. **Reinstall the package** with `pip install -e .` (or `pipx install --force git+...` for pipx installs). With an editable install new files are picked up automatically, but a stale non-editable install won't see them until you reinstall.
-3. **Verify e2e** by running the actual `swe <command>` against a temp HOME, not just `PYTHONPATH=src python -m swe.cli <command>`. CI does the same on every PR (the editable install on Linux), and `release.yml` repeats it on a tag for a built wheel in a clean venv on Linux and macOS, the Nix derivation's output and the bundled app, each against a `mktemp -d` home. The native-only checks that used to sit on the PR path — the macOS install smoke test, the app unit tests and the Nix build — run nightly, on merge_group and on demand in `native.yml`; the app unit tests also run on a PR that changes `app/mac/` (`mac-unit-tests.yml`). Read `.github/workflows/ci.yml` and `release.yml` for the exact commands rather than assuming; that list gets trimmed from time to time.
+3. **Verify e2e** by running the actual `swe <command>` against a temp HOME, not just `PYTHONPATH=src python -m swe.cli <command>`. CI does the same on every PR (the editable install on Linux), and `release.yml` repeats it on a tag for a built wheel in a clean venv on Linux and macOS, the Nix derivation's output and the bundled app, each against a `mktemp -d` home. The native-only checks that used to sit on the PR path (the macOS install smoke test and the app unit tests) run nightly, on merge_group and on demand in `native.yml`; the Nix build runs on every PR in `ci.yml`, and the app unit tests also run on a PR that changes `app/mac/` (`mac-unit-tests.yml`). Read `.github/workflows/ci.yml` and `release.yml` for the exact commands rather than assuming; that list gets trimmed from time to time.
 4. **Open a PR**, one concern per PR, with a clear description of what changed and why.
 
 Common pitfall: if a feature works with `PYTHONPATH=src python -m swe.cli` but not with the installed `swe` command, the installed copy is stale (likely a non-editable install). Re-run `pip install -e .` to switch to editable mode and sync with the source tree.

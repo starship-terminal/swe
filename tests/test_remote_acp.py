@@ -1251,10 +1251,15 @@ class TestDetection(unittest.TestCase):
         self.addCleanup(acp._PROBES.clear)
 
     def _tool(self, name, help_text):
+        # A Python stub on this interpreter: PATH here is trimmed to
+        # /usr/bin:/bin, and the Nix build sandbox has neither (no cat), so
+        # a shell stub printed nothing and every probe read as "no ACP".
         path = self.bin / name
+        runs = str(self.bin / f"{name}.runs")
         path.write_text(
-            f"#!/bin/sh\necho x >> {self.bin}/{name}.runs\n"
-            f"cat <<'EOF'\n{help_text}\nEOF\n")
+            f"#!{sys.executable}\n"
+            f"with open({runs!r}, 'a') as f:\n    f.write('x\\n')\n"
+            f"print({help_text!r})\n")
         path.chmod(0o755)
         return path
 

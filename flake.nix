@@ -42,6 +42,11 @@
               # landing pages (docs_site). app/ios is app-only.
               ./app/mac
               ./app/landing-page
+              # tests/test_harness_docs.py checks this page and example
+              # against the code and reads both at import time. Only these
+              # two files, so other doc edits still leave the hash alone.
+              ./docs/harness-support.md
+              ./examples/harness.example.json
             ];
           };
 

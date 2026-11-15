@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -1344,9 +1345,22 @@ class TestBlindNetstatNettop(unittest.TestCase):
                     self.assertEqual(sighted, uid == 0 and path in paths[:2])
 
 
+def _can_run_ps() -> bool:
+    """Whether this process may exec /bin/ps. It is setuid root, and the
+    Nix build on macOS refuses to exec setuid programs (EPERM)."""
+    try:
+        subprocess.run([peer._PS, "-o", "pid=", "-p", str(os.getpid())],
+                       capture_output=True, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
 class TestDarwinProcessLookups(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin", "libproc and kern.proc are macOS's")
     def test_this_process_is_listed_and_identified(self):
+        if not _can_run_ps():
+            self.skipTest("this build cannot exec the setuid /bin/ps (the Nix build on macOS)")
         self.assertIn(os.getpid(), peer._all_pids())
         ident = peer._identity(os.getpid())
         self.assertIsNotNone(ident)

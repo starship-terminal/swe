@@ -26,10 +26,13 @@ class DemoVmTest(unittest.TestCase):
     def setUp(self):
         self.scratch = temp_dir(self).resolve()
         # No utmctl on this PATH, so every step refuses before touching a VM.
+        # It does carry everything need_host runs before that check: in the
+        # Nix build on a Mac sed and friends come from the store, and
+        # sw_vers only from /usr/bin, so each tool's own folder is listed.
         self.bin = self.scratch / "bin"
         self.bin.mkdir()
         tool_dirs = {os.path.dirname(shutil.which(tool) or f"/usr/bin/{tool}")
-                     for tool in ("sed", "uname", "dirname")}
+                     for tool in ("sed", "uname", "dirname", "cut", "sw_vers")}
         self.path = ":".join([str(self.bin), *sorted(tool_dirs)])
         self.state = self.scratch / "state"
         self.cache = self.scratch / "cache"
