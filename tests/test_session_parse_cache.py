@@ -142,7 +142,10 @@ class CliColdWarmTest(unittest.TestCase):
         self.cache = session_parse_cache_file_for(self.home)
 
     def listing(self) -> str:
-        result = run_swe(self.home, "session", "100000", "--json")
+        result = run_swe(
+            self.home, "session", "100000", "--json",
+            extra_env={"SWE_CACHE_RACY_WINDOW_MS": "0"},
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         decode(result)
         return result.stdout
@@ -299,7 +302,12 @@ class InProcessCacheTest(unittest.TestCase):
 
     def setUp(self):
         self.home = temp_dir(self)
-        patcher = patch.dict(os.environ, {"HOME": str(self.home)})
+        # Files these tests just wrote count as settled; the racy rule has
+        # its own tests below.
+        patcher = patch.dict(
+            os.environ,
+            {"HOME": str(self.home), "SWE_CACHE_RACY_WINDOW_MS": "0"},
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
         failures.clear()
@@ -466,6 +474,64 @@ class InProcessCacheTest(unittest.TestCase):
         with parse_cache.activate() as store:
             self.assertEqual(parse_cache.lookup("t:x", missing, lambda: "x"), "x")
             self.assertEqual(store.entries.get("t:x", {}), {})
+
+
+class RacyWindowTest(unittest.TestCase):
+    """A value is stored only once the file's ctime is older than the window."""
+
+    def setUp(self):
+        self.dir = temp_dir(self)
+        self.cache = self.dir / "cache.json"
+        env = patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("SWE_CACHE_RACY_WINDOW_MS", None)
+        self.path = self.dir / "t.jsonl"
+        self.path.write_text("x")
+        self.calls = 0
+
+    def look(self, now_ns=None):
+        def compute():
+            self.calls += 1
+            return [self.calls]
+
+        with patch.object(parse_cache.time, "time_ns",
+                          return_value=now_ns or parse_cache.time.time_ns()):
+            with parse_cache.standalone(lambda: self.cache, ("swe.sessions.parse_cache",)) as store:
+                return parse_cache.lookup_in(store, "t:x", str(self.path), compute)
+
+    def test_a_file_written_just_now_is_read_every_time(self):
+        self.assertEqual(self.look(), [1])
+        self.assertEqual(self.look(), [2])
+        self.assertFalse(self.cache.exists())
+
+    def test_a_file_older_than_the_window_is_stored_and_reused(self):
+        later = self.path.stat().st_ctime_ns + 3_000_000_000
+        self.assertEqual(self.look(later), [1])
+        self.assertEqual(self.look(later), [1])
+
+    def test_a_ctime_in_the_future_counts_as_fresh(self):
+        earlier = self.path.stat().st_ctime_ns - 10_000_000_000
+        self.assertEqual(self.look(earlier), [1])
+        self.assertEqual(self.look(earlier), [2])
+
+    def test_a_racy_read_drops_the_entry_it_replaces(self):
+        # Under a coarse clock tick the rewrite keeps the stored signature,
+        # so only the freshness check can tell: model that, not nanoseconds.
+        real = parse_cache._signature
+        patcher = patch.object(
+            parse_cache, "_signature",
+            lambda st: [real(st)[0], 0, 0, real(st)[3]],
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        later = self.path.stat().st_ctime_ns + 3_000_000_000
+        self.look(later)
+        self.assertTrue(self.cache.exists())
+        self.path.write_text("y")
+        self.look()  # fresh again: read, and not remembered
+        self.assertEqual(self.look(), [3])
+        self.assertNotIn(str(self.path), json.loads(self.cache.read_text())["entries"].get("t:x", {}))
 
 
 if __name__ == "__main__":

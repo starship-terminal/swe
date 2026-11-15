@@ -26,6 +26,7 @@ from swe.sessions.engines.jsonl_engine import (
     parse_jsonl_projects,
 )
 from tests._tempdir import temp_dir
+from tests._settled import settle_cache
 
 _IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 
@@ -496,6 +497,7 @@ class JsonFilesEdgesTest(_FailuresClean):
         self.assertEqual(failures.snapshot(), {})
 
     def test_cached_read_honours_include(self):
+        settle_cache(self)
         self._write("a.json", {"id": "a", "cwd": "/a"})
         self._write("b.json", {"id": "b", "cwd": "/b"})
         config = self._config(cache=True, include=lambda e, _fp: e["id"] == "b")

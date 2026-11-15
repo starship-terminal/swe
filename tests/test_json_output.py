@@ -22,7 +22,9 @@ from tests._tempdir import temp_dir
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
-def run_swe(home: Path, *args: str) -> subprocess.CompletedProcess:
+def run_swe(
+    home: Path, *args: str, extra_env: dict | None = None
+) -> subprocess.CompletedProcess:
     # A clean environment, so the developer's CLAUDE_CONFIG_DIR, CODEX_HOME
     # and friends cannot point the child at real configs. Coverage's own
     # variables pass through: .coveragerc patches subprocesses, and without
@@ -37,6 +39,7 @@ def run_swe(home: Path, *args: str) -> subprocess.CompletedProcess:
         "PYTHONPATH": str(SRC),
         "NO_COLOR": "1",
     })
+    env.update(extra_env or {})
     return subprocess.run(
         [sys.executable, "-m", "swe.cli", *args],
         capture_output=True, text=True, env=env, timeout=60,
