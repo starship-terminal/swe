@@ -362,6 +362,12 @@ class LedgerTest(OpencodeV2Case):
         bare = {"opencode:msg_a": "grok-4.7", "opencode:m3": "MiniMax-M3"}
         for rec in opencode_records(self.db):
             store.upsert(LedgerRecord(rec.key, dataclasses.replace(rec.event, model=bare[rec.key])))
+        # Aged a minute, so the stamp this scan saves is trusted to skip
+        # the next one (#1930).
+        for f in (self.db, Path(str(self.db) + "-wal")):
+            if f.exists():
+                old = f.stat().st_mtime_ns - 60_000_000_000
+                os.utime(f, ns=(old, old))
         st = self.db.stat()
         store.set_file_cursor(str(self.db) + "#v2", st.st_ino, st.st_size, st.st_mtime_ns, st.st_size)
         store.db.commit()

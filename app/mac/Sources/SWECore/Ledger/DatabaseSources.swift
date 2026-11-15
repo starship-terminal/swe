@@ -3,9 +3,9 @@ import Foundation
 /// Harnesses that keep history in SQLite. Both are opened strictly read-only
 /// and only token metadata is selected, never message bodies.
 ///
-/// A database is skipped while it and its WAL are unchanged. Otherwise only
-/// rows past a watermark are read, and every row is keyed so re-reading one
-/// is harmless.
+/// A database is skipped while it and its WAL are unchanged and settled
+/// (`Fingerprint.settled`). Otherwise only rows past a watermark are read,
+/// and every row is keyed so re-reading one is harmless.
 enum DatabaseSources {
     /// A read from the source database failed. `Ledger.scan` downgrades
     /// only these to a per-source note: a failure on SWE's own cache
@@ -23,13 +23,33 @@ enum DatabaseSources {
     struct Fingerprint: Equatable {
         var text: String
         var inode: UInt64
+        /// Whether the file and its WAL were last written more than
+        /// `settleSeconds` before the stamp was taken. A write in the same
+        /// clock tick as the stat can leave inode, size and mtime as they
+        /// were (a row that fits the last page), so only a settled stamp
+        /// may skip a scan (#1930).
+        var settled: Bool
 
-        init?(_ url: URL) {
+        /// FAT keeps two-second modification times, the coarsest of any
+        /// local filesystem (HFS+ keeps one second). A stamp older than
+        /// this when taken cannot be shared by a later write; a younger one
+        /// can (#1930: reproduced on HFS+ and FAT, reported on Linux 6.12).
+        static let settleSeconds: Double = 2
+
+        /// - Parameter now: read before the stat, so a write after it is newer.
+        init?(_ url: URL, now: Date = Date()) {
             guard let db = FileInfo(path: url.path) else { return nil }
             let wal = FileInfo(path: url.path + "-wal")
             inode = db.inode
             text = "\(db.inode):\(db.size):\(db.modified):\(wal?.size ?? 0):\(wal?.modified ?? 0)"
+            settled = now.timeIntervalSince1970 - max(db.modified, wal?.modified ?? 0) > Self.settleSeconds
         }
+
+        /// What a scan saves under `:fingerprint`: the stamp once settled,
+        /// else "", which no stamp matches, so the next scan reads past the
+        /// watermark again. Every row is keyed, so that read adds nothing
+        /// twice.
+        var saved: String { settled ? text : "" }
     }
 
     /// The saved watermark, or 0 when the database is no longer the file it
@@ -76,8 +96,11 @@ enum DatabaseSources {
     ///   caller owns it — this never closes what it did not open — and is
     ///   trusted to have checked `sourceFingerprintUnchanged` first, so a
     ///   passed connection is used as-is.
-    static func scanOpenCode(_ url: URL, store: LedgerStore, source passed: SQLiteDatabase? = nil) throws -> Bool {
-        guard let fingerprint = Fingerprint(url) else { return false }
+    /// - Parameter now: the clock the settle rule reads (`Fingerprint.settled`).
+    static func scanOpenCode(
+        _ url: URL, store: LedgerStore, source passed: SQLiteDatabase? = nil, now: Date = Date()
+    ) throws -> Bool {
+        guard let fingerprint = Fingerprint(url, now: now) else { return false }
         let metaKey = openCodeMetaKey(url)
         if try store.meta(metaKey + ":fingerprint") == fingerprint.text { return false }
         let watermark = try watermark(metaKey, fingerprint, store: store)
@@ -127,7 +150,7 @@ enum DatabaseSources {
             try store.dropVacatedDims()
             try store.setMeta(metaKey + ":watermark", String(highest))
             try store.setMeta(metaKey + ":inode", String(fingerprint.inode))
-            try store.setMeta(metaKey + ":fingerprint", fingerprint.text)
+            try store.setMeta(metaKey + ":fingerprint", fingerprint.saved)
             try store.db.execute("COMMIT")
         } catch {
             store.rollback()
@@ -203,8 +226,8 @@ enum DatabaseSources {
     /// waiting for its metrics holds the watermark back so it is read again
     /// once Devin fills them in, unless a later row of the same session has
     /// metrics, which means it was abandoned.
-    static func scanDevin(_ url: URL, store: LedgerStore) throws -> Bool {
-        guard let fingerprint = Fingerprint(url) else { return false }
+    static func scanDevin(_ url: URL, store: LedgerStore, now: Date = Date()) throws -> Bool {
+        guard let fingerprint = Fingerprint(url, now: now) else { return false }
         let metaKey = "devin:\(url.path)"
         if try store.meta(metaKey + ":fingerprint") == fingerprint.text { return false }
         var watermark = try watermark(metaKey, fingerprint, store: store)
@@ -261,7 +284,7 @@ enum DatabaseSources {
             let pendingFloor = pending.values.min().map { $0 - 1 }
             try store.setMeta(metaKey + ":watermark", String(pendingFloor ?? highest))
             try store.setMeta(metaKey + ":inode", String(fingerprint.inode))
-            try store.setMeta(metaKey + ":fingerprint", fingerprint.text)
+            try store.setMeta(metaKey + ":fingerprint", fingerprint.saved)
             try store.db.execute("COMMIT")
         } catch {
             store.rollback()
