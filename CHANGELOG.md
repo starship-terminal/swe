@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-15
+
+### Fixed
+
+- **1.2.4 ships the builds 1.2.3 could not.** The 1.2.3 tag has no
+  wheel, DMG or appcast: its release run stopped at two test jobs
+  (test stubs the Nix sandbox could not start, and Mac unit tests that
+  blocked every test thread on a 3-core runner). Both are test fixes
+  with no change to the product, and both checks now run on pull
+  requests. Everything listed under 1.2.3 first ships in 1.2.4.
+
 ## [1.2.3] - 2026-11-15
 
 ### Added
@@ -6053,7 +6064,8 @@ service / model layering, tests with an 84% coverage floor).
 - Stdlib-only core; optional FastMCP server extra for session history MCP tool
 - Test suite (15 unit tests) with isolated `$HOME` fixtures
 
-[Unreleased]: https://github.com/starship-terminal/swe/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/starship-terminal/swe/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/starship-terminal/swe/releases/tag/v1.2.4
 [1.2.3]: https://github.com/starship-terminal/swe/releases/tag/v1.2.3
 [1.2.2]: https://github.com/starship-terminal/swe/releases/tag/v1.2.2
 [1.2.1]: https://github.com/starship-terminal/swe/releases/tag/v1.2.1

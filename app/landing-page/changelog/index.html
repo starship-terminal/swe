@@ -110,7 +110,17 @@ footer a:hover { color: var(--text); }
 <p>All notable changes to this project will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.3...HEAD">Unreleased</a></h2>
+<h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.4...HEAD">Unreleased</a></h2>
+<h2 id="124---2026-11-15"><a class="anchor" href="#124---2026-11-15"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.4">1.2.4</a> - 2026-11-15</h2>
+<h3 id="fixed"><a class="anchor" href="#fixed"></a>Fixed</h3>
+<ul>
+<li><strong>1.2.4 ships the builds 1.2.3 could not.</strong> The 1.2.3 tag has no
+wheel, DMG or appcast: its release run stopped at two test jobs
+(test stubs the Nix sandbox could not start, and Mac unit tests that
+blocked every test thread on a 3-core runner). Both are test fixes
+with no change to the product, and both checks now run on pull
+requests. Everything listed under 1.2.3 first ships in 1.2.4.</li>
+</ul>
 <h2 id="123---2026-11-15"><a class="anchor" href="#123---2026-11-15"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.3">1.2.3</a> - 2026-11-15</h2>
 <h3 id="added"><a class="anchor" href="#added"></a>Added</h3>
 <ul>
@@ -315,7 +325,7 @@ the Mac, iPhone and web resolve sheets all get the new prompt; issue
 comments in <code>--json</code> gain <code>association</code>.</p>
 </li>
 </ul>
-<h3 id="fixed"><a class="anchor" href="#fixed"></a>Fixed</h3>
+<h3 id="fixed-1"><a class="anchor" href="#fixed-1"></a>Fixed</h3>
 <ul>
 <li><p><strong>A hub run by a locally installed SWE.app recognises <code>tailscale serve</code> again on macOS 27.</strong> A process that is ad-hoc or Apple-Development signed (Homebrew's Python, Nix's shells, the Python a local SWE.app install bundles) sees an empty <code>netstat</code> TCP table on macOS 27, so the hub never found the Tailscale daemon behind a connection and every request through serve lost its tailnet identity. When netstat's table is empty, and only then, the hub now asks <code>nettop</code> which socket the daemon holds: it finds the daemon by its executable and root uid (never by name), accepts only exactly one <code>Established</code> row for exactly that connection, reads the listing by its fixed shape, and checks the daemon's pid kept the same executable, uid and start time across the query. The final check is the one netstat answers to (root and the daemon's own executable), a table netstat can see is never second-guessed, and anything <code>nettop</code> cannot answer with confidence still means no tailnet identity, never trust. The start-up warning now fires only when neither tool can see the hub's own test connection (<a href="https://github.com/starship-terminal/swe/issues/1950">#1950</a>).</p>
 </li>
@@ -903,7 +913,7 @@ node was rewritten reads whole in 25 to 45 ms (<a href="https://github.com/stars
 </li>
 </ul>
 <h2 id="121---2026-11-04"><a class="anchor" href="#121---2026-11-04"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.1">1.2.1</a> - 2026-11-04</h2>
-<h3 id="fixed-1"><a class="anchor" href="#fixed-1"></a>Fixed</h3>
+<h3 id="fixed-2"><a class="anchor" href="#fixed-2"></a>Fixed</h3>
 <ul>
 <li><strong>The tag build's Swift test step compiles again.</strong> <code>SilentHubStub</code>'s
 <code>await Self.started.bump()</code> inside a <code>Task</code> tripped a region-isolation
@@ -2699,7 +2709,7 @@ swept at the next launch. Closes
 <a href="https://github.com/starship-terminal/swe/issues/1551">#1551</a>.</p>
 </li>
 </ul>
-<h3 id="fixed-2"><a class="anchor" href="#fixed-2"></a>Fixed</h3>
+<h3 id="fixed-3"><a class="anchor" href="#fixed-3"></a>Fixed</h3>
 <ul>
 <li><p><strong><code>build_ios.sh</code> reaches a real iPhone and a named signing team.</strong>
 The device picker took the first paired iOS device <code>devicectl</code>
@@ -3266,7 +3276,7 @@ devices keep working on the approval route unchanged.</p>
 </li>
 </ul>
 <h2 id="111---2026-10-26"><a class="anchor" href="#111---2026-10-26"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.1.1">1.1.1</a> - 2026-10-26</h2>
-<h3 id="fixed-3"><a class="anchor" href="#fixed-3"></a>Fixed</h3>
+<h3 id="fixed-4"><a class="anchor" href="#fixed-4"></a>Fixed</h3>
 <ul>
 <li><p><strong>&quot;Clear search data&quot; could hang the app.</strong> With the session-index
 switch still on, the clear ran its rebuild inside the same flight it
@@ -3904,7 +3914,7 @@ it, with a hairline once they do. Collapsed, the button sits over the
 icon column as before.</p>
 </li>
 </ul>
-<h3 id="fixed-4"><a class="anchor" href="#fixed-4"></a>Fixed</h3>
+<h3 id="fixed-5"><a class="anchor" href="#fixed-5"></a>Fixed</h3>
 <ul>
 <li><p><strong>MCP sync no longer writes remote servers into Claude Desktop.</strong> Its
 config file launches local servers only (a remote one is added in
@@ -4571,7 +4581,7 @@ panel.</p>
 General as its Display and Updates cards, and GitHub and Remote share one
 Integrations page under Advanced. The list goes from 12 items to 9.</li>
 </ul>
-<h3 id="fixed-5"><a class="anchor" href="#fixed-5"></a>Fixed</h3>
+<h3 id="fixed-6"><a class="anchor" href="#fixed-6"></a>Fixed</h3>
 <ul>
 <li><p><strong>OpenCode 2.x sessions show up again.</strong> OpenCode 2.x writes new
 sessions only to <code>session_v2</code> and their turns only to
@@ -4900,7 +4910,7 @@ setup preview under <code>data.harness</code> / <code>data.mcp</code> / <code>da
 <code>--json --apply</code> invocation prints one document instead of two.</p>
 </li>
 </ul>
-<h3 id="fixed-6"><a class="anchor" href="#fixed-6"></a>Fixed</h3>
+<h3 id="fixed-7"><a class="anchor" href="#fixed-7"></a>Fixed</h3>
 <ul>
 <li><p><strong><code>swe list --usage --json</code> served an hour-old limit reading instead of
 a fresh one.</strong> Piped output gave each provider's fetch a 2 second cap,
@@ -5175,7 +5185,7 @@ harness.json&quot;) instead, so archiving a harness stops init from touching
 its config. A path already linked stays linked — init never unlinks —
 and <code>.linkignore</code> still wins when both apply.</li>
 </ul>
-<h3 id="fixed-7"><a class="anchor" href="#fixed-7"></a>Fixed</h3>
+<h3 id="fixed-8"><a class="anchor" href="#fixed-8"></a>Fixed</h3>
 <ul>
 <li><strong><code>swe list</code> columns no longer drift when a field's content outgrows
 its declared width.</strong> <code>preformatted</code> cells are now padded to the
@@ -5394,7 +5404,7 @@ every column after it.</li>
 rather than the right. Paths in a listing tend to share a long prefix,
 and cutting the tail made whole runs of rows look identical.</li>
 </ul>
-<h3 id="fixed-8"><a class="anchor" href="#fixed-8"></a>Fixed</h3>
+<h3 id="fixed-9"><a class="anchor" href="#fixed-9"></a>Fixed</h3>
 <ul>
 <li><p><code>swe session use &lt;n&gt;</code> resumes a Cursor session again. It treated
 Cursor as limited-resume and launched a bare <code>cursor-agent</code> in the
@@ -5519,7 +5529,7 @@ already documents <code>swe harness star</code>.</li>
 notes (parked under <code>.archive/</code>, gitignored) cleaned out of the repo.</li>
 </ul>
 <h2 id="029---2026-08-20"><a class="anchor" href="#029---2026-08-20"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v0.2.9">0.2.9</a> - 2026-08-20</h2>
-<h3 id="fixed-9"><a class="anchor" href="#fixed-9"></a>Fixed</h3>
+<h3 id="fixed-10"><a class="anchor" href="#fixed-10"></a>Fixed</h3>
 <ul>
 <li><strong>v0.2.8 could not start on Python 3.10 or 3.11.</strong> <code>swe find</code>'s summary line
 used a nested f-string with implicit concatenation inside a replacement
@@ -6106,7 +6116,7 @@ new files in one shot.</li>
 <li><code>swe list --refresh</code> now also invalidates the rate limits cache (in
 addition to the session cache).</li>
 </ul>
-<h3 id="fixed-10"><a class="anchor" href="#fixed-10"></a>Fixed</h3>
+<h3 id="fixed-11"><a class="anchor" href="#fixed-11"></a>Fixed</h3>
 <ul>
 <li><p><strong><code>mcp.json</code>'s <code>updated</code> timestamp never changed.</strong> It used <code>setdefault</code>, so
 only the first write was ever stamped; the file claimed to be hours older
