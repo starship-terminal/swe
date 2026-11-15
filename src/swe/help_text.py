@@ -762,9 +762,16 @@ to use their own login state and environment."""
   {c('cyan', 'swe autocomplete zsh')}    Generate + inject zsh completion
   {c('cyan', 'swe autocomplete bash')}   Generate + inject bash completion
   {c('cyan', 'swe autocomplete fish')}   Generate + inject fish completion
+  {c('cyan', 'swe autocomplete <shell> --print')}   Print the script to stdout, install nothing
 
   Writes a completion script to {c('dim', '~/.swe/completions/')} and adds a
-  source line to your shell profile (~/.zshrc, ~/.bashrc, or fish config).
+  source line to your shell profile (~/.zshrc, ~/.bashrc, or fish config),
+  then says which two files it wrote or edited. Running it again is safe:
+  the source line is added once.
+
+  {c('cyan', '--print')} writes the script to stdout and touches nothing on disk (no
+  file under ~/.swe, no profile edit), so you can read it first or source
+  it yourself: {c('cyan', 'source <(swe autocomplete zsh --print)')}
 
   After running, restart your terminal or run:
     {c('cyan', 'source ~/.zshrc')}  (or the equivalent for your shell)
