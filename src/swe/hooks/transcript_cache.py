@@ -6,6 +6,12 @@ library. Most of those files have not changed since the last read, so
 this keeps ``transcripts.parse_raw``'s answer for each one in
 ``~/.swe/cache/hooks/transcripts.sqlite``, keyed by the file's absolute
 path and ``(size, mtime_ns, ctime_ns, inode)`` taken before the read.
+A parse is stored, and a row used, only once the file's ctime is older
+than the racy window of ``sessions/parse_cache.py`` (2 s,
+``SWE_CACHE_RACY_WINDOW_MS``): two writes inside one tick of a coarse
+clock share a ctime and an mtime, so a same-size rewrite would match the
+stored key in all four fields. A file that fresh is parsed again on the
+next read and any older row for it is dropped.
 
 Only what a file's own bytes say is kept: ``parse_raw`` leaves out what a
 command runs, which plugin it came from and the repository a cwd is in,
@@ -68,6 +74,14 @@ CREATE TABLE IF NOT EXISTS files (
 
 def cache_file_for(home: Path) -> Path:
     return _paths.hook_events_file_for(home).with_name("transcripts.sqlite")
+
+
+def _racy_rule():
+    """The session parse cache's window and test, shared so the two caches
+    can never disagree on what counts as fresh."""
+    from swe.sessions.parse_cache import _is_racy, _racy_window_ns
+
+    return _racy_window_ns, _is_racy
 
 
 def _version() -> str:
@@ -205,6 +219,9 @@ class TranscriptCache:
         self._pending: list[tuple] = []
         self._pending_bytes = 0
         self._hits: list[str] = []
+        self._drops: list[str] = []
+        window, self._is_racy = _racy_rule()
+        self._racy_ns = window()
         if os.environ.get("SWE_HOOK_CACHE", "").strip().lower() in _OFF_VALUES:
             return
         try:
@@ -246,6 +263,8 @@ class TranscriptCache:
         except OSError:
             return []
         sig = _signature(st)
+        racy = self._is_racy(st, self._racy_ns)
+        row = None
         if self._db is not None:
             try:
                 row = self._db.execute(
@@ -254,7 +273,9 @@ class TranscriptCache:
                     (self.version, path)).fetchone()
             except sqlite3.Error:
                 row = None
-            if row is not None and tuple(row[:4]) == sig:
+            # A stored row was settled when it was written, so ``racy`` only
+            # bites here when the clock stepped back or the window grew.
+            if row is not None and not racy and tuple(row[:4]) == sig:
                 try:
                     found = _unpack(row[4])
                     self._hits.append(path)
@@ -262,6 +283,12 @@ class TranscriptCache:
                 except Exception:  # noqa: BLE001 - any damage is a miss
                     pass
         found = parse(path)
+        if racy:
+            # Parsed and handed back, but not remembered, and an older row
+            # for the file goes: see the module docstring.
+            if row is not None and self._db is not None:
+                self._drops.append(path)
+            return found if found is not None else []
         if found is not None and self._db is not None:
             try:
                 blob = _pack(found)
@@ -281,9 +308,13 @@ class TranscriptCache:
         the freed pages back, in one transaction. Fails to a no-op."""
         pending, self._pending, self._pending_bytes = self._pending, [], 0
         hits, self._hits = self._hits, []
+        drops, self._drops = self._drops, []
         try:
             now = time.time()
             db.execute("BEGIN IMMEDIATE")
+            db.executemany(
+                "DELETE FROM files WHERE version = ? AND path = ?",
+                [(self.version, p) for p in drops])
             db.executemany(
                 "INSERT OR REPLACE INTO files (version, path, size, mtime_ns, "
                 "ctime_ns, inode, events, bytes, used) "
