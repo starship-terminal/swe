@@ -12,11 +12,20 @@ connection and says yes only for the Tailscale daemon:
   uid. tailscaled runs as root, and root could forge anything anyway.
 - macOS: ``netstat -anv`` names the pid behind every socket, root's
   included, without privileges; ``ps`` gives that pid's uid from the
-  kernel. Root passes: the Standalone variant's system extension and
-  the open-source tailscaled. So does a binary inside a root-owned
-  ``/Applications/Tailscale.app`` (the App Store variant's extension,
-  whatever user it runs as), its path read from the kernel with
-  ``proc_pidpath`` so a process can't rename itself into it.
+  kernel and ``proc_pidpath`` its executable, so a process can't rename
+  itself into the daemon. The pid must run as root AND be the daemon's
+  own executable: the Standalone variant's system extension under
+  ``/Library/SystemExtensions``, the open-source ``tailscaled``, or the
+  App Store variant's network extension at its exact path inside a
+  root-owned ``/Applications/Tailscale.app``. No other executable in the
+  bundle counts, root or not (the app itself, its updater, widgets):
+  none of them is the daemon.
+
+Both read only the row for exactly this connection, and only while it
+is ESTABLISHED: the owner either table shows for a socket that is
+closing or closed (FIN_WAIT, TIME_WAIT and the rest) is not reliable.
+Two rows for one connection, a row cut short, or a pid that isn't a
+plain positive number all read as "can't tell".
 
 Anything else, or any failure to tell, is "no". The request is then
 read as the loopback peer it is: it loses the tailnet identity and
@@ -52,6 +61,25 @@ Addr = tuple[str, int]
 _NETSTAT = "/usr/sbin/netstat"
 _PS = "/bin/ps"
 _TAILSCALE_APP = "/Applications/Tailscale.app"
+# The daemon's executables on macOS, as ``proc_pidpath`` reports them.
+# The Standalone variant's extension runs from where macOS installed it,
+# a SIP-protected folder named by a UUID; the copy the app stages inside
+# its own bundle is not the running one and never matches.
+_SYSTEM_EXTENSION = re.compile(
+    r"/Library/SystemExtensions/[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}"
+    r"/io\.tailscale\.ipn\.macsys\.network-extension\.systemextension"
+    r"/Contents/MacOS/io\.tailscale\.ipn\.macsys\.network-extension")
+# The App Store variant's network extension inside the app bundle.
+_APP_STORE_EXTENSION = (_TAILSCALE_APP
+                        + "/Contents/PlugIns/IPNExtension.appex/Contents/MacOS/IPNExtension")
+# The open-source daemon, wherever it was installed.
+_TAILSCALED = "tailscaled"
+# Linux ``/proc/net/tcp`` ``st`` and macOS ``netstat`` state of a live
+# connection. Every other state is a socket on its way out.
+_PROC_ESTABLISHED = "01"
+_NETSTAT_ESTABLISHED = "ESTABLISHED"
+# Largest pid either kernel hands out (pid_t is a signed 32-bit int).
+_PID_MAX = 2 ** 31 - 1
 # ``process:pid``: the digits after the last colon of a token. The name
 # is the process's own choice and can hold spaces and ``:digits`` of its
 # own (``x:1 y`` prints as ``x:1 y:<pid>``), so only the last such token
@@ -109,8 +137,11 @@ def _proc_addr(field: str) -> Addr | None:
 
 
 def linux_uid(server: Addr, peer: Addr, root: Path = Path("/proc/net")) -> int | None:
-    """The uid owning the socket whose local end is ``peer`` and remote
-    end ``server``, or None when no such socket is listed."""
+    """The uid owning the ESTABLISHED socket whose local end is ``peer``
+    and remote end ``server``, or None when no such socket is listed,
+    when it is in any other state, or when the tables list it more than
+    once."""
+    rows = []
     for name in ("tcp", "tcp6"):
         try:
             lines = (root / name).read_text(encoding="ascii").splitlines()[1:]
@@ -118,15 +149,20 @@ def linux_uid(server: Addr, peer: Addr, root: Path = Path("/proc/net")) -> int |
             continue
         for line in lines:
             fields = line.split()
-            if len(fields) < 8:
+            if len(fields) < 3:
                 continue
             local, remote = _proc_addr(fields[1]), _proc_addr(fields[2])
             if local and remote and _same(local, peer) and _same(remote, server):
-                try:
-                    return int(fields[7])
-                except ValueError:
-                    return None
-    return None
+                rows.append(fields)
+    # One live connection is one row. A row cut short still counts, so
+    # it makes the answer doubtful rather than vanishing.
+    if len(rows) != 1:
+        return None
+    fields = rows[0]
+    if len(fields) < 8 or fields[3] != _PROC_ESTABLISHED:
+        return None
+    uid = fields[7]
+    return int(uid) if uid.isascii() and uid.isdigit() else None
 
 
 # -- macOS --------------------------------------------------------------
@@ -141,20 +177,33 @@ def _bsd_addr(field: str) -> Addr | None:
 
 
 def netstat_pid(server: Addr, peer: Addr, text: str) -> int | None:
-    """The pid ``netstat -anv -p tcp`` names for the socket whose local
-    end is ``peer`` and foreign end ``server``."""
+    """The pid ``netstat -anv -p tcp`` names for the ESTABLISHED socket
+    whose local end is ``peer`` and foreign end ``server``, or None when
+    no such row is listed, when it is in any other state, when the table
+    lists it more than once, or when its pid column isn't a pid."""
+    rows = []
     for line in text.splitlines():
         fields = line.split()
-        if len(fields) < 7 or not fields[0].startswith("tcp"):
+        if len(fields) < 5 or not fields[0].startswith("tcp"):
             continue
         local, foreign = _bsd_addr(fields[3]), _bsd_addr(fields[4])
-        if not (local and foreign and _same(local, peer) and _same(foreign, server)):
-            continue
-        for tok in reversed(fields[6:]):
-            m = _PROC_PID.fullmatch(tok)
-            if m:
-                return int(m.group(1))
+        if local and foreign and _same(local, peer) and _same(foreign, server):
+            rows.append(fields)
+    # One live connection is one row. A row cut short still counts, so
+    # it makes the answer doubtful rather than vanishing.
+    if len(rows) != 1:
         return None
+    fields = rows[0]
+    if len(fields) < 7 or fields[5] != _NETSTAT_ESTABLISHED:
+        return None
+    for tok in reversed(fields[6:]):
+        m = _PROC_PID.fullmatch(tok)
+        if m:
+            digits = m.group(1)
+            if not digits.isascii() or digits.startswith("0"):
+                return None
+            pid = int(digits)
+            return pid if pid <= _PID_MAX else None
     return None
 
 
@@ -181,7 +230,9 @@ def _pid_path(pid: int) -> str:
 
 def app_store_binary(path: str, app: str = _TAILSCALE_APP) -> bool:
     """True for a file inside a root-owned Tailscale.app that only root
-    can change: a user can run what is there but not put code there."""
+    can change: a user can run what is there but not put code there.
+    Says nothing about what the file is: ``daemon_executable`` decides
+    which one is the daemon."""
     if not path.startswith(app.rstrip("/") + "/"):
         return False
     real = os.path.realpath(path)
@@ -195,6 +246,23 @@ def app_store_binary(path: str, app: str = _TAILSCALE_APP) -> bool:
             and not (bundle.st_mode & 0o022) and not (exe.st_mode & 0o022))
 
 
+def daemon_executable(path: str) -> bool:
+    """True when ``path`` (from ``proc_pidpath``) is the Tailscale
+    daemon's own executable: the Standalone system extension, the App
+    Store network extension in a root-owned bundle, or open-source
+    ``tailscaled``. Never the app's own executable nor any other file
+    in the bundle."""
+    if not path.startswith("/") or "/../" in path or "/./" in path:
+        return False
+    if _SYSTEM_EXTENSION.fullmatch(path):
+        return True
+    if path == _APP_STORE_EXTENSION:
+        return app_store_binary(path)
+    if path.startswith(_TAILSCALE_APP.rstrip("/") + "/"):
+        return False
+    return os.path.basename(path) == _TAILSCALED
+
+
 def _darwin_pid(server: Addr, peer: Addr) -> int | None:
     """The pid behind ``peer`` from a fresh ``netstat -anv -p tcp``."""
     return netstat_pid(server, peer, _run([_NETSTAT, "-anv", "-p", "tcp"]))
@@ -202,11 +270,12 @@ def _darwin_pid(server: Addr, peer: Addr) -> int | None:
 
 def _darwin_is_proxy(server: Addr, peer: Addr) -> bool:
     pid = _darwin_pid(server, peer)
-    if pid is None or pid == os.getpid():
+    if pid is None or pid < 1 or pid == os.getpid():
         return False
-    if _pid_uid(pid) == 0:
-        return True
-    return app_store_binary(_pid_path(pid))
+    # Root AND the daemon's executable: either alone is not enough.
+    if _pid_uid(pid) != 0:
+        return False
+    return daemon_executable(_pid_path(pid))
 
 
 # -- Can the lookup see anything? ---------------------------------------

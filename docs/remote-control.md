@@ -102,14 +102,30 @@ from loopback peers while `--public-url` is set; on a tailnet-IP bind
 they are ignored. A loopback peer alone isn't serve: any local process,
 another user's included, can dial the same port and write its own
 `X-Forwarded-For`. So the hub believes that header only when the OS says
-the far end of the connection is the Tailscale daemon (`peer.py`): on
-Linux the socket's owner in `/proc/net/tcp` is root; on macOS the pid
-`netstat -anv` names for it runs as root (the Standalone variant's
-system extension, open-source `tailscaled`) or is a binary inside a
-root-owned `/Applications/Tailscale.app` (the App Store variant). The
-answer is kept for the connection, and a request whose peer fails the
-check, or that the check can't place, is read as the loopback client it
-is: no tailnet identity, bearer credentials unaffected.
+the far end of the connection is the Tailscale daemon (`peer.py`):
+
+| Platform | The proxy is |
+|---|---|
+| Linux | the socket whose owner in `/proc/net/tcp` is root |
+| macOS | the pid `netstat -anv` names for the socket, when it runs as root and its executable (from the kernel, `proc_pidpath`) is the daemon's own: the Standalone variant's system extension under `/Library/SystemExtensions/<UUID>/io.tailscale.ipn.macsys.network-extension.systemextension/`, open-source `tailscaled`, or the App Store variant's `Contents/PlugIns/IPNExtension.appex/Contents/MacOS/IPNExtension` inside a root-owned `/Applications/Tailscale.app` |
+
+No other executable in `Tailscale.app` counts on macOS, whoever runs
+it: the app itself (`Contents/MacOS/Tailscale`), its updater, widgets
+and the staged copy of the system extension are not the daemon, and
+neither is any other root process. The App Store variant's
+extension has not been checked on a live install; it is held to the same
+root rule, so if it runs as the signed-in user it is not recognised and
+its requests read as loopback.
+
+On both platforms the check reads only the table row for exactly this
+connection (local end the peer, far end the hub), and only while that
+row is `ESTABLISHED`. The owner either table shows for a socket that is
+closing or closed is not reliable, so such a row never counts. Two rows
+for one connection, a row cut short, or a pid column that is not a
+plain positive number all count as "can't tell". The answer is kept for
+the connection, and a request whose peer fails the check, or that the
+check can't place, is read as the loopback client it is: no tailnet
+identity, bearer credentials unaffected.
 
 The macOS lookup can be blind ([#1944](https://github.com/starship-terminal/swe/issues/1944)).
 On macOS 27 a process that is ad-hoc signed, or has a live ad-hoc-signed

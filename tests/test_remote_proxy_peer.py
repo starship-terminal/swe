@@ -210,10 +210,10 @@ _PROC_HEAD = ("  sl  local_address rem_address   st tx_queue rx_queue tr "
               "tm->when retrnsmt   uid  timeout inode\n")
 
 
-def _proc_line(local, remote, uid, v6=False):
+def _proc_line(local, remote, uid, v6=False, st="01"):
     enc = _hex6 if v6 else _hex4
     return (f"   0: {enc(local[0])}:{local[1]:04X} {enc(remote[0])}:{remote[1]:04X} "
-            f"01 00000000:00000000 00:00000000 00000000 {uid:5d}        0 4242 1\n")
+            f"{st} 00000000:00000000 00:00000000 00000000 {uid:5d}        0 4242 1\n")
 
 
 class TestLinux(unittest.TestCase):
@@ -269,6 +269,16 @@ tcp4       0      0  127.0.0.1.8477         *.*                    LISTEN       
 """
 
 
+# The executables a macOS host runs Tailscale from, as ``proc_pidpath``
+# reports them. Only the daemon's own executable can be the proxy.
+_SYSEXT = ("/Library/SystemExtensions/0F3FAF0D-9150-4A9B-9107-01F4D6D0CCD7/"
+           "io.tailscale.ipn.macsys.network-extension.systemextension/"
+           "Contents/MacOS/io.tailscale.ipn.macsys.network-extension")
+_APP = "/Applications/Tailscale.app"
+_APPEX = _APP + "/Contents/PlugIns/IPNExtension.appex/Contents/MacOS/IPNExtension"
+_GUI = _APP + "/Contents/MacOS/Tailscale"
+
+
 class TestDarwin(unittest.TestCase):
     hub = ("127.0.0.1", 8477)
 
@@ -292,18 +302,25 @@ class TestDarwin(unittest.TestCase):
         return ok, get_uid
 
     def test_root_daemon_is_the_proxy(self):
-        ok, get_uid = self._check(1645, 0)
+        ok, get_uid = self._check(1645, 0, _SYSEXT)
         self.assertTrue(ok)
         get_uid.assert_called_once_with(1645)
+
+    def test_root_alone_is_not_the_proxy(self):
+        self.assertFalse(self._check(1645, 0, "/sbin/launchd")[0])
 
     def test_user_process_is_not(self):
         self.assertFalse(self._check(812, 501, "/Applications/Google Chrome.app/x")[0])
 
-    def test_app_store_extension_counts_when_root_owned(self):
-        path = "/Applications/Tailscale.app/Contents/PlugIns/IPNExtension.appex/x"
+    def test_app_store_extension_counts_as_root_when_root_owned(self):
         with patch.object(peer, "app_store_binary", return_value=True) as ok_path:
-            self.assertTrue(self._check(1645, 501, path)[0])
-        ok_path.assert_called_once_with(path)
+            self.assertTrue(self._check(1645, 0, _APPEX)[0])
+            # Not as another user: no variant's daemon is trusted unless
+            # it runs as root.
+            self.assertFalse(self._check(1645, 501, _APPEX)[0])
+        ok_path.assert_called_once_with(_APPEX)
+        with patch.object(peer, "app_store_binary", return_value=False):
+            self.assertFalse(self._check(1645, 0, _APPEX)[0])
 
     def test_app_store_binary_needs_a_root_owned_bundle(self):
         app = temp_dir(self) / "Tailscale.app"
@@ -338,6 +355,224 @@ class TestDarwin(unittest.TestCase):
         owners.clear()
         self.assertFalse(peer.app_store_binary("/tmp/Tailscale", str(app)))
         self.assertFalse(peer.app_store_binary(str(app) + "x/evil", str(app)))
+
+
+class TestDarwinDaemonOnly(unittest.TestCase):
+    """On macOS only the Tailscale daemon's own process is the proxy: root,
+    running the daemon's executable. Everything else in the app bundle
+    (the app itself, the updater, widgets, the staged copy of the
+    extension) is not, whoever runs it."""
+
+    hub = ("127.0.0.1", 8477)
+
+    def decide(self, uid, path, bundle_root_owned=True):
+        # Every file and folder reads as root-owned and not writable by
+        # anyone else (as on a real install) unless told otherwise, so
+        # only the rule under test decides.
+        owned = SimpleNamespace(st_uid=0 if bundle_root_owned else 501,
+                                st_mode=0o40755)
+        with patch.object(peer.sys, "platform", "darwin"), \
+                patch.object(peer, "_run", return_value=_NETSTAT), \
+                patch.object(peer, "_pid_uid", return_value=uid), \
+                patch.object(peer, "_pid_path", return_value=path), \
+                patch.object(peer.os, "stat", return_value=owned), \
+                patch.object(peer.os.path, "realpath", side_effect=lambda p: p):
+            return peer.is_proxy(self.hub, ("127.0.0.1", 53757))
+
+    def test_cli_owned_connection_is_not_the_proxy(self):
+        self.assertFalse(self.decide(501, _GUI))
+
+    def test_cli_as_root_is_not_the_proxy_either(self):
+        self.assertFalse(self.decide(0, _GUI))
+
+    def test_root_system_extension_is_the_proxy(self):
+        self.assertTrue(self.decide(0, _SYSEXT))
+        self.assertTrue(self.decide(0, _SYSEXT.replace(
+            "0F3FAF0D-9150-4A9B-9107-01F4D6D0CCD7",
+            "0f3faf0d-9150-4a9b-9107-01f4d6d0ccd7")))
+
+    def test_system_extension_not_as_root_is_not(self):
+        self.assertFalse(self.decide(501, _SYSEXT))
+
+    def test_open_source_tailscaled_as_root_is_the_proxy(self):
+        for path in ("/usr/local/bin/tailscaled",
+                     "/opt/homebrew/Cellar/tailscale/1.104.5/bin/tailscaled",
+                     "/nix/store/0abc-tailscale-1.104.5/bin/tailscaled"):
+            with self.subTest(path=path):
+                self.assertTrue(self.decide(0, path))
+
+    def test_open_source_tailscaled_as_a_user_is_not(self):
+        self.assertFalse(self.decide(501, "/usr/local/bin/tailscaled"))
+
+    def test_other_root_files_in_the_bundle_are_not(self):
+        for path in (
+                _APP + "/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate",
+                _APP + "/Contents/PlugIns/IPN-Widgets.appex/Contents/MacOS/IPN-Widgets",
+                # The copy the app stages before macOS installs it: the
+                # running extension lives under /Library/SystemExtensions.
+                _APP + "/Contents/Library/SystemExtensions/"
+                "io.tailscale.ipn.macsys.network-extension.systemextension/"
+                "Contents/MacOS/io.tailscale.ipn.macsys.network-extension",
+                _APP + "/Contents/Resources/tailscaled"):
+            for uid in (0, 501):
+                with self.subTest(path=path, uid=uid):
+                    self.assertFalse(self.decide(uid, path))
+
+    def test_other_root_processes_are_not(self):
+        for path in ("/sbin/launchd", "/usr/sbin/sshd", "/usr/bin/nc",
+                     "/usr/bin/python3", ""):
+            with self.subTest(path=path):
+                self.assertFalse(self.decide(0, path))
+
+    def test_lookalike_paths_are_not(self):
+        for path in (
+                "tailscaled",
+                "/usr/local/bin/tailscaled-dev",
+                "/usr/local/bin/tailscaled.sh",
+                "/tmp/io.tailscale.ipn.macsys.network-extension",
+                _SYSEXT.replace("0F3FAF0D-9150-4A9B-9107-01F4D6D0CCD7", "x"),
+                _SYSEXT.replace("/Library/", "/Users/me/Library/"),
+                _SYSEXT + "/extra",
+                "/Library/SystemExtensions/../../tmp/" + _SYSEXT.split("/", 4)[4],
+                _APPEX + "2",
+                _APPEX.replace("/Applications/", "/Users/me/Applications/")):
+            with self.subTest(path=path):
+                self.assertFalse(self.decide(0, path))
+
+    def test_app_store_extension_as_root_in_a_root_owned_bundle(self):
+        # Not installed on any machine this was checked on: held to the
+        # same root rule as the other daemons, at its exact path only.
+        self.assertTrue(self.decide(0, _APPEX))
+        self.assertFalse(self.decide(501, _APPEX))
+        self.assertFalse(self.decide(0, _APPEX, bundle_root_owned=False))
+
+    def test_unknown_owner_is_not(self):
+        self.assertFalse(self.decide(None, _SYSEXT))
+
+
+# One connection's row, in any TCP state. Only an ESTABLISHED row says
+# reliably who holds the connection.
+_PEER_ROW = ("tcp4       0      0  127.0.0.1.53757        127.0.0.1.8477         "
+             "{state:<11}          840          493  408000  146988 {proc:>21}   "
+             "00182 00000008 0000000000091e64 00000080 04000900      2      0 000000")
+
+
+def _row(state="ESTABLISHED", proc="io.tailscale.ipn:1645"):
+    return _PEER_ROW.format(state=state, proc=proc) + "\n"
+
+
+class TestDarwinEstablishedOnly(unittest.TestCase):
+    hub = ("127.0.0.1", 8477)
+    peer_addr = ("127.0.0.1", 53757)
+
+    def pid(self, text):
+        return peer.netstat_pid(self.hub, self.peer_addr, text)
+
+    def test_established_row_names_its_pid(self):
+        self.assertEqual(self.pid(_row()), 1645)
+
+    def test_rows_in_other_states_never_match(self):
+        for state in ("TIME_WAIT", "FIN_WAIT_1", "FIN_WAIT_2", "CLOSE_WAIT",
+                      "CLOSING", "LAST_ACK", "SYN_SENT", "SYN_RECEIVED",
+                      "CLOSED", "established", ""):
+            with self.subTest(state=state):
+                self.assertIsNone(self.pid(_row(state=state)))
+
+    def test_time_wait_row_with_a_stale_pid_is_not_the_proxy(self):
+        text = _row(state="TIME_WAIT", proc=":1645")
+        with patch.object(peer.sys, "platform", "darwin"), \
+                patch.object(peer, "_run", return_value=text), \
+                patch.object(peer, "_pid_uid", return_value=0) as get_uid, \
+                patch.object(peer, "_pid_path", return_value=_SYSEXT):
+            self.assertFalse(peer.is_proxy(self.hub, self.peer_addr))
+        get_uid.assert_not_called()
+
+    def test_garbage_pid_text_is_not_a_pid(self):
+        for proc in ("io.tailscale.ipn:", "io.tailscale.ipn:abc",
+                     "io.tailscale.ipn:16x5", "io.tailscale.ipn:-1645",
+                     "io.tailscale.ipn:0", "io.tailscale.ipn:00",
+                     "io.tailscale.ipn:99999999999999999999",
+                     "io.tailscale.ipn", "-", "?"):
+            with self.subTest(proc=proc):
+                self.assertIsNone(self.pid(_row(proc=proc)))
+
+    def test_garbage_pid_is_not_the_proxy(self):
+        with patch.object(peer.sys, "platform", "darwin"), \
+                patch.object(peer, "_run",
+                             return_value=_row(proc="kernel_task:0")), \
+                patch.object(peer, "_pid_uid", return_value=0), \
+                patch.object(peer, "_pid_path", return_value=_SYSEXT):
+            self.assertFalse(peer.is_proxy(self.hub, self.peer_addr))
+
+    def test_two_rows_for_one_connection_is_doubt(self):
+        # One live connection has one row. Two, whatever their states,
+        # means the table can't be read with confidence.
+        for other in (_row(), _row(state="TIME_WAIT"),
+                      _row(proc="Python:812")):
+            with self.subTest(other=other.split()[5]):
+                self.assertIsNone(self.pid(_row() + other))
+                self.assertIsNone(self.pid(other + _row()))
+
+    def test_row_cut_short_is_doubt(self):
+        short = " ".join(_row().split()[:6]) + "\n"
+        self.assertIsNone(self.pid(short))
+        self.assertIsNone(self.pid(short + _row()))
+
+    def test_other_connections_do_not_count_as_duplicates(self):
+        other = _row().replace("127.0.0.1.53757", "127.0.0.1.53758")
+        self.assertEqual(self.pid(other + _row() + other), 1645)
+
+    def test_captured_table_still_reads(self):
+        # The captured rows are all ESTABLISHED, one per connection.
+        self.assertEqual(peer.netstat_pid(self.hub, self.peer_addr, _NETSTAT), 1645)
+
+
+class TestLinuxEstablishedOnly(unittest.TestCase):
+    """Only an ESTABLISHED row says reliably who holds the connection."""
+
+    hub = ("127.0.0.1", 8477)
+    peer_addr = ("127.0.0.1", 50001)
+
+    def setUp(self):
+        self.root = temp_dir(self)
+
+    def uid(self, *lines):
+        (self.root / "tcp").write_text(_PROC_HEAD + "".join(lines))
+        return peer.linux_uid(self.hub, self.peer_addr, self.root)
+
+    def test_established_root_row(self):
+        self.assertEqual(self.uid(_proc_line(self.peer_addr, self.hub, 0)), 0)
+
+    def test_closing_rows_listed_as_root_never_match(self):
+        # 02 SYN_SENT .. 0B CLOSING, and spellings that are not "01".
+        for st in ("02", "03", "04", "05", "06", "07", "08", "09", "0A",
+                   "0B", "1", "001", "zz"):
+            with self.subTest(st=st):
+                self.assertIsNone(
+                    self.uid(_proc_line(self.peer_addr, self.hub, 0, st=st)))
+
+    def test_closing_row_is_not_the_proxy(self):
+        (self.root / "tcp").write_text(
+            _PROC_HEAD + _proc_line(self.peer_addr, self.hub, 0, st="05"))
+        real = peer.linux_uid
+        with patch.object(peer.sys, "platform", "linux"), \
+                patch.object(peer, "linux_uid",
+                             side_effect=lambda s, p: real(s, p, self.root)):
+            self.assertFalse(peer.is_proxy(self.hub, self.peer_addr))
+
+    def test_two_rows_for_one_connection_is_doubt(self):
+        live = _proc_line(self.peer_addr, self.hub, 0)
+        for other in (live, _proc_line(self.peer_addr, self.hub, 0, st="06"),
+                      _proc_line(self.peer_addr, self.hub, 1000)):
+            with self.subTest(other=other):
+                self.assertIsNone(self.uid(live, other))
+                self.assertIsNone(self.uid(other, live))
+
+    def test_row_in_both_tables_is_doubt(self):
+        (self.root / "tcp6").write_text(
+            _PROC_HEAD + _proc_line(("::ffff:127.0.0.1", 50001),
+                                    ("::ffff:127.0.0.1", 8477), 0, v6=True))
+        self.assertIsNone(self.uid(_proc_line(self.peer_addr, self.hub, 0)))
 
 
 class TestDarwinHelpers(unittest.TestCase):
@@ -394,9 +629,15 @@ class TestMalformedTables(unittest.TestCase):
         # a number, so the answer is "can't tell", not uid 0.
         self.assertIsNone(peer.linux_uid(self.hub, ("127.0.0.1", 50001), root))
         (root / "tcp").write_text(
-            _PROC_HEAD + "   0: short line\n" + short
+            _PROC_HEAD + "   0: short line\n"
             + good.replace(_hex4("127.0.0.1"), "ZZZZZZZZ", 1) + good)
         self.assertEqual(peer.linux_uid(self.hub, ("127.0.0.1", 50001), root), 0)
+        # A row for the same connection cut short is doubt, not skipped:
+        # one connection with two rows can't be read with confidence.
+        (root / "tcp").write_text(_PROC_HEAD + short + good)
+        self.assertIsNone(peer.linux_uid(self.hub, ("127.0.0.1", 50001), root))
+        (root / "tcp").write_text(_PROC_HEAD + short)
+        self.assertIsNone(peer.linux_uid(self.hub, ("127.0.0.1", 50001), root))
 
     def test_proc_addr_rejects_bad_fields(self):
         self.assertIsNone(peer._proc_addr("ZZZZZZZZ:1F90"))

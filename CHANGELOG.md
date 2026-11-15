@@ -148,6 +148,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Behind `tailscale serve`, only the Tailscale daemon's own live
+  connections can name the client.** The hub believes serve's forwarded
+  client only from the process that owns the far end of the loopback
+  connection. On macOS that check accepted any executable inside
+  `/Applications/Tailscale.app`, whoever ran it, and any root process; it
+  now accepts only a root process running the daemon's own executable
+  (the Standalone system extension, open-source `tailscaled`, or the App
+  Store network extension at its exact path). On macOS and Linux it now
+  reads only the row for exactly that connection, and only while it is
+  established: a row for a closing or closed socket, whose owner the
+  table does not show reliably, never counts. Anything the check cannot read with
+  confidence still means no tailnet identity, never trust.
+
 - **A task link can no longer point the hub's `gh` at any repo.**
   `POST /v1/sessions/{key}/task` stored a GitHub task for whatever repo
   the client named, and every `GET /v1/tasks` then ran `gh` against it
