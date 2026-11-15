@@ -187,6 +187,10 @@ class _Store:
             isinstance(entry, list)
             and len(entry) == 2
             and entry[0] == sig
+            # A stored entry was settled when it was written, so this only
+            # bites when the clock stepped back or the window grew: then the
+            # signature proves nothing, and the file is read again.
+            and not racy
             and (valid is None or _is_valid(valid, entry[1]))
         ):
             return entry[1]

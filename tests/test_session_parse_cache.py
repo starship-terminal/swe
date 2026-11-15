@@ -516,6 +516,15 @@ class RacyWindowTest(unittest.TestCase):
         self.assertEqual(self.look(earlier), [2])
 
     def test_a_racy_read_drops_the_entry_it_replaces(self):
+        # Under a coarse clock tick the rewrite keeps the stored signature,
+        # so only the freshness check can tell: model that, not nanoseconds.
+        real = parse_cache._signature
+        patcher = patch.object(
+            parse_cache, "_signature",
+            lambda st: [real(st)[0], 0, 0, real(st)[3]],
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         later = self.path.stat().st_ctime_ns + 3_000_000_000
         self.look(later)
         self.assertTrue(self.cache.exists())
