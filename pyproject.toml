@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "swe"
-version = "1.2.2"
+version = "1.2.3"
 description = "Central manager for AI coding CLI tools — one command to launch, resume, and analyze many AI coding agents."
 readme = "README.md"
 license = "MIT"

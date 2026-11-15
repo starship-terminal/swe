@@ -110,7 +110,8 @@ footer a:hover { color: var(--text); }
 <p>All notable changes to this project will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.2...HEAD">Unreleased</a></h2>
+<h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.3...HEAD">Unreleased</a></h2>
+<h2 id="123---2026-11-15"><a class="anchor" href="#123---2026-11-15"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.3">1.2.3</a> - 2026-11-15</h2>
 <h3 id="added"><a class="anchor" href="#added"></a>Added</h3>
 <ul>
 <li><p><strong><code>swe autocomplete &lt;shell&gt; --print</code> prints the completion script and installs nothing.</strong> The default is unchanged: <code>swe autocomplete zsh</code> (or bash, fish) still writes the script under <code>~/.swe/completions/</code> and adds one source line to your shell profile. <code>--print</code> writes the same script to stdout without creating a file under <code>~/.swe</code> or touching the profile, so you can read it or run <code>source &lt;(swe autocomplete zsh --print)</code>. An install now says which file it wrote and which profile it edited, or that the profile already had the line. Tab completion offers the new flag (<a href="https://github.com/starship-terminal/swe/issues/1932">#1932</a>).</p>

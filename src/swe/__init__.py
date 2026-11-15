@@ -5,7 +5,7 @@ values below are the single source of truth for the command name and the
 on-disk data directory.
 """
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 # User-facing CLI command name (the console entry point registered in
 # pyproject.toml).
