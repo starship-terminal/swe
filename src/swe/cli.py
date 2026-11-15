@@ -108,7 +108,6 @@ def cmd_autocomplete(args):
     """Generate and inject shell completion script (or print it with --print)."""
     from swe.completion_scripts import SHELL_CONFIGS
     from swe.console import c
-    from swe.paths import COMPLETION_DIR
 
     # --print is a boolean: check it on raw argv, wherever it sits.
     print_only = "--print" in args
@@ -132,6 +131,10 @@ def cmd_autocomplete(args):
         # Preview: the script only, nothing on disk, no rc edit.
         sys.stdout.write(config["script"])
         return 0
+
+    # Imported only here: importing swe.paths migrates a legacy ~/.quiver, so
+    # --print must return before it.
+    from swe.paths import COMPLETION_DIR
 
     # 1. Write completion script to ~/.swe/completions/
     script_dir = os.path.expanduser(str(COMPLETION_DIR))

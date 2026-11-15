@@ -272,7 +272,7 @@ swe mcp sync opencode cursor # copy MCP servers between tools
 | `swe harness discover [--apply\|--apply-all] [--json] [--all]` | | Scan PATH and home dirs for unregistered AI coding CLIs |
 | `swe discover [--apply]` | | Alias for `swe harness discover` |
 | `swe find [amd\|skills\|plugins\|mcps] [--full] [--scope=global\|local\|all] [--harness=active\|all]` | | Read-only view of shared assets and what links to them |
-| `swe autocomplete [zsh\|bash\|fish]` | `--print` | Generate + inject shell tab-completion; `--print` prints the script and installs nothing |
+| `swe autocomplete [zsh\|bash\|fish] [--print]` | | Generate + inject shell tab-completion; `--print` prints the script and installs nothing |
 | `swe use <name\|alias> [args…]` | `run` | Launch a tool (replaces current process) |
 | `swe session [N] [use N] [-i] [--agent X] [--here] [--search T] [date flags]` | | List, browse, or resume recent sessions |
 | `swe report daily\|weekly [date flags]` | | Preview and summarize coding sessions |

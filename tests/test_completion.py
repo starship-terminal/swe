@@ -590,6 +590,36 @@ class AutocompletePrintTest(unittest.TestCase):
         _, out, _ = self._run(["fish"])
         self.assertIn(str(home / ".config" / "fish" / "config.fish"), out)
 
+    def test_print_leaves_legacy_quiver_home_untouched(self):
+        # Importing swe.paths migrates ~/.quiver to ~/.swe, so --print must
+        # run in a fresh interpreter that never reaches that import.
+        import subprocess
+        import sys
+
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (home / ".quiver" / "data").mkdir(parents=True)
+        (home / ".quiver" / "data" / "f.json").write_text('{"a": 1}')
+        (home / ".quiver" / "harness.json").write_text("{}")
+
+        def snapshot():
+            return sorted(
+                (str(p.relative_to(home)), p.read_bytes() if p.is_file() else None)
+                for p in home.rglob("*")
+            )
+
+        before = snapshot()
+        env = {**os.environ, "HOME": str(home), "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+        proc = subprocess.run(
+            [sys.executable, "-m", "swe.cli", "autocomplete", "zsh", "--print"],
+            env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("#compdef swe", proc.stdout)
+        self.assertEqual(proc.stderr, "")
+        self.assertEqual(snapshot(), before)
+        self.assertFalse((home / ".swe").exists())
+        self.assertFalse((home / ".quiver").is_symlink())
+
     def test_unknown_shell_still_errors_with_print(self):
         home = self._home()
         code, out, _ = self._run(["tcsh", "--print"])
