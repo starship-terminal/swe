@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-15
+
 ### Added
 
 - **`swe autocomplete <shell> --print` prints the completion script and installs nothing.** The default is unchanged: `swe autocomplete zsh` (or bash, fish) still writes the script under `~/.swe/completions/` and adds one source line to your shell profile. `--print` writes the same script to stdout without creating a file under `~/.swe` or touching the profile, so you can read it or run `source <(swe autocomplete zsh --print)`. An install now says which file it wrote and which profile it edited, or that the profile already had the line. Tab completion offers the new flag ([#1932](https://github.com/starship-terminal/swe/issues/1932)).
@@ -6051,7 +6053,8 @@ service / model layering, tests with an 84% coverage floor).
 - Stdlib-only core; optional FastMCP server extra for session history MCP tool
 - Test suite (15 unit tests) with isolated `$HOME` fixtures
 
-[Unreleased]: https://github.com/starship-terminal/swe/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/starship-terminal/swe/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/starship-terminal/swe/releases/tag/v1.2.3
 [1.2.2]: https://github.com/starship-terminal/swe/releases/tag/v1.2.2
 [1.2.1]: https://github.com/starship-terminal/swe/releases/tag/v1.2.1
 [1.2.0]: https://github.com/starship-terminal/swe/releases/tag/v1.2.0
