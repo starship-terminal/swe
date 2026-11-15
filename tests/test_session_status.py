@@ -33,6 +33,7 @@ from swe.sessions.status import (
 )
 
 from tests._tempdir import temp_dir
+from tests._settled import settle_cache
 
 NOW = 1_700_000_000.0  # seconds
 NOW_MS = NOW * 1000
@@ -1017,6 +1018,7 @@ class ClineStatusTest(StatusTestBase):
         self.assertEqual(DONE, session_status(s, now=NOW))
 
     def test_unchanged_messages_file_is_not_read_again(self):
+        settle_cache(self)
         # The follow-up flag comes from <id>.messages.json alone, so it is
         # cached against that file's signature; the small metadata file
         # is still read every pass, since its status moves on its own.

@@ -7,6 +7,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests._settled import settle_cache
 
 
 class ParseCopilotTest(unittest.TestCase):
@@ -438,6 +439,7 @@ class ParseClineTest(unittest.TestCase):
             self.assertGreater(sessions[0].timestamp, 0)
 
     def test_warm_listing_reads_no_session_file(self):
+        settle_cache(self)
         # The glob also matches every <id>.messages.json transcript; inside
         # the parse cache an unchanged file is never opened again, and a
         # changed one is.
