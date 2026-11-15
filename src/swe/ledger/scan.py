@@ -77,7 +77,10 @@ def _stat(path: Path):
     return st.st_ino, st.st_size, st.st_mtime_ns
 
 
-def scan(store: LedgerStore, home: Path | None = None) -> ScanResult:
+def scan(store: LedgerStore, home: Path | None = None,
+         now: float | None = None) -> ScanResult:
+    """Read every source into ``store``. ``now`` (seconds) is the clock the
+    database settle rule reads, ``time.time()`` when None."""
     home = Path(home) if home is not None else Path.home()
     result = ScanResult()
     started = time.monotonic()
@@ -138,7 +141,7 @@ def scan(store: LedgerStore, home: Path | None = None) -> ScanResult:
         (home / ".local/share/devin/cli/sessions.db", parsers.devin_scan, "@w"),
     ):
         if db.is_file():
-            _scan_database(store, db, result, reader, key_suffix=key)
+            _scan_database(store, db, result, reader, key_suffix=key, now=now)
 
     for droid_home in _homes(home, "droid", ".factory"):
         for path in _files(droid_home / "sessions", ".settings.json"):
@@ -403,14 +406,14 @@ def _scan_whole(store: LedgerStore, path: Path, result: ScanResult, read) -> Non
 
 
 # FAT keeps two-second modification times, the coarsest of any local
-# filesystem (HFS+ keeps one second, ext4 a clock tick of a few
-# milliseconds). A stamp whose times are older than this when it is taken
-# cannot be shared by a later write; a younger one can.
+# filesystem (HFS+ keeps one second). A stamp whose times are older than
+# this when it is taken cannot be shared by a later write; a younger one
+# can (#1930: reproduced on HFS+ and FAT, reported on Linux 6.12).
 _SETTLE_NS = 2_000_000_000
 
 
 def _scan_database(store: LedgerStore, path: Path, result: ScanResult, read,
-                   key_suffix: str) -> None:
+                   key_suffix: str, now: float | None = None) -> None:
     """One harness database, read past its watermark (the source pass in
     ``DatabaseSources.swift``).
 
@@ -426,15 +429,17 @@ def _scan_database(store: LedgerStore, path: Path, result: ScanResult, read,
     same clock tick as the stat can leave inode, size and mtime as they
     were (a row that fits the last page), and skipping on that stamp
     would miss the row until the file next moved. An unsettled database
-    is read past its watermark again on the next scan instead."""
-    now = time.time_ns()  # before the stat: a write after it is newer
+    is read past its watermark again on the next scan instead. ``now``
+    (seconds) pins the clock for a test."""
+    # Read before the stat: a write after it is newer.
+    now_ns = time.time_ns() if now is None else int(now * 1_000_000_000)
     st = _stat(path)
     if st is None:
         return
     inode, size, mtime = st
     wal = _stat(Path(str(path) + "-wal"))
     fingerprint = f"{inode}:{size}:{mtime}:{wal[1] if wal else 0}:{wal[2] if wal else 0}"
-    settled = now - max(mtime, wal[2] if wal else 0) > _SETTLE_NS
+    settled = now_ns - max(mtime, wal[2] if wal else 0) > _SETTLE_NS
     key = str(path) + key_suffix
     cursor = store.file_cursor(key)
     if cursor is not None and cursor[4] == fingerprint:

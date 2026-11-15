@@ -421,21 +421,23 @@ class TestDatabaseSources(unittest.TestCase):
         self.assertEqual(scan(self.store, self.home).records, 1)
 
     def test_a_write_that_keeps_the_scans_stamp_is_still_read(self):
-        # A filesystem that stamps writes from a coarse clock (ext4 ticks
-        # every few milliseconds, HFS+ every second) gives a write that
-        # lands in the same tick as a scan the inode, size and mtime that
-        # scan saw (#1930). utime puts that stamp back here.
+        # A filesystem whose timestamps are coarse (reproduced on HFS+ and
+        # FAT, reported on Linux 6.12) gives a write that lands in the
+        # same tick as a scan the inode, size and mtime that scan saw
+        # (#1930). utime puts that stamp back here.
         path = self._devin((1, "d1", self._node("r1")), (2, "d1", self._node("r2")))
         before = path.stat()
-        self.assertEqual(scan(self.store, self.home).records, 2)
+        # The clock stands still in that tick, however slow the runner.
+        now = before.st_mtime_ns / 1e9
+        self.assertEqual(scan(self.store, self.home, now=now).records, 2)
         self._write(path, "INSERT INTO message_nodes VALUES (3, 'd1', 0, ?)", self._node("r3"))
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
         after = path.stat()
         self.assertEqual((after.st_ino, after.st_size, after.st_mtime_ns),
                          (before.st_ino, before.st_size, before.st_mtime_ns))
-        self.assertEqual(scan(self.store, self.home).records, 1)
+        self.assertEqual(scan(self.store, self.home, now=now).records, 1)
         # Read again while unsettled, nothing is counted twice.
-        scan(self.store, self.home)
+        self.assertEqual(scan(self.store, self.home, now=now).files_read, 1)
         self.assertEqual(self.store.db.execute(
             "SELECT COUNT(*), SUM(input) FROM events").fetchone(), (3, 21))
 

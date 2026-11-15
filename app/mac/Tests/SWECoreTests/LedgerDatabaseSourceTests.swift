@@ -219,9 +219,9 @@ func fileStat(_ url: URL) throws -> stat {
         #expect(await ledger.totals(in: allTime).totalTokens == 1_160 + 450 + 10)
     }
 
-    /// A filesystem that stamps writes from a coarse clock (ext4 ticks every
-    /// few milliseconds, HFS+ every second) gives a write landing in the
-    /// same tick as a scan the inode, size and mtime that scan saw (#1930).
+    /// A filesystem whose timestamps are coarse (reproduced on HFS+ and FAT,
+    /// reported on Linux 6.12) gives a write landing in the same tick as a
+    /// scan the inode, size and mtime that scan saw (#1930).
     @Test func aWriteThatKeepsTheScansStampIsStillRead() throws {
         let temp = try TempDir()
         defer { withExtendedLifetime(temp) {} }
@@ -229,8 +229,11 @@ func fileStat(_ url: URL) throws -> stat {
         try makeDatabase("devin.sql", at: db)
         let store = try LedgerStore(url: temp.path("cache/ledger.sqlite"))
         let before = try fileStat(db)
-        let stamp = try #require(DatabaseSources.Fingerprint(db))
-        #expect(try DatabaseSources.scanDevin(db, store: store))
+        // The clock stands still in that tick, however slow the runner.
+        let now = Date(timeIntervalSince1970: try #require(FileInfo(path: db.path)).modified)
+        let stamp = try #require(DatabaseSources.Fingerprint(db, now: now))
+        #expect(!stamp.settled)
+        #expect(try DatabaseSources.scanDevin(db, store: store, now: now))
         #expect(try store.events(in: allTime).count == 2)
 
         try execute("""
@@ -238,12 +241,12 @@ func fileStat(_ url: URL) throws -> stat {
               json('{"input_tokens":5,"output_tokens":5}')) WHERE node_id = 5;
             """, on: db)
         try restoreModified(db, to: before)
-        #expect(try #require(DatabaseSources.Fingerprint(db)).text == stamp.text)
+        #expect(try #require(DatabaseSources.Fingerprint(db, now: now)).text == stamp.text)
 
-        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try DatabaseSources.scanDevin(db, store: store, now: now))
         #expect(try store.events(in: allTime).count == 3)
         // Read again while unsettled, nothing is counted twice.
-        #expect(try DatabaseSources.scanDevin(db, store: store))
+        #expect(try DatabaseSources.scanDevin(db, store: store, now: now))
         #expect(try store.events(in: allTime).reduce(0) { $0 + $1.totalTokens } == 1_160 + 450 + 10)
     }
 

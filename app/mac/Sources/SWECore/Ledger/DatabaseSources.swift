@@ -31,9 +31,9 @@ enum DatabaseSources {
         var settled: Bool
 
         /// FAT keeps two-second modification times, the coarsest of any
-        /// local filesystem (HFS+ keeps one second, ext4 a clock tick of a
-        /// few milliseconds). A stamp older than this when taken cannot be
-        /// shared by a later write; a younger one can.
+        /// local filesystem (HFS+ keeps one second). A stamp older than
+        /// this when taken cannot be shared by a later write; a younger one
+        /// can (#1930: reproduced on HFS+ and FAT, reported on Linux 6.12).
         static let settleSeconds: Double = 2
 
         /// - Parameter now: read before the stat, so a write after it is newer.
@@ -96,8 +96,11 @@ enum DatabaseSources {
     ///   caller owns it — this never closes what it did not open — and is
     ///   trusted to have checked `sourceFingerprintUnchanged` first, so a
     ///   passed connection is used as-is.
-    static func scanOpenCode(_ url: URL, store: LedgerStore, source passed: SQLiteDatabase? = nil) throws -> Bool {
-        guard let fingerprint = Fingerprint(url) else { return false }
+    /// - Parameter now: the clock the settle rule reads (`Fingerprint.settled`).
+    static func scanOpenCode(
+        _ url: URL, store: LedgerStore, source passed: SQLiteDatabase? = nil, now: Date = Date()
+    ) throws -> Bool {
+        guard let fingerprint = Fingerprint(url, now: now) else { return false }
         let metaKey = openCodeMetaKey(url)
         if try store.meta(metaKey + ":fingerprint") == fingerprint.text { return false }
         let watermark = try watermark(metaKey, fingerprint, store: store)
@@ -223,8 +226,8 @@ enum DatabaseSources {
     /// waiting for its metrics holds the watermark back so it is read again
     /// once Devin fills them in, unless a later row of the same session has
     /// metrics, which means it was abandoned.
-    static func scanDevin(_ url: URL, store: LedgerStore) throws -> Bool {
-        guard let fingerprint = Fingerprint(url) else { return false }
+    static func scanDevin(_ url: URL, store: LedgerStore, now: Date = Date()) throws -> Bool {
+        guard let fingerprint = Fingerprint(url, now: now) else { return false }
         let metaKey = "devin:\(url.path)"
         if try store.meta(metaKey + ":fingerprint") == fingerprint.text { return false }
         var watermark = try watermark(metaKey, fingerprint, store: store)

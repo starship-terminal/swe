@@ -514,7 +514,8 @@ public actor Ledger {
         }
         for database in devinDatabases {
             report.databasesRead += try scanSource(database, kind: HarnessMark("devin").name,
-                                                   scan: DatabaseSources.scanDevin, report: &report)
+                                                   scan: { try DatabaseSources.scanDevin($0, store: $1) },
+                                                   report: &report)
             advanceProgress(owner)
         }
         if let indexer {
