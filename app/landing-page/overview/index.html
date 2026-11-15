@@ -342,6 +342,7 @@ swe models                   # model usage across all tools
 swe models -t -p             # grouped by tool, with provider prefix
 
 swe autocomplete zsh         # generate + inject shell tab-completion
+swe autocomplete zsh --print # print the script, install nothing
 
 swe skills list              # every SKILL.md across all skill roots
 swe skills refactor          # filter skills by name or scope
@@ -456,8 +457,8 @@ swe mcp sync opencode cursor # copy MCP servers between tools
 </tr>
 <tr>
   <td><code>swe autocomplete [zsh\|bash\|fish]</code></td>
-  <td></td>
-  <td>Generate + inject shell tab-completion</td>
+  <td><code>--print</code></td>
+  <td>Generate + inject shell tab-completion; <code>--print</code> prints the script and installs nothing</td>
 </tr>
 <tr>
   <td><code>swe use &lt;name\|alias&gt; [args…]</code></td>
@@ -636,7 +637,7 @@ the normal daily or weekly cursor.</p>
 <h3 id="shell-autocomplete"><a class="anchor" href="#shell-autocomplete"></a>Shell autocomplete</h3>
 <pre><code class="language-bash">swe autocomplete zsh    # or bash, fish
 </code></pre>
-<p>Generates a completion script and injects it into your shell profile. After running, restart your terminal or <code>source ~/.zshrc</code> (or equivalent). The completion provides:</p>
+<p>Generates a completion script, writes it to <code>~/.swe/completions/</code> and adds one <code>source</code> line to your shell profile (<code>~/.zshrc</code>, <code>~/.bashrc</code> or the fish config), then prints the two paths. <code>swe autocomplete zsh --print</code> writes the script to stdout instead and changes nothing on disk. After running, restart your terminal or <code>source ~/.zshrc</code> (or equivalent). The completion provides:</p>
 <ul>
 <li>Subcommand names with descriptions (<code>swe &lt;TAB&gt;</code>)</li>
 <li>Tool names and aliases from your registry (<code>swe use &lt;TAB&gt;</code>)</li>

@@ -54,6 +54,9 @@ _COMMAND_FLAGS: dict[str, list[tuple[str, str]]] = {
     "version": [
         ("--json", "Print the version as JSON"),
     ],
+    "autocomplete": [
+        ("--print", "Print the completion script instead of installing it"),
+    ],
     "bug": [
         ("--feature", "Open a feature request instead"),
         ("--print", "Print the link instead of opening it"),

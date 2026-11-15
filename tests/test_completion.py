@@ -515,5 +515,93 @@ class AutocompleteCommandTest(unittest.TestCase):
         self.assertEqual(result, 1)
 
 
+class AutocompletePrintTest(unittest.TestCase):
+    """`swe autocomplete <shell> --print` and the install confirmation."""
+
+    def _run(self, args):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from swe.cli import cmd_autocomplete
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cmd_autocomplete(args)
+        return code, out.getvalue(), err.getvalue()
+
+    def _home(self):
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict("os.environ", {"HOME": str(home)}))
+        self.enterContext(patch("swe.paths.COMPLETION_DIR", home / ".swe" / "completions"))
+        return home
+
+    def test_print_emits_install_script_and_touches_nothing(self):
+        from swe.completion_scripts import SHELL_CONFIGS
+
+        for shell, config in SHELL_CONFIGS.items():
+            with self.subTest(shell=shell):
+                home = self._home()
+                code, out, _ = self._run([shell, "--print"])
+                self.assertEqual(code, 0)
+                self.assertEqual(out, config["script"])
+                self.assertEqual(list(home.rglob("*")), [])
+
+    def test_print_flag_before_shell(self):
+        home = self._home()
+        code, out, _ = self._run(["--print", "zsh"])
+        self.assertEqual(code, 0)
+        self.assertIn("#compdef swe", out)
+        self.assertEqual(list(home.rglob("*")), [])
+
+    def test_print_leaves_existing_rc_unchanged(self):
+        home = self._home()
+        rc = home / ".zshrc"
+        rc.write_text("# mine\n")
+        self._run(["zsh", "--print"])
+        self.assertEqual(rc.read_text(), "# mine\n")
+        self.assertFalse((home / ".swe").exists())
+
+    def test_print_matches_written_file(self):
+        home = self._home()
+        _, printed, _ = self._run(["zsh", "--print"])
+        self._run(["zsh"])
+        self.assertEqual((home / ".swe" / "completions" / "swe.zsh").read_text(), printed)
+
+    def test_install_writes_file_and_rc_line_once_and_confirms(self):
+        home = self._home()
+        code, out, _ = self._run(["zsh"])
+        script = home / ".swe" / "completions" / "swe.zsh"
+        rc = home / ".zshrc"
+        self.assertEqual(code, 0)
+        self.assertTrue(script.exists())
+        self.assertIn(f"Wrote {script}", out)
+        self.assertIn(f"Added a source line to {rc}", out)
+        code2, out2, _ = self._run(["zsh"])
+        self.assertEqual(code2, 0)
+        self.assertEqual(rc.read_text().count("# swe autocomplete (zsh)"), 1)
+        self.assertIn(f"Wrote {script}", out2)
+        self.assertIn(f"{rc} already has the source line", out2)
+        self.assertNotIn("Added a source line", out2)
+
+    def test_install_bash_and_fish_name_their_files(self):
+        home = self._home()
+        _, out, _ = self._run(["bash"])
+        self.assertIn(str(home / ".swe" / "completions" / "swe.bash"), out)
+        self.assertIn(str(home / ".bashrc"), out)
+        _, out, _ = self._run(["fish"])
+        self.assertIn(str(home / ".config" / "fish" / "config.fish"), out)
+
+    def test_unknown_shell_still_errors_with_print(self):
+        home = self._home()
+        code, out, _ = self._run(["tcsh", "--print"])
+        self.assertEqual(code, 1)
+        self.assertIn("Unsupported shell: 'tcsh'", out)
+        self.assertEqual(list(home.rglob("*")), [])
+
+    def test_print_without_shell_errors(self):
+        code, out, _ = self._run(["--print"])
+        self.assertEqual(code, 1)
+        self.assertIn("Usage: swe autocomplete", out)
+
+
 if __name__ == "__main__":
     unittest.main()
