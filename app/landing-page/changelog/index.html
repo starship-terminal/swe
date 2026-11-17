@@ -111,6 +111,10 @@ footer a:hover { color: var(--text); }
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.4...HEAD">Unreleased</a></h2>
+<h3 id="added"><a class="anchor" href="#added"></a>Added</h3>
+<ul>
+<li><strong>Grok Build spend shows on this Mac.</strong> Each finished turn in a <code>grok</code> session's <code>usage.json</code> is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.</li>
+</ul>
 <h2 id="124---2026-11-15"><a class="anchor" href="#124---2026-11-15"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.4">1.2.4</a> - 2026-11-15</h2>
 <h3 id="fixed"><a class="anchor" href="#fixed"></a>Fixed</h3>
 <ul>
@@ -122,7 +126,7 @@ with no change to the product, and both checks now run on pull
 requests. Everything listed under 1.2.3 first ships in 1.2.4.</li>
 </ul>
 <h2 id="123---2026-11-15"><a class="anchor" href="#123---2026-11-15"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.3">1.2.3</a> - 2026-11-15</h2>
-<h3 id="added"><a class="anchor" href="#added"></a>Added</h3>
+<h3 id="added-1"><a class="anchor" href="#added-1"></a>Added</h3>
 <ul>
 <li><p><strong><code>swe autocomplete &lt;shell&gt; --print</code> prints the completion script and installs nothing.</strong> The default is unchanged: <code>swe autocomplete zsh</code> (or bash, fish) still writes the script under <code>~/.swe/completions/</code> and adds one source line to your shell profile. <code>--print</code> writes the same script to stdout without creating a file under <code>~/.swe</code> or touching the profile, so you can read it or run <code>source &lt;(swe autocomplete zsh --print)</code>. An install now says which file it wrote and which profile it edited, or that the profile already had the line. Tab completion offers the new flag (<a href="https://github.com/starship-terminal/swe/issues/1932">#1932</a>).</p>
 </li>
@@ -598,7 +602,7 @@ checks all count a key's canonical name too, so an entry an older
 init filed as <code>vibe</code> still reads as registered.</p>
 </li>
 </ul>
-<h3 id="added-1"><a class="anchor" href="#added-1"></a>Added</h3>
+<h3 id="added-2"><a class="anchor" href="#added-2"></a>Added</h3>
 <ul>
 <li><p><strong>Devin free-model limit status.</strong> Accounts and the Mac menu bar show
 a reached free-model limit and its reset time from Devin's CLI logs,
@@ -845,7 +849,7 @@ receipt. View AGENTS.md opens the filtered output's own file.</p>
 </li>
 </ul>
 <h2 id="122---2026-11-04"><a class="anchor" href="#122---2026-11-04"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.2">1.2.2</a> - 2026-11-04</h2>
-<h3 id="added-2"><a class="anchor" href="#added-2"></a>Added</h3>
+<h3 id="added-3"><a class="anchor" href="#added-3"></a>Added</h3>
 <ul>
 <li><p><strong>A one-line installer for Linux.</strong> <code>curl -fsSL https://github.com/starship-terminal/swe/releases/latest/download/install.sh | sh</code>
 downloads the released wheel (verified against the release's new
@@ -923,7 +927,7 @@ test now names the class. V1.2.0 never got its DMG, so this ships as a
 patch.</li>
 </ul>
 <h2 id="120---2026-11-04"><a class="anchor" href="#120---2026-11-04"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.0">1.2.0</a> - 2026-11-04</h2>
-<h3 id="added-3"><a class="anchor" href="#added-3"></a>Added</h3>
+<h3 id="added-4"><a class="anchor" href="#added-4"></a>Added</h3>
 <ul>
 <li><p><strong>The Mac app's chat renders the agent's Markdown tables.</strong> The chat
 used to run the issue/PR-body parser, so a pipe table showed as raw
@@ -3413,7 +3417,7 @@ PWA's list shows the logo in place of the harness's name.</p>
 </li>
 </ul>
 <h2 id="110---2026-10-26"><a class="anchor" href="#110---2026-10-26"></a>[1.1.0] - 2026-10-26</h2>
-<h3 id="added-4"><a class="anchor" href="#added-4"></a>Added</h3>
+<h3 id="added-5"><a class="anchor" href="#added-5"></a>Added</h3>
 <ul>
 <li><p><strong>Shared hooks across harnesses, plus hook CRUD.</strong> The <code>hooks</code> domain
 gains a third tier next to per-harness scripts and foreign (unclaimed)
@@ -4081,7 +4085,7 @@ keeps in <code>~/.config/cursor/auth.json</code>, so a machine signed in only
 through the CLI shows Cursor's limits.</p>
 </li>
 </ul>
-<h3 id="added-5"><a class="anchor" href="#added-5"></a>Added</h3>
+<h3 id="added-6"><a class="anchor" href="#added-6"></a>Added</h3>
 <ul>
 <li><p><strong>Web app: merge a PR and mark notifications read.</strong> The PR sheet on
 Repositories now has the Mac app's strategy menu, Merge and
@@ -4723,7 +4727,7 @@ holding non-strings) raises CorruptConfigurationError naming the row
 instead of crashing mid-merge.</p>
 </li>
 </ul>
-<h3 id="added-6"><a class="anchor" href="#added-6"></a>Added</h3>
+<h3 id="added-7"><a class="anchor" href="#added-7"></a>Added</h3>
 <ul>
 <li><p><strong>A docs site</strong> at <a href="https://starship-terminal.github.io/swe/">https://starship-terminal.github.io/swe/</a>, built with
 Zensical from the existing Markdown (README, architecture and
@@ -4865,7 +4869,7 @@ skill editing, MCP Local/Remote groups, collapsed service status cards, API
 key checks and editing, a cached and source-isolated Overview, and four
 audits (databases and caches, app structure and contracts, swe controller /
 service / model layering, tests with an 84% coverage floor).</p>
-<h3 id="added-7"><a class="anchor" href="#added-7"></a>Added</h3>
+<h3 id="added-8"><a class="anchor" href="#added-8"></a>Added</h3>
 <ul>
 <li><p><strong>Cursor's Grok Bot allowance shows with its other limits.</strong> Cursor gives
 Grok Bot its own weekly allowance, apart from the billing cycle. <code>swe list --usage --json</code> now lists it as a <code>grok_bot</code> window on Cursor (used
@@ -5025,7 +5029,7 @@ value alive forever.</p>
 <li><p><strong>Cline sessions read as zero.</strong> <code>parse_cline</code> only read the legacy <code>~/.cline/data/state/taskHistory.json</code> index; Cline 3.x writes one directory per session under <code>~/.cline/data/sessions/&lt;id&gt;/</code> (<code>&lt;id&gt;.json</code> metadata beside a <code>&lt;id&gt;.messages.json</code> transcript) and never creates <code>state/</code>. The parser now reads both layouts — the per-session dirs and, for older installs, the index. Transcript previews/reports follow: the cline reader loads <code>&lt;id&gt;.messages.json</code> (unwrapping <code>&lt;user_input&gt;</code> envelopes, dropping <code>thinking</code> blocks) and falls back to the old <code>data/tasks/&lt;id&gt;/</code> pair.</p>
 </li>
 </ul>
-<h3 id="added-8"><a class="anchor" href="#added-8"></a>Added</h3>
+<h3 id="added-9"><a class="anchor" href="#added-9"></a>Added</h3>
 <ul>
 <li><p><strong><code>swe doctor --json</code> names the harness an off-PATH finding is about.</strong>
 An <code>off-path</code> row now carries <code>&quot;harness&quot;: &quot;&lt;registry name&gt;&quot;</code>, so the app's
@@ -5259,7 +5263,7 @@ recoverable reset time into <code>0.0</code>. Its comments now say what it reall
 and 14 new tests pin the behaviour.</p>
 </li>
 </ul>
-<h3 id="added-9"><a class="anchor" href="#added-9"></a>Added</h3>
+<h3 id="added-10"><a class="anchor" href="#added-10"></a>Added</h3>
 <ul>
 <li><p><strong>A status column in <code>swe session</code>.</strong> A two-wide <code>ST</code> column after AGENT
 shows where each conversation stands as a single glyph, with a legend
@@ -5505,7 +5509,7 @@ the <code>~/.factory</code> directory it happens to live in.</li>
 </ul>
 </li>
 </ul>
-<h3 id="added-10"><a class="anchor" href="#added-10"></a>Added</h3>
+<h3 id="added-11"><a class="anchor" href="#added-11"></a>Added</h3>
 <ul>
 <li><strong><code>swe doctor</code> catches drift.</strong> A new <code>harness/drift.py</code> runs four
 read-only checks on every invocation: <code>help_text.py</code>'s HELP topics
@@ -5537,7 +5541,7 @@ field, which is PEP 701 and valid only on 3.12+. It parsed fine locally and
 raised <code>SyntaxError</code> on import for anyone at the declared floor, taking the
 whole CLI down. Anyone on v0.2.8 should upgrade.</li>
 </ul>
-<h3 id="added-11"><a class="anchor" href="#added-11"></a>Added</h3>
+<h3 id="added-12"><a class="anchor" href="#added-12"></a>Added</h3>
 <ul>
 <li><strong>A syntax-floor test.</strong> Compiles every file in <code>src/</code> with an interpreter at
 or below <code>requires-python</code>, so this class of bug fails locally instead of in
@@ -5548,7 +5552,7 @@ reaches the parser. It uses the builtin <code>compile()</code> now, and is verif
 against the actual v0.2.8 defect.</li>
 </ul>
 <h2 id="028---2026-08-20"><a class="anchor" href="#028---2026-08-20"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v0.2.8">0.2.8</a> - 2026-08-20</h2>
-<h3 id="added-12"><a class="anchor" href="#added-12"></a>Added</h3>
+<h3 id="added-13"><a class="anchor" href="#added-13"></a>Added</h3>
 <ul>
 <li><strong><code>swe find</code>.</strong> The read-only counterpart to <code>swe init</code>: where the shared
 assets live and what links to them. <code>swe find amd</code> for AGENTS.md, <code>swe find skills</code> for skills and plugins, bare <code>swe find</code> for both.<ul>
@@ -5607,7 +5611,7 @@ file. <code>mcp/servers/</code> is gitignored, since it is 21 nested git repos a
 </li>
 </ul>
 <h2 id="027---2026-08-20"><a class="anchor" href="#027---2026-08-20"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v0.2.7">0.2.7</a> - 2026-08-20</h2>
-<h3 id="added-13"><a class="anchor" href="#added-13"></a>Added</h3>
+<h3 id="added-14"><a class="anchor" href="#added-14"></a>Added</h3>
 <ul>
 <li><p><strong><code>swe init --migrate</code>.</strong> Moves a pre-0.2.7 <code>~/.config/swe</code> into <code>~/.quiver</code>,
 routing authored state to <code>config/</code>, caches to <code>cache/</code>, and leaving
@@ -6221,7 +6225,7 @@ per-subtest <code>reset_at</code> mutation into <code>_SAMPLE_RESPONSE</code>, w
 </li>
 </ul>
 <h2 id="026---2026-07-17"><a class="anchor" href="#026---2026-07-17"></a>[0.2.6] - 2026-07-17</h2>
-<h3 id="added-14"><a class="anchor" href="#added-14"></a>Added</h3>
+<h3 id="added-15"><a class="anchor" href="#added-15"></a>Added</h3>
 <ul>
 <li><code>swe autocomplete [zsh|bash|fish]</code> — generate and inject shell tab-completion</li>
 <li><code>swe __complete &lt;words&gt;</code> — hidden command powering dynamic completions (tool names, aliases, tags, flags)</li>
@@ -6247,7 +6251,7 @@ per-subtest <code>reset_at</code> mutation into <code>_SAMPLE_RESPONSE</code>, w
 <li>README updated with autocomplete, favourites, providers, doctor, install, edit, and --search/--refresh docs</li>
 </ul>
 <h2 id="025---2026-07-06"><a class="anchor" href="#025---2026-07-06"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v0.2.5">0.2.5</a> - 2026-07-06</h2>
-<h3 id="added-15"><a class="anchor" href="#added-15"></a>Added</h3>
+<h3 id="added-16"><a class="anchor" href="#added-16"></a>Added</h3>
 <ul>
 <li><code>swe skills help &lt;topic&gt;</code> — per-topic help (catalog, discover, tree, link, unlink, move, scope)</li>
 <li>README <strong>Skills</strong> section with discover, catalog, symlink, and move workflows</li>
@@ -6259,7 +6263,7 @@ per-subtest <code>reset_at</code> mutation into <code>_SAMPLE_RESPONSE</code>, w
 <li>CONTRIBUTING and tests README updated for package layout and new test files</li>
 </ul>
 <h2 id="024---2026-07-06"><a class="anchor" href="#024---2026-07-06"></a>[0.2.4] - 2026-07-06</h2>
-<h3 id="added-16"><a class="anchor" href="#added-16"></a>Added</h3>
+<h3 id="added-17"><a class="anchor" href="#added-17"></a>Added</h3>
 <ul>
 <li><code>swe skills tree</code> — show harness symlink layout (codex/claude/cursor → shared)</li>
 <li><code>swe skills tree --sync</code> — persist observed symlinks to <code>skill_links.json</code></li>
@@ -6267,13 +6271,13 @@ per-subtest <code>reset_at</code> mutation into <code>_SAMPLE_RESPONSE</code>, w
 <li>Skills list shows <strong>VISIBLE VIA</strong> (all harness scopes that see each skill)</li>
 </ul>
 <h2 id="023---2026-07-06"><a class="anchor" href="#023---2026-07-06"></a>[0.2.3] - 2026-07-06</h2>
-<h3 id="added-17"><a class="anchor" href="#added-17"></a>Added</h3>
+<h3 id="added-18"><a class="anchor" href="#added-18"></a>Added</h3>
 <ul>
 <li><code>swe skills discover</code> — scan <code>~/Desktop</code> and <code>~/Documents</code> for <code>*/skills/</code> catalogs</li>
 <li><code>swe skills catalog add|list|remove</code> — register extra skill directories in <code>skill_catalogs.json</code></li>
 </ul>
 <h2 id="022---2026-07-06"><a class="anchor" href="#022---2026-07-06"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v0.2.2">0.2.2</a> - 2026-07-06</h2>
-<h3 id="added-18"><a class="anchor" href="#added-18"></a>Added</h3>
+<h3 id="added-19"><a class="anchor" href="#added-19"></a>Added</h3>
 <ul>
 <li><code>swe mcp discover</code> — find MCP servers across tool configs vs <code>~/.config/swe/mcp.json</code></li>
 <li>Skills-root symlink hints in <code>swe setup</code> (step 3/3)</li>
@@ -6286,7 +6290,7 @@ per-subtest <code>reset_at</code> mutation into <code>_SAMPLE_RESPONSE</code>, w
 <li>README commands table documents <code>setup</code>, <code>discover</code>, and <code>harness discover</code></li>
 </ul>
 <h2 id="021---2026-07-06"><a class="anchor" href="#021---2026-07-06"></a>[0.2.1] - 2026-07-06</h2>
-<h3 id="added-19"><a class="anchor" href="#added-19"></a>Added</h3>
+<h3 id="added-20"><a class="anchor" href="#added-20"></a>Added</h3>
 <ul>
 <li><code>swe harness discover</code> — scan PATH for AI coding CLIs not yet in <code>tools.json</code> (dry-run by default)</li>
 <li><code>swe harness discover --apply</code> / <code>--apply-all</code> — register discovered harnesses</li>
@@ -6303,7 +6307,7 @@ per-subtest <code>reset_at</code> mutation into <code>_SAMPLE_RESPONSE</code>, w
 <li>CI runs tests verbosely across Python 3.10–3.13</li>
 </ul>
 <h2 id="010---2026-07-06"><a class="anchor" href="#010---2026-07-06"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v0.1.0">0.1.0</a> - 2026-07-06</h2>
-<h3 id="added-20"><a class="anchor" href="#added-20"></a>Added</h3>
+<h3 id="added-21"><a class="anchor" href="#added-21"></a>Added</h3>
 <ul>
 <li>Initial open-source release of <strong>quiver</strong> (CLI command: <code>swe</code>)</li>
 <li>Tool registry with tags, aliases, install checks, and 100-day usage sorting</li>
