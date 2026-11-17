@@ -147,7 +147,7 @@ Notes:
 | Augment | No | No | No |
 | Kiro | No | No | No |
 | Blackbox | No | No | No |
-| Grok | No | No | No |
+| Grok | Partial | No | No |
 | Kimi | No | No | No |
 | Antigravity | No | No | No |
 | Command Code | No | No | No |
@@ -170,8 +170,10 @@ Notes:
   editor's own database, so feed events never draw a second calendar row.
 - **Grok Bot:** uses the Cursor account, so the same feed gives it tokens
   and cost (listed as Grok Bot) and a calendar row; it has no limits meter
-  of its own. The Grok harness row above is the `grok` CLI, which has none
-  of the three.
+  of its own. The Grok harness row above is the `grok` CLI: it has no
+  limits meter (API billing has no window), and its tokens and cost come
+  from each session's `usage.json`, one event per turn, priced with
+  Grok's own dollar figure. The chart is this Mac only.
 - **Droid and Cline, tokens and cost:** both keep token totals per
   session rather than per request, so SWE counts the whole session at
   its last activity (Droid) or its end (Cline). Droid reports credits,
@@ -209,10 +211,11 @@ Notes:
 
 ## Known gaps
 
-- **Tokens and cost exist for eight harnesses only** (Claude, Codex,
-  OpenCode, Devin, Pi, Droid, Cline and Cursor, plus Grok Bot through the
-  Cursor account; Droid and Cline as session totals). For everything else
-  the Overview shows time and limits, never spend.
+- **Tokens and cost exist for nine harnesses** (Claude, Codex,
+  OpenCode, Devin, Pi, Droid, Cline, Cursor and Grok, plus Grok Bot
+  through the Cursor account; Droid and Cline as session totals, Grok as
+  one event per turn from `usage.json`). For everything else the
+  Overview shows time and limits, never spend.
 - **Copilot gets shared skills but no instructions link**; no confirmed
   file exists to link.
 - **Devin extra profiles are not counted in the ledger**, so their spend is

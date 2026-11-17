@@ -125,7 +125,7 @@ class LedgerStore:
                     return True
                 return False
         self._write(rec)
-        if rec.authoritative:
+        if rec.authoritative and not rec.skips_lookalikes:
             self._delete_lookalikes(rec)
         return True
 
@@ -197,6 +197,26 @@ class LedgerStore:
         session-total sources whose file now reports nothing, so stale
         spend clears (``LedgerStore.delete``)."""
         self.db.execute("DELETE FROM events WHERE key = ?", (key,))
+
+    def delete_dropped(self, prefix: str, kept: set[int],
+                       previous: set[int] | None = None) -> None:
+        """Drop events keyed ``prefix`` plus a turn number that ``kept``
+        no longer lists. ``previous`` is the turn numbers the last read
+        of this file saved; only those are deleted, each by its key, so
+        the lookup uses the ``events.key`` index. Without it (a cursor
+        from before that list) the prefix is scanned once. The match is
+        the prefix and then digits only, so a session id that starts
+        with another's never loses its rows."""
+        if previous is not None:
+            for turn in previous - kept:
+                self.delete(prefix + str(turn))
+            return
+        for (key,) in self.db.execute(
+                "SELECT key FROM events WHERE key >= ? AND key < ?",
+                (prefix, prefix + "\uffff")):
+            turn = key[len(prefix):]
+            if turn.isdigit() and int(turn) not in kept:
+                self.delete(key)
 
     def file_cursor(self, path: str) -> tuple | None:
         """``(inode, size, mtime_ns, offset, fp, state)`` from the last

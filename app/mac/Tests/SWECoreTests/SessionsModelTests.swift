@@ -645,6 +645,29 @@ final class CountingSessionSource: SessionListing, Sendable {
         #expect(model.hiddenTrivialCount == 1)
     }
 
+    @Test func aGrokSessionWithoutUsageJsonStaysVisible() async throws {
+        // The catalog lists summary.json. The ledger reads usage.json.
+        // A listed session with no usage file is unread, not empty.
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grok-cover-\(UUID().uuidString)")
+        let folder = temp.appendingPathComponent(".grok/sessions/proj/s1")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        var listed = session("s1", "grok", cwd: "/c/q", at: now.timeIntervalSince1970 - 10)
+        listed.accountHome = temp.path
+        var covered = session("s2", "grok", cwd: "/c/q", at: now.timeIntervalSince1970 - 20)
+        covered.accountHome = temp.path
+        try FileManager.default.createDirectory(
+            at: temp.appendingPathComponent(".grok/sessions/proj/s2"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: temp.appendingPathComponent(".grok/sessions/proj/s2/usage.json"))
+        let model = await model([listed, covered], [])
+        model.filter.window = .all
+        await model.load()
+        await model.refreshUsage(ledgerScanned: true)
+        #expect(model.visible.map(\.session.id) == ["s1"])
+        #expect(model.hiddenTrivialCount == 1)
+    }
+
     @Test func feedHarnessRowsStayVisibleWithoutUsage() async {
         // Cursor and Grok Bot usage comes from polling an account feed,
         // not scanning logs: a missing row means unpolled, never empty.

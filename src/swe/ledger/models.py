@@ -63,6 +63,11 @@ class LedgerRecord:
     # profile itself, so only this profile's stale rows match
     # (``accountSpansProfiles``).
     account_spans_profiles: bool = False
+    # Two events from one file can share a timestamp, model and session
+    # (Grok turns that end in the same second). The lookalike cleanup
+    # would delete one of them; these sources never used a counts-bearing
+    # key, so they skip it.
+    skips_lookalikes: bool = False
 
 
 # ``JSONValue.maxTokens``: no real response logs more. A larger count is a

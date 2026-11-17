@@ -88,6 +88,10 @@ enum SessionTotals {
     /// The session's file parses but reports no usage: remove any event a
     /// previous scan stored under this key.
     case empty(key: String)
+    /// The turn numbers this Grok file still lists. The scan compares
+    /// them with the numbers its cursor saved last time and deletes the
+    /// rest. `prefix` is `grok:<session id>:`.
+    case kept(prefix: String, turns: Set<Int>)
 }
 
 /// Session-total sources: files that hold one session's totals and are
@@ -205,6 +209,79 @@ enum SessionTotalsFile {
             cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
             costUSD: cost, isSessionTotal: true)
         return .record(LedgerRecord(key: key, authoritative: true, event: event))
+    }
+
+    /// Grok's `costUsdTicks` is USD times this. A session of a few dollars
+    /// lands in the hundreds of billions of ticks.
+    static let grokTicksPerUSD = 10_000_000_000.0
+
+    /// Grok: `<home>/sessions/<project>/<id>/usage.json`. One record per
+    /// finished turn. `session` repeats those turns as a cumulative total,
+    /// so it is never stored. `costUsdTicks` is Grok's own dollar figure
+    /// and wins over the catalog. `.dropped` names the turns this file
+    /// used to store and no longer does, so a rewrite deletes only those.
+    static func grok(usage url: URL, accountHome: String) throws -> [SessionTotals] {
+        let sessionId = url.deletingLastPathComponent().lastPathComponent
+        let prefix = "grok:\(sessionId):"
+        let object = try readJSON(url)
+        let turns = object["turns"] as? [[String: Any]] ?? []
+        let cwd = grokCwd(beside: url)
+        var out: [SessionTotals] = []
+        var seen = Set<Int>()
+        for turn in turns {
+            guard let number = turn["turnNumber"] as? Int, number >= 0, seen.insert(number).inserted
+            else { continue }
+            let key = prefix + String(number)
+            guard let timestamp = JSONValue.string(turn["endedAt"]).flatMap(Timestamp.parse)
+            else {
+                out.append(.empty(key: key))
+                continue
+            }
+            let input = JSONValue.int(turn["inputTokens"])
+            let output = JSONValue.int(turn["outputTokens"])
+            let cacheRead = JSONValue.int(turn["cachedReadTokens"])
+            let cacheWrite = JSONValue.int(turn["cacheCreationTokens"])
+            let reasoning = JSONValue.int(turn["reasoningTokens"])
+            let cost = grokCost(turn["costUsdTicks"])
+            guard input + output + cacheRead + cacheWrite + reasoning > 0 || cost != nil
+            else {
+                out.append(.empty(key: key))
+                continue
+            }
+            let event = UsageEvent(
+                harness: "grok", accountHome: accountHome, sessionId: sessionId, cwd: cwd,
+                model: JSONValue.string(turn["primaryModelId"]) ?? "unknown",
+                timestamp: timestamp,
+                inputTokens: input, outputTokens: output,
+                cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
+                reasoningTokens: reasoning, costUSD: cost)
+            out.append(.record(LedgerRecord(
+                key: key, authoritative: true, skipsLookalikes: true, event: event)))
+        }
+        out.append(.kept(prefix: prefix, turns: seen))
+        return out
+    }
+
+    /// `prompt_context.json` beside `usage.json`. A missing or unreadable
+    /// sibling leaves cwd unset; it is not part of the cursor, so a
+    /// context written later waits for the next usage rewrite.
+    private static func grokCwd(beside usage: URL) -> String? {
+        let context = usage.deletingLastPathComponent().appendingPathComponent("prompt_context.json")
+        guard let data = try? Data(contentsOf: context),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return JSONValue.string(object["working_directory"])
+    }
+
+    /// USD from `costUsdTicks`, or nil so the catalog prices the turn.
+    /// Zero and anything that is not a finite positive number fall through.
+    private static func grokCost(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber,
+              !(number === kCFBooleanTrue || number === kCFBooleanFalse)
+        else { return nil }
+        let ticks = number.doubleValue
+        guard ticks.isFinite, ticks > 0 else { return nil }
+        return ticks / grokTicksPerUSD
     }
 
     /// A read or parse failure throws, so `scanSessionFile` skips the file

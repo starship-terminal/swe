@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import SWECore
 
-/// The three new ledger sources: Pi's per-message JSONL, Droid's and
-/// Cline's rewritten session-total files.
+/// Ledger sources beyond the original four: Pi's per-message JSONL,
+/// Droid's and Cline's rewritten session-total files, and Grok's
+/// per-turn `usage.json`.
 @Suite struct LedgerImportTests {
     // MARK: - Fixtures
 
@@ -438,6 +439,64 @@ import Testing
         #expect(events.count == 1)
         #expect(events.first?.inputTokens == 300)
         #expect(events.first?.costUSD == 1.5)
+    }
+
+    // MARK: - Grok
+
+    private func grokHome(_ temp: TempDir, turns: String) throws -> URL {
+        let home = temp.path("grok")
+        let dir = home.appendingPathComponent("sessions/proj/s1")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("""
+            {"turns":[\(turns)]}
+            """.utf8).write(to: dir.appendingPathComponent("usage.json"))
+        return home
+    }
+
+    @Test func grokReadsEachTurnAndDropsOneARewriteRemoves() async throws {
+        let temp = try TempDir()
+        defer { withExtendedLifetime(temp) {} }
+        let home = try grokHome(temp, turns: """
+            {"turnNumber":1,"endedAt":"2026-10-03T10:00:00Z","primaryModelId":"grok-4.7",
+             "inputTokens":1000,"outputTokens":40,"cachedReadTokens":800,"reasoningTokens":12,
+             "costUsdTicks":20000000000},
+            {"turnNumber":2,"endedAt":"2026-10-03T10:00:00Z","primaryModelId":"grok-4.7",
+             "inputTokens":500,"outputTokens":10,"costUsdTicks":5000000000}
+            """)
+        let ledger = try Ledger(directory: temp.path("cache"))
+        try await ledger.scan(roots: LedgerRoots(grokHomes: [home]))
+
+        let first = await ledger.events(in: allTime)
+        #expect(first.count == 2)
+        #expect(first.map(\.sessionId) == ["s1", "s1"])
+        #expect(Set(first.map(\.costUSD)) == [2, 0.5])
+
+        let file = home.appendingPathComponent("sessions/proj/s1/usage.json")
+        try Data("""
+            {"turns":[
+              {"turnNumber":1,"endedAt":"2026-10-03T10:00:00Z","primaryModelId":"grok-4.7",
+               "inputTokens":7,"outputTokens":3,"costUsdTicks":1000000000}
+            ]}
+            """.utf8).write(to: file)
+        try await ledger.scan(roots: LedgerRoots(grokHomes: [home]))
+        let second = await ledger.events(in: allTime)
+        #expect(second.count == 1)
+        #expect(second.first?.inputTokens == 7)
+        #expect(second.first?.costUSD == 0.1)
+    }
+
+    @Test func aSecondGrokScanOfAnUnchangedFileReadsNothing() async throws {
+        let temp = try TempDir()
+        defer { withExtendedLifetime(temp) {} }
+        let home = try grokHome(temp, turns: """
+            {"turnNumber":1,"endedAt":"2026-10-03T10:00:00Z","inputTokens":10,
+             "outputTokens":1,"costUsdTicks":10000000000}
+            """)
+        let ledger = try Ledger(directory: temp.path("cache"))
+        try await ledger.scan(roots: LedgerRoots(grokHomes: [home]))
+        let report = try await ledger.scan(roots: LedgerRoots(grokHomes: [home]))
+        #expect(report.filesRead == 0)
+        #expect(report.filesUnchanged == 1)
     }
 
     // MARK: - Calendar

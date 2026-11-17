@@ -38,7 +38,8 @@ public struct UsageEvent: Sendable, Equatable, Hashable, Codable {
     public var serviceTier: String?
     /// Droid and Cline report one total per session, not per request. Such an
     /// event never crosses a model's long-context threshold: its summed input
-    /// says nothing about any single request's prompt size.
+    /// says nothing about any single request's prompt size. Grok reports one
+    /// total per turn, which is one request, so it stays false.
     public var isSessionTotal: Bool
 
     public init(
@@ -115,6 +116,11 @@ struct LedgerRecord: Sendable, Equatable {
     /// differently (`provider/model`) renames old rows in place instead of
     /// adding a second copy of each.
     var relabelsModel: Bool = false
+    /// Two events from one file can share a timestamp, model and session
+    /// (Grok turns that end in the same second). The lookalike cleanup
+    /// would delete one of them; these sources never used a counts-bearing
+    /// key, so they skip it.
+    var skipsLookalikes: Bool = false
     var event: UsageEvent
 }
 

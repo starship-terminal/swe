@@ -4,10 +4,10 @@
 Claude transcripts only grow, so each is read on from where the last scan
 stopped. A Codex rollout carries state from its first line (model, replay
 gate, the totals it has seen), so a changed rollout is read whole; its
-keys make that idempotent. Pi logs and the Droid and Cline session files
+keys make that idempotent. Pi logs and the Droid, Cline and Grok session files
 are read whole when they change, also keyed — the session files hold one
-authoritative total each, so a re-read replaces and a now-empty file
-deletes. OpenCode and Devin databases are skipped while they and their
+authoritative total each (Grok, one per turn), so a re-read replaces and
+a now-empty file deletes. OpenCode and Devin databases are skipped while they and their
 WALs are unchanged and settled, and otherwise read only past a
 watermark. Cursor's usage is not a file: the web app polls it in the
 background on the feed's own cadence (``CursorUsageFeed.keepFresh``), so
@@ -158,6 +158,15 @@ def scan(store: LedgerStore, home: Path | None = None,
                 continue
             _scan_session_file(store, path, str(cline_home), result,
                                parsers.cline_session_totals)
+
+    for grok_home in _homes(home, "grok", ".grok"):
+        for path in _files(grok_home / "sessions", "usage.json"):
+            # ``<project>/<id>/usage.json`` only. A namesake elsewhere
+            # (a learn run, a nested file) is not a session total.
+            if path.name != "usage.json" or path.parent.parent.parent != grok_home / "sessions":
+                continue
+            _scan_session_file(store, path, str(grok_home), result,
+                               parsers.grok_session_turns)
 
     store.set_meta("scanned_at", str(time.time()))
     store.db.commit()
@@ -459,6 +468,47 @@ def _scan_database(store: LedgerStore, path: Path, result: ScanResult, read,
     store.db.commit()
 
 
+def _watched_state(state: str | None) -> str | None:
+    """The watched-sibling stamp inside a cursor. A cursor that predates
+    Grok's turn list is that stamp itself, so an unchanged Droid or
+    Cline file still skips."""
+    if not state:
+        return state
+    try:
+        obj = json.loads(state)
+    except (TypeError, ValueError):
+        return state
+    if not isinstance(obj, dict) or "turns" not in obj:
+        return state
+    return json.dumps({"changed": obj.get("changed"), "watched": obj.get("watched")})
+
+
+def _cursor_state(watched: str, grok_turns: set[int] | None) -> str:
+    """Cursor state for a session file. Droid and Cline store only the
+    watched stamp. Grok adds the turn numbers this read kept, so the
+    next read deletes a dropped turn by key."""
+    if grok_turns is None:
+        return watched
+    obj = json.loads(watched)
+    obj["turns"] = sorted(grok_turns)
+    return json.dumps(obj)
+
+
+def _grok_kept_turns(state: str | None) -> set[int] | None:
+    """Turn numbers a previous Grok read saved, or None when the cursor
+    predates that field (nothing known to delete by key)."""
+    if not state:
+        return None
+    try:
+        obj = json.loads(state)
+    except (TypeError, ValueError):
+        return None
+    turns = obj.get("turns") if isinstance(obj, dict) else None
+    if not isinstance(turns, list):
+        return None
+    return {n for n in turns if isinstance(n, int) and not isinstance(n, bool)}
+
+
 def _stamp(path: Path) -> list | None:
     """``WatchedStamp``: a sibling's ``(inode, size, mtime, ctime)``, or
     ``None`` when it is absent — its absence is part of the stamp, so the
@@ -492,24 +542,31 @@ def _scan_session_file(store: LedgerStore, path: Path, account: str,
     if not stat.S_ISREG(st.st_mode):
         return
     key = str(path)
-    state = json.dumps({"changed": st.st_ctime_ns,
-                        "watched": _stamp(watched) if watched is not None else None})
+    watched_stamp = _stamp(watched) if watched is not None else None
     cursor = store.file_cursor(key)
+    previous_turns = _grok_kept_turns(cursor[5] if cursor is not None else None)
+    state = json.dumps({"changed": st.st_ctime_ns, "watched": watched_stamp})
     if (cursor is not None
             and tuple(cursor[:3]) == (st.st_ino, st.st_size, st.st_mtime_ns)
-            and cursor[5] == state):
+            and _watched_state(cursor[5]) == state):
         return
     try:
         totals = parse(path, account)
     except Exception as exc:  # a corrupt file must not stop the scan
         result.errors.append(f"{path}: {exc}")
         return
-    if isinstance(totals, LedgerRecord):
-        store.upsert(totals)
-        result.records += 1
-    elif isinstance(totals, parsers.Empty):
-        store.delete(totals.key)
+    rows = totals if isinstance(totals, list) else [totals]
+    kept_turns = None
+    for row in rows:
+        if isinstance(row, LedgerRecord):
+            store.upsert(row)
+            result.records += 1
+        elif isinstance(row, parsers.Empty):
+            store.delete(row.key)
+        elif isinstance(row, parsers.GrokDropped):
+            store.delete_dropped(row.prefix, row.kept, previous_turns)
+            kept_turns = row.kept
     store.set_file_cursor(key, st.st_ino, st.st_size, st.st_mtime_ns,
-                          st.st_size, state=state)
+                          st.st_size, state=_cursor_state(state, kept_turns))
     result.files_read += 1
     store.db.commit()

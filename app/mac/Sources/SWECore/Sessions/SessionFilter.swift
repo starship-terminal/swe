@@ -12,7 +12,7 @@ public enum SessionFilter {
     /// but only once a scan has actually completed; before that an empty
     /// ledger proves nothing.
     public static let localLogHarnesses: Set<String> = [
-        "claude", "codex", "opencode", "devin", "pi", "droid", "cline",
+        "claude", "codex", "opencode", "devin", "pi", "droid", "cline", "grok",
     ]
     /// Harnesses whose usage rows come from polling an account feed, not
     /// scanning local logs. A session of one of these with no usage is
