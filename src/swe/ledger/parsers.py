@@ -1,10 +1,10 @@
 """Harness logs to ledger records.
 
 Ports ``ClaudeLogParser.swift``, ``CodexFileParser.swift``, the OpenCode
-and Devin readers in ``DatabaseSources.swift``, and the Pi, Droid and
-Cline readers in ``SessionFileParsers.swift``. Keys and token splits must
-stay identical to the Swift ones, so both ledgers count a response once
-and the same way.
+and Devin readers in ``DatabaseSources.swift``, and the Pi, Droid, Cline
+and Grok readers in ``SessionFileParsers.swift``. Keys and token splits
+must stay identical to the Swift ones, so both ledgers count a response
+once and the same way.
 """
 
 from __future__ import annotations
@@ -769,3 +769,100 @@ def cline_session_totals(path: Path, account: str):
         input=input_, output=output, cache_read=cache_read,
         cache_write=cache_write, cost=cost, session_total=True)
     return LedgerRecord(key=key, event=ev, authoritative=True)
+
+
+# ---------------------------------------------------------------- Grok
+
+
+# Grok's ``costUsdTicks`` is USD times this (a session of a few dollars
+# lands in the hundreds of billions of ticks).
+_GROK_TICKS_PER_USD = 10_000_000_000
+
+
+def grok_session_turns(path: Path, account: str) -> list:
+    """Grok ``<home>/sessions/<project>/<id>/usage.json``.
+
+    One record per finished turn: the file rewrites cumulative totals in
+    ``session`` and the same numbers split by turn, so the session block
+    is never stored or it would double-count. ``costUsdTicks`` is Grok's
+    own dollar figure and wins over the catalog. The list ends with one
+    ``Empty`` per turn this file used to store and no longer does, so a
+    dropped turn deletes its event and nothing else's.
+    """
+    session_id = path.parent.name
+    prefix = f"grok:{session_id}:"
+    obj = _read_json_object(path)
+    turns = obj.get("turns")
+    turns = turns if isinstance(turns, list) else []
+    cwd = _grok_cwd(path)
+    out: list = []
+    seen: set[int] = set()
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        number = turn.get("turnNumber")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            continue
+        if number in seen:
+            continue
+        seen.add(number)
+        key = f"{prefix}{number}"
+        ts = parse_timestamp(turn.get("endedAt"))
+        if ts is None:
+            out.append(Empty(key))
+            continue
+        input_ = json_int(turn.get("inputTokens"))
+        output = json_int(turn.get("outputTokens"))
+        cache_read = json_int(turn.get("cachedReadTokens"))
+        cache_write = json_int(turn.get("cacheCreationTokens"))
+        reasoning = json_int(turn.get("reasoningTokens"))
+        cost = _grok_cost(turn.get("costUsdTicks"))
+        if input_ + output + cache_read + cache_write + reasoning <= 0 and cost is None:
+            out.append(Empty(key))
+            continue
+        model = json_str(turn.get("primaryModelId")) or "unknown"
+        ev = UsageEvent(
+            harness="grok", account=account, session=session_id, cwd=cwd,
+            model=model, ts=ts, input=input_, output=output,
+            cache_read=cache_read, cache_write=cache_write, reasoning=reasoning,
+            cost=cost)
+        out.append(LedgerRecord(key=key, event=ev, authoritative=True,
+                                skips_lookalikes=True))
+    out.append(GrokDropped(prefix, seen))
+    return out
+
+
+class GrokDropped:
+    """Turns this ``usage.json`` no longer lists. The scan deletes stored
+    events under ``prefix`` whose turn number is absent from ``kept``."""
+
+    __slots__ = ("prefix", "kept")
+
+    def __init__(self, prefix: str, kept: set[int]):
+        self.prefix = prefix
+        self.kept = kept
+
+
+def _grok_cwd(usage: Path) -> str | None:
+    """The session's working directory, from ``prompt_context.json`` beside
+    ``usage.json``. A missing or unreadable sibling leaves cwd unset; it
+    is not part of the cursor, so a context written later waits for the
+    next usage rewrite."""
+    try:
+        ctx = json.loads((usage.parent / "prompt_context.json").read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    if not isinstance(ctx, dict):
+        return None
+    return json_str(ctx.get("working_directory"))
+
+
+def _grok_cost(ticks) -> float | None:
+    """USD from ``costUsdTicks``, or ``None`` so the catalog prices the
+    turn. Zero and anything that is not a finite non-negative number
+    fall through; a bool is a number in Python and is rejected."""
+    if isinstance(ticks, bool) or not isinstance(ticks, (int, float)):
+        return None
+    if ticks != ticks or ticks <= 0 or ticks == float("inf"):
+        return None
+    return float(ticks) / _GROK_TICKS_PER_USD

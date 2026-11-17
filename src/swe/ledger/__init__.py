@@ -9,7 +9,8 @@ Its store is ``~/.swe/data/web-ledger/``, never the Mac app's
 
 Every source the Mac ledger reads is covered: Claude and Codex logs, the
 OpenCode and Devin databases, the Pi logs, the Droid and Cline
-session-total files, and Cursor's usage feed (polled through
+session-total files, Grok's per-turn ``usage.json``, and Cursor's usage
+feed (polled through
 ``rate_limits.fetch_cursor_usage_events`` — the reader behind
 ``swe harness usage-events cursor --json`` — rather than a subprocess).
 """

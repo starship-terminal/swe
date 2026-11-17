@@ -4,10 +4,10 @@
 Claude transcripts only grow, so each is read on from where the last scan
 stopped. A Codex rollout carries state from its first line (model, replay
 gate, the totals it has seen), so a changed rollout is read whole; its
-keys make that idempotent. Pi logs and the Droid and Cline session files
+keys make that idempotent. Pi logs and the Droid, Cline and Grok session files
 are read whole when they change, also keyed — the session files hold one
-authoritative total each, so a re-read replaces and a now-empty file
-deletes. OpenCode and Devin databases are skipped while they and their
+authoritative total each (Grok, one per turn), so a re-read replaces and
+a now-empty file deletes. OpenCode and Devin databases are skipped while they and their
 WALs are unchanged and settled, and otherwise read only past a
 watermark. Cursor's usage is not a file: the web app polls it in the
 background on the feed's own cadence (``CursorUsageFeed.keepFresh``), so
@@ -158,6 +158,15 @@ def scan(store: LedgerStore, home: Path | None = None,
                 continue
             _scan_session_file(store, path, str(cline_home), result,
                                parsers.cline_session_totals)
+
+    for grok_home in _homes(home, "grok", ".grok"):
+        for path in _files(grok_home / "sessions", "usage.json"):
+            # ``<project>/<id>/usage.json`` only. A namesake elsewhere
+            # (a learn run, a nested file) is not a session total.
+            if path.name != "usage.json" or path.parent.parent.parent != grok_home / "sessions":
+                continue
+            _scan_session_file(store, path, str(grok_home), result,
+                               parsers.grok_session_turns)
 
     store.set_meta("scanned_at", str(time.time()))
     store.db.commit()
@@ -504,11 +513,15 @@ def _scan_session_file(store: LedgerStore, path: Path, account: str,
     except Exception as exc:  # a corrupt file must not stop the scan
         result.errors.append(f"{path}: {exc}")
         return
-    if isinstance(totals, LedgerRecord):
-        store.upsert(totals)
-        result.records += 1
-    elif isinstance(totals, parsers.Empty):
-        store.delete(totals.key)
+    rows = totals if isinstance(totals, list) else [totals]
+    for row in rows:
+        if isinstance(row, LedgerRecord):
+            store.upsert(row)
+            result.records += 1
+        elif isinstance(row, parsers.Empty):
+            store.delete(row.key)
+        elif isinstance(row, parsers.GrokDropped):
+            store.delete_dropped(row.prefix, row.kept)
     store.set_file_cursor(key, st.st_ino, st.st_size, st.st_mtime_ns,
                           st.st_size, state=state)
     result.files_read += 1

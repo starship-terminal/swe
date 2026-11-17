@@ -17,14 +17,15 @@ from swe.sessions.parsers import codex_thread_id
 
 # Harnesses whose sessions leave usage in a log some ledger reads. Only
 # those can be judged accidental (SessionFilter.usageLogHarnesses).
-_USAGE_LOG = {"claude", "codex", "opencode", "devin", "pi", "droid", "cline", "cursor", "grok-bot"}
+_USAGE_LOG = {"claude", "codex", "opencode", "devin", "pi", "droid", "cline",
+              "cursor", "grok", "grok-bot"}
 # Harnesses with no per-turn timing, judged on tokens alone.
 _NO_TIMING = {"cursor", "droid", "cline"}
 # Harnesses this ledger reads (SessionFilter.localLogHarnesses). A row of
 # one of these with no usage at all, once the ledger has scanned, is an
 # accidental session; cursor and grok-bot are feed-only, so a session the
 # poll never covered is not judged empty.
-LEDGER_HARNESSES = {"claude", "codex", "opencode", "devin", "pi", "droid", "cline"}
+LEDGER_HARNESSES = {"claude", "codex", "opencode", "devin", "pi", "droid", "cline", "grok"}
 
 _CLOUD = {"grok-bot", "devin-cloud"}
 

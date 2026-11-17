@@ -1,5 +1,5 @@
-"""ledger/parsers.py session files: Pi logs and the Droid and Cline
-session-total files (the ``SessionFileParsers.swift`` readers), their
+"""ledger/parsers.py session files: Pi logs and the Droid, Cline and
+Grok session files (the ``SessionFileParsers.swift`` readers), their
 scan wiring, and the store's authoritative upsert."""
 
 import json
@@ -222,8 +222,89 @@ class TestCline(unittest.TestCase):
             parsers.cline_session_totals(self.path, self.account), parsers.Empty)
 
 
+def _grok_turn(number, ended="2026-10-01T10:00:00Z", ticks=20_000_000_000, **kw):
+    turn = {
+        "turnNumber": number, "endedAt": ended, "inputTokens": 1000,
+        "outputTokens": 40, "cachedReadTokens": 800, "cacheCreationTokens": 0,
+        "reasoningTokens": 12, "costUsdTicks": ticks, "primaryModelId": "grok-4.7",
+    }
+    turn.update(kw)
+    return turn
+
+
+def _grok_usage(turns, session=None):
+    body = {"sessionId": "s1", "turns": turns}
+    if session is not None:
+        body["session"] = session
+    return json.dumps(body)
+
+
+class TestGrok(unittest.TestCase):
+    def setUp(self):
+        self.home = temp_dir(self)
+        self.folder = self.home / ".grok" / "sessions" / "proj" / "s1"
+        self.folder.mkdir(parents=True)
+        self.path = self.folder / "usage.json"
+        self.account = str(self.home / ".grok")
+
+    def _records(self):
+        rows = parsers.grok_session_turns(self.path, self.account)
+        return [r for r in rows if isinstance(r, LedgerRecord)]
+
+    def test_one_event_per_turn_ignores_the_session_total(self):
+        self.path.write_text(_grok_usage(
+            [_grok_turn(1), _grok_turn(2, ended="2026-10-01T11:00:00Z", ticks=5_000_000_000)],
+            session={"inputTokens": 999999, "costUsdTicks": 9_000_000_000_000}))
+        (self.folder / "prompt_context.json").write_text(
+            json.dumps({"working_directory": "/work/app"}))
+        recs = self._records()
+        self.assertEqual([r.key for r in recs], ["grok:s1:1", "grok:s1:2"])
+        ev = recs[0].event
+        self.assertEqual((ev.harness, ev.session, ev.cwd, ev.model),
+                         ("grok", "s1", "/work/app", "grok-4.7"))
+        self.assertEqual((ev.input, ev.output, ev.cache_read, ev.cache_write, ev.reasoning),
+                         (1000, 40, 800, 0, 12))
+        self.assertFalse(ev.session_total)
+        self.assertTrue(recs[0].authoritative)
+        # 20_000_000_000 ticks is $2.
+        self.assertEqual(ev.cost, 2.0)
+        self.assertEqual(ev.ts, datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc).timestamp())
+        self.assertEqual(recs[1].event.cost, 0.5)
+
+    def test_zero_cost_falls_through_and_a_blank_turn_empties(self):
+        self.path.write_text(_grok_usage([
+            _grok_turn(1, ticks=0),
+            _grok_turn(2, inputTokens=0, outputTokens=0, cachedReadTokens=0,
+                       reasoningTokens=0, ticks=0),
+        ]))
+        rows = parsers.grok_session_turns(self.path, self.account)
+        self.assertIsNone(rows[0].event.cost)
+        self.assertIsInstance(rows[1], parsers.Empty)
+        self.assertEqual(rows[1].key, "grok:s1:2")
+
+    def test_a_missing_timestamp_and_a_duplicate_turn_are_skipped(self):
+        self.path.write_text(_grok_usage([
+            _grok_turn(1, endedAt=None),
+            _grok_turn(3),
+            _grok_turn(3, ticks=9_000_000_000),
+            {"turnNumber": True, "inputTokens": 5},
+        ]))
+        rows = parsers.grok_session_turns(self.path, self.account)
+        self.assertIsInstance(rows[0], parsers.Empty)
+        recs = [r for r in rows if isinstance(r, LedgerRecord)]
+        self.assertEqual([r.key for r in recs], ["grok:s1:3"])
+        self.assertEqual(recs[0].event.cost, 2.0)
+
+    def test_no_turns_reports_nothing_kept(self):
+        self.path.write_text(_grok_usage([]))
+        rows = parsers.grok_session_turns(self.path, self.account)
+        self.assertEqual(len(rows), 1)
+        self.assertIsInstance(rows[0], parsers.GrokDropped)
+        self.assertEqual(rows[0].kept, set())
+
+
 class TestSessionScan(unittest.TestCase):
-    """The three session sources through ``scan()``: discovery, the
+    """The session sources through ``scan()``: discovery, the
     authoritative re-read, watched-sibling stamps and deletion."""
 
     def setUp(self):
@@ -332,6 +413,34 @@ class TestSessionScan(unittest.TestCase):
         manifest.write_text(json.dumps(_cline_manifest()))
         scan(self.store, self.home)
         self.assertIn("cline:s1", self._rows())
+
+    def test_grok_discovery_replacement_and_a_dropped_turn(self):
+        folder = self.home / ".grok" / "sessions" / "proj" / "s1"
+        folder.mkdir(parents=True)
+        usage = folder / "usage.json"
+        usage.write_text(_grok_usage([_grok_turn(1), _grok_turn(2, ticks=4_000_000_000)]))
+        # A namesake one level too deep is not a session file.
+        nested = folder / "extra"
+        nested.mkdir()
+        (nested / "usage.json").write_text(_grok_usage([_grok_turn(9)]))
+        scan(self.store, self.home)
+        rows = self._rows()
+        self.assertEqual(set(rows), {"grok:s1:1", "grok:s1:2"})
+        self.assertEqual(rows["grok:s1:1"][7], 0)  # a turn, not a session total
+
+        usage.write_text(_grok_usage([
+            _grok_turn(1, inputTokens=7, outputTokens=3, ticks=1_000_000_000)]))
+        scan(self.store, self.home)
+        rows = self._rows()
+        self.assertEqual(set(rows), {"grok:s1:1"})
+        self.assertEqual(rows["grok:s1:1"][2:4], (7, 3))
+        # A session whose id starts with this one keeps its own rows.
+        other = self.home / ".grok" / "sessions" / "proj" / "s1-extra"
+        other.mkdir()
+        (other / "usage.json").write_text(_grok_usage([_grok_turn(1)]))
+        scan(self.store, self.home)
+        self.assertIn("grok:s1-extra:1", self._rows())
+        self.assertIn("grok:s1:1", self._rows())
 
 
 class TestSessionTotalsInStore(unittest.TestCase):

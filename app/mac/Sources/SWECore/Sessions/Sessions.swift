@@ -992,7 +992,8 @@ public final class SessionsModel {
     /// a listed session of a local-log harness with no ledger events at
     /// all counts, once the ledger has actually scanned) or probe-like.
     /// Feed-polled harnesses (Cursor, Grok Bot) and harnesses the ledger
-    /// does not read are never hidden for missing usage.
+    /// does not read are never hidden for missing usage. Grok Build is a
+    /// local log: a listed session with no `usage.json` events is empty.
     func isTrivial(_ row: Row) -> Bool {
         // A mirrored session is never an accident: its copy may predate
         // the ledger, so missing usage proves nothing about it.

@@ -125,7 +125,7 @@ class LedgerStore:
                     return True
                 return False
         self._write(rec)
-        if rec.authoritative:
+        if rec.authoritative and not rec.skips_lookalikes:
             self._delete_lookalikes(rec)
         return True
 
@@ -197,6 +197,17 @@ class LedgerStore:
         session-total sources whose file now reports nothing, so stale
         spend clears (``LedgerStore.delete``)."""
         self.db.execute("DELETE FROM events WHERE key = ?", (key,))
+
+    def delete_dropped(self, prefix: str, kept: set[int]) -> None:
+        """Drop events keyed ``prefix`` plus a turn number that ``kept``
+        no longer lists. The match is the prefix and then digits only, so
+        a session id that starts with another's never loses its rows."""
+        for (key,) in self.db.execute(
+                "SELECT key FROM events WHERE key LIKE ? ESCAPE '\\'",
+                (_like_prefix(prefix),)):
+            turn = key[len(prefix):]
+            if turn.isdigit() and int(turn) not in kept:
+                self.delete(key)
 
     def file_cursor(self, path: str) -> tuple | None:
         """``(inode, size, mtime_ns, offset, fp, state)`` from the last
@@ -338,6 +349,13 @@ class LedgerStore:
             f" FROM events WHERE {where} ORDER BY harness, account, session, ts, key",
             args,
         ).fetchall()
+
+
+def _like_prefix(prefix: str) -> str:
+    """``prefix`` as a LIKE pattern: ``_`` and ``%`` in a session id stay
+    literal. The caller still checks that what follows is a turn number."""
+    return (prefix.replace("\\", "\\\\").replace("%", "\\%")
+            .replace("_", "\\_")) + "%"
 
 
 def _wins(new_sidechain: bool, new_total: int, old_sidechain: bool, old_total: int) -> bool:

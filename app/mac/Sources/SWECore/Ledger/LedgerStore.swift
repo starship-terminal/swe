@@ -257,7 +257,7 @@ final class LedgerStore {
             }
         }
         let dim = try write(record, key: key)
-        if record.authoritative {
+        if record.authoritative, !record.skipsLookalikes {
             // An authoritative record is the source's latest word on its
             // event. If an older key scheme left a row for the same event
             // behind — the Cursor feed once keyed on the token counts it

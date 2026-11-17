@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Grok Build spend shows on this Mac.** Each finished turn in a `grok` session's `usage.json` is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.
+
 ## [1.2.4] - 2026-11-15
 
 ### Fixed

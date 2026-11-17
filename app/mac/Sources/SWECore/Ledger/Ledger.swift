@@ -25,6 +25,8 @@ public struct LedgerRoots: Sendable, Equatable {
     /// Cline sessions roots (`~/.cline/data/sessions`); each session dir
     /// pairs `<id>.json` with a `<id>.messages.json` sibling.
     public var clineSessions: [URL]
+    /// Grok homes; per-turn usage is `<home>/sessions/<project>/<id>/usage.json`.
+    public var grokHomes: [URL]
     /// Roots for the search index's own transcript enumeration, keyed by
     /// harness — every `SearchTranscriptSource` row's roots except the
     /// harnesses the explicit fields above already own (claude/codex/pi/
@@ -44,6 +46,7 @@ public struct LedgerRoots: Sendable, Equatable {
         openCodeDatabases: [URL] = [], devinDatabases: [URL] = [],
         piHomes: [URL] = [], droidHomes: [URL] = [], clineHomes: [URL] = [],
         cursorProjects: [URL] = [], clineSessions: [URL] = [],
+        grokHomes: [URL] = [],
         transcriptRoots: [SearchDecoder.Harness: [URL]] = [:],
         mirror: TranscriptMirror? = nil
     ) {
@@ -57,6 +60,7 @@ public struct LedgerRoots: Sendable, Equatable {
         self.clineHomes = clineHomes
         self.cursorProjects = cursorProjects
         self.clineSessions = clineSessions
+        self.grokHomes = grokHomes
         self.transcriptRoots = transcriptRoots
     }
 
@@ -89,6 +93,7 @@ public struct LedgerRoots: Sendable, Equatable {
             clineHomes: [home.appendingPathComponent(".cline")],
             cursorProjects: [home.appendingPathComponent(".cursor/projects")],
             clineSessions: [home.appendingPathComponent(".cline/data/sessions")],
+            grokHomes: [home.appendingPathComponent(".grok")],
             transcriptRoots: transcriptRoots,
             mirror: .standard(root: TranscriptMirror.defaultRoot(home: home),
                               claudeHomes: claudeHomes, codexHomes: codexHomes,
@@ -420,6 +425,22 @@ public actor Ledger {
                     },
                 recentLimit: recentLimit))
         }
+        // `<project>/<id>/usage.json` only. Filter before the cap so a
+        // namesake elsewhere cannot crowd a session out of the window.
+        let grokFiles = roots.grokHomes.map { home in
+            let sessions = home.appendingPathComponent("sessions")
+            return (home, Self.capped(
+                Self.files(under: sessions, suffix: "usage.json").filter { url in
+                    // file / id / project / sessions: three parents up.
+                    // standardizedFileURL: the enumerator resolves /var to
+                    // /private/var, and a string compare would drop every file.
+                    url.lastPathComponent == "usage.json"
+                        && url.deletingLastPathComponent().deletingLastPathComponent()
+                            .deletingLastPathComponent().standardizedFileURL
+                        == sessions.standardizedFileURL
+                },
+                recentLimit: recentLimit))
+        }
         let indexJobs = indexer == nil ? [] : Self.indexJobs(roots: roots, recentLimit: recentLimit)
 
         var owner = 0
@@ -427,7 +448,7 @@ public actor Ledger {
             progressOwner += 1
             owner = progressOwner
             let fileLists: [[URL]] = claudeFiles.map(\.1) + codexFiles.map(\.1) + piFiles.map(\.1)
-                + droidFiles.map(\.1) + clineFiles.map(\.1) + indexJobs.map(\.files)
+                + droidFiles.map(\.1) + clineFiles.map(\.1) + grokFiles.map(\.1) + indexJobs.map(\.files)
                 + [devinTranscripts]
             // OpenCode and Devin databases are visited twice with an
             // indexer: once to index their sessions, once for tokens.
@@ -548,7 +569,7 @@ public actor Ledger {
                 if Task.isCancelled { throw CancellationError() }
                 try scanSessionFile(file, accountHome: home.path,
                                     watched: SessionTotalsFile.droidTranscript(for: file),
-                                    parse: { try SessionTotalsFile.droid(settings: $0, accountHome: home.path) },
+                                    parse: { try SessionTotalsFile.droid(settings: $0, accountHome: home.path).map { [$0] } },
                                     report: &report)
                 advanceProgress(owner)
                 await Task.yield()
@@ -558,7 +579,17 @@ public actor Ledger {
             for file in files {
                 if Task.isCancelled { throw CancellationError() }
                 try scanSessionFile(file, accountHome: home.path,
-                                    parse: { try SessionTotalsFile.cline(session: $0, accountHome: home.path) },
+                                    parse: { try SessionTotalsFile.cline(session: $0, accountHome: home.path).map { [$0] } },
+                                    report: &report)
+                advanceProgress(owner)
+                await Task.yield()
+            }
+        }
+        for (home, files) in grokFiles {
+            for file in files {
+                if Task.isCancelled { throw CancellationError() }
+                try scanSessionFile(file, accountHome: home.path,
+                                    parse: { try SessionTotalsFile.grok(usage: $0, accountHome: home.path) },
                                     report: &report)
                 advanceProgress(owner)
                 await Task.yield()
@@ -1753,31 +1784,33 @@ public actor Ledger {
     }
 
     /// One session-total file (Droid's `.settings.json`, Cline's session
-    /// JSON): re-read whole whenever its stamp (or its watched sibling's)
-    /// changes; the record upserts under the session's stable key, replacing
-    /// rather than duplicating. A file that now reports no usage deletes its
-    /// old event.
+    /// JSON, Grok's `usage.json`): re-read whole whenever its stamp (or
+    /// its watched sibling's) changes; each record upserts under its
+    /// stable key, replacing rather than duplicating. A file that now
+    /// reports no usage deletes its old event. Grok returns one result
+    /// per turn, plus the turns a rewrite dropped.
     private func scanSessionFile(
         _ url: URL, accountHome: String, watched: URL? = nil,
-        parse: (URL) throws -> SessionTotals?, report: inout ScanReport
+        parse: (URL) throws -> [SessionTotals]?, report: inout ScanReport
     ) throws {
         let path = url.resolvingSymlinksInPath().path
         guard let info = FileInfo(path: path) else { return }
         // The watched file's absence is part of the stamp, so a transcript
         // appearing or disappearing re-reads too.
         let watchedStamp = watched.flatMap { WatchedStamp($0.path) }
-        let state = watched.map { _ in (try? JSONEncoder().encode(watchedStamp)) ?? nil } ?? nil
-        if let saved = try store.cursor(for: path),
+        let watchedState = watched.map { _ in (try? JSONEncoder().encode(watchedStamp)) ?? nil } ?? nil
+        let saved = try store.cursor(for: path)
+        if let saved,
            saved.inode == info.inode, saved.size == info.size, saved.modified == info.modified,
            (saved.changed ?? info.changed) == info.changed,
-           saved.state == state {
+           Self.watchedState(saved.state) == watchedState {
             report.filesUnchanged += 1
             return
         }
         // A bad file (mid-rewrite, corrupt) skips this round without a
         // cursor, so it is retried on the next scan instead of aborting
         // every source after it.
-        let totals: SessionTotals?
+        let totals: [SessionTotals]?
         do {
             totals = try parse(URL(fileURLWithPath: path))
         } catch {
@@ -1786,22 +1819,69 @@ public actor Ledger {
         }
         try store.db.execute("BEGIN IMMEDIATE")
         do {
-            switch totals {
-            case .record(let record): try store.upsert(record)
-            case .empty(let key): try store.delete(key: key)
-            case nil: break
+            var keptTurns: Set<Int>?
+            var keptPrefix: String?
+            for row in totals ?? [] {
+                switch row {
+                case .record(let record): try store.upsert(record)
+                case .empty(let key): try store.delete(key: key)
+                case .kept(let prefix, let turns):
+                    keptPrefix = prefix
+                    keptTurns = turns
+                }
+            }
+            if let keptPrefix, let keptTurns,
+               let previous = Self.grokKeptTurns(saved?.state) {
+                for turn in previous.subtracting(keptTurns) {
+                    try store.delete(key: keptPrefix + String(turn))
+                }
             }
             try store.save(FileCursor(
                 path: path, inode: info.inode, size: info.size, modified: info.modified,
                 changed: info.changed, offset: info.size,
                 headHash: 0, headLength: 0, tailHash: 0, tailLength: 0,
-                state: state, skippedLines: 0))
+                state: Self.cursorState(watched: watchedState, grokTurns: keptTurns),
+                skippedLines: 0))
             try store.db.execute("COMMIT")
         } catch {
             store.rollback()
             throw error
         }
         report.filesRead += 1
+    }
+
+    /// The watched-sibling stamp inside a cursor. A cursor that predates
+    /// Grok's turn list is that stamp itself.
+    private static func watchedState(_ state: Data?) -> Data? {
+        guard let state,
+              let object = try? JSONSerialization.jsonObject(with: state) as? [String: Any],
+              object["turns"] != nil
+        else { return state }
+        guard let encoded = object["watched"] as? String else { return nil }
+        return Data(base64Encoded: encoded)
+    }
+
+    /// Cursor state for a session file. Droid stores only its watched
+    /// transcript stamp. Grok adds the turn numbers this read kept, so
+    /// the next read can delete a turn the file dropped.
+    private static func cursorState(watched: Data?, grokTurns: Set<Int>?) -> Data? {
+        guard let grokTurns else { return watched }
+        let body: [String: Any] = [
+            "watched": watched?.base64EncodedString() ?? NSNull(),
+            "turns": grokTurns.sorted(),
+        ]
+        return try? JSONSerialization.data(withJSONObject: body)
+    }
+
+    /// Turn numbers a previous Grok read saved, or nil when the cursor
+    /// predates that field (nothing to delete: the old scan stored no
+    /// Grok events).
+    private static func grokKeptTurns(_ state: Data?) -> Set<Int>? {
+        guard let state,
+              let object = try? JSONSerialization.jsonObject(with: state) as? [String: Any],
+              let turns = object["turns"] as? [Int]
+        else { return nil }
+        return Set(turns)
     }
 
     /// Store records a poll produced (Cursor's usage feed) in one

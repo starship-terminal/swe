@@ -368,3 +368,114 @@ import Testing
         #expect(key == "cline:t1_abc")
     }
 }
+
+/// `SessionTotalsFile.grok`: one `usage.json` per session, one event per
+/// turn. The cumulative `session` block is the same numbers summed, so it
+/// is never stored.
+@Suite struct GrokSessionFileTests {
+    private func read(_ temp: TempDir, _ json: String, context: String? = nil) throws -> [SessionTotals] {
+        let dir = temp.path("sessions/proj/s1")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let context {
+            try Data(context.utf8).write(to: dir.appendingPathComponent("prompt_context.json"))
+        }
+        let file = dir.appendingPathComponent("usage.json")
+        try Data(json.utf8).write(to: file)
+        return try SessionTotalsFile.grok(usage: file, accountHome: "/h/.grok")
+    }
+
+    private func records(_ rows: [SessionTotals]) -> [LedgerRecord] {
+        rows.compactMap { row in
+            if case .record(let record) = row { return record }
+            return nil
+        }
+    }
+
+    @Test func oneEventPerTurnIgnoresTheSessionTotal() throws {
+        let temp = try TempDir()
+        let rows = try read(temp, """
+            {"session":{"inputTokens":999999,"costUsdTicks":9000000000000},
+             "turns":[
+               {"turnNumber":1,"endedAt":"2026-10-03T10:00:00Z","primaryModelId":"grok-4.7",
+                "inputTokens":1000,"outputTokens":40,"cachedReadTokens":800,
+                "cacheCreationTokens":2,"reasoningTokens":12,"costUsdTicks":20000000000},
+               {"turnNumber":2,"endedAt":"2026-10-03T11:00:00Z","primaryModelId":"grok-4.7",
+                "inputTokens":500,"outputTokens":10,"cachedReadTokens":400,
+                "cacheCreationTokens":0,"reasoningTokens":0,"costUsdTicks":5000000000}
+             ]}
+            """, context: #"{"working_directory":"/work/app"}"#)
+        let records = records(rows)
+        #expect(records.map(\.key) == ["grok:s1:1", "grok:s1:2"])
+        let event = records[0].event
+        #expect(event.harness == "grok")
+        #expect(event.accountHome == "/h/.grok")
+        #expect(event.sessionId == "s1")
+        #expect(event.cwd == "/work/app")
+        #expect(event.model == "grok-4.7")
+        #expect(!event.isSessionTotal)
+        #expect(records[0].authoritative)
+        #expect(event.inputTokens == 1_000)
+        #expect(event.outputTokens == 40)
+        #expect(event.cacheReadTokens == 800)
+        #expect(event.cacheWriteTokens == 2)
+        #expect(event.reasoningTokens == 12)
+        #expect(event.costUSD == 2)
+        #expect(event.timestamp == utc("2026-10-03T10:00:00Z"))
+        #expect(records[1].event.costUSD == 0.5)
+        guard case .kept(let prefix, let turns) = rows.last else {
+            Issue.record("expected a kept marker")
+            return
+        }
+        #expect(prefix == "grok:s1:")
+        #expect(turns == [1, 2])
+    }
+
+    @Test func zeroCostFallsThroughAndABlankTurnEmpties() throws {
+        let temp = try TempDir()
+        let rows = try read(temp, """
+            {"turns":[
+               {"turnNumber":1,"endedAt":"2026-10-03T10:00:00Z","inputTokens":10,
+                "outputTokens":1,"costUsdTicks":0},
+               {"turnNumber":2,"endedAt":"2026-10-03T10:00:00Z","inputTokens":0,
+                "outputTokens":0,"costUsdTicks":0}
+             ]}
+            """)
+        #expect(records(rows).first?.event.costUSD == nil)
+        guard case .empty(let key) = rows[1] else {
+            Issue.record("expected .empty for a blank turn")
+            return
+        }
+        #expect(key == "grok:s1:2")
+    }
+
+    @Test func aMissingTimestampAndADuplicateTurnAreSkipped() throws {
+        let temp = try TempDir()
+        let rows = try read(temp, """
+            {"turns":[
+               {"turnNumber":1,"endedAt":null,"inputTokens":10,"costUsdTicks":10000000000},
+               {"turnNumber":3,"endedAt":"2026-10-03T10:00:00Z","inputTokens":10,
+                "costUsdTicks":20000000000},
+               {"turnNumber":3,"endedAt":"2026-10-03T12:00:00Z","inputTokens":99,
+                "costUsdTicks":9000000000}
+             ]}
+            """)
+        guard case .empty = rows[0] else {
+            Issue.record("expected .empty for a turn with no timestamp")
+            return
+        }
+        let records = records(rows)
+        #expect(records.map(\.key) == ["grok:s1:3"])
+        #expect(records[0].event.costUSD == 2)
+    }
+
+    @Test func aFileCaughtMidRewriteThrows() throws {
+        let temp = try TempDir()
+        let dir = temp.path("sessions/proj/s1")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("usage.json")
+        try Data(#"{"turns":["#.utf8).write(to: file)
+        #expect(throws: Error.self) {
+            try SessionTotalsFile.grok(usage: file, accountHome: "/h")
+        }
+    }
+}
