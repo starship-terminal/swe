@@ -198,13 +198,22 @@ class LedgerStore:
         spend clears (``LedgerStore.delete``)."""
         self.db.execute("DELETE FROM events WHERE key = ?", (key,))
 
-    def delete_dropped(self, prefix: str, kept: set[int]) -> None:
+    def delete_dropped(self, prefix: str, kept: set[int],
+                       previous: set[int] | None = None) -> None:
         """Drop events keyed ``prefix`` plus a turn number that ``kept``
-        no longer lists. The match is the prefix and then digits only, so
-        a session id that starts with another's never loses its rows."""
+        no longer lists. ``previous`` is the turn numbers the last read
+        of this file saved; only those are deleted, each by its key, so
+        the lookup uses the ``events.key`` index. Without it (a cursor
+        from before that list) the prefix is scanned once. The match is
+        the prefix and then digits only, so a session id that starts
+        with another's never loses its rows."""
+        if previous is not None:
+            for turn in previous - kept:
+                self.delete(prefix + str(turn))
+            return
         for (key,) in self.db.execute(
-                "SELECT key FROM events WHERE key LIKE ? ESCAPE '\\'",
-                (_like_prefix(prefix),)):
+                "SELECT key FROM events WHERE key >= ? AND key < ?",
+                (prefix, prefix + "\uffff")):
             turn = key[len(prefix):]
             if turn.isdigit() and int(turn) not in kept:
                 self.delete(key)
@@ -349,13 +358,6 @@ class LedgerStore:
             f" FROM events WHERE {where} ORDER BY harness, account, session, ts, key",
             args,
         ).fetchall()
-
-
-def _like_prefix(prefix: str) -> str:
-    """``prefix`` as a LIKE pattern: ``_`` and ``%`` in a session id stay
-    literal. The caller still checks that what follows is a turn number."""
-    return (prefix.replace("\\", "\\\\").replace("%", "\\%")
-            .replace("_", "\\_")) + "%"
 
 
 def _wins(new_sidechain: bool, new_total: int, old_sidechain: bool, old_total: int) -> bool:

@@ -257,6 +257,17 @@ class TestLedgerCoverage(unittest.TestCase):
         home = temp_dir(self)
         self.assertTrue(self._build(home, "pi", "anything")["trivial"])
 
+    def test_a_grok_row_needs_its_usage_file(self):
+        home = temp_dir(self)
+        folder = home / ".grok" / "sessions" / "proj" / "s1"
+        folder.mkdir(parents=True)
+        (folder / "summary.json").write_text("{}")
+        self.assertFalse(self._build(home, "grok", "s1")["trivial"])
+        (folder / "usage.json").write_text("{}")
+        self.assertTrue(self._build(home, "grok", "s1")["trivial"])
+        # A session id that starts with this one is a different file.
+        self.assertFalse(self._build(home, "grok", "s1-extra")["trivial"])
+
 
 class TestCarefulJudgement(unittest.TestCase):
     def test_satellite_projects_ignore_this_disk(self):

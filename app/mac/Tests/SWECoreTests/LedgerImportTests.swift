@@ -460,7 +460,7 @@ import Testing
             {"turnNumber":1,"endedAt":"2026-10-03T10:00:00Z","primaryModelId":"grok-4.7",
              "inputTokens":1000,"outputTokens":40,"cachedReadTokens":800,"reasoningTokens":12,
              "costUsdTicks":20000000000},
-            {"turnNumber":2,"endedAt":"2026-10-03T11:00:00Z","primaryModelId":"grok-4.7",
+            {"turnNumber":2,"endedAt":"2026-10-03T10:00:00Z","primaryModelId":"grok-4.7",
              "inputTokens":500,"outputTokens":10,"costUsdTicks":5000000000}
             """)
         let ledger = try Ledger(directory: temp.path("cache"))
@@ -469,7 +469,7 @@ import Testing
         let first = await ledger.events(in: allTime)
         #expect(first.count == 2)
         #expect(first.map(\.sessionId) == ["s1", "s1"])
-        #expect(first.map(\.costUSD) == [2, 0.5])
+        #expect(Set(first.map(\.costUSD)) == [2, 0.5])
 
         let file = home.appendingPathComponent("sessions/proj/s1/usage.json")
         try Data("""

@@ -993,16 +993,43 @@ public final class SessionsModel {
     /// all counts, once the ledger has actually scanned) or probe-like.
     /// Feed-polled harnesses (Cursor, Grok Bot) and harnesses the ledger
     /// does not read are never hidden for missing usage. Grok Build is a
-    /// local log: a listed session with no `usage.json` events is empty.
+    /// local log, but the catalog lists `summary.json` and the ledger
+    /// reads `usage.json`: a listed session with no usage file is unread,
+    /// not empty.
     func isTrivial(_ row: Row) -> Bool {
         // A mirrored session is never an accident: its copy may predate
         // the ledger, so missing usage proves nothing about it.
         guard !row.session.mirrored,
               SessionFilter.usageLogHarnesses.contains(row.session.harness) else { return false }
         guard let usage = row.usage else {
-            return ledgerScanned && SessionFilter.localLogHarnesses.contains(row.session.harness)
+            return ledgerScanned
+                && SessionFilter.localLogHarnesses.contains(row.session.harness)
+                && Self.usageFilePresent(row.session)
         }
         return SessionFilter.isTrivial(usage: usage)
+    }
+
+    /// Whether the ledger's source walk reaches this session's usage
+    /// file. Grok lists `summary.json`; only a sibling `usage.json` is
+    /// read. Every other local-log harness is treated as covered here
+    /// (the web page checks Cline and Droid too).
+    static func usageFilePresent(_ session: SessionInfo) -> Bool {
+        guard session.harness == "grok" else { return true }
+        let id = session.id
+        guard !id.isEmpty, !id.contains("/"), !id.contains(":") else { return false }
+        // accountHome is the account root (`~`, or a profile home). The
+        // default catalog reads `~/.grok`, so a nil home is `~/.grok`.
+        let base = session.accountHome.map {
+            URL(fileURLWithPath: $0).appendingPathComponent(".grok")
+        } ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".grok")
+        let sessions = base.appendingPathComponent("sessions")
+        guard let projects = try? FileManager.default.contentsOfDirectory(
+            at: sessions, includingPropertiesForKeys: nil) else { return false }
+        return projects.contains {
+            FileManager.default.fileExists(atPath:
+                $0.appendingPathComponent(id).appendingPathComponent("usage.json").path)
+        }
     }
 
     /// Rows the current filters match that the trivial rule would hide.

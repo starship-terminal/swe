@@ -24,7 +24,9 @@ _NO_TIMING = {"cursor", "droid", "cline"}
 # Harnesses this ledger reads (SessionFilter.localLogHarnesses). A row of
 # one of these with no usage at all, once the ledger has scanned, is an
 # accidental session; cursor and grok-bot are feed-only, so a session the
-# poll never covered is not judged empty.
+# poll never covered is not judged empty. Grok is listed from
+# ``summary.json``; only a session whose ``usage.json`` the scan read is
+# covered (``ledger_covers``).
 LEDGER_HARNESSES = {"claude", "codex", "opencode", "devin", "pi", "droid", "cline", "grok"}
 
 _CLOUD = {"grok-bot", "devin-cloud"}
@@ -54,18 +56,19 @@ def ledger_covers(row: dict, home: Path | None = None,
                   droid_ids: dict | None = None) -> bool:
     """Whether the ledger's source walk reaches this row's own file.
 
-    The catalog is wider than the ledger for two harnesses:
+    The catalog is wider than the ledger for three harnesses:
     ``parse_cline`` also lists the legacy ``data/state/taskHistory.json``
-    index the scan never reads, and ``parse_droid`` a transcript whose
-    ``.settings.json`` sibling never existed. A row from one of those
-    sources is unread, not accidental, and stays visible. ``parse_pi``
-    and the ledger read the same ``agent/sessions`` tree, so every pi
-    row is covered by definition.
+    index the scan never reads, ``parse_droid`` a transcript whose
+    ``.settings.json`` sibling never existed, and ``parse_grok`` a
+    ``summary.json`` whose sibling ``usage.json`` never existed. A row
+    from one of those sources is unread, not accidental, and stays
+    visible. ``parse_pi`` and the ledger read the same
+    ``agent/sessions`` tree, so every pi row is covered by definition.
 
     ``droid_ids`` is a cache one listing shares across its rows: each
     Droid sessions folder is listed once, not globbed per row."""
     harness = str(row.get("harness") or "")
-    if harness not in ("cline", "droid"):
+    if harness not in ("cline", "droid", "grok"):
         return True
     sid = str(row.get("id") or "")
     if not sid or os.sep in sid or (os.altsep and os.altsep in sid):
@@ -75,7 +78,12 @@ def ledger_covers(row: dict, home: Path | None = None,
         base = Path(account)
     else:
         home = Path(home) if home is not None else Path.home()
-        base = home / (".cline" if harness == "cline" else ".factory")
+        names = {"cline": ".cline", "droid": ".factory", "grok": ".grok"}
+        base = home / names[harness]
+    if harness == "grok":
+        # The catalog lists ``summary.json``. The scan reads the sibling
+        # ``usage.json`` only, so a session without one is unread.
+        return next((base / "sessions").glob(f"*/{sid}/usage.json"), None) is not None
     if harness == "cline":
         # The scan reads ``data/sessions/<id>/<id>.json`` only; the
         # taskHistory index alone does not cover the row.
