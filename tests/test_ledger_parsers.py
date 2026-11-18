@@ -308,6 +308,21 @@ class TestFileLines(unittest.TestCase):
         with self.assertRaises(OSError):
             list(parsers.iter_lines(f.parent / "missing.jsonl"))
 
+    def test_a_zstd_frame_is_read_as_its_plain_lines(self):
+        import shutil
+        import subprocess
+
+        if shutil.which("zstd") is None:
+            self.skipTest("zstd is not installed")
+        f = temp_dir(self) / "copy.jsonl"
+        body = b'{"type":"user"}\n{"type":"assistant"}\n'
+        f.write_bytes(subprocess.run(
+            ["zstd", "-3", "-q", "-c"], input=body, capture_output=True, check=True).stdout)
+        end = []
+        self.assertEqual(list(parsers.iter_lines(f, end=end)),
+                         [b'{"type":"user"}\n', b'{"type":"assistant"}\n'])
+        self.assertEqual(end, [len(body)])
+
 
 class TestDatabaseValues(unittest.TestCase):
     def test_token_and_watermark_columns_read_as_sqlite_would(self):

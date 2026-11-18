@@ -1159,7 +1159,16 @@ class Indexer:
             host = next((c for c in candidates if c is not None), None)
         gone = ((path,) if copy_agent is not None else ()) + tuple(d.path for d in drop)
         decoder = decode.Decoder(harness)
-        with open(read_path or path, "rb") as handle:
+        from swe.sessions import zstd_copy
+
+        # A copy may be a zstd frame. Offsets and the fingerprint are
+        # positions in the plain transcript. The row records that plain
+        # length as its size, so the next pass sees the copy as fully
+        # read. A live file is opened as stored, and keeps its own stat.
+        opened = zstd_copy.open_plain(read_path or path)
+        if isinstance(opened, zstd_copy.PlainFile) and stat.size != opened.size:
+            stat = replace(stat, size=opened.size)
+        with opened as handle:
             start = 0
             if appending:
                 # Only a prefix this side read and fingerprinted, still
@@ -1795,8 +1804,19 @@ def _index_copies(indexer: "Indexer", home: Path, listed: list[Source], result: 
                 st = os.stat(path)
             except OSError:
                 continue
+            stat = file_stat_of(st)
+            # A compressed copy's on-disk size is the frame. The row
+            # records the plain length, so a later pass sees the copy as
+            # fully read. That length is the copy's own decoded size, not
+            # the source ``size`` the manifest recorded before the copy:
+            # the copy may hold appends the recorded stat never saw.
+            entry = manifest.get(path[len(real_root) + 1:])
+            if isinstance(entry, dict) and entry.get("compressed") == "zstd":
+                plain_size = entry.get("plain_size")
+                if isinstance(plain_size, int) and not isinstance(plain_size, bool):
+                    stat = replace(stat, size=plain_size)
             groups.setdefault(identity, []).append(_Copy(
-                path=path, key=key, stat=file_stat_of(st), mtime_ns=st.st_mtime_ns))
+                path=path, key=key, stat=stat, mtime_ns=st.st_mtime_ns))
     if not groups:
         return
     rows_by_identity = indexer.store.session_rows(mirror.MIRRORED)

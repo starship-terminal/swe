@@ -215,9 +215,12 @@ _FP_SPAN = 4096
 def _fingerprint(path: Path, offset: int) -> str:
     """A hash of the head of the file and of the bytes just before
     ``offset``, the native ledger's check that what was read is still
-    there before reading on from it."""
+    there before reading on from it. A zstd frame is hashed as the
+    plain transcript, the same bytes :func:`parsers.iter_lines` yields."""
+    from swe.sessions import zstd_copy
+
     h = hashlib.sha1()
-    with open(path, "rb") as f:
+    with zstd_copy.open_plain(str(path)) as f:
         h.update(f.read(min(_FP_SPAN, offset)))
         f.seek(max(0, offset - _FP_SPAN))
         h.update(f.read(min(_FP_SPAN, offset)))
@@ -342,6 +345,7 @@ def _scan_copies(store: LedgerStore, home: Path, live: set[tuple[str, str]],
     ever deleted here."""
     from swe.sessions import search_writer
     from swe.sessions import transcript_mirror as mirror
+    from swe.sessions import zstd_copy
 
     root = transcripts_dir_for(home)
     if not root.is_dir():
@@ -382,7 +386,17 @@ def _scan_copies(store: LedgerStore, home: Path, live: set[tuple[str, str]],
                 st = os.stat(path)
             except OSError:
                 continue  # gone since the walk
-            if _covers(_source_cursor(store, source, spellings), st, path):
+            framed = False
+            try:
+                with open(path, "rb") as head:
+                    framed = zstd_copy.is_frame(head.read(4))
+            except OSError:
+                framed = False  # the read below notes an unreadable copy
+            # A compressed orphan is smaller than the source the cursor
+            # read, so the cover check (size and mtime of the plain file)
+            # cannot match it. Read it once under its own cursor.
+            if not framed and _covers(
+                    _source_cursor(store, source, spellings), st, path):
                 continue
             copy = Path(path)
             if harness == "claude":

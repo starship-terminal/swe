@@ -351,11 +351,17 @@ def iter_lines(path: Path, offset: int = 0, end: list | None = None):
     """Complete, newline-terminated lines from ``offset``. A trailing
     partial line is left for the next read; ``end[0]`` is set to the
     offset just past the last complete line. Raises ``OSError`` when the
-    file can't be opened."""
+    file can't be opened.
+
+    ``offset`` is a position in the transcript. A zstd frame (an orphaned
+    mirror copy) is decoded first, so the offset is never a position in
+    the frame."""
     pos = offset
     # An unreadable file raises, so the caller notes it and keeps its
     # cursor; a silent empty read would mark it done for good.
-    with open(path, "rb") as f:
+    from swe.sessions import zstd_copy
+
+    with zstd_copy.open_plain(str(path)) as f:
         f.seek(offset)
         for line in f:
             if not line.endswith(b"\n"):

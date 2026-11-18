@@ -132,13 +132,37 @@ enum SearchMirror {
 
     /// The same, over a candidate list a full scan already took
     /// (`TranscriptMirror.pruned`), so the mirror is walked once per scan.
+    /// The manifest that names `copy`, found by walking up from the copy
+    /// until `manifest.json` sits beside a parent of its relative path.
+    private static func manifest(beside copy: TranscriptMirror.Copy?) -> [String: TranscriptMirror.Entry] {
+        guard let copy else { return [:] }
+        var dir = URL(fileURLWithPath: copy.path).deletingLastPathComponent()
+        let depth = copy.rel.split(separator: "/").count
+        for _ in 0..<depth {
+            let candidate = dir.appending(path: "manifest.json")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return TranscriptMirror(root: dir, homes: []).manifest()
+            }
+            dir.deleteLastPathComponent()
+        }
+        return [:]
+    }
+
     static func indexCopies(indexer: SearchIndexer, pruned: [TranscriptMirror.Pruned],
                             shouldStop: () -> Bool = { false }) -> Counts {
         var counts = Counts()
         let store = indexer.store
         var groups: [TranscriptMirror.SessionIdentity: [Candidate]] = [:]
+        let entries = Self.manifest(beside: pruned.first?.copy)
         for copy in pruned {
-            guard let stat = fileStat(copy.copy.path) else { continue }
+            guard var stat = fileStat(copy.copy.path) else { continue }
+            let entry = entries[copy.copy.rel]
+            // The copy's own plain length. The source `size` was taken
+            // before the copy and can be shorter than the bytes the copy
+            // holds, so a row of that length would hide the extra replies.
+            if entry?.compressed == "zstd", let plain = entry?.plainSize {
+                stat.stat.sizeBytes = plain
+            }
             groups[copy.identity, default: []].append(Candidate(pruned: copy, stat: stat.stat,
                                                                mtimeNs: stat.mtimeNs))
         }

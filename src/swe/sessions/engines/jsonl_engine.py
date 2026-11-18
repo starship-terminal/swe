@@ -537,7 +537,11 @@ def _scan_jsonl(fp: str, config: JsonlParserConfig) -> list:
     # for nothing).
     if config.path_from_event or config.title_from_event:
         try:
-            with open(fp, "rb") as f:
+            from swe.sessions import zstd_copy
+            import io
+            plain = zstd_copy.plain(fp)
+            handle = io.BytesIO(plain) if plain is not None else open(fp, "rb")
+            with handle as f:
                 for i, line in enumerate(decoded_lines(f)):
                     if not line.strip():
                         continue

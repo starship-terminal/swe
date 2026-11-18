@@ -343,7 +343,12 @@ def _messages_from_record(record: Any) -> list[NormalizedMessage]:
 
 def _read_jsonl(path: Path) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
-    with path.open(encoding="utf-8", errors="replace") as handle:
+    from swe.sessions import zstd_copy
+    import io
+    plain = zstd_copy.plain(str(path))
+    handle = io.TextIOWrapper(io.BytesIO(plain), encoding="utf-8", errors="replace") \
+        if plain is not None else path.open(encoding="utf-8", errors="replace")
+    with handle:
         for line in handle:
             if not line.strip():
                 continue

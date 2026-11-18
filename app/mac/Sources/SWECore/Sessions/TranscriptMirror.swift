@@ -58,6 +58,15 @@ public struct TranscriptMirror: Sendable, Equatable {
         public var source: String
         /// "" for the harness's own home, else the account home's path.
         public var accountHome: String
+        /// The source file's size, taken before the copy. Nil when the
+        /// manifest has no number.
+        public var size: Int64?
+        /// The copy's own plain length, recorded when the copy became a
+        /// frame. Search uses this, not `size`: the copy can hold appends
+        /// the source stat never saw. Nil on a plain copy.
+        public var plainSize: Int64?
+        /// `"zstd"` once the copy's body is a frame. Nil for a plain copy.
+        public var compressed: String?
     }
 
     /// One copy found under the root.
@@ -213,9 +222,14 @@ public struct TranscriptMirror: Sendable, Equatable {
         var out: [String: Entry] = [:]
         for (rel, value) in files {
             guard let entry = value as? [String: Any] else { continue }
+            let size = entry["size"] as? Int
+            let plainSize = entry["plain_size"] as? Int
             out[rel] = Entry(harness: entry["harness"] as? String ?? "",
                              source: entry["source"] as? String ?? "",
-                             accountHome: entry["account_home"] as? String ?? "")
+                             accountHome: entry["account_home"] as? String ?? "",
+                             size: size.map { Int64($0) },
+                             plainSize: plainSize.map { Int64($0) },
+                             compressed: entry["compressed"] as? String)
         }
         return out
     }

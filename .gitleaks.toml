@@ -1,0 +1,12 @@
+title = "swe"
+
+[extend]
+useDefault = true
+
+# Meta's zstd v1.5.7 single-file decoder. xxHash names its SIMD
+# accumulators data_key_lo and data_key_hi, which generic-api-key reads
+# as an assigned secret. The file is generated, so a comment allow
+# cannot be kept. Everything else in the tree stays scanned.
+[[allowlists]]
+description = "Vendored zstd decoder, xxHash SIMD identifiers"
+paths = ['''app/mac/Sources/CZStd/zstddeclib\.inc''']

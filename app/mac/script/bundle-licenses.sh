@@ -21,7 +21,7 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 python_texts="python-bzip2.txt python-cpython.txt python-expat.txt
 python-libedit.txt python-libffi.txt python-liblzma.txt python-libuuid.txt
 python-mpdecimal.txt python-ncurses.txt python-openssl-1.1.txt
-python-openssl-3.txt python-sqlite.txt python-zlib.txt"
+python-openssl-3.txt python-sqlite.txt python-zlib.txt zstd.txt"
 
 if [ "${1:-}" = "--list" ]; then
   printf '%s\n' $python_texts sparkle.txt

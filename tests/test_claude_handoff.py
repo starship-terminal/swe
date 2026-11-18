@@ -68,9 +68,10 @@ class ClaudeHandoffTest(unittest.TestCase):
             def fake_expanduser(path):
                 if path.startswith("~/.claude/projects"):
                     return str(projects) + "/"
-                # Account-home scans must not read the real ~/.swe.
-                if path.startswith("~/.swe"):
-                    return str(Path(tmp) / ".swe") + path[len("~/.swe"):]
+                # Account-home scans must not read the real ~/.swe, and a
+                # mirror walk must not read the real transcripts folder.
+                if path.startswith("~/.swe") or path.startswith("~"):
+                    return str(Path(tmp) / ".swe-empty") + path[len("~"):]
                 return REAL_EXPANDUSER(path)
 
             with patch(
@@ -195,6 +196,21 @@ class ClaudeHandoffEdgeCaseTest(unittest.TestCase):
                 f.write("not json at all\n")
                 f.write("[1, 2, 3]\n")
                 f.write("\n")
+            self.assertEqual("next", _claude_handed_off(str(path)))
+
+    def test_a_compressed_copy_still_names_its_successor(self):
+        import shutil
+        import subprocess
+
+        if shutil.which("zstd") is None:
+            self.skipTest("zstd is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            body = (json.dumps(_user("hello")) + "\n"
+                    + json.dumps(_continued_in("next")) + "\n")
+            path.write_bytes(subprocess.run(
+                ["zstd", "-3", "-q", "-c"], input=body.encode(),
+                capture_output=True, check=True).stdout)
             self.assertEqual("next", _claude_handed_off(str(path)))
 
     def test_a_tail_of_pure_bookkeeping_is_not_a_handoff(self):

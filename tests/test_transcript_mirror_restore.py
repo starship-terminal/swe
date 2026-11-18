@@ -834,7 +834,12 @@ class ChosenCopyTests(PurgeCase):
         write_jsonl(self.home / ".claude/projects/-work-proj" / f"{CLAUDE_ID}.jsonl",
                     claude_records("default home text"), MTIME + 5)
         result = self.sync()
-        self.assertEqual(work_copy.read_bytes(), before)
+        # The default home's transcript must not land on the work copy.
+        # The work copy's own source is gone, so the pass may store it as
+        # a zstd frame of the bytes it already held.
+        from swe.sessions import zstd_copy
+        self.assertEqual(zstd_copy.read_bytes(str(work_copy)), before)
+        self.assertNotIn(b"default home text", work_copy.read_bytes())
         self.assertEqual(result.failed, 1)
 
     def test_reads_never_follow_a_linked_group_into_another_account(self):

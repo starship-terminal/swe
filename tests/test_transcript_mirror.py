@@ -566,6 +566,58 @@ class SafetyTests(MirrorCase):
         self.assertEqual(result.orphaned_bytes, copy.stat().st_size)
         self.assertEqual(mirror.status(self.home)["orphaned"], 1)
 
+    def test_a_live_copy_stays_plain_and_an_orphan_becomes_a_frame(self):
+        import shutil
+
+        claude = self.claude()
+        body = claude.read_bytes()
+        mtime = claude.stat().st_mtime_ns
+        self.sync()
+        copy = self.mirror_root / "claude/-work-proj" / claude.name
+        self.assertEqual(copy.read_bytes(), body)
+        gone = self.sync()
+        self.assertEqual(gone.compressed, 0)
+        self.assertEqual(copy.read_bytes(), body)
+        claude.unlink()
+        if shutil.which("zstd") is None:
+            self.assertEqual(self.sync().compressed, 0)
+            self.assertEqual(copy.read_bytes(), body)
+            return
+        result = self.sync()
+        self.assertEqual(result.compressed, 1)
+        self.assertEqual(result.orphaned, 1)
+        self.assertTrue(copy.read_bytes().startswith(b"\x28\xb5\x2f\xfd"))
+        self.assertLess(copy.stat().st_size, len(body))
+        self.assertEqual(copy.stat().st_mtime_ns, mtime)
+        entry = mirror.load_manifest(self.home)[f"claude/-work-proj/{claude.name}"]
+        self.assertEqual(entry["compressed"], "zstd")
+        self.assertEqual(entry["size"], len(body))
+        self.assertEqual(entry["plain_size"], len(body))
+        self.assertEqual(entry["mirror_size"], copy.stat().st_size)
+        self.assertEqual(result.orphaned_bytes, copy.stat().st_size)
+        again = self.sync()
+        self.assertEqual(again.compressed, 0)
+        self.assertEqual(again.orphaned, 1)
+        from swe.sessions import zstd_copy
+        self.assertEqual(zstd_copy.read_bytes(str(copy)), body)
+        from swe.reports.transcripts import _read_jsonl
+        messages = _read_jsonl(copy)
+        self.assertIn("fix the login bug", "\n".join(m.text for m in messages))
+
+    def test_a_failed_compress_leaves_the_plain_copy(self):
+        claude = self.claude()
+        body = claude.read_bytes()
+        self.sync()
+        claude.unlink()
+        copy = self.mirror_root / "claude/-work-proj" / claude.name
+        with mock.patch("shutil.which", return_value=None):
+            result = self.sync()
+        self.assertEqual(result.compressed, 0)
+        self.assertEqual(result.orphaned, 1)
+        self.assertEqual(copy.read_bytes(), body)
+        self.assertNotIn("compressed", mirror.load_manifest(self.home)[
+            f"claude/-work-proj/{claude.name}"])
+
     def test_a_vanished_harness_directory_deletes_nothing(self):
         self.claude(), self.codex()
         self.sync()
@@ -589,6 +641,41 @@ class SafetyTests(MirrorCase):
         self.assertEqual(kept[0].read_bytes(), longer)
         # Not a transcript to anything that lists or indexes by suffix.
         self.assertFalse(kept[0].name.endswith(".jsonl"))
+        # After the shorter copy is a frame, a source shorter than that
+        # transcript and longer than the frame still keeps the frame.
+        claude.unlink()
+        import shutil
+        if shutil.which("zstd") is not None:
+            self.sync()
+            framed = copy.read_bytes()
+            self.assertTrue(framed.startswith(b"\x28\xb5\x2f\xfd"))
+            from swe.sessions import zstd_copy
+            held = zstd_copy.read_bytes(str(copy))
+            # Between the frame's size and the transcript it holds, so a
+            # comparison of file sizes would miss the shrink.
+            shorter = b'{"type":"user","pad":"' + b"x" * (len(framed) - 10) + b'"}\n'
+            self.assertGreater(len(shorter), len(framed))
+            self.assertLess(len(shorter), len(held))
+            write_jsonl(claude, [], MTIME + 60)
+            claude.write_bytes(shorter)
+            os.utime(claude, ns=((MTIME + 60) * 1_000_000_000,) * 2)
+            self.sync()
+            kept = list(copy.parent.glob(f"{claude.name}{mirror.SHRUNK_SUFFIX}*"))
+            self.assertEqual(len(kept), 2)
+            self.assertIn(held, [zstd_copy.read_bytes(str(path)) for path in kept])
+            # A frame that cannot be decoded is left in place. Replacing
+            # it would drop the only copy of that history.
+            # The frame is now a backup. A source shorter than the
+            # transcript it holds must not replace it when the frame
+            # cannot be decoded.
+            backups = list(copy.parent.glob(f"{claude.name}{mirror.SHRUNK_SUFFIX}*"))
+            framed_backup = next(path for path in backups if path.read_bytes().startswith(b"\x28\xb5\x2f\xfd"))
+            write_jsonl(claude, [], MTIME + 90)
+            claude.write_bytes(b'{"type":"user"}\n')
+            os.utime(claude, ns=((MTIME + 90) * 1_000_000_000,) * 2)
+            with mock.patch("swe.sessions.transcript_mirror._plain_bytes", side_effect=OSError("no zstd")):
+                self.assertEqual(self.sync().failed, 1)
+            self.assertEqual(framed_backup.read_bytes(), framed)
 
     def test_an_unreadable_manifest_is_set_aside_never_overwritten(self):
         self.claude()
@@ -868,7 +955,16 @@ class CommandTests(MirrorCase):
         again = decode(run_swe(self.home, "session", "mirror", "--json"))["data"]
         self.assertEqual((again["pass"]["copied"] + again["pass"]["cloned"],
                           again["pass"]["orphaned"]), (0, 1))
-        self.assertEqual(again["pass"]["orphaned_bytes"], data["bytes"])
+        # A sandbox with no zstd command leaves the orphan plain. The
+        # count is still reported, as 0.
+        import shutil
+        if shutil.which("zstd"):
+            self.assertEqual(again["pass"]["compressed"], 1)
+            self.assertLess(again["pass"]["orphaned_bytes"], data["bytes"])
+        else:
+            self.assertEqual(again["pass"]["compressed"], 0)
+            self.assertEqual(again["pass"]["orphaned_bytes"], data["bytes"])
+        self.assertEqual(again["orphaned_bytes"], again["pass"]["orphaned_bytes"])
 
     def test_status_runs_no_pass(self):
         self.claude()

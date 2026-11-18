@@ -71,6 +71,7 @@ _FINGERPRINT_MODULES = (
     "swe.sessions.parse_cache",
     "swe.sessions.parsers",
     "swe.sessions.engines.jsonl_engine",
+    "swe.sessions.zstd_copy",
     "swe.sessions.engines.common",
     "swe.sessions.engines.json_engine",
 )

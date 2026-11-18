@@ -906,7 +906,8 @@ class ForgetRaceTests(MirrorSearchCase):
         source, copy = self.copy_row()
 
         def restore_grown():
-            shutil.copy2(copy, source)
+            from swe.sessions import zstd_copy
+            source.write_bytes(zstd_copy.read_bytes(str(copy)))
             self.grow(source, CLAUDE_ID, "plover restored", mtime=MTIME + 100)
             self.index_live_only()
         self.assertEqual(self.forget_while(restore_grown), 0)
@@ -914,7 +915,9 @@ class ForgetRaceTests(MirrorSearchCase):
 
     def test_a_transcript_restored_meanwhile_keeps_its_row_even_unchanged(self):
         source, copy = self.copy_row()
-        self.assertEqual(self.forget_while(lambda: shutil.copy2(copy, source)), 0)
+        from swe.sessions import zstd_copy
+        self.assertEqual(self.forget_while(
+            lambda: source.write_bytes(zstd_copy.read_bytes(str(copy)))), 0)
         self.assertEqual(self.hits("first"), [CLAUDE_ID])
 
 

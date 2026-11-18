@@ -453,11 +453,21 @@ def _claude_handed_off(path: str) -> str:
     count; only conversation does.
     """
     try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as fh:
+        from swe.sessions import zstd_copy
+
+        # A compressed copy is a frame under the same name. The marker
+        # sits in the plain transcript, so the tail is taken from that.
+        plain = zstd_copy.plain(path)
+        if plain is None:
+            size = os.path.getsize(path)
+            with open(path, "rb") as fh:
+                start = max(0, size - _CLAUDE_HANDOFF_TAIL_BYTES)
+                fh.seek(start)
+                chunk = fh.read().decode("utf-8", errors="ignore")
+        else:
+            size = len(plain)
             start = max(0, size - _CLAUDE_HANDOFF_TAIL_BYTES)
-            fh.seek(start)
-            chunk = fh.read().decode("utf-8", errors="ignore")
+            chunk = plain[start:].decode("utf-8", errors="ignore")
     except OSError:
         parse_cache.note_read_error()
         return ""

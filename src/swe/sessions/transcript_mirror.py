@@ -217,7 +217,7 @@ def _manifest_signature(path: Path) -> tuple | None:
 # Entry fields that must be numbers for a reader to use them. A value of
 # another type reads as 0 (the stat then never matches, so a live source
 # is copied again, which is what an unknown stat should mean).
-_NUMERIC_FIELDS = ("ino", "mtime_ns", "size", "mirror_size", "copied_at")
+_NUMERIC_FIELDS = ("ino", "mtime_ns", "size", "mirror_size", "plain_size", "copied_at")
 
 
 def _is_number(value) -> bool:
@@ -240,6 +240,9 @@ def _clean_entry(value) -> dict | None:
         return None
     clean = dict(value)
     clean["account_home"] = account or ""
+    compressed = clean.get("compressed")
+    if compressed is not None and compressed != "zstd":
+        clean.pop("compressed", None)
     for field in _NUMERIC_FIELDS:
         if field in clean and not _is_number(clean[field]):
             clean[field] = 0
@@ -337,6 +340,7 @@ class MirrorResult:
     cloned: int = 0  # copy-on-write clones (macOS/APFS): no bytes moved
     unchanged: int = 0
     orphaned: int = 0  # copies whose source is gone: kept, as intended
+    compressed: int = 0  # orphaned copies turned into a zstd frame this pass
     failed: int = 0
     conflicts: int = 0  # a copy owned by another source: left alone
     unreadable: int = 0  # a copy whose manifest entry cannot be read: left alone
@@ -348,7 +352,7 @@ class MirrorResult:
 
     def as_dict(self) -> dict:
         return {k: getattr(self, k) for k in (
-            "files", "copied", "cloned", "unchanged", "orphaned", "failed", "conflicts", "unreadable",
+            "files", "copied", "cloned", "unchanged", "orphaned", "compressed", "failed", "conflicts", "unreadable",
             "copied_bytes", "cloned_bytes", "unchanged_bytes", "orphaned_bytes", "seconds")}
 
 
@@ -364,20 +368,115 @@ def _unchanged(entry: dict | None, path: str, st: os.stat_result, dest: Path) ->
         return False  # the copy is gone: copy again
 
 
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+# zstd -3: the level measured against these transcripts. Fast to write
+# and to read, and about a third of the plain file.
+_ZSTD_LEVEL = "3"
+
+
+def _compress_orphan(dest: Path, root: Path) -> bool:
+    """Replace a plain orphaned copy with a zstd frame of the same bytes.
+
+    The frame is written beside the copy, decoded back, and renamed over
+    it only when the decoded bytes match. A crash leaves the plain copy
+    or the frame, never half of either. A copy that is already a frame,
+    or one ``zstd`` cannot encode, is left alone. Returns whether this
+    call compressed it, and the plain length it stored."""
+    import shutil
+    import subprocess
+
+    # The spelled path has to be the file, inside the real root, with no
+    # symlink on the way. Following one would rewrite another account's
+    # copy when transcripts/claude points at an account folder.
+    if not _inside(str(dest), str(root)):
+        return False, 0
+    tool = shutil.which("zstd")
+    if tool is None:
+        return False, 0
+    try:
+        with open(dest, "rb") as handle:
+            head = handle.read(4)
+            if head.startswith(_ZSTD_MAGIC):
+                return False, 0
+            plain = head + handle.read()
+    except OSError:
+        return False, 0
+    tmp = dest.parent / f".{dest.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
+    try:
+        # --stream-size writes the plain length into the frame header.
+        # A reader can then skip an unchanged frame without decoding it.
+        # A build of zstd without the flag falls back to a header that
+        # omits the length; the reader decodes that one.
+        sized = subprocess.run(
+            [tool, f"-{_ZSTD_LEVEL}", "-q", "-c", f"--stream-size={len(plain)}"],
+            input=plain, capture_output=True, check=False)
+        done = sized if sized.returncode == 0 and sized.stdout.startswith(_ZSTD_MAGIC) else subprocess.run(
+            [tool, f"-{_ZSTD_LEVEL}", "-q", "-c"],
+            input=plain, capture_output=True, check=True)
+        if not done.stdout.startswith(_ZSTD_MAGIC):
+            return False, 0
+        back = subprocess.run(
+            [tool, "-d", "-q", "-c"], input=done.stdout, capture_output=True, check=True)
+        if back.stdout != plain:
+            return False, 0
+        with open(tmp, "xb") as out:
+            out.write(done.stdout)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tmp, 0o600)
+        # Keep the source's mtime: a listed session sorts by it.
+        st = os.stat(dest)
+        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+        os.replace(tmp, dest)
+        return True, len(plain)
+    except (OSError, subprocess.CalledProcessError):
+        return False, 0
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+
+
+def _plain_bytes(path: str) -> bytes:
+    """The transcript's bytes. A zstd frame decodes first. Raises
+    ``OSError`` when a frame cannot be decoded, so a caller that is
+    about to replace the file can refuse instead of guessing."""
+    from swe.sessions import zstd_copy
+
+    plain = zstd_copy.plain(path)
+    if plain is not None:
+        return plain
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
 def _keep_shrunk(dest: Path, written: int) -> None:
     """Before ``dest`` is replaced by something smaller, keep it under a
-    second name. A hard link, so no bytes move and no gap opens."""
-    try:
-        old = os.stat(dest)
-    except FileNotFoundError:
+    second name. A hard link, so no bytes move and no gap opens.
+
+    ``written`` is the incoming plain length. A frame is shorter than the
+    transcript it holds, so the comparison uses the decoded length: a
+    restored source that is shorter than the saved history still keeps
+    the frame, even when it is longer than the frame itself.
+
+    A frame that cannot be decoded raises. Replacing it then would drop
+    the only copy of that history, so the caller leaves the file alone.
+    Two histories of the same length get different names: the stamp is a
+    hash of the bytes, and a name that already exists is kept only when
+    those bytes match."""
+    if not dest.exists():
         return
-    if old.st_size <= written:
+    old_bytes = _plain_bytes(str(dest))
+    if len(old_bytes) <= written:
         return
-    backup = dest.with_name(f"{dest.name}{SHRUNK_SUFFIX}{old.st_mtime_ns}")
+    digest = hashlib.sha256(old_bytes).hexdigest()[:16]
+    backup = dest.with_name(f"{dest.name}{SHRUNK_SUFFIX}{digest}")
     try:
         os.link(dest, backup)
     except FileExistsError:
-        pass  # this exact version is already kept
+        if _plain_bytes(str(backup)) != old_bytes:
+            spare = dest.with_name(
+                f"{dest.name}{SHRUNK_SUFFIX}{digest}-{os.getpid()}")
+            os.link(dest, spare)
 
 
 def _clone(source: str, target: str) -> None:
@@ -478,7 +577,12 @@ def _copy(source: str, dest: Path, root: Path, *,
             _link_new(tmp, dest)
             os.unlink(tmp)
             return published, written, how
-        _keep_shrunk(dest, written)
+        try:
+            _keep_shrunk(dest, written)
+        except OSError:
+            # The copy is a frame we cannot read. Replacing it would drop
+            # the only copy of that history, so the source waits.
+            raise
         os.replace(tmp, dest)
         return st, written, how
     except BaseException:
@@ -486,6 +590,34 @@ def _copy(source: str, dest: Path, root: Path, *,
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+@contextlib.contextmanager
+def _reading_plain(path: str):
+    """Yield a path whose bytes are the transcript, decoding a zstd frame
+    to a temp file for the duration of the call."""
+    import tempfile
+
+    from swe.sessions import zstd_copy
+
+    plain = zstd_copy.plain(path)
+    if plain is None:
+        yield path
+        return
+    handle = tempfile.NamedTemporaryFile(prefix=".restore-", suffix=".jsonl", delete=False)
+    try:
+        handle.write(plain)
+        handle.close()
+        os.chmod(handle.name, 0o600)
+        # ``_copy`` stamps the published file with this temp's times. A
+        # frame keeps the source mtime, so the restored session keeps it
+        # too, instead of looking newly active.
+        st = os.stat(path)
+        os.utime(handle.name, ns=(st.st_atime_ns, st.st_mtime_ns))
+        yield handle.name
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(handle.name)
 
 
 def _link_new(tmp: str, dest: Path) -> None:
@@ -649,13 +781,33 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
                 if pending >= FLUSH_EVERY:
                     _write_manifest(home, entries, raw, before)
                     pending = 0
-            # Copies whose source is no longer anywhere: counted, kept.
+            # Copies whose source is no longer anywhere: kept, then
+            # stored as a zstd frame so the only remaining copy is small.
+            # A frame that will not decode is left plain.
             for rel, entry in entries.items():
                 if rel in seen or os.path.lexists(entry.get("source", "")):
                     continue
-                if (root / rel).is_file():
-                    result.orphaned += 1
-                    result.orphaned_bytes += entry.get("mirror_size", 0)
+                dest = root / rel
+                if not dest.is_file() or SHRUNK_SUFFIX in dest.name:
+                    continue
+                compressed, plain_size = _compress_orphan(dest, root)
+                if compressed:
+                    # A new dict: ``before`` holds the old one, so the
+                    # write records the new field instead of the stored
+                    # entry. ``plain_size`` is the copy's own length.
+                    # ``size`` stays the source stat taken before the
+                    # copy, which can be shorter than what the copy holds.
+                    entry = {
+                        **entry,
+                        "compressed": "zstd",
+                        "mirror_size": dest.stat().st_size,
+                        "plain_size": plain_size,
+                    }
+                    entries[rel] = entry
+                    dirty = True
+                    result.compressed += 1
+                result.orphaned += 1
+                result.orphaned_bytes += entry.get("mirror_size", 0)
         finally:
             if dirty or corrupt:
                 _write_manifest(home, entries, None if corrupt else raw, before)
@@ -876,7 +1028,8 @@ def restore(home: Path | None, session) -> dict:
             raise Refused(f"{target} already exists; swe never overwrites a transcript")
         stop = _restore_stop(home, session.tool_name, target)
         try:
-            taken, written, how = _copy(copy_path, Path(target), stop, exclusive=True)
+            with _reading_plain(copy_path) as source:
+                taken, written, how = _copy(source, Path(target), stop, exclusive=True)
         except FileExistsError:
             raise Refused(f"{target} appeared while restoring; swe left it alone") from None
         except OSError as exc:
@@ -936,8 +1089,9 @@ def _restore_subagents(root: str, rel: str, target: str, entries: dict,
                                                       "inside the mirror"})
             continue
         try:
-            taken, _written, _how = _copy(copy, Path(source), Path(os.path.dirname(target)),
-                                          exclusive=True)
+            with _reading_plain(copy) as readable:
+                taken, _written, _how = _copy(readable, Path(source),
+                                              Path(os.path.dirname(target)), exclusive=True)
         except FileExistsError:
             skipped.append({"target": source, "reason": "appeared while restoring"})
             continue
@@ -1061,7 +1215,8 @@ def purge_plan(home: Path | None, session) -> dict:
             continue
         with contextlib.suppress(OSError):
             for child in sorted(os.listdir(folder)):
-                if child.startswith(name + SHRUNK_SUFFIX) and child[len(name + SHRUNK_SUFFIX):].isdigit():
+                rest = child[len(name + SHRUNK_SUFFIX):]
+                if child.startswith(name + SHRUNK_SUFFIX) and rest and "/" not in rest and rest[0] not in ". ":
                     backup = os.path.join(folder, child)
                     (files if _inside(backup, root) else skipped).append(backup)
     known = {os.path.join(root, rel) for rel in entries}
@@ -1365,10 +1520,11 @@ def find_copy(harness: str, session_id: str, account_home: str = "",
     name = f"{Path(session_id).stem}.jsonl"
     found: list[Path] = []
     for rel in load_manifest(home):
-        if os.path.basename(rel) == name:
-            path = Path(_mirror_path(home, rel))
-            if path.is_file() and path.is_relative_to(Path(os.path.realpath(base))):
-                found.append(path)
+        if os.path.basename(rel) != name:
+            continue
+        path = Path(_mirror_path(home, rel))
+        if path.is_file() and path.is_relative_to(Path(os.path.realpath(base))):
+            found.append(path)
     if not found:
         found = [p for p in base.rglob(name) if p.is_file()]
     if not found:

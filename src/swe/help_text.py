@@ -233,7 +233,7 @@ HELP = {
   {c('cyan', 'swe session index --on|--off')} Whether the remote hub keeps the index current
   {c('cyan', 'swe session index --status')}   What the index holds, without a pass
   {c('cyan', 'swe session mirror')}           Copy Claude Code and Codex transcripts into ~/.swe so they outlive
-                                            the harnesses' 30-day pruning (a pass never deletes a copy)
+                                            the harnesses' 30-day pruning (a pass never deletes a copy; an orphan is stored as zstd)
   {c('cyan', 'swe session mirror --on|--off')} Whether the hub and swe session index keep mirroring (default on)
   {c('cyan', 'swe session mirror --status')}  What the mirror holds, without a pass
   {c('cyan', 'swe session mirror --purge=<id>')} Delete one mirrored session's copies, backups and manifest

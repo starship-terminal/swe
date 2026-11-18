@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An orphaned transcript copy is stored as zstd.** A mirror copy stays a plain JSONL, and an APFS clone, while Claude Code or Codex still has the original. Once that original is gone, the next mirror pass replaces the plain copy with a zstd level 3 frame under the same `.jsonl` name, after a round trip proves the frame decodes to the same bytes. The manifest records `compressed: zstd` and the frame's size as `mirror_size`, and keeps the source's size and mtime. Listing, chat, search, the ledger and `swe session restore` read the frame back as the transcript. A machine without the `zstd` command leaves the copy plain. The Mac app reads a frame itself. Compressing a live clone would spend disk the clone does not spend, so a pass never does that.
+
 - **The PR loop rebuilds the app once a stack has merged.** [AGENTS.md](AGENTS.md) tells an agent to fetch `main`, run `install-app.sh` once for the batch, confirm `SWECommit`, and exercise the rebuilt app before calling the work done.
 
 - **Grok Build spend shows on this Mac.** Each finished turn in a `grok` session's `usage.json` is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.
