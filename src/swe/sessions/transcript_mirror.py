@@ -436,15 +436,17 @@ def _compress_orphan(dest: Path, root: Path) -> bool:
             os.unlink(tmp)
 
 
-def _plain_length(path: str) -> int:
-    """The transcript's length. A zstd frame decodes first, so a later
-    shrink compares plain bytes with plain bytes."""
+def _plain_bytes(path: str) -> bytes:
+    """The transcript's bytes. A zstd frame decodes first. Raises
+    ``OSError`` when a frame cannot be decoded, so a caller that is
+    about to replace the file can refuse instead of guessing."""
     from swe.sessions import zstd_copy
 
     plain = zstd_copy.plain(path)
     if plain is not None:
-        return len(plain)
-    return os.path.getsize(path)
+        return plain
+    with open(path, "rb") as handle:
+        return handle.read()
 
 
 def _keep_shrunk(dest: Path, written: int) -> None:
@@ -454,26 +456,27 @@ def _keep_shrunk(dest: Path, written: int) -> None:
     ``written`` is the incoming plain length. A frame is shorter than the
     transcript it holds, so the comparison uses the decoded length: a
     restored source that is shorter than the saved history still keeps
-    the frame, even when it is longer than the frame itself."""
-    try:
-        old_size = _plain_length(str(dest))
-        old = os.stat(dest)
-    except (OSError, FileNotFoundError):
+    the frame, even when it is longer than the frame itself.
+
+    A frame that cannot be decoded raises. Replacing it then would drop
+    the only copy of that history, so the caller leaves the file alone.
+    Two histories of the same length get different names: the stamp is a
+    hash of the bytes, and a name that already exists is kept only when
+    those bytes match."""
+    if not dest.exists():
         return
-    if old_size <= written:
+    old_bytes = _plain_bytes(str(dest))
+    if len(old_bytes) <= written:
         return
-    # A frame keeps the source mtime, which an earlier plain copy of the
-    # same session may already have used. The plain length names this
-    # version; a plain file keeps the mtime it always used.
-    from swe.sessions import zstd_copy
-    with open(dest, "rb") as handle:
-        framed = zstd_copy.is_frame(handle.read(4))
-    stamp = old_size if framed else old.st_mtime_ns
-    backup = dest.with_name(f"{dest.name}{SHRUNK_SUFFIX}{stamp}")
+    digest = hashlib.sha256(old_bytes).hexdigest()[:16]
+    backup = dest.with_name(f"{dest.name}{SHRUNK_SUFFIX}{digest}")
     try:
         os.link(dest, backup)
     except FileExistsError:
-        pass  # this exact version is already kept
+        if _plain_bytes(str(backup)) != old_bytes:
+            spare = dest.with_name(
+                f"{dest.name}{SHRUNK_SUFFIX}{digest}-{os.getpid()}")
+            os.link(dest, spare)
 
 
 def _clone(source: str, target: str) -> None:
@@ -574,7 +577,12 @@ def _copy(source: str, dest: Path, root: Path, *,
             _link_new(tmp, dest)
             os.unlink(tmp)
             return published, written, how
-        _keep_shrunk(dest, written)
+        try:
+            _keep_shrunk(dest, written)
+        except OSError:
+            # The copy is a frame we cannot read. Replacing it would drop
+            # the only copy of that history, so the source waits.
+            raise
         os.replace(tmp, dest)
         return st, written, how
     except BaseException:
@@ -1207,7 +1215,8 @@ def purge_plan(home: Path | None, session) -> dict:
             continue
         with contextlib.suppress(OSError):
             for child in sorted(os.listdir(folder)):
-                if child.startswith(name + SHRUNK_SUFFIX) and child[len(name + SHRUNK_SUFFIX):].isdigit():
+                rest = child[len(name + SHRUNK_SUFFIX):]
+                if child.startswith(name + SHRUNK_SUFFIX) and rest and "/" not in rest and rest[0] not in ". ":
                     backup = os.path.join(folder, child)
                     (files if _inside(backup, root) else skipped).append(backup)
     known = {os.path.join(root, rel) for rel in entries}

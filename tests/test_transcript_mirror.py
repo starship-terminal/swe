@@ -663,6 +663,19 @@ class SafetyTests(MirrorCase):
             kept = list(copy.parent.glob(f"{claude.name}{mirror.SHRUNK_SUFFIX}*"))
             self.assertEqual(len(kept), 2)
             self.assertIn(held, [zstd_copy.read_bytes(str(path)) for path in kept])
+            # A frame that cannot be decoded is left in place. Replacing
+            # it would drop the only copy of that history.
+            # The frame is now a backup. A source shorter than the
+            # transcript it holds must not replace it when the frame
+            # cannot be decoded.
+            backups = list(copy.parent.glob(f"{claude.name}{mirror.SHRUNK_SUFFIX}*"))
+            framed_backup = next(path for path in backups if path.read_bytes().startswith(b"\x28\xb5\x2f\xfd"))
+            write_jsonl(claude, [], MTIME + 90)
+            claude.write_bytes(b'{"type":"user"}\n')
+            os.utime(claude, ns=((MTIME + 90) * 1_000_000_000,) * 2)
+            with mock.patch("swe.sessions.transcript_mirror._plain_bytes", side_effect=OSError("no zstd")):
+                self.assertEqual(self.sync().failed, 1)
+            self.assertEqual(framed_backup.read_bytes(), framed)
 
     def test_an_unreadable_manifest_is_set_aside_never_overwritten(self):
         self.claude()

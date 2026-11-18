@@ -1459,10 +1459,12 @@ public actor Ledger {
         var state: Data?
         // A compressed copy is a frame. The cursor's offset is a position
         // in the plain transcript, and the frame header stores that
-        // length. An unchanged frame matches on the header alone, so the
-        // body is not decoded. A header that omits the length falls
-        // through and decodes.
-        if let saved, saved.inode == info.inode, saved.size == info.size,
+        // length. The shortcut is only for this file's own cursor: a
+        // source cursor can share the length and mtime of a rewrite that
+        // happened while the app was closed, and that one still decodes
+        // so its samples can be checked. A header that omits the length
+        // falls through and decodes.
+        if let saved, saved.path == path, saved.inode == info.inode, saved.size == info.size,
            saved.modified == info.modified, (saved.changed ?? info.changed) == info.changed,
            indexNeed != .whole,
            let declared = ZstdFile.contentSize(at: URL(fileURLWithPath: path)),
@@ -1634,12 +1636,6 @@ public actor Ledger {
             if Task.isCancelled { throw CancellationError() }
             guard let home = mirror.home(for: copy.copy.rel, harness: copy.copy.harness),
                   let info = FileInfo(path: copy.copy.path) else { continue }
-            // The source cursor covers a frame when the header's plain
-            // length is the size that cursor read. The body stays unread.
-            if let cursor = try store.cursor(for: copy.source),
-               let declared = ZstdFile.contentSize(at: URL(fileURLWithPath: copy.copy.path)),
-               cursor.size == UInt64(declared), cursor.offset == cursor.size,
-               cursor.modified == info.modified { continue }
             let plain: Data?
             do {
                 plain = try reader.plainBytes(at: URL(fileURLWithPath: copy.copy.path))
