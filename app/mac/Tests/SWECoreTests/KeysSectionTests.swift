@@ -293,5 +293,9 @@ import Testing
             == APIKeyProbe(hosts: [URL(string: "https://api.exa.ai/search")!],
                            method: "POST", body: Data("{}".utf8), auth: .header("x-api-key"),
                            worksOnBadRequest: true))
+        #expect(APIKeyProbe.probe(forName: "AGENTMAIL_API_KEY")
+            == APIKeyProbe(hosts: [URL(string: "https://api.agentmail.to/v0/inboxes")!],
+                           method: "GET", body: nil, auth: .bearer,
+                           worksOnBadRequest: false))
     }
 }

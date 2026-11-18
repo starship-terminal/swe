@@ -191,6 +191,17 @@ import Testing
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(key)")
     }
 
+    @Test func agentmailGoesOutAsBearer() async throws {
+        let transport = FakeTransport()
+        transport.reply(200)
+        let probe = try #require(APIKeyProbe.probe(forName: "AGENTMAIL_API_KEY"))
+        _ = await APIKeyChecker(transport: transport).check(key: key, probe: probe)
+        let request = try #require(transport.requests.first)
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.absoluteString == "https://api.agentmail.to/v0/inboxes")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(key)")
+    }
+
     @Test func routingRunPostsAnEmptyJsonBody() async throws {
         let transport = FakeTransport()
         transport.reply(200)

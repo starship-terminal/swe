@@ -1,4 +1,5 @@
 id	kind	source_url	licence	notes
+agentmail	mono	https://raw.githubusercontent.com/agentmail-to/agentmail-docs/main/fern/assets/logos/agentmail-logo-landscape-light.svg	trademark, no licence stated	AgentMail mark, cropped to the symbol from the docs landscape logo
 ai21	mono	https://unpkg.com/@lobehub/icons-static-svg@1.95.1/icons/ai21.svg	MIT (LobeHub icons); AI21 trademark	AI21 mark, for its status page
 aider	mono	https://raw.githubusercontent.com/Aider-AI/aider/main/aider/website/assets/icons/safari-pinned-tab.svg	Apache-2.0 repo; aider trademark	pixel 'a' mark, from the site's pinned-tab icon; potrace file: the background-plate subpath it wraps the mark in was removed, the next subpath's relative move made absolute (M 2705 3998) so the mark keeps its place, and the counter merged into the same path with fill-rule evenodd so the a keeps its hole
 antgroup	color	https://unpkg.com/@lobehub/icons-static-svg@1.95.1/icons/antgroup-color.svg	MIT (LobeHub icons); Ant Group trademark	Ant Group mark, for InclusionAI's Ling and Ring models

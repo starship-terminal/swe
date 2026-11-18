@@ -566,6 +566,9 @@ class TestGet(_Settings):
         self.assertEqual(catalog["vercel"]["env_vars"], ["VERCEL_TOKEN"])
         self.assertEqual(catalog["netlify"]["kind"], "infra")
         self.assertEqual(catalog["openai"]["kind"], "inference")
+        self.assertEqual(catalog["agentmail"]["kind"], "services")
+        self.assertEqual(catalog["agentmail"]["env_vars"], ["AGENTMAIL_API_KEY"])
+        self.assertEqual(catalog["agentmail"]["url"], "https://console.agentmail.to")
         config = self.home / ".swe" / "config"
         config.mkdir(parents=True)
         (config / "providers.json").write_text(json.dumps({
