@@ -1457,6 +1457,11 @@ public actor Ledger {
 
         var start: UInt64 = 0
         var state: Data?
+        // A compressed copy is a frame. The cursor's offset is a position
+        // in the plain transcript, so the fast path compares it to the
+        // plain length, not to the frame's size on disk.
+        let plain = try reader.plainBytes(at: URL(fileURLWithPath: path))
+        let readSize = plain.map { UInt64($0.count) } ?? info.size
         if let saved {
             // `changed` is ctime: a rewrite that preserved size and mtime
             // (a backup restore, a `touch -r` stamp) still moves it, so the
@@ -1465,7 +1470,7 @@ public actor Ledger {
             // A `.whole` index need forfeits the fast path: the index is
             // behind on a span of its own and must read the file again.
             if saved.inode == info.inode, saved.size == info.size, saved.modified == info.modified,
-               (saved.changed ?? info.changed) == info.changed, saved.offset == info.size,
+               (saved.changed ?? info.changed) == info.changed, saved.offset == readSize,
                indexNeed != .whole {
                 report.filesUnchanged += 1
                 return
@@ -1496,10 +1501,10 @@ public actor Ledger {
         }
         var lineParser = P(file: url, accountHome: accountHome, savedState: state)
         let store = self.store
-        var endOffset: UInt64 = info.size
+        var endOffset: UInt64 = readSize
         try store.db.execute("BEGIN IMMEDIATE")
         do {
-            let result = try reader.read(URL(fileURLWithPath: path), from: start) { line in
+            let consume: (Data) throws -> Void = { line in
                 // One JSONSerialization serves both consumers: the byte
                 // gates union, then the parsed object feeds the ledger
                 // parser and the index decoder together. A line neither
@@ -1513,12 +1518,16 @@ public actor Ledger {
                 }
                 indexer?.consume(object: object)
             }
+            let result = try plain.map { try reader.read($0, from: start, line: consume) }
+                ?? reader.read(URL(fileURLWithPath: path), from: start, line: consume)
             endOffset = result.endOffset
-            let head = Self.hashRange(path: path, from: 0, length: min(Self.fingerprintBytes, result.endOffset))
+            let head = Self.hashRange(
+                path: path, plain: plain, from: 0, length: min(Self.fingerprintBytes, result.endOffset))
             let tailLength = min(Self.fingerprintBytes, result.endOffset)
-            let tail = Self.hashRange(path: path, from: result.endOffset - tailLength, length: tailLength)
+            let tail = Self.hashRange(
+                path: path, plain: plain, from: result.endOffset - tailLength, length: tailLength)
             let mid = Self.middleSample(of: result.endOffset)
-            let midHash = Self.hashRange(path: path, from: mid.from, length: mid.length)
+            let midHash = Self.hashRange(path: path, plain: plain, from: mid.from, length: mid.length)
             try store.save(FileCursor(
                 path: path, inode: info.inode, size: info.size, modified: info.modified,
                 changed: info.changed, offset: result.endOffset,
@@ -1603,7 +1612,8 @@ public actor Ledger {
             guard let home = mirror.home(for: copy.copy.rel, harness: copy.copy.harness),
                   let info = FileInfo(path: copy.copy.path) else { continue }
             if let cursor = try store.cursor(for: copy.source),
-               Self.cursor(cursor, covers: info, copy: copy.copy.path) { continue }
+               Self.cursor(cursor, covers: info, copy: copy.copy.path,
+                           plain: try reader.plainBytes(at: URL(fileURLWithPath: copy.copy.path))) { continue }
             let url = URL(fileURLWithPath: copy.copy.path)
             if copy.copy.harness == "claude" {
                 try scanFile(url, accountHome: home.home.path, parser: ClaudeFileParser.self, seen: &seen,
@@ -1623,9 +1633,14 @@ public actor Ledger {
     /// or smaller size, new usage) fails one of these, so its copy is read
     /// and event keys drop the lines the ledger already holds. Never a
     /// bare offset comparison: a shorter rewrite would pass it.
-    static func cursor(_ cursor: FileCursor, covers info: FileInfo, copy path: String) -> Bool {
-        cursor.size == info.size && cursor.offset == info.size && cursor.modified == info.modified
-            && fingerprintsMatch(cursor, path: path)
+    static func cursor(_ cursor: FileCursor, covers info: FileInfo, copy path: String,
+                       plain: Data? = nil) -> Bool {
+        // A compressed copy's on-disk size is the frame, and its mtime is
+        // the source's, which the compress step keeps. The cursor covers
+        // it only when the plain bytes are the size the cursor read.
+        let size = plain.map { UInt64($0.count) } ?? info.size
+        return cursor.size == size && cursor.offset == size && cursor.modified == info.modified
+            && fingerprintsMatch(cursor, path: path, plain: plain)
     }
 
     /// Bytes each fingerprint sample covers. Head, middle and tail of the
@@ -1640,7 +1655,7 @@ public actor Ledger {
         return ((offset - length) / 2, length)
     }
 
-    private static func fingerprintsMatch(_ cursor: FileCursor, path: String) -> Bool {
+    private static func fingerprintsMatch(_ cursor: FileCursor, path: String, plain: Data? = nil) -> Bool {
         // A malformed cursor must fail the check, not trap: validate every
         // conversion and the tail's reach before subtracting.
         guard let headLength = UInt64(exactly: cursor.headLength),
@@ -1648,13 +1663,13 @@ public actor Ledger {
               headLength <= fingerprintBytes, tailLength <= fingerprintBytes,
               tailLength <= cursor.offset
         else { return false }
-        guard hashRange(path: path, from: 0, length: headLength) == cursor.headHash,
-              hashRange(path: path, from: cursor.offset - tailLength, length: tailLength)
+        guard hashRange(path: path, plain: plain, from: 0, length: headLength) == cursor.headHash,
+              hashRange(path: path, plain: plain, from: cursor.offset - tailLength, length: tailLength)
                 == cursor.tailHash
         else { return false }
         if let midHash = cursor.midHash {
             let mid = middleSample(of: cursor.offset)
-            return hashRange(path: path, from: mid.from, length: mid.length) == midHash
+            return hashRange(path: path, plain: plain, from: mid.from, length: mid.length) == midHash
         }
         // Saved before the middle sample existed: trust it only where head
         // and tail already cover the file end to end. Bigger files rescan
@@ -1662,8 +1677,15 @@ public actor Ledger {
         return headLength + tailLength >= cursor.offset
     }
 
-    private static func hashRange(path: String, from offset: UInt64, length: UInt64) -> Int64 {
-        guard length > 0, let handle = FileHandle(forReadingAtPath: path) else { return StableHash.of("") }
+    private static func hashRange(path: String, plain: Data? = nil, from offset: UInt64, length: UInt64) -> Int64 {
+        guard length > 0 else { return StableHash.of("") }
+        if let plain {
+            let start = Int(offset)
+            let end = start + Int(length)
+            guard start >= 0, end <= plain.count else { return 0 }
+            return Int64(bitPattern: StableHash.of(plain[start..<end]))
+        }
+        guard let handle = FileHandle(forReadingAtPath: path) else { return StableHash.of("") }
         defer { try? handle.close() }
         guard (try? handle.seek(toOffset: offset)) != nil,
               let data = try? handle.read(upToCount: Int(length)), data.count == Int(length)

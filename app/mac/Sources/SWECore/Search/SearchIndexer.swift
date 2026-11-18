@@ -667,10 +667,18 @@ public final class SearchIndexer: @unchecked Sendable {
         pending!.stat = stat
         pending!.host = ([row?.sessionRowID] + drop.map(\.sessionRowID)).compactMap { $0 }.first
         do {
-            let result = try JSONLReader().read(URL(fileURLWithPath: copy), from: 0) { line in
+            let reader = JSONLReader()
+            let plain = try reader.plainBytes(at: URL(fileURLWithPath: copy))
+            // A frame's on-disk size is not the transcript's length. The
+            // row records the plain length, which is the offset the read
+            // reached, so the next pass sees the copy as fully read.
+            let recorded = plain.map {
+                SearchFileStat(ino: stat.ino, mtimeMs: stat.mtimeMs, sizeBytes: Int64($0.count))
+            } ?? stat
+            let result = try reader.read(URL(fileURLWithPath: copy), from: 0) { line in
                 consume(line: line)
             }
-            return try finishFile(path: path, stat: stat, byteOffset: Int64(result.endOffset))
+            return try finishFile(path: path, stat: recorded, byteOffset: Int64(result.endOffset))
                 ? .indexed : .moved
         } catch {
             failFile(path: path, mtimeMs: stat.mtimeMs)

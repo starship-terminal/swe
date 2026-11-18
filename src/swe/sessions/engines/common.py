@@ -113,6 +113,19 @@ def read_tail_lines(path: str, tail_bytes: int) -> tuple[list[str], bool]:
     "partial" is empty and the window's first record is kept. ``OSError``
     propagates.
     """
+    from swe.sessions import zstd_copy
+    plain = zstd_copy.plain(path)
+    if plain is not None:
+        import io
+        size = len(plain)
+        start = max(0, size - tail_bytes)
+        fh = io.BytesIO(plain)
+        fh.seek(start - 1 if start > 0 else 0)
+        chunk = fh.read().decode("utf-8", errors="ignore")
+        lines = chunk.split("\n")
+        if start > 0:
+            lines = lines[1:]
+        return lines, start == 0
     size = os.path.getsize(path)
     start = max(0, size - tail_bytes)
     with open(path, "rb") as fh:

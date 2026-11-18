@@ -18,7 +18,21 @@ let package = Package(
 
     targets: [
         // Everything testable: models, the swe client, scanners, view models.
-        .target(name: "SWECore", resources: [.process("Resources")]),
+        // Meta's zstd v1.5.7 single-file decoder. Its own target because
+        // SwiftPM refuses C and Swift in one. The .inc is the amalgam and
+        // is included by zstd_read.c, so it is not a compile unit.
+        .target(
+            name: "CZStd",
+            path: "Sources/CZStd",
+            exclude: ["zstddeclib.inc"],
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-I", "Sources/CZStd"])]
+        ),
+        .target(
+            name: "SWECore",
+            dependencies: ["CZStd"],
+            resources: [.process("Resources")]
+        ),
         // The widget views, shared by the extension that draws them and the
         // app's Desktop widgets previews.
         .target(name: "SWEWidgetsUI", dependencies: ["SWECore"]),

@@ -17,7 +17,19 @@ struct JSONLReader {
     var chunkSize = 1 << 20
     var maxLineBytes = 64 << 20
 
+    /// The plain bytes when `url` is a zstd frame, so a caller that
+    /// fingerprints the file can hash those bytes. Nil for a live JSONL.
+    func plainBytes(at url: URL) throws -> Data? {
+        try ZstdFile.plain(at: url)
+    }
+
     func read(_ url: URL, from offset: UInt64, line body: (Data) throws -> Void) throws -> Result {
+        // A mirror copy whose harness deleted the original is a zstd
+        // frame. Decompress it once and read the plain bytes; a live
+        // JSONL is not a frame and is read from disk as before.
+        if let plain = try plainBytes(at: url) {
+            return try read(plain, from: offset, line: body)
+        }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         try handle.seek(toOffset: offset)
@@ -66,6 +78,28 @@ struct JSONLReader {
             chunkStart += UInt64(chunk.count)
             return true
         }) {}
+        return Result(endOffset: committed, skippedLines: skipped)
+    }
+
+    /// The same line walk over bytes already in memory. `endOffset` is a
+    /// position in those bytes, which is what a cursor saved for a
+    /// compressed copy records.
+    func read(_ data: Data, from offset: UInt64, line body: (Data) throws -> Void) throws -> Result {
+        var committed = offset
+        var skipped = 0
+        var index = Int(min(offset, UInt64(data.count)))
+        while index < data.count {
+            let rest = data[index...]
+            guard let newline = rest.firstIndex(of: UInt8(ascii: "\n")) else { break }
+            let line = data[index..<newline]
+            if line.count <= maxLineBytes {
+                try body(line)
+            } else {
+                skipped += 1
+            }
+            committed = UInt64(newline + 1)
+            index = newline + 1
+        }
         return Result(endOffset: committed, skippedLines: skipped)
     }
 }

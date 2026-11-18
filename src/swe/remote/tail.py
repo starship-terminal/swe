@@ -867,6 +867,11 @@ class JsonlTailSource:
                 chunk = fh.read(min(size - start, _MAX_CHUNK))
         except OSError:
             return []
+        return self._records(start, chunk, size)
+
+    def _records(self, start: int, chunk: bytes, size: int) -> list[dict]:
+        """Records in ``chunk``, which begins at ``start`` in a file of
+        ``size`` plain bytes. Advances ``offset`` past complete lines."""
         if start == 0:
             # A from-scratch read refreshes the head fingerprint (the
             # file may have been replaced since the last one).
@@ -946,21 +951,51 @@ class MirrorCopySource(JsonlTailSource):
     then nothing more, so nothing is ever tailed from it, and the session
     has no resume flags, so no writer attaches. A restored session moves
     to its live file through ``TailManager._reresolve``, continuing after
-    the last line this source read."""
+    the last line this source read.
+
+    An orphaned copy may be a zstd frame under the ``.jsonl`` name. The
+    frame is decoded once and every offset is a position in those plain
+    bytes, so a seek never lands inside the frame."""
 
     read_only = True
 
     def __init__(self, path: Path, tool_name: str) -> None:
         super().__init__(path, tool_name)
+        self._plain: bytes | None = None
         try:
-            self._end = path.stat().st_size
+            from swe.sessions import zstd_copy
+
+            self._plain = zstd_copy.plain(str(path))
+            self._end = len(self._plain) if self._plain is not None else path.stat().st_size
         except OSError:
             self._end = 0
+
+    def _file_head(self, span: int) -> bytes:
+        if self._plain is not None:
+            return self._plain[:span]
+        return super()._file_head(span)
+
+    def skip_to_end(self) -> None:
+        self._since = None
+        self.offset = self._end
+        self._prime_head()
+
+    def start_near_end(self, max_bytes: int | None = None) -> None:
+        max_bytes = BACKFILL_BYTES if max_bytes is None else max_bytes
+        self._since = None
+        self._prime_head()
+        if self._end > max_bytes:
+            self.offset = self._end - max_bytes
+            self._align = True
 
     def poll(self) -> list[dict]:
         if self.offset >= self._end:
             return []
-        return super().poll()
+        if self._plain is None:
+            return super().poll()
+        start = self.offset
+        chunk = self._plain[start:start + min(self._end - start, _MAX_CHUNK)]
+        return self._records(start, chunk, self._end)
 
 
 def mirror_copy_path(session: Session) -> Path | None:

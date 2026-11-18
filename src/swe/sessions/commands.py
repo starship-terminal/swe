@@ -985,7 +985,8 @@ def cmd_session_mirror(args) -> int:
               f"{_bytes(result.copied_bytes + result.cloned_bytes)}); "
               f"{result.unchanged:,} already current; "
               f"{result.orphaned:,} kept after their source was deleted "
-              f"({_bytes(result.orphaned_bytes)}).")
+              f"({_bytes(result.orphaned_bytes)}"
+              f"{f', {result.compressed:,} compressed' if result.compressed else ''}).")
         if result.failed:
             print(c("yellow", f"{result.failed:,} transcripts could not be copied."))
         if result.conflicts:

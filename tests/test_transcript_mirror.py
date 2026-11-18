@@ -566,6 +566,57 @@ class SafetyTests(MirrorCase):
         self.assertEqual(result.orphaned_bytes, copy.stat().st_size)
         self.assertEqual(mirror.status(self.home)["orphaned"], 1)
 
+    def test_a_live_copy_stays_plain_and_an_orphan_becomes_a_frame(self):
+        import shutil
+
+        claude = self.claude()
+        body = claude.read_bytes()
+        mtime = claude.stat().st_mtime_ns
+        self.sync()
+        copy = self.mirror_root / "claude/-work-proj" / claude.name
+        self.assertEqual(copy.read_bytes(), body)
+        gone = self.sync()
+        self.assertEqual(gone.compressed, 0)
+        self.assertEqual(copy.read_bytes(), body)
+        claude.unlink()
+        if shutil.which("zstd") is None:
+            self.assertEqual(self.sync().compressed, 0)
+            self.assertEqual(copy.read_bytes(), body)
+            return
+        result = self.sync()
+        self.assertEqual(result.compressed, 1)
+        self.assertEqual(result.orphaned, 1)
+        self.assertTrue(copy.read_bytes().startswith(b"\x28\xb5\x2f\xfd"))
+        self.assertLess(copy.stat().st_size, len(body))
+        self.assertEqual(copy.stat().st_mtime_ns, mtime)
+        entry = mirror.load_manifest(self.home)[f"claude/-work-proj/{claude.name}"]
+        self.assertEqual(entry["compressed"], "zstd")
+        self.assertEqual(entry["size"], len(body))
+        self.assertEqual(entry["mirror_size"], copy.stat().st_size)
+        self.assertEqual(result.orphaned_bytes, copy.stat().st_size)
+        again = self.sync()
+        self.assertEqual(again.compressed, 0)
+        self.assertEqual(again.orphaned, 1)
+        from swe.sessions import zstd_copy
+        self.assertEqual(zstd_copy.read_bytes(str(copy)), body)
+        from swe.reports.transcripts import _read_jsonl
+        messages = _read_jsonl(copy)
+        self.assertIn("fix the login bug", "\n".join(m.text for m in messages))
+
+    def test_a_failed_compress_leaves_the_plain_copy(self):
+        claude = self.claude()
+        body = claude.read_bytes()
+        self.sync()
+        claude.unlink()
+        copy = self.mirror_root / "claude/-work-proj" / claude.name
+        with mock.patch("shutil.which", return_value=None):
+            result = self.sync()
+        self.assertEqual(result.compressed, 0)
+        self.assertEqual(result.orphaned, 1)
+        self.assertEqual(copy.read_bytes(), body)
+        self.assertNotIn("compressed", mirror.load_manifest(self.home)[
+            f"claude/-work-proj/{claude.name}"])
+
     def test_a_vanished_harness_directory_deletes_nothing(self):
         self.claude(), self.codex()
         self.sync()
@@ -868,7 +919,9 @@ class CommandTests(MirrorCase):
         again = decode(run_swe(self.home, "session", "mirror", "--json"))["data"]
         self.assertEqual((again["pass"]["copied"] + again["pass"]["cloned"],
                           again["pass"]["orphaned"]), (0, 1))
-        self.assertEqual(again["pass"]["orphaned_bytes"], data["bytes"])
+        self.assertEqual(again["pass"]["compressed"], 1)
+        self.assertLess(again["pass"]["orphaned_bytes"], data["bytes"])
+        self.assertEqual(again["orphaned_bytes"], again["pass"]["orphaned_bytes"])
 
     def test_status_runs_no_pass(self):
         self.claude()
