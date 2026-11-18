@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The PR loop rebuilds the app once a stack has merged.** [AGENTS.md](AGENTS.md) tells an agent to fetch `main`, run `install-app.sh` once for the batch, confirm `SWECommit`, and exercise the rebuilt app before calling the work done.
+
 - **Grok Build spend shows on this Mac.** Each finished turn in a `grok` session's `usage.json` is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.
 
 - **AgentMail is a service provider.** Settings › Providers › Services and `swe providers list` seed it with `AGENTMAIL_API_KEY` (console at [console.agentmail.to](https://console.agentmail.to)). Check sends `GET https://api.agentmail.to/v0/inboxes` as Bearer; a fake key is refused with 403.

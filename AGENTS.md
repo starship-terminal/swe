@@ -60,7 +60,17 @@ The web app stays inside the Python package because pipx installs and the `swe` 
 - **Share no data with those apps.** Never read or write `~/.switchboard`, `~/.tokentracker`, `~/.config/aiusage`, OpenUsage's Application Support folder, or their caches, settings or keychain items, not even to import. Everything SWE keeps lives under `~/.swe`. The harnesses' own files (`~/.claude`, `~/.codex`, ...) are not another app's data; reading them is the point.
 - **Borrow ideas and code, not state.** Their source is a reference; SWE re-implements against its own files. Keep the licence notices for any code copied.
 - **Never write to `~/Applications/SWE.app` by hand.** Several sessions work on this repo at once, so the installed app is built only from `origin/main` by `app/mac/script/install-app.sh`. Check your change with your own build: `./script/build-app.sh debug` in your worktree, then `open -n build/SWE.app`.
-- **Reinstall the app after every push to `main`**, not only `app/mac/` changes. Once your PR merges, run `app/mac/script/install-app.sh` from any checkout, `git fetch`, then confirm `git merge-base --is-ancestor <your merge commit> "$(defaults read ~/Applications/SWE.app/Contents/Info SWECommit)"`. A newer commit is fine. If the script reports another install running, wait and run it again, since that one may have built an older `main`. Nothing to install after a push to a PR branch.
+
+### The PR loop
+
+After a PR merges, the installed app is part of the loop, not a follow-up. The app bundles `swe`, so a Python-only merge is still a rebuild. Nothing to install after a push to a PR branch.
+
+1. `git fetch origin main`.
+2. Run `app/mac/script/install-app.sh` from any checkout. It pulls `origin/main` into its own worktree and installs `~/Applications/SWE.app`. If it reports another install running, wait and run it again: that one may have built an older `main`.
+3. Confirm the installed commit contains every merge from this batch: `git merge-base --is-ancestor <merge> "$(defaults read ~/Applications/SWE.app/Contents/Info SWECommit)"`. A newer commit is fine.
+4. Test the rebuilt app before calling the batch done. `codesign --verify --strict ~/Applications/SWE.app` must pass, and `HOME="$(mktemp -d)" ~/Applications/SWE.app/Contents/Resources/swe/bin/swe --version` must run. Then launch the app and exercise what the merged PRs changed, plus one nearby flow that should be unchanged. A failure here is a bug in the merged work: fix it in a new PR and run this loop again.
+
+A stack of PRs gets one rebuild, after the last of them merges, covering every merge in the batch. Do not rebuild after each one. Shipping still happens one PR at a time. When the work is a stack, say so before the first merge, and wait to rebuild until the last PR in that stack has merged.
 
 ## Commands
 
