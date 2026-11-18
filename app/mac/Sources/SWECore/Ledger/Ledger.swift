@@ -1459,8 +1459,23 @@ public actor Ledger {
         var state: Data?
         // A compressed copy is a frame. The cursor's offset is a position
         // in the plain transcript, so the fast path compares it to the
-        // plain length, not to the frame's size on disk.
-        let plain = try reader.plainBytes(at: URL(fileURLWithPath: path))
+        // plain length, not to the frame's size on disk. A cursor that
+        // already read this inode, size and mtime to the end skips the
+        // decode: the frame keeps the source mtime, and a rewrite moves
+        // ctime, which this check also requires.
+        if let saved, saved.inode == info.inode, saved.size == info.size,
+           saved.modified == info.modified, (saved.changed ?? info.changed) == info.changed,
+           saved.offset == info.size, indexNeed != .whole {
+            report.filesUnchanged += 1
+            return
+        }
+        let plain: Data?
+        do {
+            plain = try reader.plainBytes(at: URL(fileURLWithPath: path))
+        } catch {
+            report.notes.append("Skipped \(path): \(error.localizedDescription)")
+            return
+        }
         let readSize = plain.map { UInt64($0.count) } ?? info.size
         if let saved {
             // `changed` is ctime: a rewrite that preserved size and mtime
@@ -1611,9 +1626,15 @@ public actor Ledger {
             if Task.isCancelled { throw CancellationError() }
             guard let home = mirror.home(for: copy.copy.rel, harness: copy.copy.harness),
                   let info = FileInfo(path: copy.copy.path) else { continue }
+            let plain: Data?
+            do {
+                plain = try reader.plainBytes(at: URL(fileURLWithPath: copy.copy.path))
+            } catch {
+                report.notes.append("Skipped \(copy.copy.path): \(error.localizedDescription)")
+                continue
+            }
             if let cursor = try store.cursor(for: copy.source),
-               Self.cursor(cursor, covers: info, copy: copy.copy.path,
-                           plain: try reader.plainBytes(at: URL(fileURLWithPath: copy.copy.path))) { continue }
+               Self.cursor(cursor, covers: info, copy: copy.copy.path, plain: plain) { continue }
             let url = URL(fileURLWithPath: copy.copy.path)
             if copy.copy.harness == "claude" {
                 try scanFile(url, accountHome: home.home.path, parser: ClaudeFileParser.self, seen: &seen,

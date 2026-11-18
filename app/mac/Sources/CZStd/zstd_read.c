@@ -12,6 +12,55 @@
 
 static const unsigned char kMagic[4] = {0x28, 0xb5, 0x2f, 0xfd};
 
+/* A frame written through stdin has no content size. Grow the output
+ * until the stream says the frame is done. */
+static int decode_stream(const uint8_t *in, size_t in_size,
+                         uint8_t **decoded, size_t *got) {
+    ZSTD_DCtx *ctx = ZSTD_createDCtx();
+    ZSTD_inBuffer input = {in, in_size, 0};
+    size_t cap = ZSTD_DStreamOutSize();
+    uint8_t *out;
+    size_t used = 0;
+    if (ctx == NULL) return 1;
+    if (cap < 1) cap = 1 << 16;
+    out = (uint8_t *)malloc(cap + 1);
+    if (out == NULL) {
+        ZSTD_freeDCtx(ctx);
+        return 1;
+    }
+    for (;;) {
+        ZSTD_outBuffer output;
+        size_t rc;
+        if (used == cap) {
+            size_t next = cap * 2;
+            uint8_t *grown = (uint8_t *)realloc(out, next + 1);
+            if (grown == NULL) {
+                free(out);
+                ZSTD_freeDCtx(ctx);
+                return 1;
+            }
+            out = grown;
+            cap = next;
+        }
+        output.dst = out + used;
+        output.size = cap - used;
+        output.pos = 0;
+        rc = ZSTD_decompressStream(ctx, &output, &input);
+        used += output.pos;
+        if (ZSTD_isError(rc)) {
+            free(out);
+            ZSTD_freeDCtx(ctx);
+            return 1;
+        }
+        if (rc == 0) {
+            ZSTD_freeDCtx(ctx);
+            *decoded = out;
+            *got = used;
+            return 0;
+        }
+    }
+}
+
 int swe_zstd_read_file(const char *path, uint8_t **out, size_t *out_size) {
     FILE *file;
     uint8_t *in = NULL;
@@ -36,7 +85,16 @@ int swe_zstd_read_file(const char *path, uint8_t **out, size_t *out_size) {
         return 0;
     }
     plain = ZSTD_getFrameContentSize(in, (size_t)length);
-    if (plain == ZSTD_CONTENTSIZE_UNKNOWN || plain == ZSTD_CONTENTSIZE_ERROR) goto fail;
+    if (plain == ZSTD_CONTENTSIZE_ERROR) goto fail;
+    /* The mirror writes a frame through the zstd command's stdin, which
+     * omits the decoded length. Stream it, growing the buffer. */
+    if (plain == ZSTD_CONTENTSIZE_UNKNOWN) {
+        if (decode_stream(in, (size_t)length, &decoded, &got) != 0) goto fail;
+        free(in);
+        *out = decoded;
+        *out_size = got;
+        return 0;
+    }
     decoded = (uint8_t *)malloc((size_t)plain + 1);
     if (decoded == NULL) goto fail;
     got = ZSTD_decompress(decoded, (size_t)plain, in, (size_t)length);

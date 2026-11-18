@@ -217,7 +217,7 @@ def _manifest_signature(path: Path) -> tuple | None:
 # Entry fields that must be numbers for a reader to use them. A value of
 # another type reads as 0 (the stat then never matches, so a live source
 # is copied again, which is what an unknown stat should mean).
-_NUMERIC_FIELDS = ("ino", "mtime_ns", "size", "mirror_size", "copied_at")
+_NUMERIC_FIELDS = ("ino", "mtime_ns", "size", "mirror_size", "plain_size", "copied_at")
 
 
 def _is_number(value) -> bool:
@@ -381,7 +381,7 @@ def _compress_orphan(dest: Path, root: Path) -> bool:
     it only when the decoded bytes match. A crash leaves the plain copy
     or the frame, never half of either. A copy that is already a frame,
     or one ``zstd`` cannot encode, is left alone. Returns whether this
-    call compressed it."""
+    call compressed it, and the plain length it stored."""
     import shutil
     import subprocess
 
@@ -389,29 +389,29 @@ def _compress_orphan(dest: Path, root: Path) -> bool:
     # symlink on the way. Following one would rewrite another account's
     # copy when transcripts/claude points at an account folder.
     if not _inside(str(dest), str(root)):
-        return False
+        return False, 0
+    tool = shutil.which("zstd")
+    if tool is None:
+        return False, 0
     try:
         with open(dest, "rb") as handle:
             head = handle.read(4)
             if head.startswith(_ZSTD_MAGIC):
-                return False
+                return False, 0
             plain = head + handle.read()
     except OSError:
-        return False
-    tool = shutil.which("zstd")
-    if tool is None:
-        return False
+        return False, 0
     tmp = dest.parent / f".{dest.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
     try:
         done = subprocess.run(
             [tool, f"-{_ZSTD_LEVEL}", "-q", "-c"],
             input=plain, capture_output=True, check=True)
         if not done.stdout.startswith(_ZSTD_MAGIC):
-            return False
+            return False, 0
         back = subprocess.run(
             [tool, "-d", "-q", "-c"], input=done.stdout, capture_output=True, check=True)
         if back.stdout != plain:
-            return False
+            return False, 0
         with open(tmp, "xb") as out:
             out.write(done.stdout)
             out.flush()
@@ -421,24 +421,48 @@ def _compress_orphan(dest: Path, root: Path) -> bool:
         st = os.stat(dest)
         os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
         os.replace(tmp, dest)
-        return True
+        return True, len(plain)
     except (OSError, subprocess.CalledProcessError):
-        return False
+        return False, 0
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
 
 
+def _plain_length(path: str) -> int:
+    """The transcript's length. A zstd frame decodes first, so a later
+    shrink compares plain bytes with plain bytes."""
+    from swe.sessions import zstd_copy
+
+    plain = zstd_copy.plain(path)
+    if plain is not None:
+        return len(plain)
+    return os.path.getsize(path)
+
+
 def _keep_shrunk(dest: Path, written: int) -> None:
     """Before ``dest`` is replaced by something smaller, keep it under a
-    second name. A hard link, so no bytes move and no gap opens."""
+    second name. A hard link, so no bytes move and no gap opens.
+
+    ``written`` is the incoming plain length. A frame is shorter than the
+    transcript it holds, so the comparison uses the decoded length: a
+    restored source that is shorter than the saved history still keeps
+    the frame, even when it is longer than the frame itself."""
     try:
+        old_size = _plain_length(str(dest))
         old = os.stat(dest)
-    except FileNotFoundError:
+    except (OSError, FileNotFoundError):
         return
-    if old.st_size <= written:
+    if old_size <= written:
         return
-    backup = dest.with_name(f"{dest.name}{SHRUNK_SUFFIX}{old.st_mtime_ns}")
+    # A frame keeps the source mtime, which an earlier plain copy of the
+    # same session may already have used. The plain length names this
+    # version; a plain file keeps the mtime it always used.
+    from swe.sessions import zstd_copy
+    with open(dest, "rb") as handle:
+        framed = zstd_copy.is_frame(handle.read(4))
+    stamp = old_size if framed else old.st_mtime_ns
+    backup = dest.with_name(f"{dest.name}{SHRUNK_SUFFIX}{stamp}")
     try:
         os.link(dest, backup)
     except FileExistsError:
@@ -570,6 +594,11 @@ def _reading_plain(path: str):
         handle.write(plain)
         handle.close()
         os.chmod(handle.name, 0o600)
+        # ``_copy`` stamps the published file with this temp's times. A
+        # frame keeps the source mtime, so the restored session keeps it
+        # too, instead of looking newly active.
+        st = os.stat(path)
+        os.utime(handle.name, ns=(st.st_atime_ns, st.st_mtime_ns))
         yield handle.name
     finally:
         with contextlib.suppress(OSError):
@@ -744,16 +773,20 @@ def sync(home: Path, sources: Iterable, should_stop=None, *, wait: bool = True) 
                 if rel in seen or os.path.lexists(entry.get("source", "")):
                     continue
                 dest = root / rel
-                if not dest.is_file():
+                if not dest.is_file() or SHRUNK_SUFFIX in dest.name:
                     continue
-                if _compress_orphan(dest, root):
+                compressed, plain_size = _compress_orphan(dest, root)
+                if compressed:
                     # A new dict: ``before`` holds the old one, so the
                     # write records the new field instead of the stored
-                    # entry.
+                    # entry. ``plain_size`` is the copy's own length.
+                    # ``size`` stays the source stat taken before the
+                    # copy, which can be shorter than what the copy holds.
                     entry = {
                         **entry,
                         "compressed": "zstd",
                         "mirror_size": dest.stat().st_size,
+                        "plain_size": plain_size,
                     }
                     entries[rel] = entry
                     dirty = True

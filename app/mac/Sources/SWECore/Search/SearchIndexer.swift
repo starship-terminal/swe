@@ -675,9 +675,8 @@ public final class SearchIndexer: @unchecked Sendable {
             let recorded = plain.map {
                 SearchFileStat(ino: stat.ino, mtimeMs: stat.mtimeMs, sizeBytes: Int64($0.count))
             } ?? stat
-            let result = try reader.read(URL(fileURLWithPath: copy), from: 0) { line in
-                consume(line: line)
-            }
+            let result = try plain.map { try reader.read($0, from: 0) { line in consume(line: line) } }
+                ?? reader.read(URL(fileURLWithPath: copy), from: 0) { line in consume(line: line) }
             return try finishFile(path: path, stat: recorded, byteOffset: Int64(result.endOffset))
                 ? .indexed : .moved
         } catch {

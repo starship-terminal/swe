@@ -592,6 +592,7 @@ class SafetyTests(MirrorCase):
         entry = mirror.load_manifest(self.home)[f"claude/-work-proj/{claude.name}"]
         self.assertEqual(entry["compressed"], "zstd")
         self.assertEqual(entry["size"], len(body))
+        self.assertEqual(entry["plain_size"], len(body))
         self.assertEqual(entry["mirror_size"], copy.stat().st_size)
         self.assertEqual(result.orphaned_bytes, copy.stat().st_size)
         again = self.sync()
@@ -640,6 +641,28 @@ class SafetyTests(MirrorCase):
         self.assertEqual(kept[0].read_bytes(), longer)
         # Not a transcript to anything that lists or indexes by suffix.
         self.assertFalse(kept[0].name.endswith(".jsonl"))
+        # After the shorter copy is a frame, a source shorter than that
+        # transcript and longer than the frame still keeps the frame.
+        claude.unlink()
+        import shutil
+        if shutil.which("zstd") is not None:
+            self.sync()
+            framed = copy.read_bytes()
+            self.assertTrue(framed.startswith(b"\x28\xb5\x2f\xfd"))
+            from swe.sessions import zstd_copy
+            held = zstd_copy.read_bytes(str(copy))
+            # Between the frame's size and the transcript it holds, so a
+            # comparison of file sizes would miss the shrink.
+            shorter = b'{"type":"user","pad":"' + b"x" * (len(framed) - 10) + b'"}\n'
+            self.assertGreater(len(shorter), len(framed))
+            self.assertLess(len(shorter), len(held))
+            write_jsonl(claude, [], MTIME + 60)
+            claude.write_bytes(shorter)
+            os.utime(claude, ns=((MTIME + 60) * 1_000_000_000,) * 2)
+            self.sync()
+            kept = list(copy.parent.glob(f"{claude.name}{mirror.SHRUNK_SUFFIX}*"))
+            self.assertEqual(len(kept), 2)
+            self.assertIn(held, [zstd_copy.read_bytes(str(path)) for path in kept])
 
     def test_an_unreadable_manifest_is_set_aside_never_overwritten(self):
         self.claude()

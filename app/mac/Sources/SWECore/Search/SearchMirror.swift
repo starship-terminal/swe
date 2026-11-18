@@ -157,7 +157,10 @@ enum SearchMirror {
         for copy in pruned {
             guard var stat = fileStat(copy.copy.path) else { continue }
             let entry = entries[copy.copy.rel]
-            if entry?.compressed == "zstd", let plain = entry?.size {
+            // The copy's own plain length. The source `size` was taken
+            // before the copy and can be shorter than the bytes the copy
+            // holds, so a row of that length would hide the extra replies.
+            if entry?.compressed == "zstd", let plain = entry?.plainSize {
                 stat.stat.sizeBytes = plain
             }
             groups[copy.identity, default: []].append(Candidate(pruned: copy, stat: stat.stat,

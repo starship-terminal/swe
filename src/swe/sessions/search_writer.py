@@ -1043,14 +1043,6 @@ class Indexer:
         if need in (SKIP, CURRENT):
             return need
         try:
-            from swe.sessions import zstd_copy
-
-            # Correct the size before the read. ``_read`` also does this,
-            # but a caller that compared ``stat`` to the row already used
-            # the frame size to decide the copy was current.
-            decoded = zstd_copy.plain(copy)
-            if decoded is not None:
-                stat = replace(stat, size=len(decoded))
             committed = self._read(path, harness, stat, row, False, read_path=copy, drop=drop,
                                    copy_agent=harness)
         except _Moved:
@@ -1814,13 +1806,13 @@ def _index_copies(indexer: "Indexer", home: Path, listed: list[Source], result: 
                 continue
             stat = file_stat_of(st)
             # A compressed copy's on-disk size is the frame. The row
-            # records the plain length, which the manifest keeps as
-            # ``size``. A row that already recorded that length covers
-            # the frame, so it is not decoded again. A row that recorded
-            # the frame size (a read from before this) does not cover it.
+            # records the plain length, so a later pass sees the copy as
+            # fully read. That length is the copy's own decoded size, not
+            # the source ``size`` the manifest recorded before the copy:
+            # the copy may hold appends the recorded stat never saw.
             entry = manifest.get(path[len(real_root) + 1:])
             if isinstance(entry, dict) and entry.get("compressed") == "zstd":
-                plain_size = entry.get("size")
+                plain_size = entry.get("plain_size")
                 if isinstance(plain_size, int) and not isinstance(plain_size, bool):
                     stat = replace(stat, size=plain_size)
             groups.setdefault(identity, []).append(_Copy(

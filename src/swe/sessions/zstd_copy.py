@@ -52,8 +52,9 @@ def plain(path: str) -> bytes | None:
 
 
 class PlainFile:
-    """A file-like over plain bytes, so a seek and a fingerprint see the
-    transcript rather than a zstd frame. ``size`` is the plain length."""
+    """A file-like over plain bytes, so a seek, a line loop and a
+    fingerprint see the transcript rather than a zstd frame. ``size`` is
+    the plain length. Iteration yields lines, as a binary file does."""
 
     def __init__(self, data: bytes):
         self._data = data
@@ -93,6 +94,15 @@ class PlainFile:
 
     def close(self) -> None:
         return None
+
+    def __iter__(self) -> "PlainFile":
+        return self
+
+    def __next__(self) -> bytes:
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
     def __enter__(self) -> "PlainFile":
         return self
