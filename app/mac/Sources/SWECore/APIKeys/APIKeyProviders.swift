@@ -220,6 +220,9 @@ public enum APIKeyProviders {
         APIKeyProvider(id: "replicate", name: "Replicate",
                        envVars: ["REPLICATE_API_TOKEN"],
                        keyURL: URL(string: "https://replicate.com/account/api-tokens")!),
+        APIKeyProvider(id: "agentmail", name: "AgentMail",
+                       envVars: ["AGENTMAIL_API_KEY"],
+                       keyURL: URL(string: "https://console.agentmail.to")!),
     ]
 
     /// The inference provider one of whose variables is `name`, if any.

@@ -113,7 +113,10 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.4...HEAD">Unreleased</a></h2>
 <h3 id="added"><a class="anchor" href="#added"></a>Added</h3>
 <ul>
-<li><strong>Grok Build spend shows on this Mac.</strong> Each finished turn in a <code>grok</code> session's <code>usage.json</code> is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.</li>
+<li><p><strong>Grok Build spend shows on this Mac.</strong> Each finished turn in a <code>grok</code> session's <code>usage.json</code> is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.</p>
+</li>
+<li><p><strong>AgentMail is a service provider.</strong> Settings › Providers › Services and <code>swe providers list</code> seed it with <code>AGENTMAIL_API_KEY</code> (console at <a href="https://console.agentmail.to">console.agentmail.to</a>). Check sends <code>GET https://api.agentmail.to/v0/inboxes</code> as Bearer; a fake key is refused with 403.</p>
+</li>
 </ul>
 <h2 id="124---2026-11-15"><a class="anchor" href="#124---2026-11-15"></a><a href="https://github.com/starship-terminal/swe/releases/tag/v1.2.4">1.2.4</a> - 2026-11-15</h2>
 <h3 id="fixed"><a class="anchor" href="#fixed"></a>Fixed</h3>

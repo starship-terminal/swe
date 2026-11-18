@@ -142,6 +142,7 @@ public enum ModelBrands {
         .init(id: "stability", name: "Stability AI", icon: "stability",
               keywords: ["stability", "stabilityai", "stable diffusion"]),
         .init(id: "replicate", name: "Replicate", icon: "replicate", keywords: ["replicate"]),
+        .init(id: "agentmail", name: "AgentMail", icon: "agentmail", keywords: ["agentmail"]),
         // Inference plan vendors and API key providers, so a key filed
         // under their name shows the logo too.
         .init(id: "tencent", name: "Tencent", icon: "tencentcloud", keywords: ["tencent", "hunyuan", "tokenhub"]),

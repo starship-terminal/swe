@@ -680,6 +680,8 @@ class CmdListServicesSectionTest(unittest.TestCase):
                              svc_rows)
             self.assertTrue(
                 any("firecrawl" in ln for ln in svc_rows), svc_rows)
+            self.assertTrue(
+                any("agentmail" in ln for ln in svc_rows), svc_rows)
 
     def test_filter_services_shows_only_the_services_section(self):
         with TemporaryDirectory() as tmp:
@@ -692,6 +694,7 @@ class CmdListServicesSectionTest(unittest.TestCase):
             self.assertNotIn("Infra Providers", plain)
             self.assertIn("Service Providers", plain)
             self.assertIn("firecrawl", plain)
+            self.assertIn("agentmail", plain)
             self.assertNotIn("openai", plain)
 
 

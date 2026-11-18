@@ -100,6 +100,7 @@ BRANDS: list[tuple[str, str, str | None, str | None, tuple[str, ...], tuple[str,
     ("stability", "Stability AI", None, "stability",
      ("stability", "stabilityai", "stable diffusion"), ()),
     ("replicate", "Replicate", None, "replicate", ("replicate",), ()),
+    ("agentmail", "AgentMail", None, "agentmail", ("agentmail",), ()),
     # Inference plan vendors and API key providers.
     ("tencent", "Tencent", None, "tencentcloud", ("tencent", "hunyuan", "tokenhub"), ()),
     ("baidu", "Baidu", None, "baiducloud", ("baidu", "qianfan", "ernie"), ()),

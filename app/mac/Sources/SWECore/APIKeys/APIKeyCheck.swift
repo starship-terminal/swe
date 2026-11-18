@@ -161,6 +161,7 @@ public struct APIKeyProbe: Equatable, Sendable {
         put(get(.header("X-API-Key"), "https://api.cartesia.ai/voices"), "CARTESIA_API_KEY")
         put(get(.bearer, "https://api.stability.ai/v1/user/account"), "STABILITY_API_KEY")
         put(get(.token, "https://api.replicate.com/v1/models"), "REPLICATE_API_TOKEN")
+        put(get(.bearer, "https://api.agentmail.to/v0/inboxes"), "AGENTMAIL_API_KEY")
         for plan in InferenceCatalog.all {
             if let probe = InferenceCatalog.probe(for: plan) { put(probe, plan.keyName) }
         }

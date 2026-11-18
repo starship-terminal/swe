@@ -476,6 +476,13 @@ DEFAULT_SERVICES = {
         "key_filename": "replicate",
         "env_vars": ["REPLICATE_API_TOKEN"],
     },
+    "agentmail": {
+        "kind": "services",
+        "description": "AgentMail inboxes and email API",
+        "url": "https://console.agentmail.to",
+        "key_filename": "agentmail",
+        "env_vars": ["AGENTMAIL_API_KEY"],
+    },
 }
 
 # Every built-in, inference, infra and services: what the registry seed,
