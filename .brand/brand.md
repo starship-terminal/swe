@@ -1,6 +1,6 @@
 # swe brand kit
 
-Mark 4-4. Kit folder: `brand/`. Marks are letter-free; only the lockups and banners carry the name.
+Mark 4-4. Kit folder: `.brand/`. Marks are letter-free; only the lockups and banners carry the name.
 
 ## Palette
 

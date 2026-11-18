@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="brand/banners/banner-readme-1280x320.png" alt="swe" width="800">
+  <img src=".brand/banners/banner-readme-1280x320.png" alt="swe" width="800">
 </p>
 
 <h1 align="center">
