@@ -919,8 +919,15 @@ class CommandTests(MirrorCase):
         again = decode(run_swe(self.home, "session", "mirror", "--json"))["data"]
         self.assertEqual((again["pass"]["copied"] + again["pass"]["cloned"],
                           again["pass"]["orphaned"]), (0, 1))
-        self.assertEqual(again["pass"]["compressed"], 1)
-        self.assertLess(again["pass"]["orphaned_bytes"], data["bytes"])
+        # A sandbox with no zstd command leaves the orphan plain. The
+        # count is still reported, as 0.
+        import shutil
+        if shutil.which("zstd"):
+            self.assertEqual(again["pass"]["compressed"], 1)
+            self.assertLess(again["pass"]["orphaned_bytes"], data["bytes"])
+        else:
+            self.assertEqual(again["pass"]["compressed"], 0)
+            self.assertEqual(again["pass"]["orphaned_bytes"], data["bytes"])
         self.assertEqual(again["orphaned_bytes"], again["pass"]["orphaned_bytes"])
 
     def test_status_runs_no_pass(self):
