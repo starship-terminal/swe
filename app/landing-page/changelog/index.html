@@ -113,6 +113,8 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="anchor" href="#unreleased"></a><a href="https://github.com/starship-terminal/swe/compare/v1.2.4...HEAD">Unreleased</a></h2>
 <h3 id="added"><a class="anchor" href="#added"></a>Added</h3>
 <ul>
+<li><p><strong>The PR loop rebuilds the app once a stack has merged.</strong> <a href="https://github.com/starship-terminal/swe/blob/main/AGENTS.md">AGENTS.md</a> tells an agent to fetch <code>main</code>, run <code>install-app.sh</code> once for the batch, confirm <code>SWECommit</code>, and exercise the rebuilt app before calling the work done.</p>
+</li>
 <li><p><strong>Grok Build spend shows on this Mac.</strong> Each finished turn in a <code>grok</code> session's <code>usage.json</code> is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.</p>
 </li>
 <li><p><strong>AgentMail is a service provider.</strong> Settings › Providers › Services and <code>swe providers list</code> seed it with <code>AGENTMAIL_API_KEY</code> (console at <a href="https://console.agentmail.to">console.agentmail.to</a>). Check sends <code>GET https://api.agentmail.to/v0/inboxes</code> as Bearer; a fake key is refused with 403.</p>
