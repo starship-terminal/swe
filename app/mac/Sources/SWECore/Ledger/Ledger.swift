@@ -1458,14 +1458,15 @@ public actor Ledger {
         var start: UInt64 = 0
         var state: Data?
         // A compressed copy is a frame. The cursor's offset is a position
-        // in the plain transcript, so the fast path compares it to the
-        // plain length, not to the frame's size on disk. A cursor that
-        // already read this inode, size and mtime to the end skips the
-        // decode: the frame keeps the source mtime, and a rewrite moves
-        // ctime, which this check also requires.
+        // in the plain transcript, and the frame header stores that
+        // length. An unchanged frame matches on the header alone, so the
+        // body is not decoded. A header that omits the length falls
+        // through and decodes.
         if let saved, saved.inode == info.inode, saved.size == info.size,
            saved.modified == info.modified, (saved.changed ?? info.changed) == info.changed,
-           saved.offset == info.size, indexNeed != .whole {
+           indexNeed != .whole,
+           let declared = ZstdFile.contentSize(at: URL(fileURLWithPath: path)),
+           saved.offset == UInt64(declared) {
             report.filesUnchanged += 1
             return
         }
@@ -1626,6 +1627,12 @@ public actor Ledger {
             if Task.isCancelled { throw CancellationError() }
             guard let home = mirror.home(for: copy.copy.rel, harness: copy.copy.harness),
                   let info = FileInfo(path: copy.copy.path) else { continue }
+            // The source cursor covers a frame when the header's plain
+            // length is the size that cursor read. The body stays unread.
+            if let cursor = try store.cursor(for: copy.source),
+               let declared = ZstdFile.contentSize(at: URL(fileURLWithPath: copy.copy.path)),
+               cursor.size == UInt64(declared), cursor.offset == cursor.size,
+               cursor.modified == info.modified { continue }
             let plain: Data?
             do {
                 plain = try reader.plainBytes(at: URL(fileURLWithPath: copy.copy.path))

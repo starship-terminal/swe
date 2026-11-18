@@ -403,7 +403,14 @@ def _compress_orphan(dest: Path, root: Path) -> bool:
         return False, 0
     tmp = dest.parent / f".{dest.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
     try:
-        done = subprocess.run(
+        # --stream-size writes the plain length into the frame header.
+        # A reader can then skip an unchanged frame without decoding it.
+        # A build of zstd without the flag falls back to a header that
+        # omits the length; the reader decodes that one.
+        sized = subprocess.run(
+            [tool, f"-{_ZSTD_LEVEL}", "-q", "-c", f"--stream-size={len(plain)}"],
+            input=plain, capture_output=True, check=False)
+        done = sized if sized.returncode == 0 and sized.stdout.startswith(_ZSTD_MAGIC) else subprocess.run(
             [tool, f"-{_ZSTD_LEVEL}", "-q", "-c"],
             input=plain, capture_output=True, check=True)
         if not done.stdout.startswith(_ZSTD_MAGIC):

@@ -61,6 +61,22 @@ static int decode_stream(const uint8_t *in, size_t in_size,
     }
 }
 
+long long swe_zstd_content_size(const char *path) {
+    FILE *file;
+    unsigned char head[ZSTD_FRAMEHEADERSIZE_MAX];
+    size_t got;
+    unsigned long long plain;
+    if (path == NULL) return -1;
+    file = fopen(path, "rb");
+    if (file == NULL) return -1;
+    got = fread(head, 1, sizeof head, file);
+    fclose(file);
+    if (got < 4 || memcmp(head, kMagic, 4) != 0) return -1;
+    plain = ZSTD_getFrameContentSize(head, got);
+    if (plain == ZSTD_CONTENTSIZE_UNKNOWN || plain == ZSTD_CONTENTSIZE_ERROR) return -1;
+    return (long long)plain;
+}
+
 int swe_zstd_read_file(const char *path, uint8_t **out, size_t *out_size) {
     FILE *file;
     uint8_t *in = NULL;
