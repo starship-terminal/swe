@@ -1474,6 +1474,13 @@ public actor Ledger {
         do {
             plain = try reader.plainBytes(at: URL(fileURLWithPath: path))
         } catch {
+            // The read below is what used to notice an unreadable file.
+            // A decode that throws before it must still count, or three
+            // failures never hold the file out of the index. A file the
+            // index already skipped is only noted.
+            if indexNeed == .append || indexNeed == .whole {
+                fileIndexer?.failFile(path: path, mtimeMs: indexStat.mtimeMs)
+            }
             report.notes.append("Skipped \(path): \(error.localizedDescription)")
             return
         }
