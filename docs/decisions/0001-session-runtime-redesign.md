@@ -72,9 +72,9 @@ Each decision below lists what was chosen, what was rejected and why.
 
 **Decision.** The first version includes the changes panel, plan cards and plan mode, checkpoints with restore, and subagent rows.
 
-**Rejected.** No alternative was recorded for this decision.
+**Rejected.** Shipping any of the four as a later milestone. Each was offered as optional, and all four were chosen for the first version.
 
-**Reason.** These were chosen as part of the first version in the interview.
+**Reason.** These are the four things t3code's session view has that SWE's chat lacks today. Checkpoints are the largest of the four, because they need a snapshot store per session.
 
 ## D8: The view follows t3code's look
 

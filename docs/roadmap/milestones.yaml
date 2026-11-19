@@ -8,6 +8,9 @@
 #         (hard = auth, security, a user data store, a wire protocol, process supervision or architecture)
 # hub.py is one lane: milestones that own it (G8, G9, G10, G24) run one at a time.
 # Two milestones whose owns globs overlap never run at the same time.
+# src/swe/webapp/static/session/** is the committed build output of app/web-session.
+# No milestone owns it: every milestone that changes app/web-session rebuilds it,
+# and rebuilds again after a rebase. CI fails a PR whose committed copy is stale.
 # Paths are relative to the repo root.
 
 - id: G1
@@ -35,6 +38,7 @@
   status: doing
   depends_on: []
   owns:
+    - "src/swe/remote/adapters/__init__.py"
     - "src/swe/remote/adapters/base.py"
     - "src/swe/remote/adapters/events.py"
     - "src/swe/remote/adapters/registry.py"
@@ -127,7 +131,10 @@
     - "app/web-session/vite*"
     - "app/web-session/src/main*"
     - "src/swe/webapp/static/tokens.css"
+    - "src/swe/webapp/static/styles.css"
+    - "src/swe/webapp/static/index.html"
     - "src/swe/webapp/static.py"
+    - ".gitattributes"
     - "src/swe/remote/hub.py"
     - ".github/workflows/ci.yml"
   questions: []
