@@ -1,0 +1,4 @@
+# The session view's build output (app/web-session, `pnpm build`), committed
+# so installs need no Node. Folded in diffs and left out of language stats;
+# rebuild it rather than merge it by hand.
+src/swe/webapp/static/session/** linguist-generated -diff

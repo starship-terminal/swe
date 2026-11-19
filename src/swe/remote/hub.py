@@ -3968,7 +3968,8 @@ class _Handler(BaseHTTPRequestHandler):
         a flat name of a known type is served, so no request can climb
         out of the folder or shadow a ``/v1/`` route. The pages fetch
         ``/v1/app/*`` with the device credential the app's ``#pair=``
-        handler pairs, which this origin shares.
+        handler pairs, which this origin shares. ``/session/`` is the
+        React session view's own folder (``_serve_session``).
         """
         # The app lived under ``/app/`` until #944, and pair links minted
         # then (``/app/#pair=<token>``) are still out there: send them,
@@ -3976,6 +3977,12 @@ class _Handler(BaseHTTPRequestHandler):
         # at the root. The browser keeps the fragment across a redirect;
         # the query string is copied onto ``Location`` here.
         suffix = f"?{query}" if query else ""
+        if path == "/session":
+            self._redirect("/session/" + suffix)
+            return
+        if path.startswith("/session/"):
+            self._serve_session(path[len("/session/"):])
+            return
         if path == "/app" or path.startswith("/app/"):
             rest = path[len("/app/"):]
             # Only a name this handler would serve: anything else (say
@@ -4009,6 +4016,59 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_error(404, "not_found", "unknown route")
             return
         self._send_asset(webapp_static.STATIC_DIR / name)
+
+    def _serve_session(self, rel: str) -> None:
+        """The session view (app/web-session's committed build in
+        ``static/session/``) at ``/session/``, public like ``/``: its page
+        and scripts hold nothing private, and what it reads comes from
+        ``/v1`` with the device credential. ``rel`` is the raw path after
+        the prefix, never unquoted, and only a name the build lists in
+        ``build-info.json`` is served (``webapp_static.session_file``). The
+        page and the stable entry names revalidate by ETag; the hashed
+        chunks under ``assets/`` are cached for a year."""
+        target = webapp_static.session_file(rel)
+        if target is None:
+            if rel in ("", "index.html") and not webapp_static.session_built():
+                body = webapp_static.SESSION_MISSING
+                self.send_response(503)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'")
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            self._send_error(404, "not_found", "unknown route")
+            return
+        try:
+            body = target.read_bytes()
+        except OSError:
+            self._send_error(404, "not_found", "missing asset")
+            return
+        immutable = webapp_static.session_immutable(rel)
+        etag = None if immutable else webapp_static.etag_for(body)
+        if etag and webapp_pages.etag_matches(self.headers.get("If-None-Match"), etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Security-Policy", webapp_static.SESSION_CSP)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", webapp_static.content_type(target))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", webapp_static.SESSION_IMMUTABLE if immutable else "no-cache")
+        if etag:
+            self.send_header("ETag", etag)
+        self.send_header("Content-Security-Policy", webapp_static.SESSION_CSP)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     @staticmethod
     def _is_webapp_name(name: str) -> bool:

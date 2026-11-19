@@ -283,7 +283,7 @@ class TestStylesheets(unittest.TestCase):
 
     def sheets(self):
         return {p.name: p.read_text(encoding="utf-8")
-                for p in [self.STATIC / "styles.css", *sorted((self.STATIC / "pages").glob("*.css"))]}
+                for p in [self.STATIC / "tokens.css", self.STATIC / "styles.css", *sorted((self.STATIC / "pages").glob("*.css"))]}
 
     def test_every_variable_used_is_defined(self):
         """A var() with no definition renders the property's initial
