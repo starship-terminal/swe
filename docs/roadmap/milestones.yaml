@@ -312,3 +312,104 @@
   verify: ["full suite", "coverage"]
   tier: implement-hard
   est_runtime: 90m
+
+# --- MCP: the Warp-Gate view ---
+# Spec: docs/specs/G25-warp-gate-page.md
+# The gateway itself is the warp-gate repo; its milestones have their own G-codes
+# (warp-gate G2, G3, G5, G7 ...). depends_on cannot name a milestone in another
+# repo, so each cross-repo wait is a comment on the milestone.
+# G26 and G27 both own gateway_commands.py, and G27 depends on G26, so they never overlap.
+# Q1, Q5 and Q6 in the spec were answered on 2026-11-20.
+
+- id: G25
+  title: Warp-Gate page spec and milestones
+  status: done
+  depends_on: []
+  owns: ["docs/specs/G25-warp-gate-page.md"]
+  questions: []
+  verify: ["python3 scripts/docs_site.py --check", "python3 -m unittest tests.test_features_inventory tests.test_agent_rules"]
+  tier: implement-standard
+  est_runtime: 30m
+
+# G26 also waits for warp-gate G5 (services JSON) and warp-gate G7 (gateway.mode).
+- id: G26
+  title: Gateway settings and swe mcp gateway commands
+  status: todo
+  depends_on: []
+  owns:
+    - "src/swe/mcp/gateway.py"
+    - "src/swe/mcp/gateway_commands.py"
+    - "tests/test_mcp_gateway.py"
+    - "docs/json-contracts.md"
+  questions: []
+  verify:
+    - "full suite"
+    - "a gateway save keeps every gateway key it does not set"
+    - "services, tools, set, mode, install and uninstall print the documented JSON against a stub warp-gate"
+    - "each command exits 1 with a clear message when warp-gate is not on PATH"
+  tier: implement-standard
+  est_runtime: 90m
+
+# G27 also waits for warp-gate G3 (the /mcp endpoint).
+- id: G27
+  title: "Single-entry sync (gateway.mode: single)"
+  status: todo
+  depends_on: [G26]
+  owns:
+    - "src/swe/mcp/cli.py"
+    - "src/swe/mcp/gateway_commands.py"
+    - "tests/test_mcp_gateway_single.py"
+  questions: []
+  verify:
+    - "full suite"
+    - "single mode writes one warp-gate entry and removes each per-server gateway entry, per harness format"
+    - "per_server mode restores them"
+    - "a local-only harness gets no entry and is reported"
+    - "connect and disconnect switch the warp-gate entry for the named harnesses and sync them"
+    - "end-to-end against a throwaway HOME"
+  tier: implement-hard
+  est_runtime: 150m
+
+- id: G28
+  title: "Mac app: Warp-Gate view and connect sheet"
+  status: todo
+  depends_on: [G26, G27]
+  owns:
+    - "app/mac/Sources/SWECore/Mcp/WarpGate.swift"
+    - "app/mac/Sources/SWEApp/Pages/McpWarpGateView.swift"
+    - "app/mac/Sources/SWEApp/Pages/McpServersPage.swift"
+  questions: []
+  verify:
+    - "swift test"
+    - "screens: services on, not installed, not answering, loading, no services on, no match, connect sheet"
+  tier: implement-standard
+  est_runtime: 150m
+
+- id: G29
+  title: "Mac app: service sheet and add custom service sheet"
+  status: todo
+  depends_on: [G28]
+  owns: ["app/mac/Sources/SWEApp/Pages/McpWarpGateSheets.swift"]
+  questions: []
+  verify:
+    - "swift test"
+    - "screens: key saved, key missing, error, tool row open, add sheet empty, add sheet invalid"
+    - "turning a service off in per_server mode previews and runs the sync for that server"
+  tier: implement-standard
+  est_runtime: 120m
+
+- id: G30
+  title: "Web app: Warp-Gate view"
+  status: todo
+  depends_on: [G26, G27]
+  owns:
+    - "src/swe/webapp/static/pages/mcp.js"
+    - "src/swe/webapp/static/pages/mcp.css"
+    - "src/swe/webapp/api.py"
+    - "docs/web-app/mcp.md"
+  questions: []
+  verify:
+    - "full suite"
+    - "screens: the G28 and G29 states at desktop and phone width, light and dark"
+  tier: implement-standard
+  est_runtime: 150m

@@ -30,7 +30,16 @@ struct ModelCard: View {
             }
             if let aa = row.aa {
                 VStack(spacing: 8) {
-                    line("Intelligence", aa.intelligence.map { "\(Int($0.rounded()))" })
+                    line("Intelligence", aa.intelligence.map { "\(Int($0.rounded()))" }
+                         ?? aa.pastIntelligence.map { "\(Int($0.value.rounded())) · \($0.tag)" })
+                    // The card takes no hover itself, so an older score
+                    // says what it is in place.
+                    if aa.intelligence == nil, let past = aa.pastIntelligence {
+                        Text(past.note)
+                            .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     // The card takes no hover itself, so a missing score
                     // says why in place rather than in a tooltip.
                     line("Terminal-Bench 4.0", aa.coding.map { "\(Int($0.rounded()))%" } ?? "Not run by AA")
