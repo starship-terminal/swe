@@ -20,11 +20,11 @@ client sees it.
 
 | Piece | Where | What |
 |---|---|---|
-| Pages | `src/swe/webapp/static/` | Plain HTML, CSS and JS. No build step, no framework, no CDN. Same Devin-derived look as the Mac app (`Theme.swift`); the CSS variables in `styles.css` carry the same names. |
-| Install | `static/manifest.webmanifest`, `index.html`, `styles.css` | The manifest makes it installable (`display: standalone`, `id`, `start_url`; its colours are the light default's `--wash`, with `color_scheme_dark` for dark). `index.html` has one `theme-color` meta per scheme, which `syncThemeColor` in `app.js` overrides when Settings forces Light or Dark. `viewport-fit=cover` draws under the notch, so layout pads by `--safe-top/right/bottom/left` (`env(safe-area-inset-*)`). `tests/test_webapp_pwa.py` keeps the colours in step with `styles.css`. |
+| Pages | `src/swe/webapp/static/` | Plain HTML, CSS and JS: no build step, no framework, no CDN. The one exception is the session view under `static/session/` (below), which has a build step whose output is committed. Same Devin-derived look as the Mac app (`Theme.swift`); the CSS variables in `tokens.css` carry the same names, and every page loads `tokens.css` before its own styles. |
+| Install | `static/manifest.webmanifest`, `index.html`, `styles.css` | The manifest makes it installable (`display: standalone`, `id`, `start_url`; its colours are the light default's `--wash`, with `color_scheme_dark` for dark). `index.html` has one `theme-color` meta per scheme, which `syncThemeColor` in `app.js` overrides when Settings forces Light or Dark. `viewport-fit=cover` draws under the notch, so layout pads by `--safe-top/right/bottom/left` (`env(safe-area-inset-*)`). `tests/test_webapp_pwa.py` keeps the colours in step with `tokens.css`. |
 | Page data | `src/swe/webapp/api.py`, `src/swe/webapp/pages/` | Builds each page's JSON from the domain services, in process, the way `/v1/usage` does. |
 | Ledger | `src/swe/ledger/` | The Python port of `SWECore/Ledger`: scans harness logs into its own SQLite store and prices tokens. |
-| Routes | `src/swe/remote/hub.py` | `/` serves the app and its assets as flat names beside it (`_serve_static`, names checked by `webapp/static.py`); `/v1/app/*` serves their data. Old `/app/…` paths redirect to the same name at the root. |
+| Routes | `src/swe/remote/hub.py` | `/` serves the app and its assets as flat names beside it (`_serve_static`, names checked by `webapp/static.py`); `/v1/app/*` serves their data. Old `/app/…` paths redirect to the same name at the root. `/session/` serves the session view's committed build (`_serve_session`). |
 
 The hub already runs on the always-on machine, binds 127.0.0.1 and is
 published by Tailscale Serve, so the web app needs no new port, process or
@@ -134,7 +134,7 @@ parallel without touching a shared file. A page with the sidebar id
 |---|---|
 | `src/swe/webapp/pages/skills.py` | `get(ctx, args) -> dict` answers `GET /v1/app/skills` (`args`: each query parameter's first value). An optional `post(ctx, action, body) -> dict` answers `POST /v1/app/skills/<action>`. Raise `PageError(status, code, message)` to refuse. `ctx.state` is the hub's `HubState`, `ctx.home` its home. |
 | `src/swe/webapp/static/pages/skills.js` | `registerPage("skills", render)`. The bundle runs each script in its own function scope, so private names never collide with another page's. `render(id)` paints `#panel` with the shared helpers in `app.js` (`api`, `esc`, `icon`, `pageHeader`, `renderGate`) and `manage.js` (`pageError`, `bindRefresh`); take `const gen = routeGen` before awaiting and drop the reply when it changed. |
-| `src/swe/webapp/static/pages/skills.css` | Optional styles, using the tokens in `styles.css`. Buttons, spinners and switches are shared there (`.btn` with `.primary`, `.danger`, `.lg`, `.hairline`, `.on-panel`, `.medium`, `.secondary`; `.spinner`; `.switch`), so a page rule only says what is its own, never a copy of them. |
+| `src/swe/webapp/static/pages/skills.css` | Optional styles, using the tokens in `tokens.css`. Buttons, spinners and switches are shared there (`.btn` with `.primary`, `.danger`, `.lg`, `.hairline`, `.on-panel`, `.medium`, `.secondary`; `.spinner`; `.switch`), so a page rule only says what is its own, never a copy of them. |
 | `tests/test_webapp_skills.py` | The page's data, and the route with auth. |
 | `docs/web-app/skills.md` | What the page shows, its payload, and what differs from the Mac app. |
 
@@ -153,10 +153,32 @@ Read data the way the Mac app does: from the same `swe … --json`
 builders in process, not by shelling out, and never from the Mac app's
 own stores.
 
+## Session view (the one build step)
+
+The session view (decision D9 of the session redesign) is React, and it is
+the only part of the web app with a build step. Its source is
+`app/web-session/` (pnpm, Vite, React, TypeScript, Tailwind mapped onto
+`tokens.css`); its build output is committed to
+`src/swe/webapp/static/session/`, so pipx installs, `install.sh` and the
+`swe` inside SWE.app serve it with no Node at run time. The hub serves it
+at `/session/` (`/session` redirects there), public like `/`; the page
+reads `/v1` with the same device credential. Everything else in
+`static/` stays plain JS with no build.
+
+| Rule | What |
+|---|---|
+| Rebuild | `cd app/web-session && pnpm install --frozen-lockfile && pnpm build` writes `static/session/`; commit the source change and the rebuilt bundle together. |
+| After a rebase | Rebuild and commit again. The bundle never merges by hand: `.gitattributes` marks it generated and folds its diff. |
+| Freshness | `build-info.json` holds a `source_hash` over the source and lockfile. `tests/test_webapp_session_view.py` recomputes it in Python, and CI's Session view job rebuilds and fails on any `git diff` in the bundle. |
+| Serving | Only names the build lists in `build-info.json` are served (`webapp/static.py::session_file`). `index.html` and the stable names (`session-view.js`, `session-view.css`, `appearance.js`) revalidate by ETag; hashed chunks under `assets/` are immutable for a year. Every response carries the strict policy in `webapp/static.py::SESSION_CSP`. Without a bundle, `/session/` answers a plain page saying so. |
+
+`docs/specs/G10-session-view-toolchain.md` has the layout, commands, token
+mapping and dependency list.
+
 ## Going back
 
 Nothing in `app/mac/` changes. To drop the web app, delete `src/swe/webapp/`,
-`docs/web-app/`,
+`app/web-session/`, `docs/web-app/`,
 `src/swe/ledger/`, the root static handler (`_serve_static`) and the
 `/v1/app/` branches in `hub.py`, and
 `~/.swe/data/web-ledger/`.

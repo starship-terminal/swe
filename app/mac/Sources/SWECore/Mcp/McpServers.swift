@@ -855,6 +855,47 @@ public enum McpRowCheck: Sendable, Equatable {
     case some
     /// On in none.
     case none
+
+    /// A row's state from how many places it is on in, out of the places
+    /// a click could have it on in. Nothing on is `none` whatever the
+    /// total, so a row with nowhere to go never reads as checked.
+    public static func of(on: Int, possible: Int) -> McpRowCheck {
+        if on <= 0 { return .none }
+        return on >= possible ? .all : .some
+    }
+}
+
+/// What a table row's checkbox shows and what a click on it does, for a
+/// row made of places that are each on or off and may or may not be
+/// switchable (the Skills folders, the Plugins harnesses).
+public struct GridRowSwitch: Sendable, Equatable {
+    public let check: McpRowCheck
+    /// A click turns the remaining places on; false turns the row off.
+    public let turnsOn: Bool
+    /// Indexes of the places a click changes, in the order given.
+    public let targets: [Int]
+
+    /// A row of places. A place that is off and can't be switched does
+    /// not count against a full row, and a click only ever touches the
+    /// switchable places that are not already where it is heading.
+    public static func places(_ places: [(on: Bool, toggleable: Bool)]) -> GridRowSwitch {
+        let check = McpRowCheck.of(on: places.filter { $0.on }.count,
+                                   possible: places.filter { $0.on || $0.toggleable }.count)
+        let turnsOn = check != .all
+        let targets = places.indices.filter { places[$0].toggleable && places[$0].on != turnsOn }
+        return GridRowSwitch(check: check, turnsOn: turnsOn, targets: targets)
+    }
+
+    /// A plugin row: `enables` and `disables` are the harnesses with
+    /// that action waiting. With an enable waiting somewhere the row is
+    /// not full, so a click enables exactly those; a full row disables
+    /// where a harness allows it. A copy with neither action is left out
+    /// of both and never targeted.
+    public static func plugin(isOn: Bool, enables: [Int], disables: [Int]) -> GridRowSwitch {
+        let check: McpRowCheck = !isOn ? .none : enables.isEmpty ? .all : .some
+        let turnsOn = check != .all
+        return GridRowSwitch(check: check, turnsOn: turnsOn, targets: turnsOn ? enables : disables)
+    }
 }
 
 extension McpServer {
