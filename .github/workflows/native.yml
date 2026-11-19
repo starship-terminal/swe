@@ -96,6 +96,27 @@ jobs:
         timeout-minutes: 25
         run: script/test.sh
 
+  session-web-shell:
+    # The shared session web view shell (app/shared/SessionWebShell, plan
+    # milestone G2): its package tests on macOS. The iPhone proof
+    # harness under Proof/ needs a stub hub and a simulator and runs by
+    # hand (Proof/run-proof.sh), not here.
+    name: Session web shell tests
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: app/shared/SessionWebShell
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Package tests
+        timeout-minutes: 15
+        run: swift test
+
   ios-unit:
     # The iPhone app's unit tests had no job at all. The UI test target
     # needs a paired hub, so only SWERemoteTests runs here, on the
