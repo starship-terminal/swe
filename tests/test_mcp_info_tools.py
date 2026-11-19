@@ -247,12 +247,14 @@ class McpInfoToolsTest(unittest.TestCase):
         self.assertIn("exited", d["error"])
         self.assertIn("cannot load config", d["error"])
 
-    def test_tools_refuses_a_remote_server(self):
-        self.claude_write({"web": {"url": "https://x.example/mcp"}})
+    def test_tools_refuses_a_legacy_sse_server(self):
+        # A streamable-http server is probed (tests/test_mcp_probe_http.py);
+        # the older sse transport is still out of reach.
+        self.claude_write({"web": {"url": "https://x.example/sse", "type": "sse"}})
         r = self.run_mcp("tools", "web", "--json")
         self.assertEqual(r.returncode, 1)
         d = json.loads(r.stdout)["data"]
-        self.assertIn("stdio only", d["error"])
+        self.assertIn("sse transport", d["error"])
 
     def test_tools_follows_next_cursor_pages(self):
         path = self.script("paging.py", PAGING_SERVER)
