@@ -1,0 +1,307 @@
+# Milestones for the session runtime redesign.
+# Spec: docs/specs/G1-session-runtime-redesign.md
+# Decisions: docs/decisions/0001-session-runtime-redesign.md
+#
+# G-codes are stable ids: never renumber or reuse one. A new milestone takes the next number.
+# status: todo | ready | doing | blocked | done
+# tier:   implement-standard | implement-hard
+#         (hard = auth, security, a user data store, a wire protocol, process supervision or architecture)
+# hub.py is one lane: milestones that own it (G8, G9, G10, G24) run one at a time.
+# Two milestones whose owns globs overlap never run at the same time.
+# Paths are relative to the repo root.
+
+- id: G1
+  title: Roadmap file, spec and decision record
+  status: done
+  depends_on: []
+  owns: ["docs/roadmap/**", "docs/specs/**", "docs/decisions/**"]
+  questions: []
+  verify: ["python3 scripts/docs_site.py --check"]
+  tier: implement-standard
+  est_runtime: 20m
+
+- id: G2
+  title: iPhone web-view proof (scroll, keyboard, offline, streamed fetch)
+  status: doing
+  depends_on: []
+  owns: ["app/shared/SessionWebShell/**"]
+  questions: []
+  verify: ["swift test", "screens: streaming, keyboard open, offline"]
+  tier: implement-hard
+  est_runtime: 90m
+
+- id: G3
+  title: Adapter protocol, v2 events, compat layer, fake adapter
+  status: doing
+  depends_on: []
+  owns:
+    - "src/swe/remote/adapters/base.py"
+    - "src/swe/remote/adapters/events.py"
+    - "src/swe/remote/adapters/registry.py"
+    - "src/swe/remote/adapters/fallback.py"
+    - "src/swe/remote/adapters/fake.py"
+    - "src/swe/remote/protocol_compat.py"
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_compat"]
+  tier: implement-hard
+  est_runtime: 60m
+
+- id: G4
+  title: Keeper event log
+  status: todo
+  depends_on: [G3]
+  owns: ["src/swe/remote/keeper/log.py"]
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_keeper_log"]
+  tier: implement-hard
+  est_runtime: 45m
+
+- id: G5
+  title: Keeper process, IPC, discovery, service survival
+  status: todo
+  depends_on: [G4]
+  owns: ["src/swe/remote/keeper/**", "src/swe/remote/launchd.py", "src/swe/remote/systemd.py"]
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_keeper", "hub service restart check on macOS and Linux"]
+  tier: implement-hard
+  est_runtime: 120m
+
+- id: G6
+  title: SQLite store and command receipts
+  status: todo
+  depends_on: [G3]
+  owns: ["src/swe/remote/store.py"]
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_store"]
+  tier: implement-hard
+  est_runtime: 60m
+
+- id: G7
+  title: Claude stream adapter, recorder, fixtures
+  status: todo
+  depends_on: [G3]
+  owns:
+    - "src/swe/remote/adapters/claude_stream.py"
+    - "src/swe/remote/adapters/claude_wire.py"
+    - "scripts/record_protocol.py"
+    - "tests/fakes/**"
+    - "tests/fixtures/protocols/**"
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_claude_adapter", "one manual run with the real claude"]
+  tier: implement-hard
+  est_runtime: 120m
+
+- id: G8
+  title: "Hub on keepers: Claude launch and Continue in SWE"
+  status: todo
+  depends_on: [G5, G6, G7]
+  owns:
+    - "src/swe/remote/hub.py"
+    - "src/swe/remote/catalog.py"
+    - "src/swe/remote/tail.py"
+    - "src/swe/remote/fork.py"
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_hub_keeper", "end-to-end: launch, kill hub, restart, approve"]
+  tier: implement-hard
+  est_runtime: 120m
+
+- id: G9
+  title: "Sync v2: handshake, ping, overflow replay, epoch, snapshot, live resume"
+  status: todo
+  depends_on: [G8]
+  owns:
+    - "src/swe/remote/protocol.py"
+    - "src/swe/remote/hub.py"
+    - "src/swe/remote/schema/**"
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_sse_v2"]
+  tier: implement-hard
+  est_runtime: 90m
+
+- id: G10
+  title: React toolchain, tokens, /session/ route, CI job
+  status: doing
+  depends_on: []
+  owns:
+    - "app/web-session/package.json"
+    - "app/web-session/vite*"
+    - "app/web-session/src/main*"
+    - "src/swe/webapp/static/tokens.css"
+    - "src/swe/webapp/static.py"
+    - "src/swe/remote/hub.py"
+    - ".github/workflows/ci.yml"
+  questions: []
+  verify: ["pnpm test && pnpm build", "python3 -m unittest tests.test_webapp_session_view"]
+  tier: implement-standard
+  est_runtime: 90m
+
+- id: G11
+  title: "Client core: reducer, supervisor, outbox"
+  status: todo
+  depends_on: [G9, G10]
+  owns: ["app/web-session/src/core/**", "tests/fixtures/session-view/**"]
+  questions: []
+  verify: ["pnpm vitest"]
+  tier: implement-standard
+  est_runtime: 90m
+
+- id: G12
+  title: Timeline
+  status: todo
+  depends_on: [G11]
+  owns: ["app/web-session/src/session/**", "app/web-session/src/ui/**"]
+  questions: []
+  verify: ["browser tests", "screens: default, streaming"]
+  tier: implement-standard
+  est_runtime: 120m
+
+- id: G13
+  title: Composer, approvals, queued tray
+  status: todo
+  depends_on: [G12]
+  owns: ["app/web-session/src/composer/**"]
+  questions: []
+  verify: ["end-to-end", "screens: approval, queued, offline"]
+  tier: implement-standard
+  est_runtime: 120m
+
+- id: G14
+  title: Web app shows the new view behind a flag
+  status: todo
+  depends_on: [G13]
+  owns: ["src/swe/webapp/static/sessions.js", "src/swe/webapp/static/pages/chat.js"]
+  questions: []
+  verify: ["end-to-end", "screens: all"]
+  tier: implement-standard
+  est_runtime: 60m
+
+- id: G15
+  title: Satellite keepers and the loopback local API
+  status: todo
+  depends_on: [G8]
+  owns: ["src/swe/remote/agent.py", "src/swe/remote/journal.py"]
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_agent"]
+  tier: implement-hard
+  est_runtime: 120m
+
+- id: G16
+  title: Codex, opencode, ACP adapters on keepers (three PRs)
+  status: todo
+  depends_on: [G8]
+  owns:
+    - "src/swe/remote/adapters/codex*.py"
+    - "src/swe/remote/adapters/opencode*.py"
+    - "src/swe/remote/adapters/acp*.py"
+    - "src/swe/remote/inject.py"
+    - "src/swe/remote/acp.py"
+  questions: []
+  verify: ["python3 -m unittest tests.test_remote_adapters tests.test_remote_acp"]
+  tier: implement-hard
+  est_runtime: 180m
+
+- id: G17
+  title: Mac embed behind a flag
+  status: todo
+  depends_on: [G2, G13, G15]
+  owns:
+    - "app/shared/**"
+    - "app/mac/Sources/SWEApp/Pages/SessionWebPage.swift"
+    - "app/mac/Package.swift"
+  questions: []
+  verify: ["swift test --filter SessionWeb", "screens: Mac"]
+  tier: implement-hard
+  est_runtime: 90m
+
+- id: G18
+  title: iPhone embed behind a flag (only if G2 passed)
+  status: todo
+  depends_on: [G17]
+  owns: ["app/ios/Sources/SWERemote/Views/SessionWebView.swift", "app/ios/project.yml"]
+  questions: []
+  verify: ["iOS XCTest", "screens: phone"]
+  tier: implement-hard
+  est_runtime: 90m
+
+- id: G19
+  title: Checkpoints and changes (backend and UI)
+  status: todo
+  depends_on: [G15, G13]
+  owns:
+    - "src/swe/remote/checkpoints.py"
+    - "app/web-session/src/features/changes/**"
+    - "app/web-session/src/features/checkpoints/**"
+  questions: []
+  verify: ["restore tests", "screens: changes open, restore confirm"]
+  tier: implement-hard
+  est_runtime: 150m
+
+- id: G20
+  title: Plans, plan mode, subagent rows and stop
+  status: todo
+  depends_on: [G16, G13]
+  owns:
+    - "app/web-session/src/features/plan/**"
+    - "app/web-session/src/features/tasks/**"
+    - "src/swe/remote/adapters/*plan*"
+    - "src/swe/remote/adapters/*task*"
+  questions: []
+  verify: ["end-to-end per adapter"]
+  tier: implement-hard
+  est_runtime: 120m
+
+- id: G21
+  title: Read-only view, Continue in SWE, device captions
+  status: todo
+  depends_on: [G13]
+  owns: ["app/web-session/src/readonly/**", "app/web-session/src/multidevice/**"]
+  questions: []
+  verify: ["end-to-end", "screens: read-only"]
+  tier: implement-standard
+  est_runtime: 60m
+
+- id: G22
+  title: "tmux release N: never chosen, rows converted"
+  status: todo
+  depends_on: [G16]
+  owns:
+    - "src/swe/remote/supervise.py"
+    - "src/swe/remote/catalog.py"
+    - "src/swe/remote/protocol.py"
+    - "src/swe/remote/commands.py"
+    - "src/swe/remote/completion.py"
+    - "src/swe/remote/help_text.py"
+  questions: []
+  verify: ["full suite", "end-to-end"]
+  tier: implement-hard
+  est_runtime: 90m
+
+- id: G23
+  title: Flip defaults; retire chat.js and both native chats
+  status: todo
+  depends_on: [G14, G17, G18, G19, G20, G21]
+  owns: ["src/swe/webapp/static/pages/chat.js", "FEATURES.md"]
+  questions: []
+  verify: ["full suites", "screens: all"]
+  tier: implement-standard
+  est_runtime: 90m
+
+# G24 also waits one release after G22 ships; depends_on cannot express that.
+- id: G24
+  title: tmux deletion
+  status: todo
+  depends_on: [G22]
+  owns:
+    - "src/swe/remote/supervise.py"
+    - "src/swe/remote/inject.py"
+    - "src/swe/remote/tail.py"
+    - "src/swe/remote/protocol.py"
+    - "src/swe/remote/hub.py"
+    - "src/swe/remote/fork.py"
+    - "src/swe/remote/issues.py"
+    - "src/swe/remote/slash.py"
+    - "src/swe/remote/catalog.py"
+  questions: []
+  verify: ["full suite", "coverage"]
+  tier: implement-hard
+  est_runtime: 90m
