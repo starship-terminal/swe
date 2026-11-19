@@ -594,6 +594,25 @@ extension SweClient {
         try await call(["mcp", "set-type", name, type, "--json"])
     }
 
+    /// `swe mcp set NAME --url=…` or `-- command args…`: rewrites the hub
+    /// entry in place and pushes it to every harness holding the server.
+    /// Exactly one of `url` and `command`. A harness that kept the old
+    /// definition comes back in `failed` on a nonzero exit.
+    public func mcpSet(server name: String, url: String?,
+                       command: [String]?) async throws -> McpSetResult {
+        var args = ["mcp", "set", name, "--json"]
+        if let url { args.append("--url=" + url) }
+        // Last, after `--`: the command's own flags stay the command's.
+        if let command, !command.isEmpty { args += ["--"] + command }
+        return try await call(args, allowFailure: true)
+    }
+
+    /// `swe mcp rename OLD NEW`: the hub entry, its switches and every
+    /// harness's own entry move to the new name.
+    public func mcpRename(_ name: String, to newName: String) async throws -> McpRenameResult {
+        try await call(["mcp", "rename", name, newName, "--json"], allowFailure: true)
+    }
+
     /// `swe mcp enable`/`disable NAME --for=...`: a per-harness switch.
     /// `on` false pulls the entry out of the harnesses' configs (the hub
     /// keeps the copy), true restores it. Empty `harnesses` means every
@@ -791,6 +810,182 @@ public struct McpToggleResult: Decodable, Sendable, Equatable {
             ?? container.decodeIfPresent([String].self, forKey: .enabledIn) ?? []
         failedIn = try container.decodeIfPresent([String].self, forKey: .failedIn) ?? []
     }
+}
+
+/// `swe mcp set --json`: whether the hub entry changed and which
+/// harnesses took the new definition.
+public struct McpSetResult: Decodable, Sendable, Equatable {
+    public let name: String
+    public let changed: Bool
+    public let synced: [String]
+    /// Harnesses still holding the definition from before the edit.
+    public let failed: [String]
+
+    public init(name: String, changed: Bool, synced: [String], failed: [String]) {
+        self.name = name
+        self.changed = changed
+        self.synced = synced
+        self.failed = failed
+    }
+}
+
+/// `swe mcp rename --json`: where the new name landed.
+public struct McpRenameResult: Decodable, Sendable, Equatable {
+    public let name: String
+    public let renamedFrom: String
+    public let hub: Bool
+    public let renamedIn: [String]
+    /// Harnesses whose file still holds the old name.
+    public let failedIn: [String]
+
+    public init(name: String, renamedFrom: String, hub: Bool, renamedIn: [String], failedIn: [String]) {
+        self.name = name
+        self.renamedFrom = renamedFrom
+        self.hub = hub
+        self.renamedIn = renamedIn
+        self.failedIn = failedIn
+    }
+}
+
+/// Where a server row's checkbox stands across the compared harnesses.
+public enum McpRowCheck: Sendable, Equatable {
+    /// On in every harness it can be on in.
+    case all
+    /// On in some of them.
+    case some
+    /// On in none.
+    case none
+}
+
+extension McpServer {
+    /// Whether this server can be on in `harness`: it is already, or swe
+    /// has something to write there. A URL server has no place in a
+    /// harness that only launches commands, and a server outside the hub
+    /// can only come back where a copy was kept.
+    public func canBeOn(in harness: String) -> Bool {
+        if harnesses.contains(harness) { return true }
+        if McpServer.localOnly.contains(harness), isRemote(from: McpServer.hubSource) {
+            return false
+        }
+        return inHub || disabledIn.contains(harness)
+    }
+
+    /// The compared harnesses this server is off in and could be on in:
+    /// what checking the row's box switches on.
+    public func offTargets(among compared: [String]) -> [String] {
+        compared.filter { !harnesses.contains($0) && canBeOn(in: $0) }
+    }
+
+    /// The row checkbox: checked only when the server is on in every
+    /// compared harness it can be on in.
+    public func rowCheck(among compared: [String]) -> McpRowCheck {
+        let possible = compared.filter(canBeOn(in:))
+        let on = possible.filter(harnesses.contains)
+        if on.isEmpty { return .none }
+        return on.count == possible.count ? .all : .some
+    }
+}
+
+/// What the server sheet's edit form would run: nothing, an edit of the
+/// definition, a rename, or both.
+public struct McpEditPlan: Sendable, Equatable {
+    /// The new name, nil when it is unchanged.
+    public var rename: String?
+    /// The new URL, nil when it is unchanged or the server runs a command.
+    public var url: String?
+    /// The new command and its arguments, nil when unchanged.
+    public var command: [String]?
+
+    public init(rename: String? = nil, url: String? = nil, command: [String]? = nil) {
+        self.rename = rename
+        self.url = url
+        self.command = command
+    }
+
+    public var isEmpty: Bool { rename == nil && url == nil && command == nil }
+
+    /// The marker swe prints over a hidden part of a URL or argument.
+    public static let mask = "***"
+
+    /// Whether the hub entry `swe mcp set` rewrites is at a URL. The
+    /// row's own `url` cannot say: it describes the first harness's
+    /// copy, which for a shared server is the gateway's loopback URL
+    /// while the hub holds the command.
+    public static func hubIsRemote(_ server: McpServer) -> Bool {
+        server.isRemote(from: McpServer.hubSource)
+    }
+
+    /// Whether the row's command or URL can stand for the hub's: the
+    /// row was built from the hub entry itself (no harness holds the
+    /// server), or every harness agrees and holds the same kind of
+    /// definition as the hub.
+    static func rowShowsHubDefinition(_ server: McpServer) -> Bool {
+        if server.harnesses.isEmpty { return true }
+        return server.groups.count <= 1 && (server.url != nil) == hubIsRemote(server)
+    }
+
+    /// The text an edit field starts with: the definition as swe shows
+    /// it, or nothing when the row is not the hub's definition or part
+    /// of it is hidden. A masked value saved back would overwrite the
+    /// real one with asterisks, and a harness's gateway URL saved back
+    /// would replace the hub's command.
+    public static func prefill(for server: McpServer) -> String {
+        guard rowShowsHubDefinition(server) else { return "" }
+        let shown = server.url ?? ([server.command ?? ""] + server.args)
+            .map(Self.quoted).joined(separator: " ")
+        return shown.contains(mask) ? "" : shown
+    }
+
+    /// A word as the shell would need it typed, so a prefilled command
+    /// line splits back into the same words.
+    static func quoted(_ word: String) -> String {
+        let plain = word.allSatisfy { $0.isLetter || $0.isNumber || "@%+=:,./_-".contains($0) }
+        if plain && !word.isEmpty { return word }
+        return "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// The plan for the form's `name` and `definition` fields, or why
+    /// they cannot be saved. An untouched or empty definition changes
+    /// nothing, so a server with a hidden value can still be renamed.
+    public static func make(for server: McpServer, name: String, definition: String,
+                            taken: Set<String>) throws -> McpEditPlan {
+        var plan = McpEditPlan()
+        let name = name.trimmingCharacters(in: .whitespaces)
+        if name != server.name {
+            guard name.range(of: "^[A-Za-z0-9][A-Za-z0-9_.@-]*$", options: .regularExpression) != nil else {
+                throw McpEditRefusal("A name is letters, digits, . _ @ - and starts with a letter or digit.")
+            }
+            guard !taken.contains(name) else {
+                throw McpEditRefusal("A server named \(name) already exists.")
+            }
+            plan.rename = name
+        }
+        let definition = definition.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !definition.isEmpty, definition != prefill(for: server) else { return plan }
+        guard !definition.contains(mask) else {
+            throw McpEditRefusal("Type the full value in place of \(mask).")
+        }
+        if hubIsRemote(server) {
+            guard let parsed = URL(string: definition), let scheme = parsed.scheme,
+                  ["http", "https"].contains(scheme.lowercased()), parsed.host != nil else {
+                throw McpEditRefusal("A URL starts with http:// or https://.")
+            }
+            plan.url = definition
+        } else {
+            guard let words = mcpCommandWords(definition), !words.isEmpty else {
+                throw McpEditRefusal("The command has an unclosed quote.")
+            }
+            plan.command = words
+        }
+        return plan
+    }
+}
+
+/// Why the edit form's fields cannot be saved, in words for the sheet.
+public struct McpEditRefusal: LocalizedError, Equatable {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
 }
 
 /// `swe mcp set-type --json`: the label left on the hub entry (nil when
