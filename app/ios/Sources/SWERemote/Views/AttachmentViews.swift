@@ -194,20 +194,47 @@ struct FlowRows: Layout {
         return rows
     }
 
+    // The sums below are typed and kept one step per line on purpose. As
+    // one expression, the widest-row sum took Xcode 26.6's compiler past
+    // its type-check limit ("unable to type-check this expression in
+    // reasonable time") while newer compilers still accepted it.
+
+    /// The gaps between `count` children laid side by side or stacked.
+    private func gaps(_ count: Int) -> CGFloat {
+        spacing * CGFloat(max(0, count - 1))
+    }
+
+    /// A row's width: its children plus the gaps between them.
+    private func width(of row: [(Int, CGSize)]) -> CGFloat {
+        var total: CGFloat = 0
+        for (_, size) in row { total += size.width }
+        return total + gaps(row.count)
+    }
+
+    /// A row's height: its tallest child.
+    private func height(of row: [(Int, CGSize)]) -> CGFloat {
+        var tallest: CGFloat = 0
+        for (_, size) in row { tallest = max(tallest, size.height) }
+        return tallest
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? .infinity
-        let rows = rows(subviews, width: width)
-        let height = rows.reduce(0) { $0 + ($1.map(\.1.height).max() ?? 0) } + spacing * CGFloat(max(0, rows.count - 1))
-        let widest = rows.map { row in row.reduce(0) { $0 + $1.1.width } + spacing * CGFloat(max(0, row.count - 1)) }.max() ?? 0
+        let rows = rows(subviews, width: proposal.width ?? .infinity)
+        var height: CGFloat = gaps(rows.count)
+        var widest: CGFloat = 0
+        for row in rows {
+            height += self.height(of: row)
+            widest = max(widest, width(of: row))
+        }
         return CGSize(width: proposal.width ?? widest, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for row in rows(subviews, width: bounds.width) {
-            let used = row.reduce(0) { $0 + $1.1.width } + spacing * CGFloat(max(0, row.count - 1))
+            let used = width(of: row)
             var x = trailing ? bounds.maxX - used : bounds.minX
-            let height = row.map(\.1.height).max() ?? 0
+            let height = height(of: row)
             for (i, size) in row {
                 subviews[i].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
                 x += size.width + spacing
