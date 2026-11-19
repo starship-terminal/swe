@@ -65,7 +65,8 @@ swe's usual envelope.
 | `swe mcp gateway set <id> --expose=on_demand\|listed` | Runs `warp-gate set`. |
 | `swe mcp gateway mode [per_server\|single]` | Prints or writes `gateway.mode`. Writing it prints the sync that has to follow. |
 | `swe mcp gateway install` / `uninstall` | Runs `warp-gate install` or `uninstall`. This is the header switch. |
-| `swe mcp gateway connect <harness...>` / `disconnect <harness...>` | Turns the `warp-gate` entry on or off for those harnesses, then syncs them. |
+| `swe mcp gateway add <catalogue id>` / `update <id>` | Runs `warp-gate add` or `update`, which pulls and builds a built-in service's code. Waits for warp-gate's G13. |
+| `swe mcp gateway connect <harness...>` / `disconnect <harness...>` | Turns the `warp-gate` entry on or off for those harnesses, then syncs them. Ships with G27, because only the single-entry sync can write that entry. |
 
 `share`, `unshare` and `status` stay as they are.
 
@@ -142,7 +143,7 @@ when warp-gate is not installed, so the feature can be found.
 | Tools row | A search field with the prompt "Search services", and **Add custom service**. |
 | Category tabs | All, Dev, Productivity, Research, Social, Search, Other. These are the hub's existing type labels. |
 | On | A two-column grid of cards for services that are on, with the count in the section title. |
-| Catalogue | Cards for catalogue entries not added yet, each with **Add**, or the reason it cannot be added. |
+| Catalogue | Cards for catalogue entries not added yet, each with **Add**, or the reason it cannot be added. Add runs `swe mcp gateway add`, which clones and builds the service; the card shows "Adding" until it finishes and the error with the log path when it fails. |
 | Not through the gate | Rows for servers that stay per harness, each with its reason ("Keeps state per session", "Reached at a URL") and a link to the Per harness view. |
 | Footer | "N of M" for the filter in effect. |
 
@@ -180,9 +181,24 @@ States the view must handle:
 | Tools | A search field and one row per tool: the name, a "Read only" or "Can write" chip, and a disclosure that shows the description. |
 | Footer | **Done**. A custom service also has **Remove**. |
 
-The On switch runs `swe mcp gateway share` or `unshare`. Setting a key
-uses `swe mcp secret set`, as the server sheet does today. The choice
-between on demand and listed runs `swe mcp gateway set`.
+The On switch runs `swe mcp gateway share` or `unshare`, and then brings
+the harness files in line, because those two commands only change the hub
+flag and print a hint:
+
+- In `per_server` mode every harness that holds the server has to swap
+  between its gateway URL and its own command. The sheet shows the sync
+  preview for that one server across those harnesses, and on confirm
+  runs the sync for it, replacing the existing entries. Without this, a
+  service turned off would leave harnesses pointing at a URL warp-gate no
+  longer serves.
+- In `single` mode no harness file changes: warp-gate picks the change up
+  from the hub within seconds. The sheet says so and runs no sync.
+
+A failed sync leaves the switch showing the hub's real state and names
+the harnesses that did not update.
+
+Setting a key uses `swe mcp secret set`, as the server sheet does today.
+The choice between on demand and listed runs `swe mcp gateway set`.
 
 ### Connect harnesses sheet
 
@@ -191,9 +207,10 @@ The endpoint, then one row per harness: its icon and name, and either
 ("Local servers only"). Connect and disconnect run
 `swe mcp gateway connect` and `disconnect`, which sync that harness.
 
-In `per_server` mode the sheet has one extra control at the top: **Use
-one entry per harness**, which sets the mode to `single` after showing
-the sync preview.
+In `per_server` mode there is no single entry to connect, so the rows
+show which harnesses would connect and the sheet has one control at the
+top: **Use one entry per harness**, which sets the mode to `single`
+after showing the sync preview.
 
 ### Add custom service sheet
 
@@ -233,13 +250,15 @@ shares it.
 | G25 | This spec and the milestones | | standard |
 | G26 | Gateway settings and `swe mcp gateway` commands | warp-gate G5 and G7 | standard |
 | G27 | Single-entry sync | G26, warp-gate G3 | hard: it rewrites every harness config |
-| G28 | Mac app: Warp-Gate view and connect sheet | G26 | standard |
+| G28 | Mac app: Warp-Gate view and connect sheet | G26, G27 | standard |
 | G29 | Mac app: service sheet and add sheet | G28 | standard |
-| G30 | Web app: Warp-Gate view | G26 | standard |
+| G30 | Web app: Warp-Gate view | G26, G27 | standard |
 
-G28 can be built against fixtures before warp-gate's G5 ships, because
-the JSON shape is fixed in the warp-gate spec. It cannot be verified
-against a live gateway until then.
+Both views wait for G27 as well as G26: their Connect controls and the
+mode switch do nothing until the single-entry sync exists.
+
+The catalogue's Add button waits for warp-gate's G13. Until then a
+catalogue card shows "Set up by hand".
 
 ## Screens to capture
 
@@ -253,12 +272,12 @@ at phone width too:
   empty and with a validation error.
 - G30: the same states as G28 and G29 in the web app, in light and dark.
 
-## Open questions
+## Answered questions
 
-Q1 and Q5 are shared with the warp-gate spec. Q6 is swe's own.
+The owner answered these on 2026-11-20.
 
-| Id | Question | Default until answered |
+| Id | Question | Answer |
 |---|---|---|
-| Q1 | Should one connected harness see a different set of services from another? | No. Use the Per harness view for servers that need it. |
-| Q5 | How does a machine with swe get warp-gate: bundled in SWE.app, or its own package? | Its own package on PATH. The page shows the install command when it is missing. |
-| Q6 | Should the Warp-Gate view become the default once a machine is in `single` mode? | No. The last view chosen is remembered. |
+| Q1 | Should one connected harness see a different set of services from another? | No. Same for all. Use the Per harness view for servers that need it. |
+| Q5 | How does a machine with swe get warp-gate? | As its own package on PATH. The page shows the install command when it is missing. swe does not bundle it. |
+| Q6 | Should the Warp-Gate view become the default once a machine is in `single` mode? | No. The page opens on the last view used, and on Per harness the first time. |
