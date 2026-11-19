@@ -298,7 +298,9 @@ class SessionAdapter(Protocol):
         ...
 
     def steer(self, turn: TurnInput) -> None:
-        """Add ``turn`` to the turn in flight. Gated by ``Caps.steer``."""
+        """Add ``turn`` (its text and its attachments) to the turn in
+        flight; emits that user ``message.completed`` with the turn's
+        ``attachments``. Gated by ``Caps.steer``."""
         ...
 
     def interrupt(self) -> None:
@@ -334,7 +336,9 @@ class SessionAdapter(Protocol):
 
     def close(self, grace_s: float = 2.0) -> None:
         """End the session: give the agent ``grace_s`` to exit, then
-        kill it. Idempotent."""
+        kill it. Idempotent. A closed adapter is never started again:
+        a later ``start`` raises :class:`AdapterError`
+        (``code: "closed"``); make a new adapter instead."""
         ...
 
 

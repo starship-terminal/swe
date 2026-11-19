@@ -214,6 +214,39 @@ class TestDataProblems(unittest.TestCase):
         del event["data"]["text"]
         self.assertIn("data.text is required", ev.validate(event))
 
+    def test_delta_seq_counts_from_one(self):
+        self.assertIn("data.seq must be a positive integer",
+                      self.problems("message.delta", seq=0))
+        self.assertTrue(self.problems("message.delta", seq=-3))
+        self.assertEqual(self.problems("message.delta", seq=1), [])
+        with self.assertRaises(ValueError):
+            ev.message_delta(S, "m1", "assistant", "x", 0)
+        # The envelope seq of a durable event may still be 0: the sink
+        # stamps it.
+        self.assertEqual(SAMPLES["turn.ended"]()["seq"], 0)
+        self.assertEqual(ev.validate(SAMPLES["turn.ended"]()), [])
+
+    def test_unencodable_json_is_a_problem(self):
+        cases = [
+            ("tool.started", {"input": {"paths": {"a", "b"}}}),
+            ("tool.started", {"input": b"raw"}),
+            ("tool.started", {"input": {"deep": [{"x": float("nan")}]}}),
+            ("tool.started", {"input": [1, float("inf")]}),
+            ("tool.started", {"input": {("tuple", "key"): 1}}),
+            ("usage.updated", {"cost_usd": float("inf")}),
+        ]
+        for etype, patch in cases:
+            problems = self.problems(etype, **patch)
+            self.assertTrue(any("not encodable as JSON" in p
+                                for p in problems), (patch, problems))
+        nan_ts = dict(SAMPLES["notify"](), ts=float("nan"))
+        self.assertTrue(any("not encodable as JSON" in p
+                            for p in ev.validate(nan_ts)))
+        with self.assertRaises(ValueError):
+            ev.tool_started(S, "c1", "Read", input={"a": {1, 2}})
+        self.assertEqual(self.problems("tool.started",
+                                       input={"ok": [1, 2.5, None]}), [])
+
     def test_make_raises_with_every_problem(self):
         with self.assertRaises(ValueError) as ctx:
             ev.make("turn.ended", S, {"status": "done"})

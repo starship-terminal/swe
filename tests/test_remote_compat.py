@@ -4,7 +4,9 @@ against the v1 shapes protocol.py, tail.py and acp.py build today."""
 import copy
 import unittest
 
-from swe.remote import acp, protocol, protocol_compat as compat, tail
+from swe.remote import (
+    acp, attachments, protocol, protocol_compat as compat, tail,
+)
 from swe.remote.adapters import events as ev
 from swe.sessions import status as session_status
 from tests.test_remote_events_v2 import SAMPLES
@@ -38,6 +40,36 @@ class TestMessages(unittest.TestCase):
             want["seq"] = 7
             self.assertEqual(one(v2), want)
 
+    def test_user_attachments_match_the_v1_send_path(self):
+        files = ["/w/inbox/a b.png", "/w/inbox/c.pdf"]
+        v2 = stamped(ev.message_completed(S, "m1", "user", "Look at these",
+                                          attachments=files, by="iphone"))
+        # attachments.prompt_text is what inject._prompt sends, and so
+        # what the transcript's message.appended records.
+        plain_reg = {"codex": {}}
+        at_reg = {"claude": {}}
+        for at_refs, harness, reg in ((False, "codex", plain_reg),
+                                      (True, "claude", at_reg)):
+            want = attachments.prompt_text("Look at these", files,
+                                           harness, reg)
+            self.assertEqual(attachments.at_refs(harness, reg), at_refs)
+            got = compat.to_v1(v2, machine=M, at_refs=at_refs)[0]
+            self.assertEqual(got["data"],
+                             protocol.message("user", want, ts=TS))
+        plain = one(v2)["data"]["text"]
+        self.assertEqual(plain, "[Attached file: /w/inbox/a b.png] "
+                                "[Attached file: /w/inbox/c.pdf] "
+                                "Look at these")
+        refs = compat.stream_v1([v2], machine=M, at_refs=True)[0]
+        self.assertEqual(refs["data"]["text"],
+                         "@/w/inbox/a b.png @/w/inbox/c.pdf Look at these")
+        empty = stamped(ev.message_completed(S, "m1", "user", "",
+                                             attachments=["/w/a.png"]))
+        self.assertEqual(one(empty)["data"]["text"],
+                         attachments.prompt_text("", ["/w/a.png"], "codex",
+                                                 plain_reg))
+        self.assertEqual(compat.message_text("hi", None), "hi")
+
     def test_thinking_matches_tail(self):
         v2 = stamped(ev.thinking_completed(S, "m2", "pondering",
                                            duration_s=3.5))
@@ -68,8 +100,6 @@ class TestMessages(unittest.TestCase):
             "args_full": ""})
         raw = one(stamped(ev.tool_started(S, "c1", "Read", input="{}")))
         self.assertEqual(raw["data"]["tool"]["args_full"], "{}")
-        odd = one(stamped(ev.tool_started(S, "c1", "Read", input={1, 2})))
-        self.assertIn("1", odd["data"]["tool"]["args_full"])
         empty = one(stamped(ev.tool_completed(S, "c1", "error")))
         self.assertEqual(empty["data"]["text"], "")
         self.assertEqual(empty["data"]["result_ref"], "c1")

@@ -25,6 +25,7 @@ adapter cannot emit a malformed one.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -115,9 +116,14 @@ class _Str(_Spec):
 
 
 class _Int(_Spec):
+    def __init__(self, *, least: int = 0) -> None:
+        self.least = least
+
     def check(self, value, path, problems):
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            problems.append(f"{path} must be a non-negative integer")
+        if not isinstance(value, int) or isinstance(value, bool) \
+                or value < self.least:
+            what = "positive" if self.least == 1 else "non-negative"
+            problems.append(f"{path} must be a {what} integer")
 
 
 class _Num(_Spec):
@@ -190,6 +196,7 @@ class _List(_Spec):
 STR = _Str()
 TEXT = _Str(empty=True)
 INT = _Int()
+COUNT = _Int(least=1)  # a count that starts at 1
 NUM = _Num()
 BOOL = _Bool()
 ANY = _Any()
@@ -216,7 +223,7 @@ SCHEMAS: dict[str, _Obj] = {
     "turn.ended": _Obj({"status": _Enum(TURN_STATUSES)},
                        {"reason": TEXT, "duration_s": NUM}),
     "message.delta": _Obj({"id": STR, "kind": _Enum(DELTA_KINDS),
-                           "text": TEXT, "seq": INT},
+                           "text": TEXT, "seq": COUNT},
                           {"offset": INT, "done": BOOL}),
     "message.completed": _Obj({"id": STR, "kind": _Enum(MESSAGE_KINDS),
                                "text": TEXT},
@@ -285,11 +292,26 @@ _ENVELOPE_KEYS = frozenset({"v", "type", "session", "seq", "ts", "turn_id",
                             "command_id", "data"})
 
 
+def _json_problem(event: dict) -> str:
+    """Why ``event`` will not go to disk or a socket as strict JSON (a
+    set, bytes, a tuple key, NaN or infinity anywhere in it), or ""."""
+    try:
+        json.dumps(event, allow_nan=False)
+    except (TypeError, ValueError, RecursionError) as exc:
+        return f"event is not encodable as JSON: {exc}"
+    return ""
+
+
 def validate(event: Any) -> list[str]:
-    """Every problem with ``event`` as a v2 envelope; empty when valid."""
+    """Every problem with ``event`` as a v2 envelope; empty when valid.
+    That includes anything ``json.dumps(event, allow_nan=False)`` cannot
+    encode: the log and the wire are strict JSON."""
     if not isinstance(event, dict):
         return ["event must be an object"]
     problems: list[str] = []
+    unencodable = _json_problem(event)
+    if unencodable:
+        problems.append(unencodable)
     if event.get("v") != VERSION:
         problems.append(f"v must be {VERSION}")
     etype = event.get("type")

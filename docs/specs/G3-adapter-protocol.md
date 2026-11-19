@@ -24,14 +24,14 @@ adapter emits v2 events into an `EventSink` (the keeper's log).
 | `capabilities` | the `Caps` in force now | |
 | `start(spec, sink)` | new, resume (`resume_id`) or fork (`fork=True`); returns the harness's session id; emits `session.caps` then `session.state` | `fork` |
 | `send_turn(turn)` | starts a turn, returns its `turn_id`; `AdapterError(code="busy")` mid-turn | |
-| `steer(turn)` | adds a message to the turn in flight | `steer` |
+| `steer(turn)` | adds a message, with its attachments, to the turn in flight | `steer` |
 | `interrupt()` | stops the turn; a no-op when idle | |
 | `respond(request_id, answer)` | answers an approval or input request; `UnknownRequest` if not open | |
 | `set_option(name, value)` | `model`, `effort`, `permission_mode` (in `Caps.options`) or `plan_mode` | `options`, `plan_mode` |
 | `stop_task(task_id)` | stops one subagent or background task | `stop_task` |
 | `rollback(turn_id)` | rewinds the conversation to before a turn (files are checkpoints, not this) | `rollback` |
 | `transcript_position()` | the harness transcript's path and size, or None | |
-| `close(grace_s)` | ends the session; idempotent | |
+| `close(grace_s)` | ends the session; idempotent; a later `start` raises `AdapterError(code="closed")` | |
 
 The rules every adapter keeps:
 
@@ -76,7 +76,7 @@ fields marked `?`; enum values are in `events.ENUMS`.
 | `session.caps` | `caps` {steer, plan_mode, rollback, fork, stop_task, options[]} |
 | `turn.started` | `by?` (device), `text?`; envelope needs `turn_id` |
 | `turn.ended` | `status` (completed, interrupted, failed, keeper_lost), `reason?`, `duration_s?`; envelope needs `turn_id` |
-| `message.delta` | `id`, `kind` (assistant, thinking, tool_use), `text`, `seq` (this message's delta count from 1), `offset?`, `done?` |
+| `message.delta` | `id`, `kind` (assistant, thinking, tool_use), `text`, `seq` (this message's delta count, a positive integer from 1), `offset?`, `done?` |
 | `message.completed` | `id`, `kind` (user, assistant, system), `text`, `by?`, `attachments?` |
 | `thinking.completed` | `id`, `text`, `duration_s?` |
 | `tool.started` | `call_id`, `name`, `summary?` (one-line card), `input?`, `task_id?` |
@@ -101,7 +101,10 @@ fields marked `?`; enum values are in `events.ENUMS`.
 Field names follow v1 where the meaning is the same (`request_id`,
 `prompt`, `options`, `decision`, `source`; a delta's `id`, `kind`,
 `text`, `seq`, `done`; `call_id`; `duration_s`; `op`, `ok`, `note`).
-`validate` reports unknown fields, so a typo fails the adapter's tests.
+`validate` reports unknown fields, so a typo fails the adapter's tests,
+and anything `json.dumps(event, allow_nan=False)` cannot encode (sets,
+bytes, tuple keys, NaN, infinity, at any depth): the log and the wire
+are strict JSON. The envelope `seq` may be 0 before the sink stamps it.
 
 ## Capability keys
 
@@ -133,12 +136,12 @@ view's read-only bar.
 
 ## Compatibility with v1 clients
 
-`protocol_compat.to_v1(event, machine=)` maps one v2 event to at most
+`protocol_compat.to_v1(event, machine=, at_refs=)` maps one v2 event to at most
 one v1 event, keeping its `seq` (deltas keep none):
 
 | v2 | v1 |
 |---|---|
-| `message.completed` | `message.appended` kind user, assistant or system |
+| `message.completed` | `message.appended` kind user, assistant or system; `attachments` folded into the text exactly as `attachments.prompt_text` sends them (`@/abs/path` when the caller passes `at_refs=True`, else `[Attached file: /abs/path]`) |
 | `thinking.completed` | `message.appended` kind thinking, with `duration_s` |
 | `tool.started` / `tool.completed` | `message.appended` `tool_use` (tool card) / `tool_result` (`result_ref`) |
 | `context.compacted` | `message.appended` kind compaction |

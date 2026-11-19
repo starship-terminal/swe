@@ -137,6 +137,18 @@ class AdapterContract:
             adapter.send_turn(TurnInput("hi"))
         self.assertEqual(ctx.exception.code, "agent_down")
 
+    def test_contract_start_after_close_raises(self):
+        adapter = self.make_adapter(caps=Caps(), reply="x")
+        adapter.close(0.5)
+        with self.assertRaises(AdapterError):
+            adapter.start(self.make_spec(), fake.ListSink())
+        started, sink, _sid = self.started()
+        started.close(0.5)
+        count = len(sink.events)
+        with self.assertRaises(AdapterError):
+            started.start(self.make_spec(), fake.ListSink())
+        self.assertEqual(len(sink.events), count)
+
 
 class TestFakeContract(AdapterContract, unittest.TestCase):
     def make_adapter(self, *, caps, reply):
@@ -432,6 +444,11 @@ class TestFakeAdapter(unittest.TestCase):
         adapter.close()
         adapter.close()
         self.assertEqual([c.name for c in adapter.calls], ["close", "close"])
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(StartSpec("k", "/w"), fake.ListSink())
+        self.assertEqual(ctx.exception.code, "closed")
+        self.assertIsNone(adapter.spec)
+        self.assertFalse(adapter.alive)
 
     def test_input_answer_and_manual_stepping(self):
         adapter, sink, _clock = self.start(
@@ -462,6 +479,13 @@ class TestFakeAdapter(unittest.TestCase):
         adapter.send_turn(TurnInput("go"))
         adapter.steer(TurnInput("also this", device="mac"))
         self.assertEqual(sink.of("message.completed")[-1]["turn_id"], "t1")
+        self.assertNotIn("attachments", sink.of("message.completed")[-1]["data"])
+        adapter.steer(TurnInput("and these", device="mac",
+                                attachments=["/w/a.png", "/w/b.pdf"]))
+        steered = sink.of("message.completed")[-1]
+        self.assertEqual(steered["data"]["attachments"],
+                         ["/w/a.png", "/w/b.pdf"])
+        self.assertEqual(steered["data"]["by"], "mac")
         adapter.stop_task("sub-1")
         stopped = sink.of("task.updated")[-1]["data"]
         self.assertEqual(stopped["status"], "stopped")

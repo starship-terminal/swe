@@ -305,6 +305,8 @@ class FakeAdapter:
     def start(self, spec: StartSpec, sink: EventSink) -> str:
         with self._lock:
             self._record("start", spec)
+            if self.closed:
+                raise AdapterError("the adapter is closed", code="closed")
             if self.spec is not None:
                 raise AdapterError("already started", code="started")
             if spec.fork:
@@ -358,7 +360,9 @@ class FakeAdapter:
                 raise AdapterError("no turn to steer", code="idle")
             self._send(ev.message_completed(
                 self.key, self._next("msg", "m"), "user", turn.text,
-                by=turn.device or None, turn_id=self.turn.turn_id,
+                by=turn.device or None,
+                attachments=list(turn.attachments) or None,
+                turn_id=self.turn.turn_id,
                 command_id=turn.command_id or None, ts=self.clock()))
 
     def interrupt(self) -> None:

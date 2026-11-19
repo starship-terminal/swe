@@ -9,7 +9,9 @@ injectors field for field:
 ==================== ===================================================
 v2                   v1
 ==================== ===================================================
-message.completed    message.appended, kind user, assistant or system
+message.completed    message.appended, kind user, assistant or system;
+                     ``attachments`` folded into the text as v1 sends
+                     them (``message_text``)
 thinking.completed   message.appended, kind thinking (+ duration_s)
 tool.started         message.appended, kind tool_use (tool card)
 tool.completed       message.appended, kind tool_result (result_ref)
@@ -83,15 +85,13 @@ def _appended(event: dict, machine: str, kind: str, text: str,
 
 def _args_full(value) -> str:
     """``tail._summarize_args``'s ``args_full``: the arguments as JSON,
-    "" when there are none."""
+    "" when there are none. A valid v2 event is always strict JSON
+    (``events.validate``), so this cannot fail."""
     if value is None:
         return ""
     if isinstance(value, str):
         return value
-    try:
-        return json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _option_rows(options) -> list[dict]:
@@ -109,11 +109,29 @@ def _option_rows(options) -> list[dict]:
     return rows
 
 
-def to_v1(event: dict, *, machine: str = "") -> list[dict]:
+def message_text(text: str, attachments, *, at_refs: bool = False) -> str:
+    """A v2 message's text with its ``attachments`` folded in the way v1
+    carries them: exactly ``attachments.prompt_text``'s form, the text
+    the injectors send and the transcript then records. ``at_refs`` is
+    the session harness's ``attachments.at_refs``: ``@/abs/path`` refs
+    when true, ``[Attached file: /abs/path]`` otherwise."""
+    paths = [str(p) for p in attachments or []]
+    if not paths:
+        return text
+    if at_refs:
+        refs = " ".join(f"@{path}" for path in paths)
+    else:
+        refs = " ".join(f"[Attached file: {path}]" for path in paths)
+    return f"{refs} {text}" if text else refs
+
+
+def to_v1(event: dict, *, machine: str = "",
+          at_refs: bool = False) -> list[dict]:
     """The v1 events a pre-v2 client should get for ``event``: an empty
     list for a type v1 has no frame for, else one event. ``machine`` is
-    the v1 envelope's machine id. Raises ValueError for an event that is
-    not v2."""
+    the v1 envelope's machine id; ``at_refs`` is the session harness's
+    ``attachments.at_refs`` (the caller resolves it, so this stays
+    pure). Raises ValueError for an event that is not v2."""
     if not isinstance(event, dict) or event.get("v") != V2:
         raise ValueError("not a v2 event")
     etype = event.get("type")
@@ -121,7 +139,9 @@ def to_v1(event: dict, *, machine: str = "") -> list[dict]:
     if etype in DROPPED:
         return []
     if etype == "message.completed":
-        return [_appended(event, machine, data["kind"], data["text"])]
+        text = message_text(data["text"], data.get("attachments"),
+                            at_refs=at_refs)
+        return [_appended(event, machine, data["kind"], text)]
     if etype == "thinking.completed":
         extra = {}
         if data.get("duration_s") is not None:
@@ -191,9 +211,10 @@ def to_v1(event: dict, *, machine: str = "") -> list[dict]:
     raise ValueError(f"unknown v2 event type {etype!r}")
 
 
-def stream_v1(events, *, machine: str = "") -> list[dict]:
+def stream_v1(events, *, machine: str = "",
+              at_refs: bool = False) -> list[dict]:
     """:func:`to_v1` over a run of events, in order."""
     out: list[dict] = []
     for event in events:
-        out.extend(to_v1(event, machine=machine))
+        out.extend(to_v1(event, machine=machine, at_refs=at_refs))
     return out
