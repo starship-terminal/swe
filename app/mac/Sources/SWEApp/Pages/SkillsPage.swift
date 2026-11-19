@@ -814,36 +814,40 @@ private struct SkillGridRow: View {
         }
     }
 
-    /// The master switch left of the name. Only a shared skill answers
-    /// per folder; a private or harness-owned copy sits under its own
-    /// manager, so its switch stays put and explains itself on hover.
+    /// The row's checkbox left of the name: checked only when the skill
+    /// is on in every folder that can hold it, a dash when it is on in
+    /// some. Checking it turns the rest on; clearing a full row turns it
+    /// off wherever a folder allows. Only a shared skill answers per
+    /// folder; a private or harness-owned copy sits under its own
+    /// manager, so its box stays put and explains itself on hover.
     @ViewBuilder private var master: some View {
         if skill.source == .shared {
             let chips = model.chips(for: skill)
-            let on = chips.contains { $0.on }
+            let row = GridRowSwitch.places(chips.map { ($0.on, $0.toggleable) })
+            let check = row.check
+            let canAct = !row.targets.isEmpty
             Group {
                 if masterBusy {
                     ProgressView().controlSize(.mini)
-                        .frame(width: 36, height: 20)
+                        .frame(width: GridCheckBox.side, height: GridCheckBox.side)
                 } else {
-                    Toggle(skill.name, isOn: Binding(
-                        get: { on },
-                        set: { value in
-                            masterBusy = true
-                            Task { await flip(on: value); masterBusy = false }
-                        }))
-                    .labelsHidden()
-                    .toggleStyle(AccentSwitchStyle(tint: on ? Theme.success : Theme.interactive))
-                    .disabled(!chips.contains { $0.toggleable && $0.on == on })
+                    Button {
+                        masterBusy = true
+                        Task { await flip(on: row.turnsOn); masterBusy = false }
+                    } label: {
+                        GridCheckBox(state: GridCheckBox.mark(check), enabled: canAct)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAct)
+                    .accessibilityLabel("\(skill.name) in every folder")
+                    .accessibilityValue(check == .all ? "on" : check == .some ? "on in some" : "off")
                 }
             }
             .padding(.top, 2)
-            .hoverTip(masterTip(on: on), pinsOnClick: false)
+            .hoverTip(masterTip(check), pinsOnClick: false)
         } else {
-            Toggle(skill.name, isOn: .constant(true))
-                .labelsHidden()
-                .toggleStyle(AccentSwitchStyle(tint: Theme.textMuted))
-                .disabled(true)
+            GridCheckBox(state: .on, enabled: false)
                 .padding(.top, 2)
                 .hoverTip(privateTip, pinsOnClick: false)
         }
@@ -862,23 +866,30 @@ private struct SkillGridRow: View {
         }
     }
 
-    private func masterTip(on: Bool) -> String {
+    private func masterTip(_ check: McpRowCheck) -> String {
         let chips = model.chips(for: skill)
         let onNames = chips.filter { $0.on }.map { HarnessMark($0.root.name).name }
-        if on {
-            return "On for \(onNames.joined(separator: ", ")). Turn off everywhere."
+        let offNames = chips.filter { !$0.on && $0.toggleable }.map { HarnessMark($0.root.name).name }
+        switch check {
+        case .all:
+            return "On in every folder that can hold it. Click to turn it off everywhere."
+        case .some:
+            return "On for \(onNames.joined(separator: ", ")). Click to also turn it on for \(offNames.joined(separator: ", "))."
+        case .none:
+            let blocked = chips.filter { !$0.toggleable }.count
+            if offNames.isEmpty { return "Off, and no folder here can be switched." }
+            return blocked > 0
+                ? "Off where a folder allows it; \(blocked) can't be switched. Click to turn it on."
+                : "Off everywhere. Click to turn it on in every folder."
         }
-        let blocked = chips.filter { !$0.toggleable }.count
-        return blocked > 0
-            ? "Off where a folder allows it; \(blocked) can't be switched. Turn it on."
-            : "Off everywhere. Turn it on where a folder allows it."
     }
 }
 
-/// One skill in one folder: a check it can click off, a power mark it
-/// can click on, a "P" where the folder keeps its own private copy, an
-/// amber mark where the folder's state can't be switched, and a minus
-/// mark where the skill isn't seen at all.
+/// One skill in one folder: a checkbox a click flips, a "P" where the
+/// folder keeps its own private copy, a dimmed checked box where the
+/// folder's state can't be switched per skill, an amber mark where the
+/// folder needs fixing first, and a dimmed empty box where the skill
+/// isn't seen at all.
 private struct SkillCell: View {
     var skill: Skill
     var root: SkillRoot
@@ -897,11 +908,11 @@ private struct SkillCell: View {
         } else if let chip {
             if chip.on && skill.source == .shared && chip.toggleable {
                 toggleButton(to: false,
-                             label: AnyView(check),
+                             label: AnyView(GridCheckBox(state: .on)),
                              tip: "On for \(name). Click to turn it off.")
             } else if !chip.on && chip.toggleable {
                 toggleButton(to: true,
-                             label: AnyView(power),
+                             label: AnyView(GridCheckBox(state: .off)),
                              tip: "Off for \(name). Click to turn it on.")
             } else if chip.on {
                 staticMark
@@ -909,7 +920,7 @@ private struct SkillCell: View {
                 blocked
             }
         } else {
-            Image(systemName: "minus").foregroundStyle(Theme.borderStrong)
+            GridCheckBox(state: .off, enabled: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .hoverTip("Not seen by \(name)", pinsOnClick: false)
         }
@@ -940,7 +951,7 @@ private struct SkillCell: View {
                 .hoverTip(privateMarkTip, pinsOnClick: false)
                 .help(privateMarkTip)
         } else {
-            check
+            GridCheckBox(state: .on, enabled: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .hoverTip("On for \(name); this folder's state can't be switched per skill.",
                           pinsOnClick: false)
@@ -968,16 +979,8 @@ private struct SkillCell: View {
         }
         .buttonStyle(.plain)
         .hoverTip(tip, pinsOnClick: false)
-    }
-
-    private var check: some View {
-        Image(systemName: "checkmark").font(Theme.font(size: 12, weight: .semibold))
-            .foregroundStyle(Theme.textPrimary)
-    }
-
-    private var power: some View {
-        Image(systemName: "power").font(Theme.font(size: 11, weight: .semibold))
-            .foregroundStyle(Theme.textMuted)
+        .accessibilityLabel("\(skill.name) in \(name)")
+        .accessibilityValue(value ? "off" : "on")
     }
 }
 

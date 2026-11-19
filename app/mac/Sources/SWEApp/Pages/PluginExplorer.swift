@@ -505,7 +505,7 @@ private struct PluginGridRow: View {
     }
 
     /// The enables this row could run right now, and the disables: the
-    /// master switch flips the first of each it finds per harness.
+    /// row's checkbox runs the first of each it finds per harness.
     private var enables: [PluginAction] {
         harnesses.compactMap { harness in
             entry.row.actions[harness]?.first { $0.verb == .enable }
@@ -639,31 +639,46 @@ private struct PluginGridRow: View {
         }
     }
 
-    /// The master switch left of the name: green while the plugin runs
-    /// anywhere. Flipping it collects every harness's enable or disable
-    /// and asks once for the batch; a plugin with no such verb anywhere
-    /// sits disabled and says why.
-    @ViewBuilder private var master: some View {
-        let on = isOn
-        Toggle(shown, isOn: Binding(
-            get: { on },
-            set: { value in confirmBatch(value ? enables : disables) }))
-        .labelsHidden()
-        .toggleStyle(AccentSwitchStyle(tint: on ? Theme.success : Theme.interactive))
-        .disabled(busy || (on ? disables : enables).isEmpty)
-        .padding(.top, 2)
-        .hoverTip(masterTip(on: on), pinsOnClick: false)
+    /// The row's check and which batch a click runs.
+    private var rowSwitch: GridRowSwitch {
+        GridRowSwitch.plugin(isOn: isOn, enables: Array(enables.indices),
+                             disables: Array(disables.indices))
     }
 
-    private func masterTip(on: Bool) -> String {
-        if on {
+    /// The row's checkbox left of the name: checked only when the plugin
+    /// is on in every harness that could run it, a dash when it is on in
+    /// some. Checking it collects every waiting enable, clearing a full
+    /// row every disable, and asks once for the batch; a plugin with no
+    /// such verb anywhere sits dimmed and says why.
+    @ViewBuilder private var master: some View {
+        let row = rowSwitch
+        let check = row.check
+        let batch = row.turnsOn ? enables : disables
+        Button { confirmBatch(batch) } label: {
+            GridCheckBox(state: GridCheckBox.mark(check), enabled: !batch.isEmpty)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy || batch.isEmpty)
+        .padding(.top, 2)
+        .hoverTip(masterTip(check), pinsOnClick: false)
+        .accessibilityLabel("\(shown) in every harness")
+        .accessibilityValue(check == .all ? "on" : check == .some ? "on in some" : "off")
+    }
+
+    private func masterTip(_ check: McpRowCheck) -> String {
+        switch check {
+        case .all:
             return disables.isEmpty
                 ? "On, but no harness here can disable it."
-                : "On. Turn off in every harness that allows it."
+                : "On in every harness that has it. Click to turn it off in each one that allows it."
+        case .some:
+            return "On in some harnesses. Click to turn it on in \(harnessNames(enables.map(\.harness)))."
+        case .none:
+            return enables.isEmpty
+                ? "Nothing installed to enable. A cell's Install puts it in a harness first."
+                : "Off. Click to turn it on in every harness that allows it."
         }
-        return enables.isEmpty
-            ? "Nothing installed to enable. A cell's Install puts it in a harness first."
-            : "Off. Turn on in every harness that allows it."
     }
 
     private var accessibilityLabelSuffix: String {
@@ -725,23 +740,21 @@ struct PluginCell: View {
                 .hoverTip(help(for: state) + " Click for actions.", pinsOnClick: false)
             }
         } else {
-            Image(systemName: "minus").foregroundStyle(Theme.borderStrong)
+            GridCheckBox(state: .off, enabled: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .hoverTip("Not in \(name)", pinsOnClick: false)
         }
     }
 
-    /// The state's glyph: a check on, a power mark off, a grey dot
+    /// The state's glyph: a checked box on, an empty box off, a grey dot
     /// installed with no on or off known, a ring for listed and for
-    /// Cursor's cache.
+    /// Cursor's cache. A box swe has no action for is dimmed.
     @ViewBuilder private func mark(_ status: PluginHarnessState.Status) -> some View {
         switch status {
         case .enabled:
-            Image(systemName: "checkmark").font(Theme.font(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
+            GridCheckBox(state: .on, enabled: !actions.isEmpty)
         case .disabled:
-            Image(systemName: "power").font(Theme.font(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.textMuted)
+            GridCheckBox(state: .off, enabled: !actions.isEmpty)
         case .installed:
             Circle().fill(Theme.textSecondary).frame(width: Theme.statusDot, height: Theme.statusDot)
         case .available:
@@ -751,7 +764,7 @@ struct PluginCell: View {
             Circle().strokeBorder(Theme.textMuted, style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
                 .frame(width: Theme.statusDot, height: Theme.statusDot)
         case .absent:
-            Image(systemName: "minus").foregroundStyle(Theme.borderStrong)
+            GridCheckBox(state: .off, enabled: false)
         }
     }
 
