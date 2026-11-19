@@ -654,13 +654,13 @@ private struct ServerRow: View {
             Group {
                 if masterBusy {
                     ProgressView().controlSize(.mini)
-                        .frame(width: McpCheckBox.side, height: McpCheckBox.side)
+                        .frame(width: GridCheckBox.side, height: GridCheckBox.side)
                 } else {
                     Button {
                         masterBusy = true
                         Task { await toggleRow(server, check != .all); masterBusy = false }
                     } label: {
-                        McpCheckBox(state: check == .all ? .on : check == .some ? .mixed : .off,
+                        GridCheckBox(state: check == .all ? .on : check == .some ? .mixed : .off,
                                     enabled: check == .all || !pending.isEmpty)
                             .contentShape(.rect)
                     }
@@ -762,7 +762,7 @@ private struct Cell: View {
                 Task { await toggle(server, harness, false); busy = false }
             } label: {
                 HStack(spacing: 5) {
-                    McpCheckBox(state: .on)
+                    GridCheckBox(state: .on)
                     if differs { variant(group) }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -777,7 +777,7 @@ private struct Cell: View {
                 busy = true
                 Task { await toggle(server, harness, true); busy = false }
             } label: {
-                McpCheckBox(state: .off)
+                GridCheckBox(state: .off)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(.rect)
             }
@@ -788,7 +788,7 @@ private struct Cell: View {
             .accessibilityLabel("\(server.name) in \(name)")
             .accessibilityValue("off")
         } else {
-            McpCheckBox(state: .off, enabled: false)
+            GridCheckBox(state: .off, enabled: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .hoverTip(server.inHub
                           ? "\(name) only takes servers it launches with a command; this one is at a URL."
@@ -805,34 +805,6 @@ private struct Cell: View {
             .frame(width: 18, height: 18)
             .background(Theme.subtle, in: .rect(cornerRadius: 5))
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.border, lineWidth: 1))
-    }
-}
-
-/// The table's checkbox mark: checked, a dash for "some", or empty.
-/// Dimmed when a click would have nothing to do.
-struct McpCheckBox: View {
-    enum Mark { case on, mixed, off }
-    var state: Mark
-    var enabled = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    static let side: CGFloat = 16
-
-    private var symbol: String {
-        switch state {
-        case .on: "checkmark.square.fill"
-        case .mixed: "minus.square.fill"
-        case .off: "square"
-        }
-    }
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(Theme.font(size: 15))
-            .foregroundStyle(state == .off ? Theme.textMuted : Theme.interactive)
-            .opacity(enabled ? 1 : 0.35)
-            .frame(width: Self.side, height: Self.side)
-            .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: state)
     }
 }
 
