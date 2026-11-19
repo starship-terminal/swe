@@ -25,7 +25,7 @@
 
 - id: G2
   title: iPhone web-view proof (scroll, keyboard, offline, streamed fetch)
-  status: doing
+  status: done
   depends_on: []
   owns: ["app/shared/SessionWebShell/**"]
   questions: []
@@ -35,7 +35,7 @@
 
 - id: G3
   title: Adapter protocol, v2 events, compat layer, fake adapter
-  status: doing
+  status: done
   depends_on: []
   owns:
     - "src/swe/remote/adapters/__init__.py"
@@ -52,7 +52,7 @@
 
 - id: G4
   title: Keeper event log
-  status: todo
+  status: ready
   depends_on: [G3]
   owns: ["src/swe/remote/keeper/log.py"]
   questions: []
@@ -72,7 +72,7 @@
 
 - id: G6
   title: SQLite store and command receipts
-  status: todo
+  status: ready
   depends_on: [G3]
   owns: ["src/swe/remote/store.py"]
   questions: []
@@ -82,7 +82,7 @@
 
 - id: G7
   title: Claude stream adapter, recorder, fixtures
-  status: todo
+  status: ready
   depends_on: [G3]
   owns:
     - "src/swe/remote/adapters/claude_stream.py"
@@ -124,7 +124,7 @@
 
 - id: G10
   title: React toolchain, tokens, /session/ route, CI job
-  status: doing
+  status: done
   depends_on: []
   owns:
     - "app/web-session/package.json"
@@ -225,7 +225,11 @@
   status: todo
   depends_on: [G17]
   owns: ["app/ios/Sources/SWERemote/Views/SessionWebView.swift", "app/ios/project.yml"]
-  questions: []
+  questions:
+    - "G2 re-runs under heavy machine load stalled: the hub served every request but the page stopped loading, cause unknown. Reproduce or rule out on a quiet Mac and a real iPhone before the iPhone moves (docs/specs/G2-iphone-webview-proof.md)."
+    - "WebKit's form bar (up, down, done) sits between the composer and the keys. Keep it, or remove it with an undocumented runtime workaround?"
+    - "With a hardware keyboard only that bar shows and the app gets no keyboard frame. Decide the layout for that case."
+    - "A first launch with nothing cached shows a blank page. Needs a native error screen."
   verify: ["iOS XCTest", "screens: phone"]
   tier: implement-hard
   est_runtime: 90m
