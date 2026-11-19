@@ -467,9 +467,16 @@ struct ChartCard: View {
         return room.rounded(.up)
     }
 
-    /// The tallest bar: every height is a fraction of it.
+    /// The tallest bar: every height is a fraction of it. Older scores
+    /// share the scale, so their dashed bars keep their own proportions.
     private var peak: Double {
-        model.rows.compactMap(\.value).max() ?? 1
+        model.rows.compactMap { $0.value ?? model.metric.pastScore(of: $0.aa)?.value }.max() ?? 1
+    }
+
+    /// The first row drawn from an older index version, where the divider
+    /// goes; nil when the chart has none.
+    private var firstPastRow: String? {
+        model.rows.first { $0.value == nil && model.metric.pastScore(of: $0.aa) != nil }?.id
     }
 
     var body: some View {
@@ -480,7 +487,8 @@ struct ChartCard: View {
                 ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: Self.spacing) {
                         ForEach(model.rows) { row in
-                            BarColumn(row: row, metric: model.metric, peak: peak) { inside in
+                            BarColumn(row: row, metric: model.metric, peak: peak,
+                                      startsPastGroup: row.id == firstPastRow) { inside in
                                 if inside { hover.enter(row.id) } else { hover.leave(row.id) }
                             }
                             .frame(width: columnWidth - Self.spacing)
@@ -554,8 +562,20 @@ struct ChartCard: View {
                         .font(Theme.font(size: 10.5)).foregroundStyle(Theme.textSecondary)
                 }
             }
+            if firstPastRow != nil {
+                HStack(spacing: 5) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(Theme.textSecondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                        .frame(width: 10, height: 10)
+                    Text(Self.pastLegend)
+                        .font(Theme.font(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                }
+            }
         }
     }
+
+    /// The legend entry for dashed bars.
+    static let pastLegend = "Older index version, not on the same scale"
 }
 
 private struct BarColumn: View {
@@ -563,10 +583,21 @@ private struct BarColumn: View {
     var metric: ModelsModel.Metric
     /// The chart's largest value; heights are fractions of it.
     var peak: Double
+    /// The first bar of the older-index group: a divider sits before it.
+    var startsPastGroup = false
     /// The pointer entered (true) or left (false) the bar itself.
     var hover: (Bool) -> Void
 
     private var vendor: ModelVendor { row.vendor }
+
+    /// The older score this bar draws, dashed, when the model has no
+    /// current one.
+    private var past: AAPastScore? {
+        row.value == nil ? metric.pastScore(of: row.aa) : nil
+    }
+
+    /// A dashed bar holds two lines, the number and its tag.
+    static let pastMinHeight: CGFloat = 34
 
     /// Bar text reads dark on light fills (OpenAI's grey) — a fixed
     /// near-black, not the theme's dark-mode white.
@@ -602,12 +633,38 @@ private struct BarColumn: View {
     var body: some View {
         VStack(spacing: 0) {
             // Zone 1: the bar, bottom-aligned on the shared baseline.
-            let fraction = row.value.map { max($0 / max(peak, .leastNonzeroMagnitude), 0) } ?? 0
+            let past = past
+            let shown = row.value ?? past?.value
+            let fraction = shown.map { max($0 / max(peak, .leastNonzeroMagnitude), 0) } ?? 0
+            let fill: AnyShapeStyle = past != nil ? AnyShapeStyle(Color(rgb: vendor.color).opacity(0.12))
+                : row.value == nil ? AnyShapeStyle(Theme.subtle) : AnyShapeStyle(Color(rgb: vendor.color))
             RoundedRectangle(cornerRadius: 4)
-                .fill(row.value == nil ? AnyShapeStyle(Theme.subtle) : AnyShapeStyle(Color(rgb: vendor.color)))
-                .frame(height: row.value == nil ? 8 : max(fraction * ChartCard.barHeight, 20))
+                .fill(fill)
+                .frame(height: shown == nil ? 8
+                       : max(fraction * ChartCard.barHeight, past == nil ? 20 : Self.pastMinHeight))
+                .overlay {
+                    // An older-index score: the lab's colour as a dashed
+                    // outline, so it never reads as a current bar.
+                    if past != nil {
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color(rgb: vendor.color),
+                                          style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                    }
+                }
                 .overlay(alignment: .top) {
-                    if let value = row.value {
+                    if let past {
+                        VStack(spacing: 1) {
+                            Text(metric.format(past.value))
+                                .font(Theme.font(size: 10, weight: .medium)).monospacedDigit()
+                                .foregroundStyle(Theme.textPrimary)
+                            Text(past.tag)
+                                .font(Theme.font(size: 8.5)).foregroundStyle(Theme.textSecondary)
+                        }
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                        .padding(.top, 4).padding(.horizontal, 2)
+                        .accessibilityElement(children: .combine)
+                        .hoverTip(past.note, replacesLabel: false)
+                    } else if let value = row.value {
                         Text(metric.format(value))
                             .font(Theme.font(size: 10, weight: .medium)).monospacedDigit()
                             .foregroundStyle(valueColor)
@@ -616,7 +673,7 @@ private struct BarColumn: View {
                     }
                 }
                 .overlay {
-                    if row.used {
+                    if row.used, past == nil {
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
                             .padding(1)
@@ -629,8 +686,19 @@ private struct BarColumn: View {
                 .frame(height: ChartCard.barHeight, alignment: .bottom)
                 // A model with no figure keeps its 8pt stub, labelled so it
                 // doesn't read as a bar that failed to draw.
+                .overlay(alignment: .bottomLeading) {
+                    // The divider before the first older-index bar, in the
+                    // gap between it and the last current one.
+                    if startsPastGroup {
+                        Rectangle()
+                            .fill(Theme.border)
+                            .frame(width: 1, height: ChartCard.barHeight)
+                            .offset(x: -(ChartCard.spacing + 1) / 2)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(alignment: .bottom) {
-                    if row.value == nil {
+                    if shown == nil {
                         Text("No score")
                             .font(Theme.font(size: 10)).foregroundStyle(Theme.textMuted)
                             .lineLimit(1).minimumScaleFactor(0.6)
@@ -884,7 +952,7 @@ private struct TableRow: View {
                 }
             }
             .frame(width: columns.ranIn, alignment: .leading)
-            metric(row.aa?.intelligence).frame(width: columns.intelligence, alignment: .trailing)
+            intelligence(row.aa).frame(width: columns.intelligence, alignment: .trailing)
             if columns.coding > 0 {
                 metric(row.aa?.coding, missing: AALanguageModel.noCodingScore)
                     .frame(width: columns.coding, alignment: .trailing)
@@ -923,6 +991,20 @@ private struct TableRow: View {
             .frame(width: columns.tokens, alignment: .trailing)
         }
         .padding(.vertical, 8)
+    }
+
+    /// The intelligence index, or the last one AA published in muted
+    /// italics with its tag ("39 · Oct ’26") when the current feed has none.
+    @ViewBuilder private func intelligence(_ aa: AALanguageModel?) -> some View {
+        if let past = ModelsModel.Metric.intelligence.pastScore(of: aa) {
+            Text("\(Int(past.value.rounded())) · \(past.tag)")
+                .font(Theme.bodySmall).italic().monospacedDigit().foregroundStyle(Theme.textMuted)
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .help(past.note)
+                .hoverTip(past.note, replacesLabel: false)
+        } else {
+            metric(aa?.intelligence)
+        }
     }
 
     /// A figure, or "—" when Artificial Analysis has none, with `missing`

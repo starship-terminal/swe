@@ -198,6 +198,16 @@ MAX(ts)           SEARCH events USING COVERING INDEX events_ts_cover
   leaves the list has its row closed.
 - `models(id, position, slug, name, creator_*, aa_price_*, speed, ttft,
   ttfat, evaluations, raw, fetch_id)`: AA's language models in AA's order.
+- `model_last_scores(model_id, intelligence, index_version, scored_at)`:
+  the last intelligence index each model had, the feed's
+  `intelligence_index_version` (null for the legacy feed) and when that
+  feed was downloaded. Every good language feed rewrites the rows of the
+  models it scores. Artificial Analysis re-runs only some models when the
+  index moves to a new version, so a model the current feed leaves empty
+  keeps its older row, and the Models chart draws it as a dashed bar. A
+  catalog from before the table is filled once from `models` and the
+  legacy `data/artificial-analysis/llms.json` (`meta` key
+  `last_scores_backfill`).
 - `model_aliases(name, model_id, method)`: every price key and the AA model
   it names (`method` is `auto`, `manual` or `none`). Derived: rebuilt from
   `ModelMatcher` and `config/model-links.json` at launch and after any
@@ -208,7 +218,7 @@ MAX(ts)           SEARCH events USING COVERING INDEX events_ts_cover
   into one body before it is stored, so `models` is only ever replaced by
   the whole feed. Older rows hold the legacy `/api/v2/data/*` shape, which
   the decoder still reads.
-- `meta(key, value)`: the `schema` marker.
+- `meta(key, value)`: the `schema` marker and `last_scores_backfill`.
 
 Builds before the catalog kept `cache/pricing/litellm.json` and
 `data/artificial-analysis/<endpoint>.json` + `meta.json`. They are imported

@@ -155,6 +155,59 @@ private let llmsBody = Data("""
         #expect(database.languageModels()?.count == 1)
     }
 
+    /// The v5 feed: Opus re-scored, o3 left without a score.
+    private let v5Body = Data("""
+        {"tier": "free", "intelligence_index_version": 5, "data": [
+          {"id": "aa-opus", "name": "Claude Opus 5.5", "slug": "claude-opus-5-5",
+           "model_creator": {"id": "c", "name": "Anthropic"},
+           "evaluations": {"artificial_analysis_intelligence_index": 59.0}, "pricing": {}},
+          {"id": "aa-o3", "name": "o3", "slug": "o3",
+           "model_creator": {"id": "o", "name": "OpenAI"},
+           "evaluations": {"artificial_analysis_intelligence_index": null}, "pricing": {}}
+        ]}
+        """.utf8)
+
+    @Test func aScoreAANoLongerPublishesIsKeptWithItsVersionAndDate() throws {
+        let temp = try TempDir()
+        let database = CatalogDatabase(url: temp.path("catalog.sqlite"))
+        let v4 = Data(String(decoding: llmsBody, as: UTF8.self)
+            .replacingOccurrences(of: #"{"data""#, with: #"{"intelligence_index_version": "4.3", "data""#).utf8)
+        try database.recordAAPayload(.llms, body: v4, at: first, status: 200, rateLimitHeaders: nil, url: nil)
+        // While the feed scores a model there is no past score to show.
+        #expect(database.languageModels()?.map(\.pastIntelligence) == [nil, nil])
+
+        try database.recordAAPayload(.llms, body: v5Body, at: second, status: 200, rateLimitHeaders: nil, url: nil)
+        let models = try #require(database.languageModels())
+        #expect(models.map(\.intelligence) == [59, nil])
+        #expect(models[0].pastIntelligence == nil)
+        #expect(models[1].pastIntelligence == AAPastScore(value: 60, indexVersion: "4.3", scoredAt: first))
+    }
+
+    @Test func aCatalogFromBeforeTheTableBackfillsFromTheLegacyFileOnce() throws {
+        let temp = try TempDir()
+        let legacy = temp.path("legacy")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try llmsBody.write(to: legacy.appending(path: "llms.json"))
+        try Data(#"{"llms": {"fetchedAt": 1000, "status": 200}}"#.utf8)
+            .write(to: legacy.appending(path: "meta.json"))
+        let database = CatalogDatabase(url: temp.path("catalog.sqlite"))
+        try database.recordAAPayload(.llms, body: v5Body, at: second, status: 200, rateLimitHeaders: nil, url: nil)
+        // An older build stored the v5 feed without keeping any score.
+        try SQLiteDatabase(url: temp.path("catalog.sqlite")).execute("DELETE FROM model_last_scores")
+
+        database.backfillLastScores(legacyDirectory: legacy)
+        let models = try #require(database.languageModels())
+        // Opus has a current score; o3 takes the legacy one, version unknown.
+        #expect(models[0].pastIntelligence == nil)
+        #expect(models[1].pastIntelligence
+                == AAPastScore(value: 60, indexVersion: nil, scoredAt: Date(timeIntervalSince1970: 1000)))
+
+        // Once only: a second run does not bring a deleted row back.
+        try SQLiteDatabase(url: temp.path("catalog.sqlite")).execute("DELETE FROM model_last_scores")
+        database.backfillLastScores(legacyDirectory: legacy)
+        #expect(database.languageModels()?[1].pastIntelligence == nil)
+    }
+
     @Test func failuresSinceTheLastSuccessCollapseToTheLatest() throws {
         let temp = try TempDir()
         let database = CatalogDatabase(url: temp.path("catalog.sqlite"))

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Models chart keeps a model's last intelligence score when Artificial Analysis stops publishing it.** Artificial Analysis moved its Intelligence Index to v5 and re-ran only some models, so Claude 4.5 Sonnet, Grok 4.5, Gemini 2.5 Flash, Gemini 3.1 Pro Preview and about 600 others showed "No score". The catalog now keeps each model's last score with its index version and date. A model with no current score draws its last one as a dashed outline bar after a divider, tagged with the version or the month ("Oct ’26"), and the table shows it muted. Index versions are not on one scale, so a dashed bar never ranks against a current one or enters Top 25. A catalog that predates this is filled once from the older download still on disk.
+
 - **`swe mcp tools` lists a URL server's tools.** The probe spoke stdio only, so the app's server sheet showed "the tools probe speaks stdio only" for every http server. It now runs the same initialize and tools/list exchange over streamable http, with the server's configured headers, a JSON or event-stream answer, the session id the server hands back, and pagination. A redirect is refused so a token never reaches another host, a server that wants a browser sign-in is reported as asking for sign-in, and the older sse transport still reports that it is not probed.
 
 - **The Skills and Plugins tables use the same checkboxes as the MCP servers table.** Each folder or harness cell shows a checked or empty box in place of the check and power marks, dimmed where nothing can be switched. The row's checkbox replaces the switch beside the name: checked only when the skill or plugin is on everywhere it can be, a dash when it is on in some places, and checking it turns the rest on. A plugin cell still opens its menu of actions, and a batch still asks once before it runs.
@@ -24,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Grok Build spend shows on this Mac.** Each finished turn in a `grok` session's `usage.json` is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.
 
 - **AgentMail is a service provider.** Settings › Providers › Services and `swe providers list` seed it with `AGENTMAIL_API_KEY` (console at [console.agentmail.to](https://console.agentmail.to)). Check sends `GET https://api.agentmail.to/v0/inboxes` as Bearer; a fake key is refused with 403.
+
+### Fixed
+
+- **Grok 4.6 shows its intelligence score on the Models page.** Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.
 
 ## [1.2.4] - 2026-11-15
 
