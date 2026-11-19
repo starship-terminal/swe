@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+# xcodegen output and builds of the proof harness
+Proof/ShellProof.xcodeproj/
+Proof/App/Info.plist
+Proof/UITests/Info.plist
+Proof/build/
+Proof/__pycache__/

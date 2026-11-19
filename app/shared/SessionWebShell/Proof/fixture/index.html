@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- 16px inputs and a fixed scale: iOS zooms the page when an input under
+     16px takes focus, which would move the composer off the keyboard. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Session shell proof</title>
+<style>
+  :root {
+    --keyboard-inset: 0px;
+    --keyboard-duration: 0ms;
+    --bg: #ffffff; --fg: #18181b; --muted: #71717a; --line: #e4e4e7; --row: #fafafa;
+    --live: #ecfdf5; --live-fg: #047857; --field: #f4f4f5; --accent: #2563eb;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b0c; --fg: #ededed; --muted: #a1a1aa; --line: #27272a; --row: #111113;
+    --live: #052e1f; --live-fg: #6ee7b7; --field: #18181b; --accent: #60a5fa;
+    color-scheme: dark;
+  }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  /* The whole session view: fixed to the layout viewport, so only the
+     timeline scrolls. The bottom padding is the keyboard or the home
+     indicator (both passed in by the shell), whichever is taller. */
+  .app {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    padding-bottom: max(var(--keyboard-inset), var(--safe-area-bottom, env(safe-area-inset-bottom)));
+    transition: padding-bottom var(--keyboard-duration) cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-sizing: border-box;
+  }
+  .banner {
+    flex: none; padding: 6px 14px; font-size: 13px; color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  .banner.offline { background: #fef3c7; color: #92400e; }
+  :root[data-theme="dark"] .banner.offline { background: #422006; color: #fcd34d; }
+  .timeline {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .row { padding: 9px 14px; border-bottom: 1px solid var(--line); background: var(--row); }
+  .row b { font-weight: 600; }
+  .row.live { background: var(--live); color: var(--live-fg); }
+  .row.mine { background: var(--field); }
+  .composer {
+    flex: none; display: flex; gap: 8px; align-items: flex-end;
+    padding: 8px 10px; border-top: 1px solid var(--line); background: var(--bg);
+  }
+  .composer textarea {
+    flex: 1; box-sizing: border-box; min-height: 40px; max-height: 120px; resize: none;
+    font: 16px/1.35 -apple-system, system-ui, sans-serif; color: var(--fg);
+    background: var(--field); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px;
+    outline: none;
+  }
+  .composer button {
+    flex: none; height: 40px; padding: 0 14px; border: 0; border-radius: 12px;
+    background: var(--accent); color: white; font: 600 15px -apple-system, system-ui, sans-serif;
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div id="banner" class="banner" role="status">Loading</div>
+    <div id="timeline" class="timeline" role="log" aria-label="Timeline"></div>
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" aria-label="Message" placeholder="Message"></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+  <script src="/proof.js"></script>
+</body>
+</html>
