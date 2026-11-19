@@ -1,0 +1,1 @@
+import{t as e}from"../session-view.js";var t=document.getElementById(`root`);t&&window.SWESessionView&&window.SWESessionView.mount(t,{key:e(window.location.search)});

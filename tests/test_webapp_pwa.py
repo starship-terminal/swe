@@ -13,16 +13,17 @@ from tests.test_webapp import app_js_function
 STATIC = Path(__file__).resolve().parents[1] / "src/swe/webapp/static"
 INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 STYLES = (STATIC / "styles.css").read_text(encoding="utf-8")
+TOKENS = (STATIC / "tokens.css").read_text(encoding="utf-8")
 MANIFEST = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
 
 
 def wash(scheme: str) -> str:
-    """The page background styles.css gives a scheme: the light default's
+    """The page background tokens.css gives a scheme: the light default's
     --wash in the first rule, the dark one in the dark media query."""
     if scheme == "light":
-        block = STYLES.split("@media (prefers-color-scheme: dark)")[0]
+        block = TOKENS.split("@media (prefers-color-scheme: dark)")[0]
     else:
-        block = STYLES.split("@media (prefers-color-scheme: dark)")[1]
+        block = TOKENS.split("@media (prefers-color-scheme: dark)")[1]
     return re.search(r"--wash:\s*(#[0-9a-fA-F]{6})", block).group(1).lower()
 
 
@@ -63,7 +64,7 @@ class TestSafeArea(unittest.TestCase):
     def test_the_viewport_covers_the_screen_and_the_layout_pads_for_it(self):
         self.assertIn("viewport-fit=cover", INDEX)
         for side in ("top", "right", "bottom", "left"):
-            self.assertIn("env(safe-area-inset-%s, 0px)" % side, STYLES)
+            self.assertIn("env(safe-area-inset-%s, 0px)" % side, TOKENS)
             self.assertIn("var(--safe-%s)" % side, STYLES)
 
     def test_the_edges_a_page_touches_are_padded(self):
