@@ -48,13 +48,17 @@ struct McpServersPage: View {
         }
     }
 
-    /// The same switch for every harness the server touches: a bare
-    /// `swe mcp disable`/`enable`, so the CLI's `master_off` record picks
-    /// the restore set and a harness switched off by hand stays off.
-    private func toggleAll(_ server: McpServer, on: Bool) async {
+    /// The row's checkbox. Checking it turns the server on in every
+    /// compared harness it is off in and can be written to: a kept copy
+    /// comes back, and a harness it was never synced to gets the hub's
+    /// definition. Clearing it is a bare `swe mcp disable`, off wherever
+    /// the server is defined.
+    private func toggleAll(_ server: McpServer, on: Bool, compared: [String]) async {
         toggleError = nil
+        let targets = on ? server.offTargets(among: compared) : []
+        if on, targets.isEmpty { return }
         do {
-            let result = try await app.swe.mcpSetEnabled(on, server: server.name, in: [])
+            let result = try await app.swe.mcpSetEnabled(on, server: server.name, in: targets)
             await model.load(swe: app.swe, for: app.swePath, health: model.hasHealth)
             if !result.failedIn.isEmpty {
                 toggleError = "\(server.name) stayed off for \(result.failedIn.joined(separator: ", "))"
@@ -142,7 +146,12 @@ struct McpServersPage: View {
                 } }
                 folderOnlyRows(hubKnown: true)
             case .loaded(let inventory):
-                let compared = inventory.activeHarnesses.filter { !hidden.contains($0) }
+                // With no server in any harness there is no active column,
+                // and a hub-only row would have nowhere to be switched
+                // on: compare every known harness then.
+                let listed = inventory.activeHarnesses.isEmpty
+                    ? inventory.harnesses : inventory.activeHarnesses
+                let compared = listed.filter { !hidden.contains($0) }
                 let filtered = inventory.servers(filter, across: compared)
                     .filter { host == .all || $0.isRemote == (host == .remote) }
                     .filter { type == nil || $0.typeTag == type }
@@ -174,7 +183,7 @@ struct McpServersPage: View {
                     Text("\(shown) of \(inventory.servers.count)")
                         .font(Theme.caption).foregroundStyle(Theme.textMuted)
                 }
-                HarnessChips(harnesses: inventory.activeHarnesses, hidden: $hidden)
+                HarnessChips(harnesses: listed, hidden: $hidden)
                     .onChange(of: hidden) { UserDefaults.standard.set(hidden.sorted(), forKey: Self.hiddenKey) }
                 if rows.isEmpty {
                     Card {
@@ -190,14 +199,14 @@ struct McpServersPage: View {
                                     toggle: { server, harness, on in await toggle(server, in: harness, on: on) },
                                     batchServers: inventory.servers,
                                     toggleAll: { harness, on, servers in await toggleColumn(harness, on: on, servers: servers) },
-                                    toggleRow: { server, on in await toggleAll(server, on: on) }) { selected = $0 }
+                                    toggleRow: { server, on in await toggleAll(server, on: on, compared: compared) }) { selected = $0 }
                     }
                     if let toggleError {
                         Text(toggleError).font(Theme.caption).foregroundStyle(Theme.dangerText)
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    if !inventory.idleHarnesses.isEmpty {
+                    if !inventory.idleHarnesses.isEmpty, !inventory.activeHarnesses.isEmpty {
                         Text("No servers in \(harnessNames(inventory.idleHarnesses)), so they have no column. A sync can still copy servers there.")
                     }
                     Text("Letters mark different definitions of one server. Env and header values never leave swe; only their names show here.")
@@ -617,7 +626,7 @@ private struct ServerRow: View {
             Button("Turn off everywhere") { Task { await toggleRow(server, false) } }
                 .disabled(server.harnesses.isEmpty)
             Button("Turn on everywhere") { Task { await toggleRow(server, true) } }
-                .disabled(server.disabledIn.isEmpty)
+                .disabled(server.offTargets(among: harnesses).isEmpty)
         }
         // The Finder/editor buttons sit on the open button, above it in
         // hit order, so they stay clickable without breaking the cells'
@@ -630,35 +639,44 @@ private struct ServerRow: View {
         }
     }
 
-    /// The master switch left of the name. Its on-track is also the
-    /// health readout the dot used to carry: green for a healthy probe,
-    /// red for a failing one, amber when the probe never ran or a secret
-    /// is missing, and a plain track when the server is off everywhere.
-    /// Flipping it runs `swe mcp disable`/`enable` for every harness the
-    /// server touches; the hub restores the exact set on the way back.
-    /// The tint and tip are `mcpMasterTint`/`mcpMasterTip`, shared with
-    /// the server sheet's header switch.
+    /// The row's checkbox left of the name: checked only when the server
+    /// is on in every compared harness it can be on in, a dash when it is
+    /// on in some. Checking it turns the rest on; clearing a full row
+    /// turns the server off everywhere. The dot beside it is the health
+    /// readout: green for a healthy probe, red for a failing one, amber
+    /// when the probe never ran or a secret is missing, grey when the
+    /// server is off everywhere.
     @ViewBuilder private var master: some View {
+        let check = server.rowCheck(among: harnesses)
+        let pending = server.offTargets(among: harnesses)
         let on = !server.harnesses.isEmpty
-        let tip = mcpMasterTip(server, on: on)
-        Group {
-            if masterBusy {
-                ProgressView().controlSize(.mini)
-                    .frame(width: 36, height: 20)
-            } else {
-                Toggle(server.name, isOn: Binding(
-                    get: { on },
-                    set: { value in
+        HStack(spacing: 6) {
+            Group {
+                if masterBusy {
+                    ProgressView().controlSize(.mini)
+                        .frame(width: GridCheckBox.side, height: GridCheckBox.side)
+                } else {
+                    Button {
                         masterBusy = true
-                        Task { await toggleRow(server, value); masterBusy = false }
-                    }))
-                .labelsHidden()
-                .toggleStyle(AccentSwitchStyle(tint: mcpMasterTint(server, on: on)))
-                .disabled(!on && server.disabledIn.isEmpty)
+                        Task { await toggleRow(server, check != .all); masterBusy = false }
+                    } label: {
+                        GridCheckBox(state: check == .all ? .on : check == .some ? .mixed : .off,
+                                    enabled: check == .all || !pending.isEmpty)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(check != .all && pending.isEmpty)
+                    .accessibilityLabel("\(server.name) in every harness")
+                    .accessibilityValue(check == .all ? "on" : check == .some ? "on in some" : "off")
+                }
             }
+            .hoverTip(mcpRowCheckTip(server, check: check, pending: pending), pinsOnClick: false)
+            let health = mcpMasterTip(server, on: on)
+            Circle().fill(on ? mcpMasterTint(server, on: true) : Theme.borderStrong)
+                .frame(width: Theme.statusDot, height: Theme.statusDot)
+                .hoverTip(health.title ?? "Off everywhere.", pinsOnClick: false)
         }
         .padding(.top, 2)
-        .hoverTip(tip.text, title: tip.title, pinsOnClick: false)
     }
 
     /// "stdio · checkout · linear-mcp · main ↑1 ↓45 · Local changes": the
@@ -729,9 +747,11 @@ private struct Cell: View {
 
     private var name: String { HarnessMark(harness).name }
 
-    /// A click anywhere in the cell switches it: on pulls the entry out
-    /// of the harness (the hub keeps a copy to restore), off puts it
-    /// back. The minus mark means absent, nothing to switch.
+    /// A checkbox per harness; a click anywhere in the cell flips it.
+    /// Clearing pulls the entry out of the harness (the hub keeps a copy
+    /// to restore). Checking restores that copy, or writes the hub's
+    /// definition where the server was never synced. The box is dimmed
+    /// where swe has nothing it could write.
     var body: some View {
         if busy {
             ProgressView().controlSize(.mini)
@@ -741,43 +761,64 @@ private struct Cell: View {
                 busy = true
                 Task { await toggle(server, harness, false); busy = false }
             } label: {
-                (differs ? AnyView(variant(group)) : AnyView(check))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(.rect)
+                HStack(spacing: 5) {
+                    GridCheckBox(state: .on)
+                    if differs { variant(group) }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .hoverTip("On for \(name). Click to turn it off.", pinsOnClick: false)
-        } else if server.disabledIn.contains(harness) {
+            .accessibilityLabel("\(server.name) in \(name)")
+            .accessibilityValue("on")
+        } else if server.canBeOn(in: harness) {
             Button {
                 busy = true
                 Task { await toggle(server, harness, true); busy = false }
             } label: {
-                Image(systemName: "power").font(Theme.font(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.textMuted)
+                GridCheckBox(state: .off)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .hoverTip("Off for \(name). Click to turn it back on.", pinsOnClick: false)
+            .hoverTip(server.disabledIn.contains(harness)
+                      ? "Off for \(name). Click to turn it back on."
+                      : "Not in \(name) yet. Click to add it from the hub.", pinsOnClick: false)
+            .accessibilityLabel("\(server.name) in \(name)")
+            .accessibilityValue("off")
         } else {
-            Image(systemName: "minus").foregroundStyle(Theme.borderStrong)
+            GridCheckBox(state: .off, enabled: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .hoverTip("Not in \(name)", pinsOnClick: false)
+                .hoverTip(server.inHub
+                          ? "\(name) only takes servers it launches with a command; this one is at a URL."
+                          : "Not in the hub yet: the next swe mcp sync adopts it, then it can go to \(name).",
+                          pinsOnClick: false)
+                .accessibilityLabel("\(server.name) cannot be turned on in \(name)")
         }
-    }
-
-    private var check: some View {
-        Image(systemName: "checkmark").font(Theme.font(size: 12, weight: .semibold))
-            .foregroundStyle(Theme.textPrimary)
     }
 
     private func variant(_ group: Int) -> some View {
         Text(variantLetter(group))
             .font(Theme.font(size: 11, weight: .semibold))
             .foregroundStyle(group == 0 ? Theme.textPrimary : Theme.warningText)
-            .frame(width: 20, height: 20)
+            .frame(width: 18, height: 18)
             .background(Theme.subtle, in: .rect(cornerRadius: 5))
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.border, lineWidth: 1))
+    }
+}
+
+/// What the row checkbox explains on hover: what a click would do.
+func mcpRowCheckTip(_ server: McpServer, check: McpRowCheck, pending: [String]) -> String {
+    switch check {
+    case .all:
+        return "On in every harness shown. Click to turn it off everywhere."
+    case .some:
+        return "On in \(harnessNames(server.harnesses)). Click to also turn it on in \(harnessNames(pending))."
+    case .none:
+        return pending.isEmpty
+            ? "Not in the hub yet: the next swe mcp sync adopts it, then it can be turned on."
+            : "Off everywhere. Click to turn it on in \(harnessNames(pending))."
     }
 }
 
@@ -817,7 +858,8 @@ func mcpMasterTip(_ server: McpServer, on: Bool) -> (text: String, title: String
 /// gateway stats, tools and files. The hub (mcp.json) is the source of
 /// truth — `swe mcp sync` writes it into harnesses and a harness-only
 /// server adopts into it on the next sync, so the sheet holds no copy
-/// form: only switches, facts and Remove.
+/// form: switches, facts, Remove, and an edit form for the hub entry's
+/// name and its URL or command.
 private struct ServerSheet: View {
     var initial: McpServer
     /// Every harness swe reads; each gets a row and its switch.
@@ -839,6 +881,11 @@ private struct ServerSheet: View {
     @State private var secretDrafts: [String: String] = [:]
     @State private var savingSecret: String?
     @State private var confirmingRemove = false
+    /// The Definition section's edit form: open, its two fields, mid-save.
+    @State private var editing = false
+    @State private var draftName = ""
+    @State private var draftDefinition = ""
+    @State private var saving = false
     /// `swe mcp info`: the files behind this server, loaded on open.
     @State private var info: McpServerInfo?
     /// Nil until "Load tools" runs the handshake — spawning a server is
@@ -929,6 +976,71 @@ private struct ServerSheet: View {
             return .notSynced
         }
         return .blocked
+    }
+
+    /// Opens the edit form on the server as it stands. A definition with
+    /// a hidden part starts empty: left empty, it is not touched.
+    private func startEditing() {
+        draftName = server.name
+        draftDefinition = McpEditPlan.prefill(for: server)
+        error = nil
+        editing = true
+    }
+
+    /// `swe mcp set` for a changed URL or command, then `swe mcp rename`
+    /// for a changed name. The definition goes first: if it is refused,
+    /// nothing was renamed and the sheet still shows the server.
+    private func saveEdit() async {
+        error = nil
+        var taken: Set<String> = []
+        if case .loaded(let inventory) = model.state {
+            taken = Set(inventory.servers.map(\.name)).subtracting([server.name])
+        }
+        let plan: McpEditPlan
+        do {
+            plan = try McpEditPlan.make(for: server, name: draftName,
+                                        definition: draftDefinition, taken: taken)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        guard !plan.isEmpty else { editing = false; return }
+        saving = true
+        defer { saving = false }
+        do {
+            if plan.url != nil || plan.command != nil {
+                let result = try await app.swe.mcpSet(server: server.name, url: plan.url,
+                                                      command: plan.command)
+                if !result.failed.isEmpty {
+                    // The hub already holds the new definition, so a
+                    // second Save would find nothing to change and read
+                    // as done. Close the form and say where it stopped.
+                    await reload()
+                    await loadInfo()
+                    editing = false
+                    error = "Saved to the hub, but \(harnessNames(result.failed)) kept the old definition. "
+                        + "Switch \(server.name) off and on there to rewrite it."
+                    return
+                }
+            }
+            if let newName = plan.rename {
+                let result = try await app.swe.mcpRename(server.name, to: newName)
+                await reload()
+                if !result.failedIn.isEmpty {
+                    error = "\(harnessNames(result.failedIn)) still call it \(server.name)."
+                    return
+                }
+                // The sheet follows a server by name; this one has a new one.
+                dismiss()
+                return
+            }
+            await reload()
+            await loadInfo()
+            editing = false
+        } catch {
+            self.error = error.localizedDescription
+            await reload()
+        }
     }
 
     /// The selected type tag: a known word normalised, an unknown label
@@ -1212,13 +1324,23 @@ private struct ServerSheet: View {
                                   pinsOnClick: false)
                 }
                 Spacer()
+                if server.inHub, !editing {
+                    Button("Edit", systemImage: "pencil") { startEditing() }
+                        .secondaryButton()
+                        .hoverTip("Change the name, or the \(McpEditPlan.hubIsRemote(server) ? "URL" : "command").",
+                                  pinsOnClick: false)
+                }
             }
-            Text(server.summary)
-                .font(Theme.font(size: 12, design: .monospaced))
-                .textSelection(.enabled)
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
+            if editing {
+                editForm
+            } else {
+                Text(server.summary)
+                    .font(Theme.font(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if server.groups.count > 1 {
                 // swe describes a server by the first harness that defines it.
                 Text("Command, URL and key names are definition A's.")
@@ -1239,6 +1361,47 @@ private struct ServerSheet: View {
                 Text("Not in the hub yet: the next swe mcp sync adopts it there, and the switches below can then write it.")
                     .font(Theme.caption).foregroundStyle(Theme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Name and URL (or command line) fields over Cancel and Save. Env
+    /// and header values are not editable here: swe never sends them.
+    @ViewBuilder private var editForm: some View {
+        let remote = McpEditPlan.hubIsRemote(server)
+        let hidden = McpEditPlan.prefill(for: server).isEmpty
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Name").font(Theme.caption).foregroundStyle(Theme.textMuted)
+                    .frame(width: detailLabelWidth, alignment: .leading)
+                TextField(server.name, text: $draftName).sweField()
+                    .accessibilityLabel("Name")
+            }
+            HStack(spacing: 8) {
+                Text(remote ? "URL" : "Command").font(Theme.caption).foregroundStyle(Theme.textMuted)
+                    .frame(width: detailLabelWidth, alignment: .leading)
+                TextField(hidden ? "Leave empty to keep the current one"
+                          : McpEditPlan.prefill(for: server),
+                          text: $draftDefinition)
+                    .sweField(monospaced: true)
+                    .accessibilityLabel(remote ? "URL" : "Command")
+            }
+            Text(hidden
+                 ? "The hub's \(remote ? "URL" : "command") is not shown here: part of it is hidden, or the harnesses hold a different copy. Type the whole value to replace it."
+                 : server.harnesses.isEmpty
+                 ? "Saves to the hub. No harness holds this server yet."
+                 : "Saves to the hub, then rewrites \(harnessNames(server.harnesses)).")
+                .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer()
+                if saving { ProgressView().controlSize(.small) }
+                Button("Cancel", role: .cancel) { editing = false; error = nil }
+                    .secondaryButton()
+                    .disabled(saving)
+                Button("Save") { Task { await saveEdit() } }
+                    .primaryButton()
+                    .disabled(saving || draftName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
     }

@@ -569,3 +569,41 @@ extension Caret {
         return offset == target ? position : nil
     }
 }
+
+/// The checkbox mark the MCP, Skills and Plugins tables share: checked, a dash for "some", or empty.
+/// Dimmed when a click would have nothing to do.
+struct GridCheckBox: View {
+    enum Mark { case on, mixed, off }
+    var state: Mark
+
+    /// The mark for a row's all, some or none.
+    static func mark(_ check: McpRowCheck) -> Mark {
+        switch check {
+        case .all: .on
+        case .some: .mixed
+        case .none: .off
+        }
+    }
+
+    var enabled = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static let side: CGFloat = 16
+
+    private var symbol: String {
+        switch state {
+        case .on: "checkmark.square.fill"
+        case .mixed: "minus.square.fill"
+        case .off: "square"
+        }
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(Theme.font(size: 15))
+            .foregroundStyle(state == .off ? Theme.textMuted : Theme.interactive)
+            .opacity(enabled ? 1 : 0.35)
+            .frame(width: Self.side, height: Self.side)
+            .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: state)
+    }
+}
