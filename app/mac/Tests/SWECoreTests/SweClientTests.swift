@@ -434,6 +434,15 @@ func fixture(_ name: String) throws -> Data {
         #expect(harnessOnly.rowCheck(among: compared) == .some)
     }
 
+    /// The Skills and Plugins rows count places: nothing on is never a
+    /// checked row, even with nowhere to turn it on.
+    @Test func rowCheckFromCounts() {
+        #expect(McpRowCheck.of(on: 0, possible: 0) == .none)
+        #expect(McpRowCheck.of(on: 0, possible: 3) == .none)
+        #expect(McpRowCheck.of(on: 2, possible: 3) == .some)
+        #expect(McpRowCheck.of(on: 3, possible: 3) == .all)
+    }
+
     @Test func editPlanOnlyCarriesWhatChanged() throws {
         let remote = McpServer(name: "design-systems", transport: "http",
                                url: "https://h.example:8110/api/mcp", harnesses: ["claude"], inHub: true,

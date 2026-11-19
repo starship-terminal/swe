@@ -855,6 +855,14 @@ public enum McpRowCheck: Sendable, Equatable {
     case some
     /// On in none.
     case none
+
+    /// A row's state from how many places it is on in, out of the places
+    /// a click could have it on in. Nothing on is `none` whatever the
+    /// total, so a row with nowhere to go never reads as checked.
+    public static func of(on: Int, possible: Int) -> McpRowCheck {
+        if on <= 0 { return .none }
+        return on >= possible ? .all : .some
+    }
 }
 
 extension McpServer {
