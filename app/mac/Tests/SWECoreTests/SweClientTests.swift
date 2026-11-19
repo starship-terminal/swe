@@ -436,7 +436,8 @@ func fixture(_ name: String) throws -> Data {
 
     @Test func editPlanOnlyCarriesWhatChanged() throws {
         let remote = McpServer(name: "design-systems", transport: "http",
-                               url: "https://h.example:8110/api/mcp", harnesses: ["claude"], inHub: true)
+                               url: "https://h.example:8110/api/mcp", harnesses: ["claude"], inHub: true,
+                               remoteIn: ["claude", "swe"])
         let same = try McpEditPlan.make(for: remote, name: "design-systems",
                                         definition: "https://h.example:8110/api/mcp", taken: [])
         #expect(same.isEmpty)
@@ -464,13 +465,33 @@ func fixture(_ name: String) throws -> Data {
         // A hidden part leaves the field empty; empty keeps the definition
         // and still lets the name change.
         let masked = McpServer(name: "k", transport: "http", url: "https://h.example/mcp?key=***",
-                               harnesses: [], inHub: true)
+                               harnesses: [], inHub: true, remoteIn: ["swe"])
         #expect(McpEditPlan.prefill(for: masked).isEmpty)
         #expect(try McpEditPlan.make(for: masked, name: "k2", definition: "", taken: [])
                 == McpEditPlan(rename: "k2"))
         #expect(throws: McpEditRefusal.self) {
             try McpEditPlan.make(for: masked, name: "k", definition: "https://h.example/mcp?key=***", taken: [])
         }
+    }
+
+    /// A shared server's row is its harness copy, the gateway URL, while
+    /// the hub holds the command: the form must edit a command and must
+    /// not offer the gateway URL back as the definition.
+    @Test func editPlanFollowsTheHubNotTheHarnessCopy() throws {
+        let shared = McpServer(name: "gh", transport: "http", url: "http://127.0.0.1:8478/mcp/gh",
+                               harnesses: ["claude"], inHub: true, remoteIn: ["claude"])
+        #expect(!McpEditPlan.hubIsRemote(shared))
+        #expect(McpEditPlan.prefill(for: shared).isEmpty)
+        let plan = try McpEditPlan.make(for: shared, name: "gh", definition: "npx -y gh-mcp", taken: [])
+        #expect(plan == McpEditPlan(command: ["npx", "-y", "gh-mcp"]))
+        #expect(try McpEditPlan.make(for: shared, name: "gh", definition: "", taken: []).isEmpty)
+
+        // Harnesses that disagree: none of them speaks for the hub.
+        let split = McpServer(name: "s", transport: "http", url: "https://a.example/mcp",
+                              harnesses: ["claude", "cursor"], conflict: true,
+                              variants: [["claude"], ["cursor"]], inHub: true,
+                              remoteIn: ["claude", "cursor", "swe"])
+        #expect(McpEditPlan.prefill(for: split).isEmpty)
     }
 
     /// A cleared label (or a live `sse` marker swe leaves alone) decodes nil.

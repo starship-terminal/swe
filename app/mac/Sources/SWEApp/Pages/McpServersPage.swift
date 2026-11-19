@@ -146,7 +146,12 @@ struct McpServersPage: View {
                 } }
                 folderOnlyRows(hubKnown: true)
             case .loaded(let inventory):
-                let compared = inventory.activeHarnesses.filter { !hidden.contains($0) }
+                // With no server in any harness there is no active column,
+                // and a hub-only row would have nowhere to be switched
+                // on: compare every known harness then.
+                let listed = inventory.activeHarnesses.isEmpty
+                    ? inventory.harnesses : inventory.activeHarnesses
+                let compared = listed.filter { !hidden.contains($0) }
                 let filtered = inventory.servers(filter, across: compared)
                     .filter { host == .all || $0.isRemote == (host == .remote) }
                     .filter { type == nil || $0.typeTag == type }
@@ -178,7 +183,7 @@ struct McpServersPage: View {
                     Text("\(shown) of \(inventory.servers.count)")
                         .font(Theme.caption).foregroundStyle(Theme.textMuted)
                 }
-                HarnessChips(harnesses: inventory.activeHarnesses, hidden: $hidden)
+                HarnessChips(harnesses: listed, hidden: $hidden)
                     .onChange(of: hidden) { UserDefaults.standard.set(hidden.sorted(), forKey: Self.hiddenKey) }
                 if rows.isEmpty {
                     Card {
@@ -201,7 +206,7 @@ struct McpServersPage: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    if !inventory.idleHarnesses.isEmpty {
+                    if !inventory.idleHarnesses.isEmpty, !inventory.activeHarnesses.isEmpty {
                         Text("No servers in \(harnessNames(inventory.idleHarnesses)), so they have no column. A sync can still copy servers there.")
                     }
                     Text("Letters mark different definitions of one server. Env and header values never leave swe; only their names show here.")
@@ -1035,9 +1040,14 @@ private struct ServerSheet: View {
                 let result = try await app.swe.mcpSet(server: server.name, url: plan.url,
                                                       command: plan.command)
                 if !result.failed.isEmpty {
+                    // The hub already holds the new definition, so a
+                    // second Save would find nothing to change and read
+                    // as done. Close the form and say where it stopped.
                     await reload()
                     await loadInfo()
-                    error = "\(harnessNames(result.failed)) kept the old definition."
+                    editing = false
+                    error = "Saved to the hub, but \(harnessNames(result.failed)) kept the old definition. "
+                        + "Switch \(server.name) off and on there to rewrite it."
                     return
                 }
             }
@@ -1345,7 +1355,7 @@ private struct ServerSheet: View {
                 if server.inHub, !editing {
                     Button("Edit", systemImage: "pencil") { startEditing() }
                         .secondaryButton()
-                        .hoverTip("Change the name, or the \(server.url != nil ? "URL" : "command").",
+                        .hoverTip("Change the name, or the \(McpEditPlan.hubIsRemote(server) ? "URL" : "command").",
                                   pinsOnClick: false)
                 }
             }
@@ -1386,7 +1396,7 @@ private struct ServerSheet: View {
     /// Name and URL (or command line) fields over Cancel and Save. Env
     /// and header values are not editable here: swe never sends them.
     @ViewBuilder private var editForm: some View {
-        let remote = server.url != nil
+        let remote = McpEditPlan.hubIsRemote(server)
         let hidden = McpEditPlan.prefill(for: server).isEmpty
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -1398,13 +1408,14 @@ private struct ServerSheet: View {
             HStack(spacing: 8) {
                 Text(remote ? "URL" : "Command").font(Theme.caption).foregroundStyle(Theme.textMuted)
                     .frame(width: detailLabelWidth, alignment: .leading)
-                TextField(hidden ? "Leave empty to keep the current one" : server.summary,
+                TextField(hidden ? "Leave empty to keep the current one"
+                          : McpEditPlan.prefill(for: server),
                           text: $draftDefinition)
                     .sweField(monospaced: true)
                     .accessibilityLabel(remote ? "URL" : "Command")
             }
             Text(hidden
-                 ? "Part of the current \(remote ? "URL" : "command") is hidden. Type the whole value to replace it."
+                 ? "The hub's \(remote ? "URL" : "command") is not shown here: part of it is hidden, or the harnesses hold a different copy. Type the whole value to replace it."
                  : server.harnesses.isEmpty
                  ? "Saves to the hub. No harness holds this server yet."
                  : "Saves to the hub, then rewrites \(harnessNames(server.harnesses)).")

@@ -907,10 +907,30 @@ public struct McpEditPlan: Sendable, Equatable {
     /// The marker swe prints over a hidden part of a URL or argument.
     public static let mask = "***"
 
+    /// Whether the hub entry `swe mcp set` rewrites is at a URL. The
+    /// row's own `url` cannot say: it describes the first harness's
+    /// copy, which for a shared server is the gateway's loopback URL
+    /// while the hub holds the command.
+    public static func hubIsRemote(_ server: McpServer) -> Bool {
+        server.isRemote(from: McpServer.hubSource)
+    }
+
+    /// Whether the row's command or URL can stand for the hub's: the
+    /// row was built from the hub entry itself (no harness holds the
+    /// server), or every harness agrees and holds the same kind of
+    /// definition as the hub.
+    static func rowShowsHubDefinition(_ server: McpServer) -> Bool {
+        if server.harnesses.isEmpty { return true }
+        return server.groups.count <= 1 && (server.url != nil) == hubIsRemote(server)
+    }
+
     /// The text an edit field starts with: the definition as swe shows
-    /// it, or nothing when part of it is hidden. A masked value saved
-    /// back would overwrite the real one with asterisks.
+    /// it, or nothing when the row is not the hub's definition or part
+    /// of it is hidden. A masked value saved back would overwrite the
+    /// real one with asterisks, and a harness's gateway URL saved back
+    /// would replace the hub's command.
     public static func prefill(for server: McpServer) -> String {
+        guard rowShowsHubDefinition(server) else { return "" }
         let shown = server.url ?? ([server.command ?? ""] + server.args)
             .map(Self.quoted).joined(separator: " ")
         return shown.contains(mask) ? "" : shown
@@ -945,7 +965,7 @@ public struct McpEditPlan: Sendable, Equatable {
         guard !definition.contains(mask) else {
             throw McpEditRefusal("Type the full value in place of \(mask).")
         }
-        if server.url != nil {
+        if hubIsRemote(server) {
             guard let parsed = URL(string: definition), let scheme = parsed.scheme,
                   ["http", "https"].contains(scheme.lowercased()), parsed.host != nil else {
                 throw McpEditRefusal("A URL starts with http:// or https://.")
