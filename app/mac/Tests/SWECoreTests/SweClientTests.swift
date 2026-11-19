@@ -375,6 +375,104 @@ func fixture(_ name: String) throws -> Data {
         #expect(result.type == "dev")
     }
 
+    @Test func setArgvPutsTheCommandAfterTheDoubleDash() async throws {
+        let runner = FakeRunner(CommandResult(status: 0, stdout: Data(
+            #"{"schema":1,"data":{"name":"s","changed":true,"synced":["claude"],"failed":[]}}"#.utf8), stderr: ""))
+        let client = SweClient(runner: runner)
+        let result = try await client.mcpSet(server: "s", url: "https://h.example:8108/mcp", command: nil)
+        _ = try await client.mcpSet(server: "s", url: nil, command: ["npx", "-y", "srv", "--json"])
+        #expect(runner.calls == [
+            ["mcp", "set", "s", "--json", "--url=https://h.example:8108/mcp"],
+            ["mcp", "set", "s", "--json", "--", "npx", "-y", "srv", "--json"],
+        ])
+        #expect(result == McpSetResult(name: "s", changed: true, synced: ["claude"], failed: []))
+    }
+
+    /// A harness that kept the old definition exits 1 with its document.
+    @Test func setReplyDecodesOnAPartialFailure() async throws {
+        let runner = FakeRunner(CommandResult(status: 1, stdout: Data(
+            #"{"schema":1,"data":{"name":"s","changed":true,"synced":[],"failed":["codex"]}}"#.utf8), stderr: ""))
+        let result = try await SweClient(runner: runner).mcpSet(server: "s", url: "https://h.example/mcp", command: nil)
+        #expect(result.failed == ["codex"])
+    }
+
+    @Test func renameArgvAndReply() async throws {
+        let runner = FakeRunner(CommandResult(status: 0, stdout: Data(
+            #"{"schema":1,"data":{"name":"new","renamed_from":"old","hub":true,"renamed_in":["claude"],"failed_in":[]}}"#.utf8), stderr: ""))
+        let result = try await SweClient(runner: runner).mcpRename("old", to: "new")
+        #expect(runner.calls == [["mcp", "rename", "old", "new", "--json"]])
+        #expect(result == McpRenameResult(name: "new", renamedFrom: "old", hub: true,
+                                          renamedIn: ["claude"], failedIn: []))
+    }
+
+    @Test func rowCheckIsFullOnlyWhenEveryPossibleHarnessIsOn() {
+        let compared = ["claude", "claude-desktop", "cursor"]
+        let everywhere = McpServer(name: "s", harnesses: compared, inHub: true)
+        #expect(everywhere.rowCheck(among: compared) == .all)
+        #expect(everywhere.offTargets(among: compared).isEmpty)
+
+        let partial = McpServer(name: "s", harnesses: ["cursor"], inHub: true, disabledIn: ["claude"])
+        #expect(partial.rowCheck(among: compared) == .some)
+        #expect(partial.offTargets(among: compared) == ["claude", "claude-desktop"])
+
+        // In the hub, in no harness: every box is clickable, none is on.
+        let hubOnly = McpServer(name: "s", harnesses: [], inHub: true)
+        #expect(hubOnly.rowCheck(among: compared) == .none)
+        #expect(hubOnly.offTargets(among: compared) == compared)
+
+        // A URL server has no place in Claude Desktop, so the other two
+        // being on is the whole row.
+        let remote = McpServer(name: "s", transport: "http", url: "https://h.example/mcp",
+                               harnesses: ["claude", "cursor"], inHub: true,
+                               remoteIn: ["claude", "cursor", "swe"])
+        #expect(!remote.canBeOn(in: "claude-desktop"))
+        #expect(remote.rowCheck(among: compared) == .all)
+
+        // Outside the hub only a kept copy can come back.
+        let harnessOnly = McpServer(name: "s", harnesses: ["claude"], disabledIn: ["cursor"])
+        #expect(harnessOnly.offTargets(among: compared) == ["cursor"])
+        #expect(harnessOnly.rowCheck(among: compared) == .some)
+    }
+
+    @Test func editPlanOnlyCarriesWhatChanged() throws {
+        let remote = McpServer(name: "design-systems", transport: "http",
+                               url: "https://h.example:8110/api/mcp", harnesses: ["claude"], inHub: true)
+        let same = try McpEditPlan.make(for: remote, name: "design-systems",
+                                        definition: "https://h.example:8110/api/mcp", taken: [])
+        #expect(same.isEmpty)
+        let both = try McpEditPlan.make(for: remote, name: " constellations ",
+                                        definition: "https://h.example:8108/api/mcp", taken: ["other"])
+        #expect(both == McpEditPlan(rename: "constellations", url: "https://h.example:8108/api/mcp"))
+        #expect(throws: McpEditRefusal.self) {
+            try McpEditPlan.make(for: remote, name: "other", definition: "", taken: ["other"])
+        }
+        #expect(throws: McpEditRefusal.self) {
+            try McpEditPlan.make(for: remote, name: "-bad", definition: "", taken: [])
+        }
+        #expect(throws: McpEditRefusal.self) {
+            try McpEditPlan.make(for: remote, name: "design-systems", definition: "h.example:8108", taken: [])
+        }
+    }
+
+    @Test func editPlanSplitsACommandAndNeverSavesAMask() throws {
+        let local = McpServer(name: "gh", command: "npx", args: ["-y", "a b"], harnesses: [], inHub: true)
+        #expect(McpEditPlan.prefill(for: local) == "npx -y 'a b'")
+        let plan = try McpEditPlan.make(for: local, name: "gh", definition: "uvx 'my server' --flag", taken: [])
+        #expect(plan.command == ["uvx", "my server", "--flag"])
+        #expect(plan.url == nil)
+
+        // A hidden part leaves the field empty; empty keeps the definition
+        // and still lets the name change.
+        let masked = McpServer(name: "k", transport: "http", url: "https://h.example/mcp?key=***",
+                               harnesses: [], inHub: true)
+        #expect(McpEditPlan.prefill(for: masked).isEmpty)
+        #expect(try McpEditPlan.make(for: masked, name: "k2", definition: "", taken: [])
+                == McpEditPlan(rename: "k2"))
+        #expect(throws: McpEditRefusal.self) {
+            try McpEditPlan.make(for: masked, name: "k", definition: "https://h.example/mcp?key=***", taken: [])
+        }
+    }
+
     /// A cleared label (or a live `sse` marker swe leaves alone) decodes nil.
     @Test func setTypeReplyDecodesNilType() async throws {
         let runner = FakeRunner(CommandResult(status: 0, stdout: Data(
