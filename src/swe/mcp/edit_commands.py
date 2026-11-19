@@ -173,6 +173,15 @@ def cmd_set(args):
         return 0
 
     holders = _holders(cli, name)
+    if changed.get("url"):
+        # A config that only launches commands cannot hold a URL server:
+        # sync would skip it and leave the old command in place.
+        local_only = [t for t in holders if not cli.takes_remote(t)]
+        if local_only:
+            print(c("red", f"{', '.join(local_only)} {cli.LOCAL_ONLY_NOTE}. "
+                           f"Switch {name} off there first: swe mcp disable "
+                           f"{name} --for={','.join(local_only)}"), file=refusal)
+            return 1
     if holders:
         # A ${NAME} no harness can resolve must not land as the literal:
         # refuse before the hub moves, so hub and harnesses never split.
@@ -191,15 +200,24 @@ def cmd_set(args):
     failed: list[str] = []
     for target in holders:
         # --json's stdout is one document: the inner sync reports to stderr.
+        report: dict = {"targets": []}
         with redirect_stdout(sys.stderr if json_view else sys.stdout):
             try:
                 code = cli._sync([cli.HUB_LABEL, target, f"--only={name}",
-                                  "--no-interactive", "--force"], None)
+                                  "--no-interactive", "--force"], report)
             except Exception as exc:
                 print(c("yellow", f"  {target}: {exc.__class__.__name__}: {exc}"),
                       file=sys.stderr)
                 code = 1
-        (synced if code == 0 else failed).append(target)
+        # A sync can exit 0 having left the server out. A harness whose
+        # copy needed no change (a shared server's gateway URL) is fine;
+        # one the run skipped, could not express or holds off is not.
+        left_out = any(
+            row.get("name") == target and name in (
+                (row.get("skipped") or []) + (row.get("unsupported") or [])
+                + (row.get("disabled") or []))
+            for row in report.get("targets") or [])
+        (failed if code != 0 or left_out else synced).append(target)
 
     if json_view:
         emit(SetReply(name, changed=True, synced=synced, failed=failed).to_json())
@@ -299,14 +317,13 @@ def cmd_rename(args):
         return 1
 
     in_hub = old in hub
-    if in_hub:
-        cli.save_hub_servers(_renamed_keys(hub, old, new))
-    state = cli._swe_state()
-    if rename_state(state, old, new):
-        cli._save_swe_state(state)
-
     old_tail = gateway_defaults.PATH_PREFIX + old
     new_tail = gateway_defaults.PATH_PREFIX + new
+
+    # Harness files first: a config that looks writable can still refuse
+    # the write (a read-only directory), and the hub must not forget the
+    # old name while a harness still holds it. A failure puts back the
+    # files already rewritten and leaves the hub and its records alone.
     renamed: list[str] = []
     failed: list[str] = []
     for target in holders:
@@ -321,6 +338,33 @@ def cmd_rename(args):
             failed.append(target)
             print(c("yellow", f"  {target}: could not rename {old} "
                             f"({exc.__class__.__name__}: {exc})"), file=sys.stderr)
+            break
+    if failed:
+        for target in renamed:
+            try:
+                cli.get_tool_saver(target)(held[target], cli.get_tool_config(target)["path"])
+            except Exception as exc:
+                failed.append(target)
+                print(c("yellow", f"  {target}: could not put {old} back "
+                                f"({exc.__class__.__name__}: {exc})"), file=sys.stderr)
+        if json_view:
+            emit(RenameReply(old, old, hub=False, failed_in=failed).to_json())
+        else:
+            print(c("red", f"{old} keeps its name: could not write "
+                           f"{', '.join(failed)}."), file=refusal)
+        return 1
+
+    if in_hub:
+        cli.save_hub_servers(_renamed_keys(hub, old, new))
+    state = cli._swe_state()
+    if rename_state(state, old, new):
+        if in_hub:
+            # A kept copy of a shared server is its gateway URL: it must
+            # follow the name too, or `enable` restores /mcp/<old>.
+            for harness, entries in (state.get("disabled_defs") or {}).items():
+                if isinstance(entries, dict) and isinstance(entries.get(new), dict):
+                    entries[new] = _repoint_gateway(entries[new], old_tail, new_tail)
+        cli._save_swe_state(state)
 
     if json_view:
         emit(RenameReply(new, old, hub=in_hub, renamed_in=renamed,

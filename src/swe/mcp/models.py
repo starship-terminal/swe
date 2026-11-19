@@ -132,9 +132,10 @@ class SetReply:
 class RenameReply:
     """``swe mcp rename OLD NEW --json``: where the new name landed.
 
-    ``hub`` says whether the hub held the server; ``renamed_in`` names
-    the harness files rewritten, ``failed_in`` the ones still holding the
-    old name.
+    ``hub`` says whether the hub entry moved; ``renamed_in`` names the
+    harness files rewritten. A harness file that cannot be written stops
+    the rename before the hub moves: ``failed_in`` names it, ``name``
+    stays the old name and nothing is renamed.
     """
 
     name: str

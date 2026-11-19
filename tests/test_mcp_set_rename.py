@@ -102,6 +102,33 @@ class McpSetTest(_McpHome):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.cursor()["docs"]["url"], NEW_URL)
 
+    def test_url_edit_refuses_while_a_command_only_harness_holds_it(self):
+        cfg = self.home / ".swe" / "config" / "tools.json"
+        cfg.write_text(json.dumps({"claude": {}, "claude-desktop": {}}) + "\n")
+        desktop = (self.home / "Library" / "Application Support" / "Claude"
+                   / "claude_desktop_config.json")
+        desktop.parent.mkdir(parents=True, exist_ok=True)
+        desktop.write_text(json.dumps({"mcpServers": {"gh": {"command": "npx"}}}) + "\n")
+        self.hub_write({"gh": {"command": "npx"}})
+        r = self.run_mcp("list", "--json")
+        row = next(s for s in self.data(r)["servers"] if s["name"] == "gh")
+        if "claude-desktop" not in row["harnesses"]:
+            self.skipTest("Claude Desktop's config lives elsewhere on this platform")
+        r = self.run_mcp("set", "gh", f"--url={NEW_URL}", "--json")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("claude-desktop", r.stderr)
+        self.assertEqual(self.hub()["gh"], {"command": "npx"})
+
+    def test_shared_server_whose_harness_copy_needs_no_change_is_synced(self):
+        gateway_url = "http://127.0.0.1:8478/mcp/gh"
+        self.hub_write({"gh": {"command": "npx", "shared": True}},
+                       gateway={"enabled": True, "port": 8478})
+        self.claude_write({"gh": {"type": "http", "url": gateway_url}})
+        r = self.run_mcp("set", "gh", "--env=A=1", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.data(r)["synced"], ["claude"])
+        self.assertEqual(self.claude()["gh"]["url"], gateway_url)
+
     def test_env_pairs_merge_and_unset(self):
         self.hub_write({"gh": {"command": "npx", "args": ["gh"],
                                "env": {"A": "1", "B": "2"}, "shared": True}})
@@ -190,6 +217,38 @@ class McpRenameTest(_McpHome):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.claude()["github"]["url"],
                          "http://127.0.0.1:8478/mcp/github")
+
+    def test_kept_copy_of_a_shared_server_follows_the_name(self):
+        kept = {"type": "http", "url": "http://127.0.0.1:8478/mcp/gh"}
+        self.hub_write({"gh": {"command": "npx", "shared": True}},
+                       gateway={"enabled": True, "port": 8478},
+                       swe={"disabled": {"claude": ["gh"]},
+                            "disabled_defs": {"claude": {"gh": kept}}})
+        r = self.run_mcp("rename", "gh", "github")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.run_mcp("enable", "github", "--for=claude", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.claude()["github"]["url"],
+                         "http://127.0.0.1:8478/mcp/github")
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only directory")
+    def test_unwritable_harness_leaves_every_name_alone(self):
+        self.hub_write({"docs": {"url": OLD_URL}},
+                       swe={"disabled": {"x": ["docs"]}})
+        self.claude_write({"docs": {"type": "http", "url": OLD_URL}})
+        entry = {"url": OLD_URL}
+        self.cursor_file.write_text(json.dumps({"mcpServers": {"docs": entry}}) + "\n")
+        self.cursor_file.parent.chmod(0o555)
+        self.addCleanup(self.cursor_file.parent.chmod, 0o755)
+        r = self.run_mcp("rename", "docs", "atlas", "--json")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self.data(r), {
+            "name": "docs", "renamed_from": "docs", "hub": False,
+            "renamed_in": [], "failed_in": ["cursor"]})
+        self.assertEqual(list(self.hub()), ["docs"])
+        self.assertEqual(list(self.claude()), ["docs"])
+        self.assertEqual(list(self.cursor()), ["docs"])
+        self.assertEqual(self.hub_data()["swe"], {"disabled": {"x": ["docs"]}})
 
     def test_harness_only_server(self):
         self.claude_write({"solo": {"command": "x"}})
