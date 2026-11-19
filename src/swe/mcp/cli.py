@@ -14,6 +14,8 @@ Commands:
   add <name> ...                 Add a server to the hub (and harnesses)
   remove <name> [--from=...]     Remove a server everywhere, or from given places
   enable/disable <name>          Switch a server on/off per harness
+  set <name> ...                 Change a hub server's URL, command or keys
+  rename <old> <new>             Rename a server everywhere
   set-type <name> TYPE           Label a hub server
   info <name>                    One server's full detail
   tools <name>                   List a server's tools by handshake
@@ -2952,6 +2954,45 @@ MCP_HELP = {
   swe mcp enable github
   swe mcp enable github --for=cursor,codex""",
 
+    "set": f"""\
+  {c('cyan', 'swe mcp set <name> --url=<url>')}            Point a server at a new URL
+  {c('cyan', 'swe mcp set <name> -- <command> [args…]')}   Give it a new command
+  {c('cyan', 'swe mcp set <name> --env=K=V')}              Add or replace one env pair
+
+  Changes the hub entry (~/.swe/mcp.json) in place, then writes the new
+  definition to every harness that already holds the server. A harness
+  where the server is off, or was never synced, is left alone. Only the
+  fields you name change: other env and header pairs, the shared flag
+  and the type label stay. A new URL replaces a command and the other
+  way round. A ${{NAME}} with no value in the secrets file refuses before
+  anything is written.
+
+{c('bold', 'Flags')}
+  --url=<url>         The server's new URL
+  --env=K=V           Add or replace an env pair (repeatable)
+  --unset-env=K       Drop an env pair (repeatable)
+  --header=K=V        Add or replace a header pair (repeatable)
+  --unset-header=K    Drop a header pair (repeatable)
+  --json              Print the result as one JSON document
+
+{c('bold', 'Examples')}
+  swe mcp set docs --url=https://mcp.example.com:8108/api/mcp
+  swe mcp set github --env=GITHUB_TOKEN='${{GITHUB_TOKEN}}'
+  swe mcp set github -- npx -y @modelcontextprotocol/server-github""",
+    "rename": f"""\
+  {c('cyan', 'swe mcp rename <old> <new>')}           Rename a server everywhere
+
+  Moves the hub entry, the off switches and kept copies recorded for it,
+  and the entry in every harness config that holds it. Each harness keeps
+  its own definition; only the name changes. A shared server's gateway
+  URL follows the new name. Refuses when <new> is already taken in the
+  hub or in any harness.
+
+{c('bold', 'Flags')}
+  --json              Print the result as one JSON document
+
+{c('bold', 'Examples')}
+  swe mcp rename design-systems constellations""",
     "set-type": f"""\
   {c('cyan', 'swe mcp set-type <name> <type>')}       Label a hub server
   {c('cyan', 'swe mcp set-type <name> --clear')}      Remove the label
@@ -3110,6 +3151,8 @@ def cmd_help(args=None):
   {c('cyan', 'swe mcp validate')}     Validate MCP config shape for one/all tools
   {c('cyan', 'swe mcp add')}          Add a server to the hub (and harnesses)
   {c('cyan', 'swe mcp remove')}       Remove a server from the hub or harnesses
+  {c('cyan', 'swe mcp set')}          Change a hub server's URL, command or keys
+  {c('cyan', 'swe mcp rename')}       Rename a server everywhere
   {c('cyan', 'swe mcp set-type')}     Label a hub server
   {c('cyan', 'swe mcp secret set')}   Store a ${{NAME}} value in the secrets file
   {c('cyan', 'swe mcp doctor')}       Deep diagnostics
@@ -3468,6 +3511,16 @@ def cmd_set_type(args):
     return 0
 
 
+def cmd_set(args):
+    from swe.mcp.edit_commands import cmd_set as run
+    return run(args)
+
+
+def cmd_rename(args):
+    from swe.mcp.edit_commands import cmd_rename as run
+    return run(args)
+
+
 def cmd_gateway(args):
     from swe.mcp.gateway_commands import cmd_gateway as run
 
@@ -3758,6 +3811,8 @@ COMMANDS = {
     "remove": cmd_remove,
     "enable": cmd_enable,
     "disable": cmd_disable,
+    "set": cmd_set,
+    "rename": cmd_rename,
     "set-type": cmd_set_type,
     "info": cmd_info,
     "tools": cmd_tools,
