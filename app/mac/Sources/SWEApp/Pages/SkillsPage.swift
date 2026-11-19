@@ -823,9 +823,9 @@ private struct SkillGridRow: View {
     @ViewBuilder private var master: some View {
         if skill.source == .shared {
             let chips = model.chips(for: skill)
-            let check = rowCheck(chips)
-            // Checking turns on what is off; clearing a full row turns off.
-            let canAct = chips.contains { $0.toggleable && $0.on == (check == .all) }
+            let row = GridRowSwitch.places(chips.map { ($0.on, $0.toggleable) })
+            let check = row.check
+            let canAct = !row.targets.isEmpty
             Group {
                 if masterBusy {
                     ProgressView().controlSize(.mini)
@@ -833,7 +833,7 @@ private struct SkillGridRow: View {
                 } else {
                     Button {
                         masterBusy = true
-                        Task { await flip(on: check != .all); masterBusy = false }
+                        Task { await flip(on: row.turnsOn); masterBusy = false }
                     } label: {
                         GridCheckBox(state: GridCheckBox.mark(check), enabled: canAct)
                             .contentShape(.rect)
@@ -851,14 +851,6 @@ private struct SkillGridRow: View {
                 .padding(.top, 2)
                 .hoverTip(privateTip, pinsOnClick: false)
         }
-    }
-
-    /// On in every folder a click could have it on in, some, or none. A
-    /// folder that is off and can't be switched does not count against a
-    /// full row.
-    private func rowCheck(_ chips: [(root: SkillRoot, link: SkillRoot.Link, on: Bool, toggleable: Bool)]) -> McpRowCheck {
-        McpRowCheck.of(on: chips.filter { $0.on }.count,
-                       possible: chips.filter { $0.on || $0.toggleable }.count)
     }
 
     private var privateTip: String {

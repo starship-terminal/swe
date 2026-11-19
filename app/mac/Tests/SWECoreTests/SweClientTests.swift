@@ -443,6 +443,48 @@ func fixture(_ name: String) throws -> Data {
         #expect(McpRowCheck.of(on: 3, possible: 3) == .all)
     }
 
+    /// A Skills row: folders on, off, and one that is off and blocked.
+    @Test func skillRowTurnsOnOnlyWhatIsLeftThenTurnsOff() {
+        // on, off-switchable, off-blocked, on-but-fixed
+        let mixed = GridRowSwitch.places([(true, true), (false, true), (false, false), (true, false)])
+        #expect(mixed.check == .some)
+        #expect(mixed.turnsOn)
+        #expect(mixed.targets == [1])
+
+        // The blocked folder stays off and does not keep the row from full.
+        let full = GridRowSwitch.places([(true, true), (true, true), (false, false), (true, false)])
+        #expect(full.check == .all)
+        #expect(!full.turnsOn)
+        #expect(full.targets == [0, 1])
+
+        let off = GridRowSwitch.places([(false, true), (false, false)])
+        #expect(off.check == .none)
+        #expect(off.turnsOn)
+        #expect(off.targets == [0])
+
+        // Nothing switchable: no targets, so the box sits dimmed.
+        #expect(GridRowSwitch.places([(false, false)]).targets.isEmpty)
+        #expect(GridRowSwitch.places([(true, false)]) == GridRowSwitch(check: .all, turnsOn: false, targets: []))
+    }
+
+    /// A Plugins row: a click enables only the harnesses with an enable
+    /// waiting; a full row runs the disables. A copy with no on/off
+    /// action is in neither list.
+    @Test func pluginRowPicksEnablesThenDisables() {
+        let mixed = GridRowSwitch.plugin(isOn: true, enables: [0], disables: [0, 1])
+        #expect(mixed == GridRowSwitch(check: .some, turnsOn: true, targets: [0]))
+
+        let full = GridRowSwitch.plugin(isOn: true, enables: [], disables: [0, 1])
+        #expect(full == GridRowSwitch(check: .all, turnsOn: false, targets: [0, 1]))
+
+        let off = GridRowSwitch.plugin(isOn: false, enables: [0, 1], disables: [])
+        #expect(off == GridRowSwitch(check: .none, turnsOn: true, targets: [0, 1]))
+
+        // Installed with no on/off action anywhere: on, nothing to run.
+        let fixed = GridRowSwitch.plugin(isOn: true, enables: [], disables: [])
+        #expect(fixed == GridRowSwitch(check: .all, turnsOn: false, targets: []))
+    }
+
     @Test func editPlanOnlyCarriesWhatChanged() throws {
         let remote = McpServer(name: "design-systems", transport: "http",
                                url: "https://h.example:8110/api/mcp", harnesses: ["claude"], inHub: true,

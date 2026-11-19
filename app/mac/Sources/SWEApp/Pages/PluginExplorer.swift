@@ -639,11 +639,10 @@ private struct PluginGridRow: View {
         }
     }
 
-    /// On in every harness that could have it on, some, or none. A
-    /// harness with an enable waiting is one the plugin is off in.
-    private var rowCheck: McpRowCheck {
-        guard isOn else { return .none }
-        return enables.isEmpty ? .all : .some
+    /// The row's check and which batch a click runs.
+    private var rowSwitch: GridRowSwitch {
+        GridRowSwitch.plugin(isOn: isOn, enables: Array(enables.indices),
+                             disables: Array(disables.indices))
     }
 
     /// The row's checkbox left of the name: checked only when the plugin
@@ -652,8 +651,9 @@ private struct PluginGridRow: View {
     /// row every disable, and asks once for the batch; a plugin with no
     /// such verb anywhere sits dimmed and says why.
     @ViewBuilder private var master: some View {
-        let check = rowCheck
-        let batch = check == .all ? disables : enables
+        let row = rowSwitch
+        let check = row.check
+        let batch = row.turnsOn ? enables : disables
         Button { confirmBatch(batch) } label: {
             GridCheckBox(state: GridCheckBox.mark(check), enabled: !batch.isEmpty)
                 .contentShape(.rect)
