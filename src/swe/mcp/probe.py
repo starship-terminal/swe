@@ -13,6 +13,7 @@ answer comes back as a JSON body or as a short event stream.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import select
@@ -342,35 +343,84 @@ def _http_error_text(exc: urllib.error.HTTPError) -> str:
     return f"{detail}: {reason}" if reason else detail
 
 
-def _read_event_stream(response, mid: int, deadline: float) -> dict:
+# The most one answer may weigh. A large server's whole tool list is a
+# megabyte or two; past this the body is a fault or an attack, and it is
+# refused before it can fill memory.
+MAX_REPLY_BYTES = 16 * 1024 * 1024
+_READ_CHUNK = 65536
+
+
+def _chunks(response, deadline: float, what: str):
+    """The response body in pieces, bounded in time and in size.
+
+    The socket timeout urllib sets only limits a silence, so a server
+    trickling bytes could hold the probe open for ever: the deadline is
+    checked before every read, and the socket is told how long is left.
+    The total is capped at ``MAX_REPLY_BYTES``. Every way a read can fail
+    becomes a ``ProbeError``: a dropped connection or a body shorter than
+    its declared length must not escape as an http.client exception.
+    """
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    total = 0
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError
+        if sock is not None:
+            try:
+                sock.settimeout(max(left, 0.05))
+            except OSError:
+                pass
+        try:
+            chunk = response.read1(_READ_CHUNK)
+        except TimeoutError:
+            raise
+        except (http.client.HTTPException, OSError, ValueError) as exc:
+            raise ProbeError(f"the connection dropped during {what}: "
+                             f"{exc.__class__.__name__}") from exc
+        if not chunk:
+            if getattr(response, "length", None):
+                raise ProbeError(f"the connection closed before the whole "
+                                 f"answer to {what} arrived")
+            return
+        total += len(chunk)
+        if total > MAX_REPLY_BYTES:
+            raise ProbeError(f"the answer to {what} is larger than "
+                             f"{MAX_REPLY_BYTES // (1024 * 1024)} MB")
+        yield chunk
+
+
+def _read_event_stream(response, mid: int, deadline: float, what: str) -> dict:
     """The JSON-RPC response for ``mid`` out of a ``text/event-stream``.
 
     Events are ``data:`` lines ended by a blank line; a server may send
     notifications or requests of its own before the answer, which are
-    skipped. The stream is abandoned as soon as the answer is read.
+    skipped. The stream is abandoned as soon as the answer is read. Lines
+    are split here rather than with ``readline`` so the deadline and the
+    size cap in ``_chunks`` hold inside a single long line too.
     """
     data: list[str] = []
-    while True:
-        if time.monotonic() > deadline:
-            raise TimeoutError
-        raw = response.readline()
-        if not raw:
-            raise ProbeError("the server closed the stream before answering")
-        line = raw.decode("utf-8", "replace").rstrip("\r\n")
-        if line.startswith("data:"):
-            data.append(line[5:].lstrip(" "))
-            continue
-        if line:
-            continue  # event:, id:, retry: and comments
-        if not data:
-            continue
-        payload, data = "\n".join(data), []
-        try:
-            message = json.loads(payload)
-        except ValueError:
-            continue
-        if isinstance(message, dict) and message.get("id") == mid:
-            return message
+    pending = b""
+    for chunk in _chunks(response, deadline, what):
+        pending += chunk
+        while b"\n" in pending:
+            raw, _, pending = pending.partition(b"\n")
+            line = raw.decode("utf-8", "replace").rstrip("\r")
+            if line.startswith("data:"):
+                data.append(line[5:].lstrip(" "))
+                continue
+            if line:
+                continue  # event:, id:, retry: and comments
+            if not data:
+                continue
+            payload, data = "\n".join(data), []
+            try:
+                message = json.loads(payload)
+            except ValueError:
+                continue
+            if isinstance(message, dict) and message.get("id") == mid:
+                return message
+    raise ProbeError("the server closed the stream before answering")
 
 
 class _HttpSession:
@@ -404,14 +454,18 @@ class _HttpSession:
         try:
             response = self.opener.open(self._request(message), timeout=timeout_s)
         except urllib.error.HTTPError as exc:
-            raise ProbeError(f"{what} failed: {_http_error_text(exc)}") from exc
+            detail = _http_error_text(exc)
+            exc.close()
+            raise ProbeError(f"{what} failed: {detail}") from exc
         except TimeoutError as exc:
             raise ProbeError(f"no answer to {what} in {timeout_s:.0f}s") from exc
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, http.client.HTTPException,
+                OSError, ValueError) as exc:
             reason = getattr(exc, "reason", exc)
             if isinstance(reason, TimeoutError):
                 raise ProbeError(f"no answer to {what} in {timeout_s:.0f}s") from exc
-            raise ProbeError(f"cannot reach the server: {reason}") from exc
+            raise ProbeError(f"cannot reach the server: "
+                             f"{reason or exc.__class__.__name__}") from exc
         with response:
             session = response.headers.get("Mcp-Session-Id")
             if session:
@@ -419,12 +473,11 @@ class _HttpSession:
             kind = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             try:
                 if kind == "text/event-stream":
-                    return _read_event_stream(response, message.get("id"), deadline)
-                raw = response.read()
+                    return _read_event_stream(response, message.get("id"),
+                                              deadline, what)
+                raw = b"".join(_chunks(response, deadline, what))
             except TimeoutError as exc:
                 raise ProbeError(f"no answer to {what} in {timeout_s:.0f}s") from exc
-            except OSError as exc:
-                raise ProbeError(f"the connection dropped during {what}: {exc}") from exc
         try:
             reply = json.loads(raw)
         except ValueError as exc:
@@ -441,7 +494,7 @@ class _HttpSession:
         try:
             with self.opener.open(self._request(message), timeout=timeout_s):
                 pass
-        except (urllib.error.URLError, OSError, ValueError):
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
             pass
 
     def close(self) -> None:
@@ -451,7 +504,7 @@ class _HttpSession:
         try:
             with self.opener.open(self._request(None, method="DELETE"), timeout=3):
                 pass
-        except (urllib.error.URLError, OSError, ValueError):
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
             pass
 
 

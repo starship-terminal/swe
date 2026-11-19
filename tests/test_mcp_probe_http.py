@@ -12,8 +12,11 @@ import pathlib
 import subprocess
 import sys
 import threading
+import time
 import unittest
+from unittest import mock
 
+from swe.mcp import probe
 from swe.mcp.probe import ProbeError, inspect_http
 from tests._tempdir import temp_dir
 
@@ -76,6 +79,35 @@ class _Fake(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if srv.mode == "trickle":
+            # A byte every 100 ms, for far longer than any test waits: a
+            # silence-only timeout never fires on this.
+            self.send_response(200)
+            self.send_header("Content-Type", srv.trickle_kind)
+            self.end_headers()
+            try:
+                for _ in range(300):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except OSError:
+                pass
+            return
+        if srv.mode == "truncated":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "500")
+            self.end_headers()
+            self.wfile.write(b'{"jsonrpc":"2.0",')
+            return
+        if srv.mode == "huge":
+            body = b'{"pad":"' + b"x" * 5000 + b'"}'
+            self.send_response(200)
+            self.send_header("Content-Type", srv.trickle_kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         mid, method = message.get("id"), message.get("method")
         if method == "initialize":
             if srv.mode == "rpc-error":
@@ -101,6 +133,7 @@ class HttpProbeTest(unittest.TestCase):
     def serve(self, mode):
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Fake)
         server.mode, server.seen = mode, []
+        server.trickle_kind = "application/json"
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 2)
@@ -139,6 +172,32 @@ class HttpProbeTest(unittest.TestCase):
             # server opened; a refused redirect is never followed.
             sent = [m for m, _ in server.seen if m != "DELETE"]
             self.assertEqual(sent, ["initialize"], mode)
+
+    def test_a_trickling_answer_still_times_out(self):
+        for kind in ("application/json", "text/event-stream"):
+            server, url = self.serve("trickle")
+            server.trickle_kind = kind
+            started = time.monotonic()
+            with self.assertRaises(ProbeError) as caught:
+                inspect_http(url, None, timeout_s=1)
+            self.assertIn("no answer to initialize in 1s", str(caught.exception), kind)
+            self.assertLess(time.monotonic() - started, 5, kind)
+
+    def test_a_reply_cut_short_is_a_probe_error(self):
+        _, url = self.serve("truncated")
+        with self.assertRaises(ProbeError) as caught:
+            inspect_http(url, None, timeout_s=5)
+        self.assertIn("before the whole answer", str(caught.exception))
+
+    def test_an_oversized_reply_is_refused(self):
+        for kind in ("application/json", "text/event-stream"):
+            server, url = self.serve("huge")
+            server.trickle_kind = kind
+            with mock.patch.object(probe, "MAX_REPLY_BYTES", 1024), \
+                    mock.patch.object(probe, "_READ_CHUNK", 256):
+                with self.assertRaises(ProbeError) as caught:
+                    inspect_http(url, None, timeout_s=5)
+            self.assertIn("larger than", str(caught.exception), kind)
 
     def test_unreachable_and_bad_urls(self):
         with self.assertRaises(ProbeError) as caught:

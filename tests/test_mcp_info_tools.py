@@ -282,6 +282,13 @@ class ProbeDeadServerTest(unittest.TestCase):
     exit and quote stderr, not the broken pipe the death caused. The
     command-level test above only hits this when the child loses a race."""
 
+    @staticmethod
+    def _close(pipe):
+        try:
+            pipe.close()
+        except OSError:
+            pass  # the write end of a dead child's pipe
+
     def test_write_to_an_exited_server_reports_the_exit(self):
         import subprocess as sp
         from swe.mcp import probe
@@ -290,8 +297,8 @@ class ProbeDeadServerTest(unittest.TestCase):
             [sys.executable, "-c",
              "import sys; sys.stderr.write('cannot load config'); sys.exit(3)"],
             stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
-        self.addCleanup(proc.stdout.close)
-        self.addCleanup(proc.stderr.close)
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            self.addCleanup(self._close, pipe)
         proc.wait(timeout=10)
         errbuf = probe._StderrTail()
         with self.assertRaises(probe.ProbeError) as caught:
