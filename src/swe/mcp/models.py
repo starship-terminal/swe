@@ -109,6 +109,47 @@ class SetTypeReply:
 
 
 @dataclass(frozen=True)
+class SetReply:
+    """``swe mcp set NAME ... --json``: what an in-place edit reached.
+
+    ``changed`` is False when the hub entry already read that way and
+    nothing was written. ``synced`` names the harnesses that hold the
+    server and took the new definition; ``failed`` the ones still on the
+    old one.
+    """
+
+    name: str
+    changed: bool = True
+    synced: list = field(default_factory=list)
+    failed: list = field(default_factory=list)
+
+    def to_json(self) -> dict:
+        return {"name": self.name, "changed": self.changed,
+                "synced": self.synced, "failed": self.failed}
+
+
+@dataclass(frozen=True)
+class RenameReply:
+    """``swe mcp rename OLD NEW --json``: where the new name landed.
+
+    ``hub`` says whether the hub held the server; ``renamed_in`` names
+    the harness files rewritten, ``failed_in`` the ones still holding the
+    old name.
+    """
+
+    name: str
+    renamed_from: str
+    hub: bool = True
+    renamed_in: list = field(default_factory=list)
+    failed_in: list = field(default_factory=list)
+
+    def to_json(self) -> dict:
+        return {"name": self.name, "renamed_from": self.renamed_from,
+                "hub": self.hub, "renamed_in": self.renamed_in,
+                "failed_in": self.failed_in}
+
+
+@dataclass(frozen=True)
 class PlaceRow:
     """One place ``swe mcp info`` found a server: a harness file or the hub.
 
