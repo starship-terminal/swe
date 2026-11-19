@@ -164,3 +164,13 @@ Reused as they are: `journal.py` (seq replay), `sendq.Waiting` claim logic, `acp
 4. Committed bundles conflict between parallel PRs. Rule: rebuild after rebase; CI gate.
 5. Checkpoint time on very large folders delays turn start. Budget and skip with a visible note.
 6. Five harnesses lose phone control when tmux goes.
+
+## Carried forward from wave 1 (G1, G2, G3, G10)
+
+Notes the first four milestones left for later ones.
+
+- **G8 and G9:** `protocol_compat.to_v1` takes an `at_refs` argument that picks how attached files appear in message text for old clients (`@/abs/path` or `[Attached file: ...]`). The caller passes `attachments.at_refs(harness)` for the session.
+- **G8:** old clients get no frame for `input.requested`, so a session waiting on a question would look idle to them. Map a single question with options onto the existing approval card for those clients.
+- **G14:** Tailwind utility names such as `flex` and `hidden` are global class names. Check they cannot restyle the plain-JS app once the session view is mounted inside it.
+- **G17 and G18:** the findings in [G2-iphone-webview-proof.md](G2-iphone-webview-proof.md), and the open questions on G18 in [milestones.yaml](../roadmap/milestones.yaml). The iPhone move stays blocked until the page-load stall seen under heavy machine load is reproduced or ruled out.
+- **Current clients tolerate gaps in `seq`.** All three keep only the highest seq seen. Two frames sharing one seq is the hazard, so the compat layer sends at most one old-style event per v2 event ([G3-adapter-protocol.md](G3-adapter-protocol.md)).
