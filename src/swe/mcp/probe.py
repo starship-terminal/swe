@@ -125,12 +125,38 @@ def _wait_reply(proc: subprocess.Popen, buf: bytearray,
         buf.extend(chunk)
 
 
-def _send(proc: subprocess.Popen, message: dict) -> None:
+def _send(proc: subprocess.Popen, message: dict,
+          errbuf: _StderrTail | None = None) -> None:
     try:
         proc.stdin.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
         proc.stdin.flush()
     except (OSError, BrokenPipeError) as exc:
+        # A server that died on startup closes its end before the first
+        # write lands: say that it exited, with what it logged, rather
+        # than report the broken pipe the death caused.
+        if errbuf is not None and _died(proc, errbuf):
+            raise _exited_error(proc, errbuf) from exc
         raise ProbeError(f"cannot write to the server: {exc}") from exc
+
+
+def _died(proc: subprocess.Popen, errbuf: _StderrTail) -> bool:
+    """Whether the child has exited, after a short grace; its remaining
+    stderr is drained into ``errbuf`` so the error can quote it."""
+    try:
+        proc.wait(timeout=1.0)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    if proc.stderr is not None:
+        fd = proc.stderr.fileno()
+        while select.select([fd], [], [], 0.2)[0]:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            errbuf.feed(chunk)
+    return True
 
 
 def _stop(proc: subprocess.Popen) -> None:
@@ -189,7 +215,7 @@ def _list_tools(proc: subprocess.Popen, buf: bytearray,
         mid = 2 + page
         params = {"cursor": cursor} if cursor else {}
         _send(proc, {"jsonrpc": "2.0", "id": mid, "method": "tools/list",
-                     "params": params})
+                     "params": params}, errbuf)
         try:
             reply = _wait_reply(proc, buf, errbuf, mid,
                                 time.monotonic() + tools_s)
@@ -257,7 +283,7 @@ def inspect_stdio(command: str, args: list, env: dict | None,
                          "params": {"protocolVersion": PROTOCOL_VERSION,
                                     "capabilities": {},
                                     "clientInfo": {"name": "swe-mcp-probe",
-                                                   "version": "1"}}})
+                                                   "version": "1"}}}, errbuf)
             reply = _wait_reply(proc, buf, errbuf, 1,
                                 time.monotonic() + init_s)
         except TimeoutError:
@@ -265,7 +291,7 @@ def inspect_stdio(command: str, args: list, env: dict | None,
         result = _result_or_raise(reply, "initialize", errbuf)
 
         _send(proc, {"jsonrpc": "2.0",
-                     "method": "notifications/initialized"})
+                     "method": "notifications/initialized"}, errbuf)
         tools_s = TOOLS_TIMEOUT_S if timeout_s is None else timeout_s
         tools = _list_tools(proc, buf, errbuf, tools_s)
         server_info = result.get("serverInfo")

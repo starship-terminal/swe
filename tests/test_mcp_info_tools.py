@@ -276,5 +276,32 @@ class McpInfoToolsTest(unittest.TestCase):
         self.assertIn("Unknown server", r.stdout + r.stderr)
 
 
+
+class ProbeDeadServerTest(unittest.TestCase):
+    """A server that dies before the first write: the probe must name the
+    exit and quote stderr, not the broken pipe the death caused. The
+    command-level test above only hits this when the child loses a race."""
+
+    def test_write_to_an_exited_server_reports_the_exit(self):
+        import subprocess as sp
+        from swe.mcp import probe
+
+        proc = sp.Popen(
+            [sys.executable, "-c",
+             "import sys; sys.stderr.write('cannot load config'); sys.exit(3)"],
+            stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.stderr.close)
+        proc.wait(timeout=10)
+        errbuf = probe._StderrTail()
+        with self.assertRaises(probe.ProbeError) as caught:
+            # Larger than a pipe buffer is not needed: the reader is gone.
+            probe._send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize"}, errbuf)
+        message = str(caught.exception)
+        self.assertIn("exited (status 3)", message)
+        self.assertIn("cannot load config", message)
+        self.assertNotIn("Broken pipe", message)
+
+
 if __name__ == "__main__":
     unittest.main()
