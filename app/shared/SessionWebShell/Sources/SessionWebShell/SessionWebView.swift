@@ -135,9 +135,11 @@ public final class SessionWebController: NSObject {
     public var onOuterScrollReset: ((CGPoint) -> Void)?
 
     private let bridge: BridgeReceiver
+    /// The keyboard observers; removed from `NotificationCenter` when the
+    /// controller (and so this bag) is released.
+    let observers = ObserverTokens()
     #if canImport(UIKit)
     private var offsetWatch: NSKeyValueObservation?
-    private var keyboardWatch: [NSObjectProtocol] = []
     private var resetting = false
     #endif
 
@@ -186,8 +188,19 @@ public final class SessionWebController: NSObject {
     /// of the view. iOS calls this itself from the keyboard notifications;
     /// it is public for tests and for a host with its own keyboard logic.
     public func setKeyboardInset(_ inset: Double, duration: Double = 0) {
-        keyboardInset = max(0, inset)
+        let inset = max(0, inset)
+        if inset != keyboardInset {
+            keyboardInset = inset
+            // The next load's start script carries the inset too, so a
+            // reload after the keyboard went away doesn't bring its gap back.
+            installStartScript()
+        }
         webView.evaluateJavaScript(ShellScript.keyboard(inset: keyboardInset, duration: duration))
+    }
+
+    /// The script WebKit runs at the start of the next load; tests read it.
+    var startScriptSource: String? {
+        webView.configuration.userContentController.userScripts.first?.source
     }
 
     private func installStartScript() {
@@ -241,24 +254,23 @@ public final class SessionWebController: NSObject {
 
     private func trackKeyboard() {
         let center = NotificationCenter.default
-        let change: (Notification) -> Void = { [weak self] note in
-            MainActor.assumeIsolated { self?.keyboardChanged(note) }
+        // Read the plain values out of the notification here, so only
+        // Sendable values cross onto the main actor.
+        let change: @Sendable (Notification) -> Void = { [weak self] note in
+            let info = note.userInfo ?? [:]
+            let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
+            let end = note.name == UIResponder.keyboardWillHideNotification
+                ? nil : (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+            MainActor.assumeIsolated { self?.keyboardChanged(end: end, duration: duration) }
         }
-        keyboardWatch = [
-            center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification,
-                               object: nil, queue: .main, using: change),
-            center.addObserver(forName: UIResponder.keyboardWillHideNotification,
-                               object: nil, queue: .main, using: change),
-        ]
+        observers.observe(UIResponder.keyboardWillChangeFrameNotification, in: center, using: change)
+        observers.observe(UIResponder.keyboardWillHideNotification, in: center, using: change)
     }
 
-    private func keyboardChanged(_ note: Notification) {
-        let info = note.userInfo ?? [:]
-        let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
-        guard note.name != UIResponder.keyboardWillHideNotification,
-              let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
-              let window = webView.window
-        else {
+    /// `end` is the keyboard's final frame in screen coordinates, nil when
+    /// it is going away.
+    private func keyboardChanged(end: CGRect?, duration: Double) {
+        guard let end, let window = webView.window else {
             setKeyboardInset(0, duration: duration)
             return
         }
@@ -269,6 +281,36 @@ public final class SessionWebController: NSObject {
                          duration: duration)
     }
     #endif
+}
+
+/// Block-based `NotificationCenter` observers, removed when the bag is
+/// released. The center keeps a block observer until it is removed by hand;
+/// a weak capture alone leaves the registration behind.
+public final class ObserverTokens: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokens: [(NotificationCenter, NSObjectProtocol)] = []
+
+    public init() {}
+
+    public func observe(_ name: Notification.Name, in center: NotificationCenter = .default,
+                        queue: OperationQueue? = .main,
+                        using block: @escaping @Sendable (Notification) -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: queue, using: block)
+        lock.withLock { tokens.append((center, token)) }
+    }
+
+    /// How many observers are registered; tests use it.
+    public var count: Int { lock.withLock { tokens.count } }
+
+    public func removeAll() {
+        let gone = lock.withLock { () -> [(NotificationCenter, NSObjectProtocol)] in
+            defer { tokens.removeAll() }
+            return tokens
+        }
+        for (center, token) in gone { center.removeObserver(token) }
+    }
+
+    deinit { removeAll() }
 }
 
 /// The keyboard arithmetic, kept pure.

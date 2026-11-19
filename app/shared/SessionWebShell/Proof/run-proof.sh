@@ -5,7 +5,8 @@
 #
 #   Proof/run-proof.sh [output-dir] [simulator name]
 #
-# Defaults: ./build/proof-output and "iPhone 18 Pro". The simulator is
+# Defaults: Proof/build/proof-output and "iPhone 18 Pro". A relative
+# output folder is taken from where you run the script. The simulator is
 # booted if needed and left booted; shut it down with
 # `xcrun simctl shutdown "<name>"` when done.
 set -eu
@@ -13,6 +14,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 out="${1:-$here/build/proof-output}"
 device="${2:-iPhone 18 Pro}"
 mkdir -p "$out"
+# Absolute before the cd below, so the stub's log and the test runner's
+# output land where the caller asked.
+out="$(cd "$out" && pwd)"
 cd "$here"
 
 python3 stub_hub.py --port 8765 --control 8766 2>"$out/stub-hub.log" &

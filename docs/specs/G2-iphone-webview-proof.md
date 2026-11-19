@@ -117,7 +117,7 @@ should: sends never replay a saved answer.
 | `HubEndpoint.swift` | the pinned hub: page id, real origin, per-hub data store id |
 | `RequestRewriter.swift` | page URL to hub URL, header injection, redirect rule, the response the page sees |
 | `HubSchemeHandler.swift` | the `WKURLSchemeHandler`: forwards, streams, refuses, falls back to the cache |
-| `ShellCache.swift` | the cache hook (`ShellCache`), `CachePolicy`, `DiskShellCache` |
+| `ShellCache.swift` | the cache hook (`ShellCache`), `CachePolicy`, `DiskShellCache` (8 MiB per reply; 16 MiB in memory and 64 MiB on disk in all, least recently used dropped first) |
 | `NativeBridge.swift` | `sweNative.wake()`, `open(key)`, `back()`: the page script and the decoder |
 | `SessionWebView.swift` | the web view factory, `SessionWebController` (navigation rule, keyboard inset, safe area, appearance) |
 | `ShellNavigation.swift` | which navigations load, go to the browser, or are dropped |
@@ -126,8 +126,9 @@ should: sends never replay a saved answer.
 hubs, ports, user info, other schemes, redirects off the hub), header
 injection, the credential staying out of every URL, response and cache file
 the page can read, streaming through the handler chunk by chunk, stop, the
-cache fallback choice, the disk cache, bridge decoding and frame trust, the
-navigation rule and the injected scripts.
+cache fallback choice, the disk cache and its budgets, bridge decoding and
+frame trust, the navigation rule, the injected scripts, a reload after the
+keyboard went away, and the keyboard observers going with the controller.
 
 `Proof/` is the throwaway harness: an xcodegen iOS app with a native
 navigation bar over the web view, the fixture page, the stub hub and the
@@ -176,5 +177,18 @@ folder. It is not built by CI; the Native workflow runs only `swift test`.
   harness's state from a file fixed it. G18's UI tests should do the same.
 - WebKit lists no Resource Timing entries for custom-scheme loads, so the
   page's performance tooling sees none of its requests.
+- With the simulator in hardware-keyboard mode (no on-screen keys), focusing
+  the composer showed only WebKit's form bar, the app got no keyboard frame
+  notification, and the bar covered the composer. Two proof re-runs failed
+  the keyboard check this way; with the on-screen keyboard back on, it
+  passed. G18 has to handle a hardware keyboard, where only that bar shows.
+- After the review fixes, the proof ran three more times on a Mac with a
+  load average near 540 (other builds running). In two runs the page
+  stopped loading in one to three tests: the hub served every request, but
+  the app passed nothing on and its state stopped updating. One test also
+  failed on an XCUITest error ("Failed to get background assertion"). Each
+  of the six tests passed in at least one of those runs, and all six passed
+  in the earlier full run on a quiet machine. The cause of the stall is not
+  known; it looks like the earlier stall under accessibility polling.
 - Scroll pinning in the page must not judge "at the end" by distance alone:
   the scroll event from its own jump can land after the next row arrived.

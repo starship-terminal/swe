@@ -99,33 +99,110 @@ public enum CachePolicy {
 /// A `ShellCache` on disk: one JSON file per key under `directory`, named
 /// by the key's SHA-256. Reads are synchronous (small files, needed before
 /// the handler can answer); writes go to a background queue.
+///
+/// Both copies have a total budget and drop the least recently used
+/// entries past it: the in-memory map by its own use order, the folder by
+/// file modification time, which a read bumps.
 @MainActor
 public final class DiskShellCache: ShellCache {
+    /// The in-memory map's total budget (bodies and headers).
+    public static let memoryBudgetBytes = 16 << 20
+    /// The folder's total size budget.
+    public static let diskBudgetBytes = 64 << 20
+
     public let directory: URL
+    public let memoryBudget: Int
+    public let diskBudget: Int
     private var memory: [String: CachedResponse] = [:]
+    /// Keys in memory, least recently used first.
+    private var order: [String] = []
+    private var memoryBytes = 0
     private let writer = DispatchQueue(label: "swe.session-shell.cache", qos: .utility)
 
-    public init(directory: URL) {
+    public init(directory: URL, memoryBudget: Int = DiskShellCache.memoryBudgetBytes,
+                diskBudget: Int = DiskShellCache.diskBudgetBytes) {
         self.directory = directory
+        self.memoryBudget = memoryBudget
+        self.diskBudget = diskBudget
     }
 
     public func cachedResponse(for key: String) -> CachedResponse? {
-        if let hit = memory[key] { return hit }
+        if let hit = memory[key] {
+            touch(key)
+            touchFile(key)
+            return hit
+        }
         guard let data = try? Data(contentsOf: file(for: key)),
               let entry = try? JSONDecoder().decode(CachedResponse.self, from: data)
         else { return nil }
-        memory[key] = entry
+        remember(entry, for: key)
+        touchFile(key)
         return entry
     }
 
     public func store(_ response: CachedResponse, for key: String) {
-        memory[key] = response
+        remember(response, for: key)
         let file = file(for: key)
         let directory = directory
+        let budget = diskBudget
         writer.async {
             guard let data = try? JSONEncoder().encode(response) else { return }
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? data.write(to: file, options: .atomic)
+            Self.trimFolder(directory, to: budget, keeping: file)
+        }
+    }
+
+    /// The keys held in memory, least recently used first; tests use it.
+    var memoryKeys: [String] { order }
+
+    static func size(of entry: CachedResponse) -> Int {
+        entry.body.count + entry.headers.reduce(0) { $0 + $1.key.utf8.count + $1.value.utf8.count }
+    }
+
+    private func remember(_ entry: CachedResponse, for key: String) {
+        if let old = memory[key] { memoryBytes -= Self.size(of: old) }
+        memory[key] = entry
+        memoryBytes += Self.size(of: entry)
+        touch(key)
+        // Never drop the entry just remembered, even when it alone is over.
+        while memoryBytes > memoryBudget, let oldest = order.first, oldest != key {
+            order.removeFirst()
+            if let gone = memory.removeValue(forKey: oldest) { memoryBytes -= Self.size(of: gone) }
+        }
+    }
+
+    private func touch(_ key: String) {
+        order.removeAll { $0 == key }
+        order.append(key)
+    }
+
+    /// A read counts as a use on disk too: bump the file's time.
+    private func touchFile(_ key: String) {
+        let path = file(for: key).path
+        writer.async {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
+        }
+    }
+
+    /// Deletes the least recently used files until the folder fits `budget`,
+    /// never `keeping` (the file just written).
+    nonisolated static func trimFolder(_ directory: URL, to budget: Int, keeping: URL) {
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
+        else { return }
+        var entries = files.compactMap { url -> (url: URL, size: Int, at: Date)? in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
+            return (url, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast)
+        }
+        var total = entries.reduce(0) { $0 + $1.size }
+        guard total > budget else { return }
+        entries.sort { $0.at < $1.at }
+        for entry in entries where total > budget {
+            if entry.url.standardizedFileURL == keeping.standardizedFileURL { continue }
+            try? FileManager.default.removeItem(at: entry.url)
+            total -= entry.size
         }
     }
 
@@ -137,6 +214,8 @@ public final class DiskShellCache: ShellCache {
     /// Drops every saved response.
     public func removeAll() {
         memory.removeAll()
+        order.removeAll()
+        memoryBytes = 0
         let directory = directory
         writer.sync { _ = try? FileManager.default.removeItem(at: directory) }
     }

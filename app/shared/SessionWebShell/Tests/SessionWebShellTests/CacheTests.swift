@@ -76,4 +76,70 @@ import Testing
         second.removeAll()
         #expect(DiskShellCache(directory: dir).cachedResponse(for: "/index.html") == nil)
     }
+
+    func entry(_ byte: UInt8, _ count: Int = 1000) -> CachedResponse {
+        CachedResponse(status: 200, headers: [:], body: Data(repeating: byte, count: count),
+                       savedAt: Date(timeIntervalSince1970: 1))
+    }
+
+    func tempDir() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("shell-cache-\(UUID())")
+    }
+
+    @Test func memoryDropsTheLeastRecentlyUsedPastItsBudget() {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cache = DiskShellCache(directory: dir, memoryBudget: 2500, diskBudget: 1 << 20)
+        cache.store(entry(1), for: "/a")
+        cache.store(entry(2), for: "/b")
+        _ = cache.cachedResponse(for: "/a")  // a is now the most recently used
+        cache.store(entry(3), for: "/c")     // 3,000 bytes: one has to go
+        #expect(cache.memoryKeys == ["/a", "/c"])
+        // b is still on disk, under the folder's own budget, and reading it
+        // back pushes the oldest (a) out of memory.
+        cache.flush()
+        #expect(cache.cachedResponse(for: "/b") == entry(2))
+        #expect(cache.memoryKeys == ["/c", "/b"])
+    }
+
+    @Test func diskDropsTheLeastRecentlyUsedFilePastItsBudget() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let probe = DiskShellCache(directory: dir)
+        probe.store(entry(1), for: "/a")
+        probe.flush()
+        let fileSize = try #require(try FileManager.default.attributesOfItem(
+            atPath: probe.file(for: "/a").path)[.size] as? Int)
+        // Room for two files, not three.
+        let budget = fileSize * 2 + fileSize / 2
+        let cache = DiskShellCache(directory: dir, diskBudget: budget)
+        cache.store(entry(2), for: "/b")
+        cache.flush()
+        // A fresh instance reads a from disk: that read makes a more recent than b.
+        let reader = DiskShellCache(directory: dir, diskBudget: budget)
+        #expect(reader.cachedResponse(for: "/a") == entry(1))
+        reader.flush()
+        cache.store(entry(3), for: "/c")
+        cache.flush()
+        let after = DiskShellCache(directory: dir)
+        #expect(after.cachedResponse(for: "/a") == entry(1), "the recently read entry was dropped")
+        #expect(after.cachedResponse(for: "/b") == nil, "the least recently used entry stayed")
+        #expect(after.cachedResponse(for: "/c") == entry(3))
+    }
+
+    @Test func oneEntryOverTheBudgetIsStillKept() {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cache = DiskShellCache(directory: dir, memoryBudget: 500, diskBudget: 500)
+        cache.store(entry(1), for: "/big")
+        cache.flush()
+        #expect(cache.memoryKeys == ["/big"])
+        #expect(DiskShellCache(directory: dir).cachedResponse(for: "/big") == entry(1))
+    }
+
+    @Test func budgetsAreNamedAndHoldTheLargestReply() {
+        #expect(DiskShellCache.memoryBudgetBytes == 16 << 20)
+        #expect(DiskShellCache.diskBudgetBytes == 64 << 20)
+        #expect(DiskShellCache.memoryBudgetBytes >= CachePolicy.maxBodyBytes)
+    }
 }

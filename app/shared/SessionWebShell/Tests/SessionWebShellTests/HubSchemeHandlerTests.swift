@@ -163,6 +163,12 @@ func pause(_ seconds: Double) async {
 
 // MARK: Tests
 
+/// Suites that need the main queue to themselves: the first `WKWebView` a
+/// test makes blocks it for seconds, which starved the handler's timed
+/// streaming checks when the two ran side by side.
+@Suite(.serialized) struct MainQueueSuites {}
+
+extension MainQueueSuites {
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct HubSchemeHandlerTests {
@@ -437,4 +443,5 @@ struct HubSchemeHandlerTests {
         }
         return String(decoding: data, as: UTF8.self)
     }
+}
 }
