@@ -1,0 +1,71 @@
+/* The session view's stylesheet (session-view.css).
+ *
+ * Tailwind's theme and utilities, with its base styles replaced by
+ * preflight.css, which applies only inside a .swe-sv root so nothing here
+ * restyles the plain-JS web app around an embedded view. Colours, radii and
+ * fonts are SWE's tokens from /tokens.css, mapped with @theme inline so a
+ * utility reads the token itself (bg-card is background-color: var(--card))
+ * and follows the light, dark and forced data-theme palettes. Tailwind's own
+ * palette, fonts and radii are reset: only SWE tokens exist. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "./preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+/* Components only: test files name classes (lint:tokens' own bad
+ * examples among them) that must never reach the bundle. */
+@source "./";
+@source not "./**/*.test.{ts,tsx}";
+
+@theme inline {
+  --color-*: initial;
+  --font-*: initial;
+  --radius-*: initial;
+
+  /* Surfaces */
+  --color-wash: var(--wash);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+
+  /* Text */
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+
+  /* Lines */
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-divider: var(--row-divider);
+
+  /* Roles */
+  --color-accent: var(--accent);
+  --color-accent-fill: var(--accent-fill);
+  --color-interactive: var(--interactive);
+  --color-link: var(--link);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-warning-text: var(--warning-text);
+  --color-danger-text: var(--danger-text);
+
+  /* Radii */
+  --radius-card: var(--card-radius);
+  --radius-control: var(--control-radius);
+  --radius-field: var(--field-radius);
+  --radius-block: var(--block-radius);
+  --radius-dialog: var(--dialog-radius);
+  --radius-full: 9999px;
+
+  /* Fonts: the system stack; mono is for code only (lint:tokens). */
+  --font-sans: var(--font);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Safe-area insets, for pt-safe-top and the like. */
+  --spacing-safe-top: var(--safe-top);
+  --spacing-safe-right: var(--safe-right);
+  --spacing-safe-bottom: var(--safe-bottom);
+  --spacing-safe-left: var(--safe-left);
+}
