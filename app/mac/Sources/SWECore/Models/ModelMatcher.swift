@@ -316,12 +316,23 @@ public struct ModelMatcher: Sendable {
     /// (`claude-opus-5-5`, AA's own default run), else the highest effort
     /// listed. Ties, and a reasoning run against a non-reasoning one,
     /// take the highest intelligence index.
+    ///
+    /// An entry AA has scored beats one it hasn't: each new Intelligence
+    /// Index version is run on only some efforts of an older model (v5
+    /// scored Grok 4.6 at Xhigh and left `grok-4-6` empty), and the family
+    /// should show the score it has.
     private static func headline(of family: [AALanguageModel]) -> AALanguageModel? {
+        // Among entries with no current score, the best kept one leads.
+        func rank(_ model: AALanguageModel) -> (Double, Double) {
+            (model.intelligence ?? -1, model.pastIntelligence?.value ?? 0)
+        }
         func best(_ pool: [AALanguageModel]) -> AALanguageModel? {
-            pool.max { ($0.intelligence ?? 0) < ($1.intelligence ?? 0) }
+            pool.max { rank($0) < rank($1) }
         }
         let stable = family.filter { !parseAA($0).prerelease }
-        for pool in [stable, family] where !pool.isEmpty {
+        for candidates in [stable, family] where !candidates.isEmpty {
+            let scored = candidates.filter { $0.intelligence != nil }
+            let pool = scored.isEmpty ? candidates : scored
             if let plain = best(pool.filter { !slugHasEffort($0) }) { return plain }
             for wanted in effortPreference {
                 if let hit = best(pool.filter { parseAA($0).effort == wanted }) { return hit }

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Models chart keeps a model's last intelligence score when Artificial Analysis stops publishing it.** Artificial Analysis moved its Intelligence Index to v5 and re-ran only some models, so Claude 4.5 Sonnet, Grok 4.5, Gemini 2.5 Flash, Gemini 3.1 Pro Preview and about 600 others showed "No score". The catalog now keeps each model's last score with its index version and date. A model with no current score draws its last one as a dashed outline bar after a divider, tagged with the version or the month ("Oct ’26"), and the table shows it muted. Index versions are not on one scale, so a dashed bar never ranks against a current one or enters Top 25. A catalog that predates this is filled once from the older download still on disk.
+
 - **The MCP servers table uses checkboxes, and a server can be edited and renamed in the app.** Each harness cell is a checkbox. Checking one turns the server on there, including in a harness it was never synced to, which used to show a dash with no action. The row's checkbox replaces the switch beside the name: it is checked only when the server is on in every harness shown, shows a dash when it is on in some, and checking it turns the rest on. A hub server that sat in no harness had a locked switch and no way on from the table. The server sheet's Definition section has an Edit button for the name and the URL or command, saved with `swe mcp set` and `swe mcp rename`.
 
 - **`swe mcp set` and `swe mcp rename` change a server in place.** `swe mcp set NAME --url=…` (or `--env=K=V`, `--unset-env=K`, `--header=K=V`, `--unset-header=K`, `-- command args…`) rewrites the named fields of the hub entry and then writes the new definition to every harness that already holds the server. A harness where it is off stays off, and its kept copy from before the edit is dropped so the next `enable` writes the hub's. `swe mcp rename OLD NEW` moves the hub entry, its off switches, kept copies and adoption record, and the entry in each harness config; a shared server's gateway URL follows the new name. Until now a changed URL meant `swe mcp add --force` with every field retyped, and a rename meant a remove and an add.
@@ -20,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Grok Build spend shows on this Mac.** Each finished turn in a `grok` session's `usage.json` is one ledger event (tokens, and Grok's own dollar figure). The Accounts chart counts those events for the last six weeks. There is still no usage-limits meter: Grok Build is billed by API key, which has no window. Grok Bot stays on the Cursor feed.
 
 - **AgentMail is a service provider.** Settings › Providers › Services and `swe providers list` seed it with `AGENTMAIL_API_KEY` (console at [console.agentmail.to](https://console.agentmail.to)). Check sends `GET https://api.agentmail.to/v0/inboxes` as Bearer; a fake key is refused with 403.
+
+### Fixed
+
+- **Grok 4.6 shows its intelligence score on the Models page.** Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.
 
 ## [1.2.4] - 2026-11-15
 

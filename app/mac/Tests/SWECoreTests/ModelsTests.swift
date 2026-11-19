@@ -454,9 +454,9 @@ private final class StubHTTP: HTTPTransport, Sendable {
 
 @Suite struct ModelMatcherTests {
     private func aa(_ name: String, slug: String, creator: String = "anthropic",
-                    intelligence: Double = 50) -> AALanguageModel {
+                    intelligence: Double? = 50) -> AALanguageModel {
         AALanguageModel(id: slug, name: name, slug: slug, creatorSlug: creator,
-                        evaluations: ["artificial_analysis_intelligence_index": intelligence])
+                        evaluations: ["artificial_analysis_intelligence_index": intelligence].compactMapValues { $0 })
     }
 
     @Test func parsesProviderPrefixSnapshotDateFastAndEffort() {
@@ -506,6 +506,52 @@ private final class StubHTTP: HTTPTransport, Sendable {
                       aa("Grok 9 (Max)", slug: "grok-9-max", creator: "x-ai", intelligence: 39),
                       aa("Grok 9 (Low)", slug: "grok-9-low", creator: "x-ai", intelligence: 30)]
         #expect(ModelMatcher.match("grok-9-low", in: models)?.slug == "grok-9-max")
+    }
+
+    @Test func aScoredEffortBeatsAnUnscoredEffortFreeSlug() {
+        // AA's v5 index: only the Xhigh run of Grok 4.6 was scored.
+        let models = [aa("Grok 4.6 (High)", slug: "grok-4-6", creator: "x-ai", intelligence: nil),
+                      aa("Grok 4.6 (Xhigh)", slug: "grok-4-6-xhigh", creator: "x-ai", intelligence: 31),
+                      aa("Grok 4.6 (Low)", slug: "grok-4-6-low", creator: "x-ai", intelligence: nil)]
+        #expect(ModelMatcher.match("grok-4.6-high-fast", in: models)?.slug == "grok-4-6-xhigh")
+        #expect(ModelMatcher.headlines(in: models).map(\.slug) == ["grok-4-6-xhigh"])
+        // With no score anywhere the effort-free slug still leads.
+        let unscored = [models[0], models[2]]
+        #expect(ModelMatcher.headlines(in: unscored).map(\.slug) == ["grok-4-6"])
+    }
+
+    @Test func amongUnscoredEntriesTheBestOlderScoreLeads() {
+        var reasoning = aa("Claude 4.5 Sonnet (Reasoning)", slug: "claude-4-5-sonnet-thinking", intelligence: nil)
+        reasoning.pastIntelligence = AAPastScore(value: 20.7)
+        var plain = aa("Claude 4.5 Sonnet (Non-reasoning)", slug: "claude-4-5-sonnet", intelligence: nil)
+        plain.pastIntelligence = AAPastScore(value: 19.3)
+        #expect(ModelMatcher.headlines(in: [plain, reasoning]).map(\.slug) == ["claude-4-5-sonnet-thinking"])
+        #expect(ModelMatcher.headlines(in: [reasoning, plain]).map(\.slug) == ["claude-4-5-sonnet-thinking"])
+    }
+
+    @Test func aPastScoreTagsWithItsVersionElseItsMonth() {
+        let october = utc("2026-10-17T12:00:00Z")
+        #expect(AAPastScore(value: 1, indexVersion: "5", scoredAt: october).tag == "v5")
+        #expect(AAPastScore(value: 1, scoredAt: october).tag == "Oct ’26")
+        #expect(AAPastScore(value: 1).tag == "older")
+        #expect(AAPastScore(value: 1, scoredAt: october).note
+                == "Scored on an older Intelligence Index version, last published October 2026. Not on the same scale as current scores.")
+        #expect(AAPastScore(value: 1, indexVersion: "5").note
+                == "Scored on Intelligence Index v5. Not on the same scale as current scores.")
+    }
+
+    @MainActor @Test func rowsWithOnlyAnOlderScoreSortAfterScoredOnesBestFirst() {
+        func row(_ name: String, _ score: Double?, past: Double? = nil, tokens: Int = 0) -> ModelsModel.Row {
+            var model = aa(name, slug: name, intelligence: score)
+            model.pastIntelligence = past.map { AAPastScore(value: $0) }
+            return ModelsModel.Row(logged: name, aa: model, tokens: tokens, value: score)
+        }
+        let rows = [row("none", nil, tokens: 9), row("old-low", nil, past: 20), row("new", 30),
+                    row("old-high", nil, past: 45)]
+        #expect(ModelsModel.sort(rows, by: .intelligence).map(\.logged) == ["new", "old-high", "old-low", "none"])
+        // Only the intelligence index keeps an older score.
+        #expect(ModelsModel.Metric.speed.pastScore(of: rows[1].aa) == nil)
+        #expect(ModelsModel.Metric.intelligence.pastScore(of: rows[2].aa) == nil)
     }
 
     @Test func headlinesListOneEntryPerFoundationModel() {

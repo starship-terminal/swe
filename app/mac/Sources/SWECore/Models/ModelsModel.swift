@@ -98,6 +98,13 @@ public final class ModelsModel {
             }
         }
 
+        /// The older score to draw apart from the others when the model
+        /// has no current one. Only the intelligence index keeps one.
+        public func pastScore(of model: AALanguageModel?) -> AAPastScore? {
+            guard self == .intelligence, let model, model.intelligence == nil else { return nil }
+            return model.pastIntelligence
+        }
+
         /// Why a model has no value, for the dash's hover note, where AA
         /// skips this evaluation on some models.
         public var missingNote: String? {
@@ -909,7 +916,8 @@ public final class ModelsModel {
     }
 
     /// Best first: descending for the indexes and speed, ascending for
-    /// TTFT and cost; rows with no value sit last, used before unused.
+    /// TTFT and cost; rows with no value sit last, those with an older
+    /// score first among them (best first), then used before unused.
     /// Equal values fall back to tokens then name, so tied bars keep
     /// their places across rebuilds instead of trading them.
     public static func sort(_ rows: [Row], by metric: Metric) -> [Row] {
@@ -921,6 +929,12 @@ public final class ModelsModel {
             case (_?, nil): return true
             case (nil, _?): return false
             case (nil, nil):
+                let ap = metric.pastScore(of: a.aa)?.value, bp = metric.pastScore(of: b.aa)?.value
+                if ap != bp {
+                    guard let ap else { return false }
+                    guard let bp else { return true }
+                    return ap > bp
+                }
                 return (a.tokens, a.logged) > (b.tokens, b.logged)
             }
         }
