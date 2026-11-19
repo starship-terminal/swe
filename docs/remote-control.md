@@ -6,6 +6,14 @@ the macOS app's Settings › Integrations › Remote checklist all exist. This d
 the design record: what follows describes the build as it is, and the
 milestones table at the end is history, not a plan.
 
+A redesign of session execution is in progress: SWE starts every controllable
+session itself, a keeper process holds the agent across hub restarts, and one
+web session view replaces the separate chats. Read the
+[spec](specs/G1-session-runtime-redesign.md), the
+[decision record](decisions/0001-session-runtime-redesign.md) and the
+[roadmap](roadmap/milestones.yaml). Until those milestones land, the rest of
+this doc is accurate.
+
 Watch and steer CLI coding sessions (Claude Code, Codex, opencode and the
 rest of the registry) from a phone. Read the chat, send prompts, see new
 messages stream in, answer approvals, get notified when an agent needs a
