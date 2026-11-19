@@ -102,6 +102,11 @@ public final class CatalogDatabase: @unchecked Sendable {
                 evaluations TEXT NOT NULL,
                 raw TEXT NOT NULL,
                 fetch_id INTEGER NOT NULL REFERENCES fetches (id));
+            CREATE TABLE IF NOT EXISTS model_last_scores (
+                model_id TEXT PRIMARY KEY,
+                intelligence REAL NOT NULL,
+                index_version TEXT,
+                scored_at REAL);
             CREATE TABLE IF NOT EXISTS model_aliases (
                 name TEXT PRIMARY KEY,
                 model_id TEXT REFERENCES models (id) ON DELETE SET NULL,
@@ -515,7 +520,11 @@ extension CatalogDatabase {
                 if let id = existing.text(0), !ids.contains(id) { stale.append(id) }
             }
             let delete = try db.prepare("DELETE FROM models WHERE id = ?")
-            for id in stale { try delete.bind([.text(id)]).run() }
+            let deleteScore = try db.prepare("DELETE FROM model_last_scores WHERE model_id = ?")
+            for id in stale {
+                try delete.bind([.text(id)]).run()
+                try deleteScore.bind([.text(id)]).run()
+            }
             // An upsert, not REPLACE: replacing would null every alias
             // pointing at the model until the next rebuild.
             let upsert = try db.prepare("""
@@ -542,6 +551,67 @@ extension CatalogDatabase {
                     .text(evaluations), .text(item.raw), .int(fetchID),
                 ]).run()
             }
+            // Keep every score this feed carries: the next index version
+            // drops most of them, and the chart still wants the last one.
+            try Self.keepScores(db, of: models.map(\.model), version: AAModelsResponse.indexVersion(body),
+                                at: date, replacing: true)
+        }
+    }
+
+    /// Writes each scored model's intelligence index into
+    /// `model_last_scores`. `replacing` is the newest feed overwriting the
+    /// row; off, a row already there wins (the backfill of older feeds).
+    private static func keepScores(_ db: SQLiteDatabase, of models: [AALanguageModel], version: String?,
+                                   at date: Date?, replacing: Bool) throws {
+        let insert = try db.prepare("""
+            INSERT OR \(replacing ? "REPLACE" : "IGNORE") INTO model_last_scores
+                (model_id, intelligence, index_version, scored_at) VALUES (?, ?, ?, ?)
+            """)
+        for model in models {
+            guard let score = model.intelligence else { continue }
+            try insert.bind([.text(model.id), .double(score), version.map { .text($0) } ?? .null,
+                             .optionalDouble(date?.timeIntervalSince1970)]).run()
+        }
+    }
+
+    /// Fills `model_last_scores` for a catalog built before the table
+    /// existed: first from the models already stored, then from the legacy
+    /// `llms.json` an older build left in `legacyDirectory`, which holds
+    /// the scores from before the current index version. A model already
+    /// in the table keeps its row. Runs once.
+    public func backfillLastScores(legacyDirectory: URL?) {
+        let marker = "last_scores_backfill"
+        let done = withDB { db in
+            let statement = try db.prepare("SELECT 1 FROM meta WHERE key = ?")
+            statement.bind([.text(marker)])
+            return try statement.step()
+        } ?? true
+        guard !done else { return }
+        let source = Self.aaSource(.llms)
+        let current = languageModels() ?? []
+        let version = payload(.llms).flatMap(AAModelsResponse.indexVersion)
+        let fetchedAt = lastSuccess(source: source)?.fetchedAt
+        var legacy: [AALanguageModel] = []
+        var legacyDate: Date?
+        if let legacyDirectory {
+            let file = legacyDirectory.appending(path: AAEndpoint.llms.fileName)
+            if let body = FileManager.default.contents(atPath: file.path),
+               let models = try? AAModelsResponse.decode(body) {
+                legacy = models
+                let meta = FileManager.default.contents(atPath: legacyDirectory.appending(path: "meta.json").path)
+                    .flatMap { try? JSONDecoder().decode([String: ArtificialAnalysisStore.Meta].self, from: $0) }
+                legacyDate = meta?[AAEndpoint.llms.rawValue]?.fetchedAt.map(Date.init(timeIntervalSince1970:))
+                    ?? (try? FileManager.default.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
+            }
+        }
+        _ = try? transaction { db in
+            try Self.keepScores(db, of: current, version: version, at: fetchedAt, replacing: false)
+            // Only models the catalog still lists: `models` drops the rest.
+            let listed = Set(current.map(\.id))
+            try Self.keepScores(db, of: legacy.filter { listed.contains($0.id) }, version: nil,
+                                at: legacyDate, replacing: false)
+            try db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, '1')")
+                .bind([.text(marker)]).run()
         }
     }
 
@@ -571,13 +641,22 @@ extension CatalogDatabase {
     public func languageModels() -> [AALanguageModel]? {
         guard lastSuccess(source: Self.aaSource(.llms)) != nil else { return nil }
         return withDB { db in
-            let statement = try db.prepare("SELECT raw FROM models ORDER BY position")
+            let statement = try db.prepare("""
+                SELECT m.raw, s.intelligence, s.index_version, s.scored_at FROM models m
+                LEFT JOIN model_last_scores s ON s.model_id = m.id ORDER BY m.position
+                """)
             var result: [AALanguageModel] = []
             let decoder = JSONDecoder()
             while try statement.step() {
                 guard let raw = statement.text(0),
-                      let model = try? decoder.decode(AALanguageModel.self, from: Data(raw.utf8))
+                      var model = try? decoder.decode(AALanguageModel.self, from: Data(raw.utf8))
                 else { continue }
+                // A kept score stands in only where the feed has none.
+                if model.intelligence == nil, !statement.isNull(1) {
+                    model.pastIntelligence = AAPastScore(
+                        value: statement.double(1), indexVersion: statement.text(2),
+                        scoredAt: statement.isNull(3) ? nil : Date(timeIntervalSince1970: statement.double(3)))
+                }
                 result.append(model)
             }
             return result

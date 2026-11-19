@@ -30,6 +30,10 @@ public struct AALanguageModel: Sendable, Equatable, Identifiable {
     public var timeToFirstToken: Double?
     /// Seconds to first answer token (reasoning models): the `performance_v3` mean, or the median in older stored rows.
     public var timeToFirstAnswer: Double?
+    /// The last intelligence index AA published for the model, when the
+    /// current feed has none. Not part of AA's row: the catalog fills it
+    /// from the scores it kept (see `AAPastScore`).
+    public var pastIntelligence: AAPastScore?
 
     public init(id: String, name: String, slug: String,
                 creatorID: String = "", creatorName: String = "", creatorSlug: String = "",
@@ -50,6 +54,50 @@ public struct AALanguageModel: Sendable, Equatable, Identifiable {
         self.speed = speed
         self.timeToFirstToken = timeToFirstToken
         self.timeToFirstAnswer = timeToFirstAnswer
+    }
+}
+
+/// An intelligence index from a feed older than the current one. AA
+/// re-runs only some models when it moves the index to a new version
+/// (v5 left most models released before August 2026 without a score), and
+/// versions are not on one scale: Grok 4.6 (Xhigh) scored 44 before v5 and
+/// 31 on it. So a kept score is drawn apart from current ones, never
+/// ranked against them.
+public struct AAPastScore: Sendable, Equatable {
+    public var value: Double
+    /// The feed's `intelligence_index_version` ("5"); nil for the legacy
+    /// feed, which never said.
+    public var indexVersion: String?
+    /// When the feed that carried the score was downloaded.
+    public var scoredAt: Date?
+
+    public init(value: Double, indexVersion: String? = nil, scoredAt: Date? = nil) {
+        self.value = value
+        self.indexVersion = indexVersion
+        self.scoredAt = scoredAt
+    }
+
+    /// The short mark under a bar's number: "v5", else "Oct ’26", else
+    /// "older".
+    public var tag: String {
+        if let indexVersion { return "v\(indexVersion)" }
+        if let scoredAt { return Self.format(scoredAt, "MMM ’yy") }
+        return "older"
+    }
+
+    /// The sentence the model card and VoiceOver give.
+    public var note: String {
+        var text = "Scored on "
+        text += indexVersion.map { "Intelligence Index v\($0)" } ?? "an older Intelligence Index version"
+        if let scoredAt { text += ", last published \(Self.format(scoredAt, "MMMM yyyy"))" }
+        return text + ". Not on the same scale as current scores."
+    }
+
+    private static func format(_ date: Date, _ pattern: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = pattern
+        return formatter.string(from: date)
     }
 }
 
@@ -167,6 +215,17 @@ public struct AAModelsResponse: Sendable {
 
     public init(models: [AALanguageModel]) { self.models = models }
 
+    /// The feed's `intelligence_index_version` as text ("5", "4.3"); nil
+    /// for the legacy feed, which has none.
+    public static func indexVersion(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        switch root["intelligence_index_version"] {
+        case let text as String: return text.isEmpty ? nil : text
+        case let number as NSNumber: return number.stringValue
+        default: return nil
+        }
+    }
+
     /// Decodes the response body; throws on anything but a `data` array.
     public static func decode(_ data: Data) throws -> [AALanguageModel] {
         let root = try JSONSerialization.jsonObject(with: data)
@@ -277,6 +336,7 @@ public struct ArtificialAnalysisStore: Sendable {
         self.database = database
         self.now = now
         if let legacyDirectory { database.importLegacyAA(directory: legacyDirectory) }
+        database.backfillLastScores(legacyDirectory: legacyDirectory)
     }
 
     /// A store over `directory/catalog.sqlite` that imports any raw files
