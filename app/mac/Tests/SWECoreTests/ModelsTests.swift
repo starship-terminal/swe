@@ -529,6 +529,17 @@ private final class StubHTTP: HTTPTransport, Sendable {
         #expect(ModelMatcher.headlines(in: [reasoning, plain]).map(\.slug) == ["claude-4-5-sonnet-thinking"])
     }
 
+    @Test func aKeptEffortScoreBeatsAnEmptyEffortFreeSlug() {
+        // A later index version left every Grok 4.6 entry empty; only the
+        // Xhigh run has a kept score.
+        var xhigh = aa("Grok 4.6 (Xhigh)", slug: "grok-4-6-xhigh", creator: "x-ai", intelligence: nil)
+        xhigh.pastIntelligence = AAPastScore(value: 31, indexVersion: "5")
+        let models = [aa("Grok 4.6 (High)", slug: "grok-4-6", creator: "x-ai", intelligence: nil), xhigh,
+                      aa("Grok 4.6 (Low)", slug: "grok-4-6-low", creator: "x-ai", intelligence: nil)]
+        #expect(ModelMatcher.headlines(in: models).map(\.slug) == ["grok-4-6-xhigh"])
+        #expect(ModelMatcher.match("grok-4.6", in: models)?.slug == "grok-4-6-xhigh")
+    }
+
     @Test func aPastScoreTagsWithItsVersionElseItsMonth() {
         let october = utc("2026-10-17T12:00:00Z")
         #expect(AAPastScore(value: 1, indexVersion: "5", scoredAt: october).tag == "v5")

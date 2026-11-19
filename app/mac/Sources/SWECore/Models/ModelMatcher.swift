@@ -320,7 +320,9 @@ public struct ModelMatcher: Sendable {
     /// An entry AA has scored beats one it hasn't: each new Intelligence
     /// Index version is run on only some efforts of an older model (v5
     /// scored Grok 4.6 at Xhigh and left `grok-4-6` empty), and the family
-    /// should show the score it has.
+    /// should show the score it has. With no current score anywhere, an
+    /// entry with a kept older score (`pastIntelligence`) beats one
+    /// without.
     private static func headline(of family: [AALanguageModel]) -> AALanguageModel? {
         // Among entries with no current score, the best kept one leads.
         func rank(_ model: AALanguageModel) -> (Double, Double) {
@@ -331,8 +333,12 @@ public struct ModelMatcher: Sendable {
         }
         let stable = family.filter { !parseAA($0).prerelease }
         for candidates in [stable, family] where !candidates.isEmpty {
+            // Current scores first, then kept ones: once a later index
+            // version empties the whole family, the entry whose last
+            // score the catalog kept still leads.
             let scored = candidates.filter { $0.intelligence != nil }
-            let pool = scored.isEmpty ? candidates : scored
+            let kept = candidates.filter { $0.pastIntelligence != nil }
+            let pool = !scored.isEmpty ? scored : !kept.isEmpty ? kept : candidates
             if let plain = best(pool.filter { !slugHasEffort($0) }) { return plain }
             for wanted in effortPreference {
                 if let hit = best(pool.filter { parseAA($0).effort == wanted }) { return hit }
