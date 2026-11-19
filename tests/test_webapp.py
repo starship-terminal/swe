@@ -23,7 +23,7 @@ class TestAssetNames(unittest.TestCase):
 
 
 class TestStyles(unittest.TestCase):
-    """styles.css keeps one definition per component and one dark palette."""
+    """styles.css keeps one definition per component; tokens.css one dark palette."""
 
     STATIC = Path(static.__file__).parent / "static"
 
@@ -32,7 +32,7 @@ class TestStyles(unittest.TestCase):
         return dict(re.findall(r"(--[\w-]+):\s*([^;]+);", block))
 
     def test_both_dark_blocks_define_the_same_tokens(self):
-        css = (self.STATIC / "styles.css").read_text()
+        css = (self.STATIC / "tokens.css").read_text()
         auto = css.split("@media (prefers-color-scheme: dark) {")[1].split("\n}\n")[0]
         explicit = css.split(':root[data-theme="dark"] {')[1].split("\n}\n")[0]
         auto_tokens, explicit_tokens = self._tokens(auto), self._tokens(explicit)

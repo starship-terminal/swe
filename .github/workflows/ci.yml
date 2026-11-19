@@ -181,6 +181,54 @@ jobs:
           # should not mark a run red when every test job passed.
           fail_ci_if_error: false
 
+  session-view:
+    # The React session view (app/web-session): typecheck, the token lint,
+    # its Vitest suite and a build, then a check that the build matches
+    # the bundle committed under src/swe/webapp/static/session. Installs
+    # serve that committed copy and never run Node, so a source change
+    # without a rebuild (or a rebase that skipped one) fails here.
+    name: Session view
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/web-session
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm (the version package.json's packageManager pins)
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          pnpm --version
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Token lint
+        run: pnpm lint:tokens
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: The committed bundle matches the build
+        run: |
+          git status --porcelain -- ../../src/swe/webapp/static/session
+          git diff --exit-code -- ../../src/swe/webapp/static/session
+          test -z "$(git status --porcelain -- ../../src/swe/webapp/static/session)"
+
   install-script:
     # scripts/install.sh end to end in a container per distro shape.
     # ubuntu:22.04 has no Python at all (the uv bootstrap path);

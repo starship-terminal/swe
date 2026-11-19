@@ -1,0 +1,36 @@
+{
+  "hash_rule": "app/web-session/scripts/source-hash.mjs",
+  "source_hash": "b0cb4047da4851af3f087af21f508133910231dcc322c50cfc7b9cd95779096b",
+  "sources": {
+    "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
+    "package.json": "219fdb24e14e1e6439f07202fbfdf8e7fb41fdbb27ed78f57b6803374db70a5a",
+    "pnpm-lock.yaml": "8e0f798e840699da604ba57825eca85c1c8194b7a838992989816a8dcf0cbe6e",
+    "public/appearance.js": "1f9bcd81b27cce8c7ec36bd0aed90332894a26a66bd120a6b35f1684b51b147d",
+    "scripts/lint-tokens.mjs": "6b51f41942c5afb18fbde0f77098ef0b473ed4e85d0c57eafde86d8446fe61b8",
+    "scripts/source-hash.mjs": "b0c5447f157d3693f2d6612d3ae09e5bfc5ddcb1137c88220b78bf4cc6682f75",
+    "src/SessionShell.test.tsx": "38bcd7da019308f2a74a54bad0300a4368cf4e9962068a32d97a99fb9a3e321d",
+    "src/SessionShell.tsx": "b72a4bd597cbd2f0939413a4e39f040980d24b94b48ca9c4b7afba43ebfb754f",
+    "src/appearance.test.ts": "5e9a970a011ed8748a0be74d57a20be96e2dc3bee1903ec042fbf44b3a19b18d",
+    "src/boot.ts": "f2042097b82da401222f49d9ac198d2d677cd3b1eea1cd5b4c16f1884d50eabd",
+    "src/index.css": "9bc072b3b09cce47f1c8a50810043468c6e8b324bf579ebb9cbff534ffe007d0",
+    "src/lint-tokens.test.ts": "2d4b66a6b23b2ffb128205307156a6f5f162eaa0527c91c1dc056e25e81ad81d",
+    "src/main.tsx": "c0c7f85333b04fb2b9a443b5d4529b7826542d4fd7a957c55b64f362132d01d4",
+    "src/page.css": "28942d4c5a50412ddda912c2698ff52118d8bc07895a5c71e507440d89593ecc",
+    "src/preflight.css": "a6581acce65d8270cb939b53dc589f96b8f913bc0dc63a13d5dfd6ac35b85295",
+    "src/session-key.test.ts": "6fd959621df1341621a7f262bf210de6d22353ce71f261a36f7c7ae891d2570e",
+    "src/session-key.ts": "27c68ebf3db5b2c1e2c4ecec115f84e5b07fc077f19654f7331be282ba7ebd3b",
+    "tsconfig.json": "3e1f35695a154b6afcb73b5b784cc80988dc7ced8e8d4a2223d4da9f06270a58",
+    "vite.config.ts": "f68bf1a948475c30d6674dc63c8c0c9b64faf653de9be18dbc63910adb8be362"
+  },
+  "outputs": [
+    "appearance.js",
+    "assets/index-BFqzyBqT.js",
+    "assets/index-obnHEHL0.css",
+    "assets/react-WGfG_Ba-.js",
+    "build-info.json",
+    "index.html",
+    "session-view.css",
+    "session-view.js",
+    "third-party-licenses.md"
+  ]
+}
