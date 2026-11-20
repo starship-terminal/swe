@@ -1,0 +1,490 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.147,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.147,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.147,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Use the Bash tool to run exactly this command and nothing else: touch marker.txt"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.147,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.147,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Use the Bash tool to run exactly this command and nothing else: touch marker.txt"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.588,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "Bash",
+   "summary": "Bash · touch marker.txt",
+   "input": {
+    "command": "touch marker.txt",
+    "description": "Create empty marker.txt file"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.61,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.61,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000017",
+   "kind": "command",
+   "prompt": "Allow Bash?\nBash · touch marker.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "always",
+     "label": "Always allow",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.61,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000017",
+   "source": "user",
+   "decision": "always"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.61,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.125,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "ok",
+   "name": "Bash",
+   "output": "(Bash completed with no output)"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.751,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "I ran `touch ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "marker.txt` ",
+   "seq": 2,
+   "offset": 13,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "as requested. ",
+   "seq": 3,
+   "offset": 25,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "It completed ",
+   "seq": 4,
+   "offset": 39,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "with no output, so ",
+   "seq": 5,
+   "offset": 52,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "`marker.txt` ",
+   "seq": 6,
+   "offset": 71,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.883,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "should ",
+   "seq": 7,
+   "offset": 84,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.883,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "now exist in the working ",
+   "seq": 8,
+   "offset": 91,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.904,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "directory.",
+   "seq": 9,
+   "offset": 116,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.904,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "I ran `touch marker.txt` as requested. It completed with no output, so `marker.txt` should now exist in the working directory."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.913,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 126,
+   "cache_read_tokens": 34409,
+   "cache_write_tokens": 3515,
+   "cost_usd": 0.000846865,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.914,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.767
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.914,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.914,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Use the Bash tool to run exactly the same command again: touch marker.txt. Then reply only with: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.914,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.914,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Use the Bash tool to run exactly the same command again: touch marker.txt. Then reply only with: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.804,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "toolu_02",
+   "name": "Bash",
+   "summary": "Bash · touch marker.txt",
+   "input": {
+    "command": "touch marker.txt",
+    "description": "Create or update marker.txt timestamp"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.852,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "toolu_02",
+   "status": "ok",
+   "name": "Bash",
+   "output": "(Bash completed with no output)"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.429,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.429,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.436,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 89,
+   "cache_read_tokens": 38224,
+   "cache_write_tokens": 229,
+   "cost_usd": 0.00130263,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.437,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.523
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.437,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.437,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

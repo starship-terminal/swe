@@ -28,10 +28,14 @@ def session(entry):
 class RegistryCase(unittest.TestCase):
     def setUp(self):
         # Every id the fallback names gets a class, so resolution reaches
-        # the precedence rules; each test can unregister one again.
+        # the precedence rules; each test can unregister one again. The
+        # built-in adapters register on import, so they load first and
+        # the table is put back as it was afterwards (unregistering the
+        # stand-ins would drop a real class such as claude_stream).
+        registry.registered()
+        self.enterContext(mock.patch.dict(registry._ADAPTERS))
         for adapter_id in FALLBACK_IDS + ("fake",):
             registry.register(adapter_id, fake.FakeAdapter, replace=True)
-            self.addCleanup(registry.unregister, adapter_id)
 
     def resolve(self, harness, reg, which=on_path):
         return registry.adapter_for(harness, reg, which=which)

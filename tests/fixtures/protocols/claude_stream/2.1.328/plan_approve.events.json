@@ -1,0 +1,948 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.989,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.989,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.991,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Plan, in one step, how to append the line 'done' to notes.txt in the current folder, present it with ExitPlanMode, and once it is approved carry it out with the Edit tool."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.991,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.991,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Plan, in one step, how to append the line 'done' to notes.txt in the current folder, present it with ExitPlanMode, and once it is approved carry it out with the Edit tool."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.27,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "Write",
+   "summary": "Write · /config/plans/plan-in-one-step-temporal-whale.md",
+   "input": {
+    "file_path": "/config/plans/plan-in-one-step-temporal-whale.md",
+    "content": "# Plan: append \"done\" to notes.txt\n\n## Context\nUser wants the line `done` appended to `notes.txt` in the current working folder.\n\n## Step\nUse the Edit tool on `notes.txt`: read the file first (required by Edit), then replace its last line with itself plus a newline and `done`, so `done` becomes the final line.\n\n## Verification\nRead `notes.txt` and confirm the last line is `done`.\n"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.272,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_02",
+   "name": "ToolSearch",
+   "summary": "ToolSearch · select:ExitPlanMode",
+   "input": {
+    "query": "select:ExitPlanMode",
+    "max_results": 1
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.432,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "ok",
+   "name": "Write",
+   "output": "File created successfully at: /config/plans/plan-in-one-step-temporal-whale.md (file state is current in your context — no need to Read it back)",
+   "file_edits": [
+    {
+     "path": "/config/plans/plan-in-one-step-temporal-whale.md",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,10 @@\n+# Plan: append \"done\" to notes.txt\n+\n+## Context\n+User wants the line `done` appended to `notes.txt` in the current working folder.\n+\n+## Step\n+Use the Edit tool on `notes.txt`: read the file first (required by Edit), then replace its last line with itself plus a newline and `done`, so `done` becomes the final line.\n+\n+## Verification\n+Read `notes.txt` and confirm the last line is `done`.\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.441,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_02",
+   "status": "ok",
+   "name": "ToolSearch",
+   "output": "ExitPlanMode"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.705,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_03",
+   "name": "ExitPlanMode",
+   "summary": "ExitPlanMode",
+   "input": {
+    "plan": "# Plan: append \"done\" to notes.txt\n\n## Context\nUser wants the line `done` appended to `notes.txt` in the current working folder.\n\n## Step\nUse the Edit tool on `notes.txt`: read the file first (required by Edit), then replace its last line with itself plus a newline and `done`, so `done` becomes the final line.\n\n## Verification\nRead `notes.txt` and confirm the last line is `done`.\n",
+    "planFilePath": "/config/plans/plan-in-one-step-temporal-whale.md"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.74,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.74,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000071",
+   "kind": "plan",
+   "prompt": "# Plan: append \"done\" to notes.txt\n\n## Context\nUser wants the line `done` appended to `notes.txt` in the current working folder.\n\n## Step\nUse the Edit tool on `notes.txt`: read the file first (required by Edit), then replace its last line with itself plus a newline and `done`, so `done` becomes the final line.\n\n## Verification\nRead `notes.txt` and confirm the last line is `done`.\n",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Approve plan",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Keep planning",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_03"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.741,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000071",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.741,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.764,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_03",
+   "status": "ok",
+   "name": "ExitPlanMode",
+   "output": "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\nYour plan has been saved to: /config/plans/plan-in-one-step-temporal-whale.md\nYou can refer back to it if needed during implementation.\n\n## Approved Plan:\n# Plan: append \"done\" to notes.txt\n\n## Context\nUser wants the line `done` appended to `notes.txt` in the current working folder.\n\n## Step\nUse the Edit tool on `notes.txt`: read the file first (required by Edit), then replace its last line with itself plus a newline and `done`, so `done` becomes the final line.\n\n## Verification\nRead `notes.txt` and confirm the last line is `done`.\n",
+   "file_edits": [
+    {
+     "path": "/config/plans/plan-in-one-step-temporal-whale.md",
+     "kind": "modify"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.902,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:0",
+   "text": "",
+   "duration_s": 0.445
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.142,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_04",
+   "name": "Read",
+   "summary": "Read · /work/notes.txt",
+   "input": {
+    "file_path": "/work/notes.txt"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.432,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_04",
+   "status": "ok",
+   "name": "Read",
+   "output": "1\tfirst line of the notes\n2\tsecond line\n3\t"
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.033,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "text": "",
+   "duration_s": 2.04
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.033,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "The file has three lines, with ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.033,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "line 3 ",
+   "seq": 2,
+   "offset": 31,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.033,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "showing as empty. ",
+   "seq": 3,
+   "offset": 38,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.033,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "I'll ",
+   "seq": 4,
+   "offset": 56,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.037,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "insert `done` after ",
+   "seq": 5,
+   "offset": 61,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.056,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "\"second line\" and ",
+   "seq": 6,
+   "offset": 81,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.081,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "keep the ",
+   "seq": 7,
+   "offset": 99,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.099,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "rest of the file as it ",
+   "seq": 8,
+   "offset": 108,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.187,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "is.",
+   "seq": 9,
+   "offset": 131,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.187,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "The file has three lines, with line 3 showing as empty. I'll insert `done` after \"second line\" and keep the rest of the file as it is."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.569,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_05",
+   "name": "Edit",
+   "summary": "Edit · /work/notes.txt",
+   "input": {
+    "replace_all": false,
+    "file_path": "/work/notes.txt",
+    "old_string": "second line\n",
+    "new_string": "second line\ndone\n"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.585,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.585,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000154",
+   "kind": "tool",
+   "prompt": "Allow Edit?\nEdit · /work/notes.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_05"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.586,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000154",
+   "source": "user",
+   "decision": "deny",
+   "text": "The user said no to this."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.586,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.59,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_05",
+   "status": "error",
+   "name": "Edit",
+   "output": "The user said no to this."
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000014.576,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:0",
+   "text": "",
+   "duration_s": 0.392
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "The ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "edit ",
+   "seq": 2,
+   "offset": 4,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "to `notes.txt` ",
+   "seq": 3,
+   "offset": 9,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "was declined, so I ",
+   "seq": 4,
+   "offset": 24,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.678,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "haven't changed the file. I ",
+   "seq": 5,
+   "offset": 43,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.701,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "won't retry ",
+   "seq": 6,
+   "offset": 71,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.727,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "the same ",
+   "seq": 7,
+   "offset": 83,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.755,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "edit. The file is ",
+   "seq": 8,
+   "offset": 92,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.769,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "unchanged: it has three lines, ",
+   "seq": 9,
+   "offset": 110,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.787,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "\"first line of the notes\", ",
+   "seq": 10,
+   "offset": 141,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.813,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "\"second line\", and an empty ",
+   "seq": 11,
+   "offset": 168,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.833,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "line 3.\n\nDo you ",
+   "seq": 12,
+   "offset": 196,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.873,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "want `done` added as ",
+   "seq": 13,
+   "offset": 212,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.884,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "a new line ",
+   "seq": 14,
+   "offset": 233,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.9,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "at the end of the file, or ",
+   "seq": 15,
+   "offset": 244,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.921,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "inserted after \"second line\" ",
+   "seq": 16,
+   "offset": 271,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.94,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "as I ",
+   "seq": 17,
+   "offset": 300,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.988,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "tried? If you'd rather ",
+   "seq": 18,
+   "offset": 305,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.004,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "I ",
+   "seq": 19,
+   "offset": 328,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.027,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "leave the ",
+   "seq": 20,
+   "offset": 330,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.046,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "file alone, ",
+   "seq": 21,
+   "offset": 340,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.069,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "I'll stop ",
+   "seq": 22,
+   "offset": 352,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.094,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "here.",
+   "seq": 23,
+   "offset": 362,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000015.094,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:1",
+   "kind": "assistant",
+   "text": "The edit to `notes.txt` was declined, so I haven't changed the file. I won't retry the same edit. The file is unchanged: it has three lines, \"first line of the notes\", \"second line\", and an empty line 3.\n\nDo you want `done` added as a new line at the end of the file, or inserted after \"second line\" as I tried? If you'd rather I leave the file alone, I'll stop here."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000015.107,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10,
+   "output_tokens": 1392,
+   "cache_read_tokens": 92901,
+   "cache_write_tokens": 14728,
+   "cost_usd": 0.02538934,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000015.109,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 12.118
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000015.109,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000015.109,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

@@ -1,0 +1,258 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.823,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.823,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.937,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Reply with exactly: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.937,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.937,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Reply with exactly: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.717,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01:0",
+   "kind": "assistant",
+   "text": "ok",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.717,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01:0",
+   "kind": "assistant",
+   "text": "ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.736,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 4,
+   "cache_read_tokens": 14725,
+   "cache_write_tokens": 3298,
+   "cost_usd": 0.009761500000000001,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.738,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.801
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.738,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.76,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Reply with exactly: ok again"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.76,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.76,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Reply with exactly: ok again"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.737,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "ok ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.737,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "again",
+   "seq": 2,
+   "offset": 3,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.737,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "ok again"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.737,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 5,
+   "cache_read_tokens": 14431,
+   "cache_write_tokens": 4045,
+   "cost_usd": 0.010414135000000001,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.742,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 0.982
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.742,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.742,
+  "data": {
+   "state": "closed"
+  }
+ }
+]
