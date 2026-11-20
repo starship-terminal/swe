@@ -16,6 +16,12 @@ import Testing
     static let narrow = CGSize(width: 900, height: 860)
     static let sizes = [("1328", wide), ("900", narrow)]
 
+    /// Snapshot runs render every state; plain runs render only the states
+    /// an assertion reads, so the suite stays cheap beside other tests.
+    static var snapshots: Bool {
+        ProcessInfo.processInfo.environment["SWE_HOOKS_SNAPSHOT_DIR"] != nil
+    }
+
     nonisolated static let claudeEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest",
                                "PostToolUse", "SubagentStart", "Stop", "SessionEnd"]
 
@@ -306,8 +312,11 @@ import Testing
         let detail = try #require(recorder.panes["detail"], "no detail frame at \(label)")
         let editor = try #require(recorder.panes["editor"], "no editor frame at \(label)")
         let rail = try #require(recorder.panes["rail"], "no rail frame at \(label)")
-        #expect(abs(detail.width - HookDetailLayout.detailWidth(panel: panel)) < 0.5,
-                "the detail is \(detail.width) wide at \(label)")
+        // This Mac's scroll bars decide what a scrolling page keeps: a
+        // trackpad Mac overlays them, a CI runner shows them always.
+        let style = NSScroller.preferredScrollerStyle
+        #expect(abs(detail.width - HookDetailLayout.laidOutWidth(panel: panel, style: style)) < 0.5,
+                "the detail is \(detail.width) wide at \(label), scroller style \(style.rawValue)")
         switch Self.layout(window, sidebar: sidebar) {
         case .stacked:
             #expect(abs(editor.width - detail.width) < 0.5 && abs(rail.width - detail.width) < 0.5,
@@ -334,6 +343,24 @@ import Testing
         #expect(HookDetailLayout.of(width: 1052) == .wide)
         #expect(HookDetailLayout.of(width: 660) == .narrowRail)
         #expect(HookDetailLayout.of(width: 0) == .wide)
+        // Under both scroller styles: a stacked page loses a legacy scroll
+        // bar's width and stays stacked; a side-by-side one never scrolls,
+        // so its editor keeps 380pt at the narrowest width that picks it.
+        let narrowestPanel = 900 - widest
+        let legacy = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        #expect(legacy > 0)
+        #expect(HookDetailLayout.laidOutWidth(panel: narrowestPanel, style: .overlay)
+                == HookDetailLayout.narrowest())
+        #expect(HookDetailLayout.laidOutWidth(panel: narrowestPanel, style: .legacy)
+                == HookDetailLayout.narrowest() - legacy)
+        let firstNarrowRail = HookDetailLayout.narrowRailWidth + HookDetailLayout.gap + HookDetailLayout.editorMin
+        #expect(HookDetailLayout.of(width: firstNarrowRail) == .narrowRail)
+        #expect(HookDetailLayout.of(width: firstNarrowRail - 1) == .stacked)
+        for style in [NSScroller.Style.overlay, .legacy] {
+            let width = HookDetailLayout.laidOutWidth(panel: firstNarrowRail + HookDetailLayout.pagePadding,
+                                                      style: style)
+            #expect(width - HookDetailLayout.narrowRailWidth - HookDetailLayout.gap >= HookDetailLayout.editorMin)
+        }
         let fixture = try Fixture()
         let window = Self.narrow
         let layout = Self.layout(window, sidebar: widest)
@@ -365,7 +392,7 @@ import Testing
     @Test func overviewStatesRender() async throws {
         let fixture = try Fixture()
         let onlyForeign = HookInventory(hooks: fixture.hooks.filter { $0.tier == .foreign })
-        for (width, window) in Self.sizes {
+        for (width, window) in Self.sizes where Self.snapshots {
             try await render("check-open-\(width)", window: window) {
                 overview(fixture, harness: "claude", findingsOpen: true)
             }
@@ -398,6 +425,7 @@ import Testing
                         "tile heights at \(width): \(tiles.map(\.height))")
             }
             try checkPanes(recorder, window: window, label: width)
+            guard Self.snapshots else { continue }
             try await render("detail-short-\(width)", window: CGSize(width: window.width, height: 520),
                              detail: true) { editable }
             let readOnly = await detail(fixture, fixture.readOnly, drafts: drafts, layout: Self.layout(window))

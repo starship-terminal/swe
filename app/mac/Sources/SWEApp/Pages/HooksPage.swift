@@ -1102,7 +1102,25 @@ enum HookDetailLayout: Equatable {
         detailWidth(panel: window - CGFloat(SidebarWidth.range.upperBound))
     }
 
-    /// The layout for a detail `width` wide; 0 (not measured yet) is wide.
+    /// What a scrolling page's scroll bar takes from its content: nothing
+    /// with overlay scroll bars (a trackpad), its width when System
+    /// Settings shows them always (a mouse, or a CI runner).
+    @MainActor static func scrollerAllowance(_ style: NSScroller.Style) -> CGFloat {
+        style == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+    }
+
+    /// The width the detail is laid out at. Only a stacked detail makes the
+    /// page scroll, so only it loses a legacy scroll bar's width; the two
+    /// side-by-side layouts get the page's whole width, which is why `of`
+    /// can decide from `detailWidth` alone and the editor's 380pt holds
+    /// under either scroller style.
+    @MainActor static func laidOutWidth(panel: CGFloat, style: NSScroller.Style) -> CGFloat {
+        let width = detailWidth(panel: panel)
+        return of(width: width) == .stacked ? width - scrollerAllowance(style) : width
+    }
+
+    /// The layout for a detail `width` wide (the page's width, before any
+    /// scroll bar); 0 (not measured yet) is wide.
     static func of(width: CGFloat) -> HookDetailLayout {
         guard width > 0 else { return .wide }
         if width - railWidth - gap >= editorMin { return .wide }
