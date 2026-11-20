@@ -1132,7 +1132,7 @@ class TestLimits(KeeperCase):
         self.assertLess(keeper_process.QUEUE_MAX_BYTES * 2, ipc.MAX_LINE)
 
     def test_a_queued_secret_is_redacted_where_it_is_shown(self):
-        secret = "use OPENAI_API_KEY=sk-abc123def456ghi789 for it"
+        secret = "use OPENAI_API_KEY=sk-test for it"
         keeper = self.keeper({"turns": [[fake.ask("ok?")],
                                         [fake.say("done")]]})
         feed = self.connect(keeper)
@@ -1146,7 +1146,7 @@ class TestLimits(KeeperCase):
         self.assertEqual(self.connect(keeper, last_seq=None)
                          .client.welcome["queue"][0]["text"], shown)
         segment = keeper.log.segments()[-1][1]
-        self.assertNotIn(b"sk-abc123", segment.read_bytes())
+        self.assertNotIn(b"sk-test", segment.read_bytes())
         # The agent still gets the message as it was typed.
         feed.client.request("respond", command_id="ok", request_id="r1",
                             decision="allow")

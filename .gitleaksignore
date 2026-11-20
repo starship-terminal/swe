@@ -1,0 +1,7 @@
+# Findings gitleaks may pass over, one fingerprint per line.
+#
+# A made-up key in a keeper test (tests/test_remote_keeper.py), written
+# to check that queued text is redacted. The test now uses "sk-test";
+# this commit of PR 1991 still holds the first spelling, and the PR
+# scan reads every commit of the branch.
+60d8cecaa3eab722c617554481c5ceacb64c60e6:tests/test_remote_keeper.py:generic-api-key:1135
