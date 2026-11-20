@@ -42,7 +42,7 @@ The alternatives rejected for each decision are in the decision record.
 **Assumptions to prove inside milestones**
 
 - Claude's control wire format has no stated stability promise. The exact spawn line is settled by a recorded fixture in G7, starting from the SDK's own line.
-- Claude steer (message priority "now") and the wire form of ExitPlanMode are unverified. Steer stays off for Claude until a fixture proves it.
+- Claude steer (message priority "now") is proven by the G7 fixtures: it stops the reply in progress (a running tool call is killed, an open approval is withdrawn) and answers the new message in the same turn; it is offered only when the CLI lists `interrupt_send_now_v1`. The wire form of ExitPlanMode is proven too: a `can_use_tool` request for `ExitPlanMode` whose input carries the plan, mapped to a plan approval ([G7-claude-stream-adapter.md](G7-claude-stream-adapter.md)).
 - A WebKit custom scheme handler can stream fetch bodies and use IndexedDB (G2 proves it; cookie auth is the fallback).
 - A keeper costs about 15 to 20 MB. Measure in G5.
 - Current clients tolerate gaps in seq numbers (needed by the compat layer).
@@ -174,3 +174,7 @@ Notes the first four milestones left for later ones.
 - **G14:** Tailwind utility names such as `flex` and `hidden` are global class names. Check they cannot restyle the plain-JS app once the session view is mounted inside it.
 - **G17 and G18:** the findings in [G2-iphone-webview-proof.md](G2-iphone-webview-proof.md), and the open questions on G18 in [milestones.yaml](../roadmap/milestones.yaml). The iPhone move stays blocked until the page-load stall seen under heavy machine load is reproduced or ruled out.
 - **Current clients tolerate gaps in `seq`.** All three keep only the highest seq seen. Two frames sharing one seq is the hazard, so the compat layer sends at most one old-style event per v2 event ([G3-adapter-protocol.md](G3-adapter-protocol.md)).
+
+## Carried forward from wave 2
+
+- **G13:** the Steer control must say that it stops the current reply, with one wording for every harness in the first version. On Claude a steer also kills a tool call that is running: the call ends cancelled, and what it would have written never appears (the `steer_tool` recording in [G7-claude-stream-adapter.md](G7-claude-stream-adapter.md)).

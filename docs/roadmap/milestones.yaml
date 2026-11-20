@@ -162,6 +162,7 @@
   tier: implement-standard
   est_runtime: 120m
 
+# G13: on Claude, Steer stops the reply in progress (docs/specs/G7-claude-stream-adapter.md). Label the control accordingly.
 - id: G13
   title: Composer, approvals, queued tray
   status: todo

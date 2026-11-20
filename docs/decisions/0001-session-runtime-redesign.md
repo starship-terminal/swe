@@ -127,3 +127,4 @@ These defaults were chosen in the plan and can be changed.
 - The hub holds messages for a sleeping machine for 24 hours. A keeper parks an idle session after 30 minutes.
 - Autonomy keeps today's default. Presence ("also open on iPhone") is a later milestone.
 - For one release, the hub may still run `tmux kill-session` to convert an old pane.
+- On Claude, steer stops the reply in progress and takes the new message in the same turn (Claude Code's `priority: now`). It is offered only when the CLI lists `interrupt_send_now_v1`. Decided 2026-11-21 from the recorded fixture.

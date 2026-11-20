@@ -23,12 +23,30 @@ FAKE_CLAUDE_MODE
     by itself after the first one), ``cancel`` (withdraws its approval
     with ``control_cancel_request``), ``linger`` (ignores the end of its
     stdin until it is terminated), ``deaf`` (answers ``initialize``,
-    then never reads stdin again).
+    then never reads stdin again), ``slow-tool`` (like ``approval``, but
+    an allowed call keeps running until a steer cuts it).
+
+A user message with ``priority: "now"`` mid-turn is a steer, answered
+the way the steer, steer_tool and steer_approval recordings show: in
+``slow`` the reply being streamed arrives cut (``aborted: true``) with a
+``result``; in ``slow-tool`` the running call's result says
+``interrupted``; with an approval open the CLI withdraws it
+(``control_cancel_request``) and the call fails "Tool permission request
+aborted". Then a new init, the steered reply, a second ``result`` and
+one ``idle``. In the other modes it is queued and ignored.
+
 FAKE_CLAUDE_REPLY
     The assistant's reply text (default ``hello``).
+FAKE_CLAUDE_STEER_REPLY
+    The reply to a steer (default ``steered``).
+FAKE_CLAUDE_PARTIAL
+    The text ``slow`` streams before it waits (default ``1\\n2\\n``).
 FAKE_CLAUDE_CAPS
     A JSON list for the init message's ``capabilities`` (default the
-    2.1.328 list; ``none`` leaves the key out).
+    2.1.328 list; ``none`` leaves the key out). A list without
+    ``interrupt_send_now_v1`` is a CLI that does not take steer.
+FAKE_CLAUDE_NO_INIT
+    Set: no turn prints an init message.
 FAKE_CLAUDE_LOG
     A file every line we receive is appended to, and the argv on the
     first line.
@@ -40,6 +58,8 @@ import sys
 
 MODE = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 REPLY = os.environ.get("FAKE_CLAUDE_REPLY", "hello")
+STEER_REPLY = os.environ.get("FAKE_CLAUDE_STEER_REPLY", "steered")
+PARTIAL = os.environ.get("FAKE_CLAUDE_PARTIAL", "1\n2\n")
 LOG = os.environ.get("FAKE_CLAUDE_LOG")
 CAPS_ENV = os.environ.get("FAKE_CLAUDE_CAPS")
 VERSION = "1.0.0" if MODE == "old" else "2.1.328"
@@ -98,6 +118,8 @@ def set_state(s):
 
 
 def init():
+    if os.environ.get("FAKE_CLAUDE_NO_INIT"):
+        return
     body = {"cwd": os.getcwd(), "model": MODEL,
             "permissionMode": state["mode"], "claude_code_version": VERSION,
             "tools": ["Bash", "Read", "Write", "Task"]}
@@ -141,8 +163,9 @@ def assistant(api, content, parent=None, aborted=False):
     out(msg)
 
 
-def result(error=False, subtype="success"):
+def result(error=False, subtype="success", terminal_reason="completed"):
     out({"type": "result", "subtype": subtype, "is_error": error,
+         "terminal_reason": terminal_reason,
          "session_id": SID, "result": "" if error else REPLY,
          "errors": ["boom"] if error else None, "total_cost_usd": 0.001,
          "usage": {"input_tokens": 3, "output_tokens": 5,
@@ -190,6 +213,9 @@ def answered(resp):
     state["pending"] = None
     set_state("running")
     ok = body.get("behavior") == "allow"
+    if ok and MODE == "slow-tool":
+        state["running_tool"] = True  # until a steer cuts it
+        return
     out({"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "toolu_fake1",
          "content": "file-a\nfile-b" if ok else body.get("message", ""),
@@ -198,6 +224,44 @@ def answered(resp):
         "tool_use_result": {"stdout": "file-a\nfile-b"} if ok else
         "Error: denied"})
     finish_turn()
+
+
+def tool_result(content, structured):
+    out({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_fake1",
+         "content": content, "is_error": True}]},
+        "parent_tool_use_id": None, "session_id": SID,
+        "tool_use_result": structured})
+
+
+def steered(msg):
+    """A ``priority: "now"`` message mid-turn, as recorded: the work in
+    progress is cut, then the message is answered in the same running
+    stretch, and the CLI goes idle once."""
+    if state["pending"]:
+        rid, state["pending"] = state["pending"], None
+        out({"type": "control_cancel_request", "request_id": rid})
+        set_state("running")
+        tool_result("Tool permission request aborted",
+                    "Error: Tool permission request aborted")
+        result(terminal_reason="aborted_tools")
+    elif state.get("running_tool"):
+        state["running_tool"] = False
+        tool_result("<error>Command was aborted before completion</error>",
+                    {"stdout": "", "stderr": "", "interrupted": True})
+        result(terminal_reason="aborted_tools")
+    elif state.get("slow_api"):
+        api = state.pop("slow_api")
+        assistant(api, [{"type": "text", "text": PARTIAL}], aborted=True)
+        stream(api, 0, "content_block_stop")
+        result(terminal_reason="aborted_streaming")
+    else:
+        return
+    init()
+    say(STEER_REPLY)
+    result()
+    set_state("idle")
+    state["busy"] = False
 
 
 def start_turn(msg):
@@ -215,7 +279,7 @@ def start_turn(msg):
         out({"type": "user", "message": {"content": "plain text"}})
         out({"type": "control_request", "request": "no id"})
         out({"type": "control_response", "response": {"request_id": 7}})
-    if MODE in ("approval", "cancel"):
+    if MODE in ("approval", "cancel", "slow-tool"):
         ask_tool()
         return
     if MODE in ("slow", "crash"):
@@ -224,7 +288,7 @@ def start_turn(msg):
         stream(api, 0, "content_block_start",
                content_block={"type": "text", "text": ""})
         stream(api, 0, "content_block_delta",
-               delta={"type": "text_delta", "text": "1\n2\n"})
+               delta={"type": "text_delta", "text": PARTIAL})
         if MODE == "crash":
             sys.stderr.write("panic: the fake crashed\n")
             sys.stdout.flush()
@@ -289,8 +353,8 @@ def control(msg):
     elif sub == "interrupt":
         ok({"still_queued": []})
         if state["busy"] and MODE == "slow":
-            assistant(state.get("slow_api", "msg_x"),
-                      [{"type": "text", "text": "1\n2\n"}], aborted=True)
+            assistant(state.pop("slow_api", "msg_x"),
+                      [{"type": "text", "text": PARTIAL}], aborted=True)
             out({"type": "user", "message": {"role": "user", "content": [
                 {"type": "text", "text": "[Request interrupted by user]"}]},
                 "parent_tool_use_id": None, "session_id": SID})
@@ -343,7 +407,11 @@ for raw in sys.stdin:
             answered(resp)
     elif mtype == "user":
         if state["busy"]:
-            continue  # the real CLI queues it; the adapter never sends one
+            # A steer cuts the work in progress; any other message the
+            # real CLI queues (the adapter never sends one).
+            if msg.get("priority") == "now":
+                steered(msg)
+            continue
         start_turn(msg)
 if MODE == "linger":
     import threading

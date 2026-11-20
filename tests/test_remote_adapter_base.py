@@ -114,6 +114,17 @@ class AdapterContract:
                          fake.ListSink())
         self.assertEqual(ctx.exception.feature, "fork")
 
+    def test_contract_steer_needs_a_turn(self):
+        adapter, sink, _sid = self.started(caps=ALL_CAPS)
+        if not adapter.capabilities.steer:
+            self.skipTest("this adapter offers no steer")
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.steer(TurnInput("more", attachments=["/w/a.png"]))
+        self.assertEqual(ctx.exception.code, "idle")
+        self.assertEqual(len(sink.events), before, "a refused steer emits "
+                         "nothing")
+
     def test_contract_respond_unknown_request(self):
         adapter, _sink, _sid = self.started()
         with self.assertRaises(UnknownRequest):
