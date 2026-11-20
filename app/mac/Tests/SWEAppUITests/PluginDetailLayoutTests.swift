@@ -239,6 +239,18 @@ import Testing
         #expect(drafts.dirty.isEmpty)
     }
 
+    @Test func theEditorNamesAFileUnderThePluginNotItsFolder() {
+        // A cached copy's folder is named for its version.
+        #expect(PluginDetailContent.fileSubtitle("/cache/composio/0.2.4/commands/connect.md",
+                                                 under: "/cache/composio/0.2.4", plugin: "composio")
+            == "composio/commands/connect.md")
+        #expect(PluginDetailContent.fileSubtitle("/hub/eng/.claude-plugin/plugin.json", under: "/hub/eng/", plugin: "eng")
+            == "eng/.claude-plugin/plugin.json")
+        // A file outside the folder gets its full path instead.
+        #expect(PluginDetailContent.fileSubtitle("/elsewhere/notes.md", under: "/hub/eng", plugin: "eng") == nil)
+        #expect(PluginDetailContent.fileSubtitle("/hub/engine/notes.md", under: "/hub/eng", plugin: "eng") == nil)
+    }
+
     @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
     func detailsOpenWithServersAndAMissingKey() async throws {
         let f = try Fixture()

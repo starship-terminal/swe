@@ -770,14 +770,21 @@ struct PluginDetailContent: View {
             : "Only plugins in your ~/.swe/plugins hub can be edited, so this one is read-only."
     }
 
-    /// The file under the plugin's folder (`release-tools/skills/tdd/SKILL.md`):
-    /// the rail already says which plugin this is, and a full path would
-    /// wrap into a column beside the header in a narrow window.
+    /// The file under the plugin (`release-tools/skills/tdd/SKILL.md`): the
+    /// rail already says which plugin this is, and a full path would wrap
+    /// into a column beside the header in a narrow window. Led by the
+    /// plugin's name, not its folder's: a cached copy sits in a folder
+    /// named for its version (`0.2.4/commands/connect.md`).
     private func fileSubtitle(_ url: URL) -> String {
         guard let dir else { return displayPath(url) }
-        let base = dir.path.hasSuffix("/") ? dir.path : dir.path + "/"
-        guard url.path.hasPrefix(base) else { return displayPath(url) }
-        return dir.lastPathComponent + "/" + url.path.dropFirst(base.count)
+        return Self.fileSubtitle(url.path, under: dir.path, plugin: plugin.name) ?? displayPath(url)
+    }
+
+    /// `path` as `<plugin>/<path under dir>`; nil when it is not under `dir`.
+    static func fileSubtitle(_ path: String, under dir: String, plugin: String) -> String? {
+        let base = dir.hasSuffix("/") ? dir : dir + "/"
+        guard path.hasPrefix(base) else { return nil }
+        return plugin + "/" + path.dropFirst(base.count)
     }
 
     private func loadingCard(_ url: URL) -> some View {
