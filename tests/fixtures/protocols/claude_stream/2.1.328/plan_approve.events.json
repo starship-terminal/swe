@@ -480,12 +480,6 @@
      "kind": "allow"
     },
     {
-     "id": "always",
-     "label": "Always allow",
-     "kind": "always",
-     "standing": true
-    },
-    {
      "id": "deny",
      "label": "Deny",
      "kind": "deny"

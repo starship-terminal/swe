@@ -624,6 +624,82 @@ class TestStreamState(unittest.TestCase):
                              reply["response"]["response"])
             self.assertEqual(done[0]["data"]["decision"], "allow")
 
+    def test_always_needs_a_rule_left_after_scoping(self):
+        st = self.state()
+        st.begin_turn("go")
+        out = self.feed(st, self.can_use("p1", tool="Write", suggestions=[
+            {"type": "setMode", "mode": "acceptEdits",
+             "destination": "session"}]))
+        asked = [e for e in out if e["type"] == "approval.requested"][0]
+        self.assertEqual([o["id"] for o in asked["data"]["options"]],
+                         ["allow", "deny"])
+        reply, done = st.answer("p1", Answer(decision="always"))
+        self.assertNotIn("updatedPermissions", reply["response"]["response"])
+        self.assertEqual(done[0]["data"]["decision"], "allow")
+
+    def test_context_window_is_the_active_models(self):
+        st = self.state()
+        st.begin_turn("go")
+        # State frames on, so each result leaves the turn open.
+        self.feed(st, {"type": "system", "subtype": "session_state_changed",
+                       "state": "running"})
+        usage = {"claude-sonnet-5-5": {"contextWindow": 1000000},
+                 "claude-haiku-5-5": {"contextWindow": 200000}}
+
+        def window(*msgs):
+            out = self.feed(st, *msgs, {"type": "result",
+                                        "modelUsage": usage})
+            got = [e["data"] for e in out if e["type"] == "usage.updated"]
+            return got[0].get("context_window") if got else None
+
+        self.assertIsNone(window(), "no model known yet: no window")
+        self.assertEqual(window({"type": "system", "subtype": "init",
+                                 "model": "claude-haiku-5-5"}), 200000)
+        # set_model's answer names the resolved id.
+        self.assertEqual(window({"type": "control_response", "response": {
+            "subtype": "success", "request_id": "r",
+            "response": {"model": "claude-sonnet-5-5"}}}), 1000000)
+        self.assertEqual(st.model, "claude-sonnet-5-5")
+        self.assertIsNone(window({"type": "system", "subtype": "init",
+                                  "model": "claude-other-1"}))
+
+    def test_no_secret_reaches_an_event(self):
+        key = "sk-ant-api03-" + "S" * 40
+        st = self.state()
+        _turn, out = st.begin_turn(f"use {key}",
+                                   attachments=[f"/w/{key}.txt"])
+
+        def sys_(sub, **kw):
+            return {"type": "system", "subtype": sub, **kw}
+
+        out += self.feed(
+            st,
+            sys_("task_started", task_id="a", description=f"Use {key}",
+                 task_type="local_agent"),
+            sys_("task_progress", task_id="a", description=f"Still {key}"),
+            {"type": "control_request", "request_id": "p1", "request": {
+                "subtype": "can_use_tool", "tool_name": f"mcp__x__{key}",
+                "title": f"Run with {key}?", "display_name": key,
+                "input": {"command": f"curl -H 'x: {key}'"}}},
+            {"type": "assistant", "message": {"id": "m", "content": [
+                # The transcript redactor wants a token to stand alone
+                # (no letter or digit right before it).
+                {"type": "tool_use", "id": "tu", "name": f"T_{key}",
+                 "input": {"q": key}},
+                {"type": "text", "text": f"the key is {key}"}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu",
+                 "content": f"out {key}"}]}},
+            {"type": "result", "is_error": True, "subtype": f"e {key}",
+             "errors": [f"failed: {key}"]})
+        out += st.exited(f"claude exited with code 3: {key}")
+        text = json.dumps(out)
+        self.assertNotIn(key, text)
+        titles = [e["data"]["title"] for e in out
+                  if e["type"] == "task.updated"]
+        self.assertEqual(titles, ["Use [REDACTED]", "Still [REDACTED]"])
+        self.assertEqual(st.tasks["a"]["title"], "Still [REDACTED]")
+
     def test_turn_ids_differ_across_starts(self):
         ids = set()
         for _ in range(2):
@@ -1336,6 +1412,9 @@ class TestAdapterOptions(_FakeCase):
         adapter.close(0.5)
         self.assertLess(_time.monotonic() - began, 5.0)
         self.assertIsNotNone(adapter._proc.poll(), "the child is gone")
+        self.assertFalse(adapter._writer.thread.is_alive(),
+                         "the writer thread ended")
+        self.assertTrue(adapter._proc.stdin.closed, "stdin is closed")
 
     def test_close_while_the_writer_is_stuck(self):
         import time as _time
@@ -1349,6 +1428,15 @@ class TestAdapterOptions(_FakeCase):
         self.assertLess(_time.monotonic() - began, 8.0)
         self.assertIsNotNone(adapter._proc.poll(), "the child is gone")
         self.assertEqual(sink.events[-1]["data"]["state"], "closed")
+        self.assertFalse(adapter._writer.thread.is_alive())
+        self.assertTrue(adapter._proc.stdin.closed)
+
+    def test_close_ends_the_writer(self):
+        adapter, _sink, _sid = self.started()
+        adapter.close(1.0)
+        self.assertFalse(adapter._writer.thread.is_alive())
+        self.assertTrue(adapter._proc.stdin.closed)
+        self.assertEqual(adapter._proc.poll(), 0)
 
 
 if __name__ == "__main__":

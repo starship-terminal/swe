@@ -80,7 +80,7 @@ What the CLI prints:
 | CLI line | v2 events |
 |---|---|
 | `control_response` | none; wakes the call waiting on that request id |
-| `control_request` `can_use_tool` | `approval.requested` (`kind` plan for ExitPlanMode, command for Bash, tool otherwise; `request_id` is the CLI's; options allow, always (only with suggestions), deny), then `session.state` waiting |
+| `control_request` `can_use_tool` | `approval.requested` (`kind` plan for ExitPlanMode, command for Bash, tool otherwise; `request_id` is the CLI's; options allow, always (only when a suggestion survives session scoping: a Write's lone `setMode` does not), deny), then `session.state` waiting |
 | `control_cancel_request` | `approval.resolved` `source: harness` |
 | `system` `session_state_changed` `running` | `turn.started` + `session.state` running when no turn is open (a turn the CLI started itself) |
 | `system` `session_state_changed` `requires_action` | `session.state` waiting |
@@ -96,7 +96,7 @@ What the CLI prints:
 | `assistant` thinking block | `thinking.completed` (`duration_s` from `thinking_duration_ms`) |
 | `assistant` tool_use block | `tool.started` (`summary` like `Bash · ls`, `input` redacted key-aware, `task_id` when a subagent made it) |
 | `user` tool_result block | `tool.completed` (ok, error, or cancelled when `tool_use_result.interrupted`; `output` cut at 8000 chars; `file_edits` from a Write or Edit result's `structuredPatch`) |
-| `result` | `usage.updated` (tokens, `cost_usd`, `context_window`); `error` when `is_error` and we did not interrupt; ends the turn itself only for a CLI that sends no state frames |
+| `result` | `usage.updated` (tokens, `cost_usd`, and `context_window` from the `modelUsage` entry of the active model only: the init message's `model`, or the resolved id a `set_model` answer names; no entry, no window); `error` when `is_error` and we did not interrupt; ends the turn itself only for a CLI that sends no state frames |
 | a subagent's lines (`parent_tool_use_id` set) | tool rows only, under the subagent's `task_id`; its text is not forwarded |
 | anything else (`rate_limit_event`, `command_lifecycle`, `background_tasks_changed`, unknown types, non-JSON) | nothing; counted in `StreamState.unknown` |
 
@@ -130,7 +130,12 @@ Tool input and other structured values go through `claude_wire.redact`,
 which is key-aware: a value under a key that names a credential
 (`api_key`, `accessToken`, `client_secret`, `password`, `Authorization`,
 `cookie`, at any depth) is masked whatever it holds; every other string
-goes through the transcript redactor.
+goes through the transcript redactor. So does every other CLI string
+that reaches an event: task titles (`description` of `task_started` and
+`task_progress`, also as stored), tool names, the approval prompt
+(including `title` and `display_name`), error codes and messages,
+`turn.ended` and `session.state` reasons (the stderr tail included),
+user message text and attachment paths.
 
 ### Writing to the CLI
 
@@ -139,7 +144,8 @@ waits at most `write_timeout` (10 s) for it to reach the pipe; the
 reader thread's own replies are queued without waiting, so a CLI that
 stops reading can never stall the reader. A write that misses its
 deadline raises `AdapterError(code="timeout")` and kills the child (its
-exit sequence follows: `agent_down`), since the pipe may hold half a
+exit sequence follows: `agent_down`; the kill breaks the blocked write,
+and the writer then closes stdin and ends), since the pipe may hold half a
 line. `close` cannot be held up by a stuck writer.
 
 ## Proven by fixture, and unverified
@@ -162,7 +168,7 @@ empty `--strict-mcp-config`.
 | Resume by id, fork with `--fork-session --session-id` | proven | `resume` |
 | `rewind_files` restores files (with `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` and a user message `uuid`) | proven on the wire; no SessionAdapter method uses it | `rewind` |
 | Steer (`priority: "now"`) | recorded, left off | `steer` |
-| "Always allow": the CLI's suggestions sent back with every `destination` set to `session` (`setMode` ones dropped). The CLI took them, did not ask again for the same call in that session (its result says `reason_type: "rule"`), and wrote no settings file in the work folder or the throwaway `CLAUDE_CONFIG_DIR` (both checked before and after) | proven, offered when the CLI sends suggestions | `always` |
+| "Always allow": the CLI's suggestions sent back with every `destination` set to `session` (`setMode` ones dropped). The CLI took them, did not ask again for the same call in that session (its result says `reason_type: "rule"`), and wrote no settings file in the work folder or the throwaway `CLAUDE_CONFIG_DIR` (both checked before and after) | proven; offered only when a suggestion is left after scoping (an "always" answer otherwise counts as, and is recorded as, `allow`) | `always` |
 | `--effort` at start; effort mid-session | flag not recorded; no control request exists | |
 | AskUserQuestion answers | not recorded; it arrives as a plain tool approval | |
 | An interrupt while a `can_use_tool` is open | fake only | |
@@ -286,6 +292,9 @@ its own folders).
   as for a terminal session; `TailManager` must skip SWE-owned sessions
   (G1, section 2) or the timeline doubles.
 - Approval `request_id`s are the CLI's UUIDs; respond with them as is.
+- In plan mode the CLI answered with another model than the session's
+  (`plan_mode`: init says haiku, `modelUsage` lists only sonnet), so that
+  turn's `usage.updated` carries no `context_window`.
 - Turn ids are `t-<8 hex>-<n>`, unique across starts of one session;
   never parse them. The constructor's `run_id` fixes the prefix (tests).
 - A stdin write that times out (`write_timeout`, 10 s) raises `timeout`

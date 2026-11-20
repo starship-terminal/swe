@@ -82,8 +82,9 @@ class _Writer:
         self._queue: queue.Queue = queue.Queue()
         self.broken = False
         self.stalled = False
-        threading.Thread(target=self._run, daemon=True,
-                         name="claude-stream-stdin").start()
+        self.thread = threading.Thread(target=self._run, daemon=True,
+                                       name="claude-stream-stdin")
+        self.thread.start()
 
     def send(self, data: bytes | None, timeout: float | None) -> bool:
         """Queue ``data`` (None: close stdin). With a ``timeout``, wait
@@ -103,23 +104,40 @@ class _Writer:
         return result[0]
 
     def _run(self) -> None:
+        """Write until stdin is closed on purpose or the pipe breaks (the
+        child exited, or was killed under a stalled write); either way
+        the stream is closed and the thread ends, failing whatever was
+        still queued."""
         while True:
             data, done, result = self._queue.get()
-            if data is None or self.broken:
-                _close(self._stream)
-                result[0] = data is None and not self.broken
-                self.broken = True
-                done.set()
-                if data is None:
-                    return
-                continue
+            if data is None:
+                result[0] = True
+                break
             try:
                 self._stream.write(data)
                 self._stream.flush()
                 result[0] = True
             except (OSError, ValueError, AttributeError):
                 self.broken = True
+                done.set()
+                break
             done.set()
+        self.broken = True
+        _close(self._stream)
+        done.set()
+        while True:
+            try:
+                _data, left, _result = self._queue.get_nowait()
+            except queue.Empty:
+                return
+            left.set()
+
+    def stop(self, timeout: float) -> None:
+        """Make sure the thread ends: a stop message when it is idle (it
+        is ignored by one already gone), then a bounded join."""
+        if not self.stalled and not self.broken:
+            self._queue.put((None, threading.Event(), [False]))
+        self.thread.join(timeout)
 
 
 class ClaudeStreamAdapter:
@@ -521,6 +539,9 @@ class ClaudeStreamAdapter:
                     pass
             except OSError:
                 pass
+        if writer is not None:
+            # Gone with the child: a write the kill broke has ended it.
+            writer.stop(_KILL_WAIT_S)
         reader = self._reader
         if reader is not None and reader is not threading.current_thread():
             reader.join(timeout=_KILL_WAIT_S)

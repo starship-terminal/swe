@@ -702,8 +702,10 @@ class StreamState:
             out.append(event)
 
     def _state(self, out: list, state: str, reason: str | None = None) -> None:
-        self._out(out, ev.session_state(self.key, state, reason=reason,
-                                        ts=self.clock()))
+        self._out(out, ev.session_state(
+            self.key, state,
+            reason=_redact_secrets(reason) if reason else None,
+            ts=self.clock()))
 
     def _retire(self, out: list, source: str) -> None:
         for rid in list(self.pending):
@@ -719,7 +721,8 @@ class StreamState:
         if turn is None:
             return
         self._out(out, ev.turn_ended(
-            self.key, turn.turn_id, status, reason=reason,
+            self.key, turn.turn_id, status,
+            reason=_redact_secrets(reason) if reason else None,
             duration_s=round(max(0.0, self.clock() - turn.started), 3),
             command_id=turn.command_id or None, ts=self.clock()))
         self.turn = None
@@ -775,7 +778,8 @@ class StreamState:
         mid = f"{self.turn.turn_id}:user" + (str(n) if n > 1 else "")
         return ev.message_completed(
             self.key, mid, "user", _redact_secrets(text),
-            by=device or None, attachments=list(attachments) or None,
+            by=device or None,
+            attachments=[_redact_secrets(str(a)) for a in attachments] or None,
             turn_id=self.turn.turn_id, command_id=command_id or None,
             ts=self.clock())
 
@@ -804,14 +808,13 @@ class StreamState:
             # A bare text answer is feedback: the call does not run and
             # the model reads why.
             decision = "deny"
-        if decision == "always" and not (OFFER_ALWAYS
-                                         and pending.suggestions):
+        rules = session_scoped(pending.suggestions)
+        if decision == "always" and not (OFFER_ALWAYS and rules):
             decision = "allow"
         if decision in ("allow", "always"):
             reply = permission_allow(
                 request_id, pending.tool_input,
-                session_scoped(pending.suggestions)
-                if decision == "always" else None)
+                rules if decision == "always" else None)
         else:
             default = (_PLAN_DENY_MESSAGE if pending.kind == "plan"
                        else _DENY_MESSAGE)
@@ -877,8 +880,13 @@ class StreamState:
                                 error=_str(resp.get("error")) or "refused"))
         else:
             body = resp.get("response")
-            fed.acks.append(Ack(rid, True,
-                                body=body if isinstance(body, dict) else {}))
+            body = body if isinstance(body, dict) else {}
+            # set_model answers with the resolved id (``sonnet`` comes
+            # back as ``claude-sonnet-5-5``), the spelling modelUsage and
+            # the init message use.
+            if isinstance(body.get("model"), str) and body["model"]:
+                self.model = body["model"]
+            fed.acks.append(Ack(rid, True, body=body))
 
     def _on_control_request(self, msg: dict, fed: Fed) -> None:
         rid = msg.get("request_id")
@@ -892,7 +900,7 @@ class StreamState:
                 rid, f"{req.get('subtype')!s:.40} is not handled by this "
                 "client"))
             return
-        name = _str(req.get("tool_name")) or "tool"
+        name = _redact_secrets(_str(req.get("tool_name"))) or "tool"
         tool_input = req.get("input")
         suggestions = req.get("permission_suggestions")
         suggestions = [s for s in suggestions if isinstance(s, dict)] \
@@ -909,7 +917,10 @@ class StreamState:
                 f"Allow {_str(req.get('display_name')) or name}?")
             detail = tool_summary(name, tool_input)
             prompt = label if detail == name else f"{label}\n{detail}"
-            offer_always = bool(suggestions) and OFFER_ALWAYS
+            # Offered only when a session-scoped rule is left to save: a
+            # setMode-only suggestion list would make "always" an
+            # allow-once under another name.
+            offer_always = OFFER_ALWAYS and bool(session_scoped(suggestions))
             options = [_ALLOW, _ALWAYS, _DENY] if offer_always \
                 else [_ALLOW, _DENY]
         call_id = _str(req.get("tool_use_id"))
@@ -1012,7 +1023,7 @@ class StreamState:
             kind = "subagent" if msg.get("task_type") in (
                 None, "local_agent", "remote_agent") else "background"
             known = {"kind": kind, "status": "running",
-                     "title": _str(msg.get("description")),
+                     "title": _redact_secrets(_str(msg.get("description"))),
                      "parent": self._tid()}
             self.tasks[task_id] = known
             tool_id = msg.get("tool_use_id")
@@ -1022,7 +1033,7 @@ class StreamState:
         elif known is None:
             return
         elif sub == "task_progress":
-            title = _str(msg.get("description"))
+            title = _redact_secrets(_str(msg.get("description")))
             if not title or title == known["title"]:
                 return
             known["title"] = title
@@ -1134,7 +1145,7 @@ class StreamState:
             btype = block.get("type")
             if btype == "tool_use":
                 call_id = _str(block.get("id"))
-                name = _str(block.get("name")) or "tool"
+                name = _redact_secrets(_str(block.get("name"))) or "tool"
                 if not call_id:
                     continue
                 self._tools[call_id] = name
@@ -1213,15 +1224,17 @@ class StreamState:
         if isinstance(cost, (int, float)) and not isinstance(cost, bool) \
                 and cost >= 0 and cost == cost and cost != float("inf"):
             counts["cost_usd"] = float(cost)
+        # ``modelUsage`` keeps every model the session used; only the
+        # active one's window is the session's now (none if it is not
+        # listed: no window beats a wrong one).
         models = msg.get("modelUsage")
-        if isinstance(models, dict):
-            for info in models.values():
-                window = info.get("contextWindow") if isinstance(info, dict) \
-                    else None
-                if isinstance(window, int) and not isinstance(window, bool) \
-                        and window > 0:
-                    counts["context_window"] = window
-                    break
+        info = models.get(self.model) if isinstance(models, dict) \
+            and self.model else None
+        window = info.get("contextWindow") if isinstance(info, dict) \
+            else None
+        if isinstance(window, int) and not isinstance(window, bool) \
+                and window > 0:
+            counts["context_window"] = window
         if counts:
             self._out(fed.events, ev.usage_updated(
                 self.key, turn_id=self._tid(), ts=self.clock(), **counts))
@@ -1233,7 +1246,7 @@ class StreamState:
             self.turn.error = True
             self.turn.reason = _redact_secrets(text)[:300]
             self._out(fed.events, ev.error(
-                self.key, _str(msg.get("subtype")) or "error",
+                self.key, _redact_secrets(_str(msg.get("subtype"))) or "error",
                 self.turn.reason or "the turn failed", turn_id=self._tid(),
                 ts=self.clock()))
         if not self._state_events:
