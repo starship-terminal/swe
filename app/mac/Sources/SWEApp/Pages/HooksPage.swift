@@ -28,6 +28,13 @@ struct HooksPage: View {
     @AppStorage("hooksStatsWindow") private var statsWindow = HookStatsWindow.week
     /// The Check control's findings are folded open under the filter row.
     @State private var showFindings = false
+    /// The page panel's width, which picks the open hook's layout; 0
+    /// until the first layout.
+    @State private var panelWidth: CGFloat = 0
+
+    private var detailLayout: HookDetailLayout {
+        HookDetailLayout.of(width: panelWidth > 0 ? HookDetailLayout.detailWidth(panel: panelWidth) : 0)
+    }
 
     /// App-wide, so a list outlives a trip to another page and the last
     /// one shows at once.
@@ -46,10 +53,12 @@ struct HooksPage: View {
 
     var body: some View {
         // The open hook's editor fills the window and scrolls itself, so
-        // the page scrolls only while the table shows.
+        // the page scrolls only while the table shows, or when a narrow
+        // window stacks the editor under the rail. The switch between
+        // layouts follows the window's width as it resizes, unanimated.
         Page(title: Self.title, subtitle: Self.subtitle,
              back: opened == nil ? nil : (Self.backHelp, { app.navReselects += 1 }),
-             scrolls: opened == nil) {
+             scrolls: opened == nil || detailLayout == .stacked) {
             Button("New hook", systemImage: "plus") { adding = true }
                 .primaryButton()
                 .disabled(model.creating)
@@ -71,6 +80,7 @@ struct HooksPage: View {
                     .transition(.opacity)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { panelWidth = $0 }
         .task(id: app.swePath) { await model.loadIfStale(swe: app.swe, for: app.swePath) }
         // Counts load with the page, and again when the range menu moves or
         // the swe changes; the Refresh button runs them too. Never on a timer.
@@ -137,6 +147,7 @@ struct HooksPage: View {
         let app = app, stats = stats, model = model
         return HookDetailView(
             hook: hook, counts: stats.state(for: statsWindow), window: statsWindow,
+            layout: detailLayout,
             home: FileManager.default.homeDirectoryForCurrentUser,
             drafts: model.drafts, findings: model.findings, stats: stats,
             navReselects: app.navReselects,
@@ -331,7 +342,8 @@ struct HooksOverview: View {
         let picked = HookTable.harness(stored: harness, in: hooks)
         let table = HookTable(hooks: hooks, harness: picked, includeForeign: showForeign)
         // The labels never wrap: past one row, the checkbox takes a line
-        // of its own under the menus.
+        // of its own under the menus, and narrower still the controls
+        // take more lines rather than clip.
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 harnessMenu(harnesses, picked: picked)
@@ -349,7 +361,27 @@ struct HooksOverview: View {
                 }
                 foreignToggle(table.foreignCount)
             }
+            // The narrowest windows: the menus on one line, the checkbox
+            // and Check on the next, then everything on a line of its own.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    harnessMenu(harnesses, picked: picked)
+                    rangeMenu
+                }
+                HStack(spacing: 8) {
+                    foreignToggle(table.foreignCount)
+                    Spacer(minLength: 8)
+                    checkToggle(inventory.findings)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                harnessMenu(harnesses, picked: picked)
+                rangeMenu
+                foreignToggle(table.foreignCount)
+                checkToggle(inventory.findings)
+            }
         }
+        .modifier(PaneProbe(name: "filters"))
         if showFindings && !inventory.findings.isEmpty {
             FindingsCard(findings: inventory.findings)
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -418,6 +450,7 @@ struct HooksOverview: View {
             CheckToggle(count: findings.count, isOpen: showFindings) {
                 withAnimation(animation) { showFindings.toggle() }
             }
+            .modifier(PaneProbe(name: "check"))
         }
     }
 }
@@ -529,6 +562,30 @@ final class HookColumnRecorder {
 
     func recordTile(_ label: String, _ frame: CGRect) {
         tiles[label] = frame
+    }
+
+    /// The open hook's panes ("detail", "rail", "editor"), in window
+    /// coordinates.
+    private(set) var panes: [String: CGRect] = [:]
+
+    func recordPane(_ name: String, _ frame: CGRect) {
+        panes[name] = frame
+    }
+}
+
+/// Reports a detail pane's frame to the environment's recorder, if any.
+struct PaneProbe: ViewModifier {
+    @Environment(\.hookColumnRecorder) private var recorder
+    let name: String
+
+    func body(content: Content) -> some View {
+        if let recorder {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                recorder.recordPane(name, $0)
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -1011,6 +1068,49 @@ private struct QuietEvents: View {
 
 // MARK: - Hook detail
 
+/// How the open hook lays out for the width `Page` leaves it: the rail
+/// beside the editor at 300pt, then 260pt, and below that the two stacked
+/// at full width, since the editor would drop under `editorMin`.
+enum HookDetailLayout: Equatable {
+    case wide
+    case narrowRail
+    case stacked
+
+    static let railWidth: CGFloat = 300
+    static let narrowRailWidth: CGFloat = 260
+    static let gap: CGFloat = 12
+    /// The narrowest the editor pane may get beside the rail.
+    static let editorMin: CGFloat = 380
+    /// The editor's height when stacked under the rail, where the page
+    /// scrolls and nothing else gives it one.
+    static let stackedEditorMin: CGFloat = 360
+    static let stackedEditorIdeal: CGFloat = 440
+    /// Stacked, Declaration and Runs sit side by side from this width.
+    static let sideBySideFrom: CGFloat = 580
+    /// `Page`'s side padding, 40 a side.
+    static let pagePadding: CGFloat = 80
+
+    /// The detail's width in a page panel `panel` wide (`Page` centres a
+    /// 1280pt column inside its padding).
+    static func detailWidth(panel: CGFloat) -> CGFloat {
+        min(panel, 1280) - pagePadding
+    }
+
+    /// The narrowest detail the app can show: the minimum window with the
+    /// sidebar dragged to its widest.
+    static func narrowest(window: CGFloat = 900) -> CGFloat {
+        detailWidth(panel: window - CGFloat(SidebarWidth.range.upperBound))
+    }
+
+    /// The layout for a detail `width` wide; 0 (not measured yet) is wide.
+    static func of(width: CGFloat) -> HookDetailLayout {
+        guard width > 0 else { return .wide }
+        if width - railWidth - gap >= editorMin { return .wide }
+        if width - narrowRailWidth - gap >= editorMin { return .narrowRail }
+        return .stacked
+    }
+}
+
 /// One hook in the table's place: a rail with what fires it, where it's
 /// declared and linked, and how it ran, beside the script in a raw editor
 /// that fills the window. The script is the hub copy under ~/.swe/hooks;
@@ -1030,6 +1130,9 @@ struct HookDetailView: View {
     /// The run counts for `window`, from the page.
     var counts: HookStatsState
     var window: HookStatsWindow
+    /// Rail beside the editor, or the two stacked; the page decides from
+    /// its own width, since a stacked detail also makes the page scroll.
+    var layout: HookDetailLayout
     /// The home whose `~/.swe/hooks` decides what is editable.
     var home: URL
     /// The model's, not the view's: going back keeps the drafts so an
@@ -1050,7 +1153,7 @@ struct HookDetailView: View {
     var loadRecent: (String, HookStatsWindow) async -> Void
     var onBack: () -> Void
 
-    init(hook: Hook, counts: HookStatsState, window: HookStatsWindow, home: URL,
+    init(hook: Hook, counts: HookStatsState, window: HookStatsWindow, layout: HookDetailLayout, home: URL,
          drafts: PrimitiveDrafts, findings: [HookFinding], stats: HookStatsModel,
          navReselects: Int,
          info: @escaping (String) async -> HookInfo?,
@@ -1061,6 +1164,7 @@ struct HookDetailView: View {
         self.hook = hook
         self.counts = counts
         self.window = window
+        self.layout = layout
         self.home = home
         self.drafts = drafts
         self.findings = findings
@@ -1075,20 +1179,13 @@ struct HookDetailView: View {
         _isFolder = State(initialValue: checked?.isFolder ?? false)
     }
 
-    /// The rail's width, the AGENTS.md chapter rail's.
-    private static let railWidth: CGFloat = 300
-    /// The rail in a window near its 900pt minimum, so the editor keeps
-    /// room for its header and a line of code.
-    private static let narrowRailWidth: CGFloat = 260
-    /// Under this width the rail narrows.
-    private static let narrowBelow: CGFloat = 760
-
     /// The model's, not the view's: going back keeps the drafts so an
     /// edit survives a trip to another hook and the app's quit check
     /// still sees it.
     @State private var leaving = false
     @State private var leaveError: String?
-    /// The detail's width, for the rail's; 0 until the first layout.
+    /// The stacked rail's width, for Declaration beside Runs; 0 until
+    /// the first layout.
     @State private var width: CGFloat = 0
     /// The script's ownership, worked out off the main actor, with the
     /// path it was worked out for; nil until the first lands.
@@ -1120,17 +1217,31 @@ struct HookDetailView: View {
             if let leaveError {
                 ErrorCard(message: leaveError)
             }
-            HStack(alignment: .top, spacing: 12) {
-                rail
-                    .frame(width: width > 0 && width < Self.narrowBelow ? Self.narrowRailWidth : Self.railWidth)
-                    .frame(maxHeight: .infinity)
+            switch layout {
+            case .wide, .narrowRail:
+                HStack(alignment: .top, spacing: HookDetailLayout.gap) {
+                    rail
+                        .frame(width: layout == .wide ? HookDetailLayout.railWidth : HookDetailLayout.narrowRailWidth)
+                        .frame(maxHeight: .infinity)
+                        .modifier(PaneProbe(name: "rail"))
+                    scriptPane
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .modifier(PaneProbe(name: "editor"))
+                }
+                .frame(maxHeight: .infinity)
+            case .stacked:
+                // The page scrolls: the rail at full width on top, then
+                // the editor at a height of its own.
+                stackedRail
+                    .modifier(PaneProbe(name: "rail"))
                 scriptPane
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .frame(minHeight: HookDetailLayout.stackedEditorMin,
+                           idealHeight: HookDetailLayout.stackedEditorIdeal, alignment: .top)
+                    .modifier(PaneProbe(name: "editor"))
             }
-            .frame(maxHeight: .infinity)
         }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .frame(maxHeight: layout == .stacked ? nil : .infinity, alignment: .top)
+        .modifier(PaneProbe(name: "detail"))
         .task(id: [hook.source, home.path, String(refresh)]) {
             let source = hook.source, home = home
             let (check, folder) = await offMain {
@@ -1197,6 +1308,32 @@ struct HookDetailView: View {
             .frame(maxHeight: .infinity)
         }
         .frame(maxHeight: .infinity)
+    }
+
+    /// The rail above the editor in a narrow window: no scroll of its own
+    /// (the page scrolls), and Declaration beside Runs when there's room
+    /// for both, so it doesn't become one tall column.
+    private var stackedRail: some View {
+        Strip {
+            VStack(alignment: .leading, spacing: 16) {
+                identity
+                Divider().overlay(Theme.border)
+                if width >= HookDetailLayout.sideBySideFrom {
+                    HStack(alignment: .top, spacing: 24) {
+                        declaration.frame(maxWidth: .infinity, alignment: .topLeading)
+                        HookRunsGroup(source: hook.source, counts: counts, window: window,
+                                      stats: stats, loadRecent: loadRecent, divider: false)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                } else {
+                    declaration
+                    HookRunsGroup(source: hook.source, counts: counts, window: window,
+                                  stats: stats, loadRecent: loadRecent)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 
     /// The right pane: the lock note over a read-only script, then the
@@ -1406,6 +1543,8 @@ private struct HookRunsGroup: View {
     var window: HookStatsWindow
     var stats: HookStatsModel
     var loadRecent: (String, HookStatsWindow) async -> Void
+    /// The rule above "Runs"; off beside Declaration in a stacked rail.
+    var divider = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let recentLimit = 5
@@ -1463,7 +1602,7 @@ private struct HookRunsGroup: View {
     /// The rail's divider, "Runs" and the range it covers, then `content`.
     private func section<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Divider().overlay(Theme.border)
+            if divider { Divider().overlay(Theme.border) }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Runs").font(Theme.cardTitle).foregroundStyle(Theme.textPrimary)
                 Text(window.title).font(Theme.caption).foregroundStyle(Theme.textSecondary)

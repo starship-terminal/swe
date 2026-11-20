@@ -142,13 +142,25 @@ import Testing
     /// Lays `content` out in an offscreen window the size of the page panel
     /// in a window of `window`, inside the real `Page` scaffold, and writes
     /// a PNG when `SWE_HOOKS_SNAPSHOT_DIR` is set.
+    /// The page panel's width in a window `window` wide beside a sidebar.
+    static func panel(_ window: CGSize, sidebar: CGFloat = CGFloat(SidebarWidth.standard)) -> CGFloat {
+        window.width - sidebar
+    }
+
+    /// The open hook's layout in that panel, as `HooksPage` picks it.
+    static func layout(_ window: CGSize, sidebar: CGFloat = CGFloat(SidebarWidth.standard)) -> HookDetailLayout {
+        HookDetailLayout.of(width: HookDetailLayout.detailWidth(panel: panel(window, sidebar: sidebar)))
+    }
+
     private func render(_ name: String, window: CGSize, detail: Bool = false,
+                        sidebar: CGFloat = CGFloat(SidebarWidth.standard),
                         recorder: HookColumnRecorder? = nil,
                         @ViewBuilder content: () -> some View) async throws {
         _ = NSApplication.shared
-        let size = CGSize(width: window.width - SidebarWidth.standard, height: window.height)
+        let size = CGSize(width: Self.panel(window, sidebar: sidebar), height: window.height)
+        let scrolls = !detail || Self.layout(window, sidebar: sidebar) == .stacked
         let page = Page(title: HooksPage.title, subtitle: HooksPage.subtitle,
-                        back: detail ? (HooksPage.backHelp, {}) : nil, scrolls: !detail) {
+                        back: detail ? (HooksPage.backHelp, {}) : nil, scrolls: scrolls) {
             Button("New hook", systemImage: "plus") {}.primaryButton()
             Button("Refresh", systemImage: "arrow.clockwise") {}.iconButton()
         } content: {
@@ -193,14 +205,16 @@ import Testing
                       quietEventsOpen: quietOpen, open: { _ in })
     }
 
-    private func detail(_ fixture: Fixture, _ hook: Hook, drafts: PrimitiveDrafts) async -> HookDetailView {
+    private func detail(_ fixture: Fixture, _ hook: Hook, drafts: PrimitiveDrafts,
+                        layout: HookDetailLayout) async -> HookDetailView {
         let checked = HookScript(source: hook.source, home: fixture.home)
         var directory: ObjCBool = false
         let folder = FileManager.default.fileExists(atPath: hook.source, isDirectory: &directory)
             && directory.boolValue
         if checked.exists && !folder { drafts.document(for: hook.source) }
         await drafts.settled()
-        return HookDetailView(hook: hook, counts: fixture.counts, window: .week, home: fixture.home,
+        return HookDetailView(hook: hook, counts: fixture.counts, window: .week, layout: layout,
+                              home: fixture.home,
                               drafts: drafts, findings: fixture.findings, stats: HookStatsModel(),
                               navReselects: 0, info: { _ in nil }, reloadList: {},
                               loadRecent: { _, _ in }, onBack: {},
@@ -283,6 +297,69 @@ import Testing
         }
     }
 
+    /// The editor is readable at every layout: at least `editorMin` beside
+    /// the rail, or the detail's full width when stacked, and no pane runs
+    /// past the page's padding.
+    private func checkPanes(_ recorder: HookColumnRecorder, window: CGSize,
+                            sidebar: CGFloat = CGFloat(SidebarWidth.standard), label: String) throws {
+        let panel = Self.panel(window, sidebar: sidebar)
+        let detail = try #require(recorder.panes["detail"], "no detail frame at \(label)")
+        let editor = try #require(recorder.panes["editor"], "no editor frame at \(label)")
+        let rail = try #require(recorder.panes["rail"], "no rail frame at \(label)")
+        #expect(abs(detail.width - HookDetailLayout.detailWidth(panel: panel)) < 0.5,
+                "the detail is \(detail.width) wide at \(label)")
+        switch Self.layout(window, sidebar: sidebar) {
+        case .stacked:
+            #expect(abs(editor.width - detail.width) < 0.5 && abs(rail.width - detail.width) < 0.5,
+                    "stacked panes \(rail.width) and \(editor.width) in \(detail.width) at \(label)")
+            #expect(editor.minY >= rail.maxY, "the editor sits under the rail at \(label)")
+            #expect(editor.height >= HookDetailLayout.stackedEditorMin - 0.5,
+                    "the stacked editor is \(editor.height) tall at \(label)")
+        case .wide, .narrowRail:
+            #expect(editor.width >= HookDetailLayout.editorMin - 0.5,
+                    "the editor is \(editor.width) wide at \(label)")
+        }
+        for (name, frame) in recorder.panes {
+            #expect(frame.minX >= 40 - 0.5 && frame.maxX <= panel - 40 + 0.5,
+                    "\(name) spans \(frame.minX)...\(frame.maxX) in a \(panel) panel at \(label)")
+        }
+    }
+
+    /// The narrowest detail the app can show: a 900pt window with the
+    /// sidebar dragged to its widest. It stacks the editor under the rail.
+    @Test func theNarrowestWindowStacksTheDetail() async throws {
+        let widest = CGFloat(SidebarWidth.range.upperBound)
+        #expect(HookDetailLayout.narrowest() == 900 - widest - 80)
+        #expect(HookDetailLayout.of(width: HookDetailLayout.narrowest()) == .stacked)
+        #expect(HookDetailLayout.of(width: 1052) == .wide)
+        #expect(HookDetailLayout.of(width: 660) == .narrowRail)
+        #expect(HookDetailLayout.of(width: 0) == .wide)
+        let fixture = try Fixture()
+        let window = Self.narrow
+        let layout = Self.layout(window, sidebar: widest)
+        #expect(layout == .stacked)
+        let drafts = PrimitiveDrafts()
+        let editable = await detail(fixture, fixture.editable, drafts: drafts, layout: layout)
+        let recorder = HookColumnRecorder()
+        try await render("detail-narrowest", window: window, detail: true, sidebar: widest,
+                         recorder: recorder) { editable }
+        try checkPanes(recorder, window: window, sidebar: widest, label: "narrowest")
+
+        // The overview at that width: the table may scroll sideways, but
+        // the filter row and the Check control stay inside the page.
+        let overviewRecorder = HookColumnRecorder()
+        try await render("one-harness-narrowest", window: window, sidebar: widest,
+                         recorder: overviewRecorder) {
+            overview(fixture, harness: "claude")
+        }
+        let panel = Self.panel(window, sidebar: widest)
+        for name in ["filters", "check"] {
+            let frame = try #require(overviewRecorder.panes[name], "no \(name) frame")
+            #expect(frame.minX >= 40 - 0.5 && frame.maxX <= panel - 40 + 0.5,
+                    "\(name) spans \(frame.minX)...\(frame.maxX) in a \(panel) panel")
+        }
+    }
+
     // MARK: Snapshots of the other states
 
     @Test func overviewStatesRender() async throws {
@@ -309,7 +386,7 @@ import Testing
         #expect(!HookScript(source: fixture.readOnly.source, home: fixture.home).editable)
         let drafts = PrimitiveDrafts()
         for (width, window) in Self.sizes {
-            let editable = await detail(fixture, fixture.editable, drafts: drafts)
+            let editable = await detail(fixture, fixture.editable, drafts: drafts, layout: Self.layout(window))
             let recorder = HookColumnRecorder()
             try await render("detail-\(width)", window: window, detail: true, recorder: recorder) { editable }
             // The Runs tiles are one size whichever way they lay out: no
@@ -320,11 +397,12 @@ import Testing
                 #expect(tiles.allSatisfy { abs($0.height - first.height) < 0.5 },
                         "tile heights at \(width): \(tiles.map(\.height))")
             }
+            try checkPanes(recorder, window: window, label: width)
             try await render("detail-short-\(width)", window: CGSize(width: window.width, height: 520),
                              detail: true) { editable }
-            let readOnly = await detail(fixture, fixture.readOnly, drafts: drafts)
+            let readOnly = await detail(fixture, fixture.readOnly, drafts: drafts, layout: Self.layout(window))
             try await render("detail-read-only-\(width)", window: window, detail: true) { readOnly }
-            let folder = await detail(fixture, fixture.folder, drafts: drafts)
+            let folder = await detail(fixture, fixture.folder, drafts: drafts, layout: Self.layout(window))
             try await render("detail-folder-\(width)", window: window, detail: true) { folder }
         }
         #expect(drafts.documents[fixture.editable.source]?.state == .ready)
