@@ -299,7 +299,6 @@ struct PluginDetailContent: View {
         // The page header's back chevron (and its ⌘[) and reselecting the
         // Plugins sidebar item both come through here.
         .onChange(of: navReselects) { leave() }
-        .preference(key: DetailOpenKey.self, value: true)
         .alert("Unsaved changes", isPresented: $leaving) {
             Button("Save all") { saveAllAndLeave() }
             Button("Discard", role: .destructive) { onBack() }

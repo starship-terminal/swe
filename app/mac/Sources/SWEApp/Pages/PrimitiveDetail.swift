@@ -39,10 +39,10 @@ struct NewPartMenu: View {
     }
 }
 
-/// Set by a plugin or skill detail while it is on screen, so its page can
-/// show the header's back chevron like every other detail page. The
-/// chevron bumps `navReselects`, which the detail answers through its
-/// unsaved-changes ask.
+/// Set by a skill detail while it is on screen, so its page can show the
+/// header's back chevron like every other detail page. The chevron bumps
+/// `navReselects`, which the detail answers through its unsaved-changes
+/// ask. The Plugins page reads its own opened plugin instead.
 struct DetailOpenKey: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }

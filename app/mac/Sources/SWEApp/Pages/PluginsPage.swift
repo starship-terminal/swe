@@ -14,17 +14,15 @@ struct PluginsPage: View {
     private static let foldLimit = 8
     /// Harnesses whose drift cards are unfolded.
     @State private var opened: Set<String> = []
-    /// A plugin's detail is on screen (`DetailOpenKey`).
-    @State private var detailOpen = false
     /// The plugin open in its detail page, nil while the list shows. Kept
     /// here, not in the list: the page stops scrolling and hides its tabs
     /// while a detail is open (its editor fills the window and scrolls
     /// itself), and that swap rebuilds the content below it.
     @State private var openedPlugin: ExplorePlugin?
 
-    /// A plugin's detail has the page: no tabs over it, no page scroll.
-    /// False again once the catalog stops listing the plugin, so the list
-    /// that takes its place scrolls and has its tabs.
+    /// A plugin's detail has the page: the back chevron, no tabs over it,
+    /// no page scroll. False again once the catalog stops listing the
+    /// plugin, so the list that takes its place scrolls and has its tabs.
     private var showsDetail: Bool {
         app.pluginsTab == .explore && PluginExplorer.detail(of: openedPlugin, in: catalog.index) != nil
     }
@@ -38,8 +36,7 @@ struct PluginsPage: View {
         @Bindable var app = app
         Page(title: "Plugins",
              subtitle: "Switch installed plugins on or off in each harness. Import into SWE to own and edit their files.",
-             back: app.pluginsTab == .explore && detailOpen
-                ? ("Back to all plugins", { app.navReselects += 1 }) : nil,
+             back: showsDetail ? ("Back to all plugins", { app.navReselects += 1 }) : nil,
              scrolls: !showsDetail) {
             switch app.pluginsTab {
             case .explore:
@@ -76,7 +73,6 @@ struct PluginsPage: View {
                                confirm: { confirmingAction = $0 },
                                confirmBatch: { confirmingBatch = $0 },
                                opened: $openedPlugin)
-                    .onPreferenceChange(DetailOpenKey.self) { detailOpen = $0 }
             case .health: health
             }
         }
