@@ -51,7 +51,10 @@ disk does not change a keeper that is already running.
 Written by the hub with `discovery.write_spec` before `spawn`:
 `{v: 1, session, harness, cwd, resume_id, fork, model, effort,
 permission_mode, plan_mode, env, first_seq}`. The keeper resolves the
-harness with `adapters.registry.adapter_for` itself. `env` is stored on
+harness with `adapters.registry.adapter_for` itself. The keeper writes
+to this file too: an option change that took effect is recorded in it
+(`discovery.update_spec`), so the next keeper of the session starts the
+agent with the settings in force, not the ones it was launched with. `env` is stored on
 disk, so nothing secret goes in it: a secret for the agent goes in
 `spawn(env=)`, which becomes the keeper's process environment and
 reaches the agent from there, never through a command line or a file.
@@ -118,7 +121,9 @@ keeper  {"t":"event","e":{...}}     seq 58 on, and deltas, as they happen
 - `gap` means the client asked for history the log no longer has
   (`reason: evicted`, with the `log.truncated` marker) or never had
   (`before_start`: the session was continued from the hub journal).
-  The events from `oldest_seq` on still follow. The hub should serve
+  The events from `oldest_seq` on still follow. It can also come in
+  the middle of a replay, when the cap drops segments the replay has
+  not reached yet. The hub should serve
   its own clients a snapshot.
 
 ### Versions
@@ -170,6 +175,13 @@ The rules:
   (`accepted`, `queued` or `rejected`, fsynced by the log) and replies
   before it calls the adapter, then writes a `command.result` when the
   call returns or fails.
+- **Not recorded, not run.** If the log cannot write the receipt, or
+  cannot fsync it (a full disk, an I/O error), the command is answered
+  `rejected` with `not_recorded` and nothing is applied. A receipt that
+  was written but not fsynced may or may not be found by a later
+  keeper, so that id stays refused: a second `rejected` receipt is
+  written and a retry answers `duplicate` with `first: rejected`. Send
+  it again under a new id. `stop` is honoured either way.
 - **Never twice.** A `command_id` seen before is answered `duplicate`
   with `first` (the first answer) and nothing is written or applied.
   The last 4096 ids are kept and rebuilt from the log at start, so this
@@ -199,6 +211,25 @@ ends the oldest message is sent.
 
 - Rebuilt at start from the newest `queue.updated` in the log, read
   backward (`EventLog.read_back`) over at most 64 MiB.
+- **The queue is written before the receipt.** A queued send, an edit
+  and a removal each write `queue.updated` first and the receipt
+  second, and the receipt's fsync carries both to disk. A crash between
+  the two leaves a queued message with no receipt, which the next
+  keeper rebuilds and counts as taken (a retry answers `duplicate`),
+  never a receipt whose message is gone. If the receipt cannot be
+  recorded, the change is taken back.
+- **Bounded, so it always fits one frame.** One message is at most
+  1 MiB as JSON with at most 100 attachments (`too_large`), and the
+  queue at most 100 messages and 4 MiB (`queue_full`); a frame may be
+  16 MiB.
+- **Redacted where it is shown.** `queue.updated`, `welcome.queue` and
+  `status` carry each message's text after the same redaction an
+  adapter applies to a message it sends. The text as typed stays in
+  the keeper's memory and is what the agent receives. A queue rebuilt
+  after a keeper restart therefore holds the redacted text.
+- A message taken off the queue and not yet started when the keeper
+  dies is not sent again (at most once): its command has a receipt and
+  no result, which is what the hub's reconcile looks for.
 - A turn the agent began by itself (G7, "implicit turns") answers a
   send with `busy`: the message goes back to the head of the queue.
 - An agent that dies before it took a message leaves it at the head of
@@ -219,6 +250,10 @@ ends the oldest message is sent.
 | Send while parked | starts the agent again, resuming the harness session; not counted as a restart |
 | `stop`, SIGTERM, SIGINT | closes the agent (`turn.ended {interrupted}`, `session.state closed`), then the log, then the socket and the lock |
 
+- A signal stops the keeper whichever thread it lands on: the main
+  thread sleeps on its inbox, and a Python handler would wait for it to
+  wake, so the signal is passed through `signal.set_wakeup_fd` to a
+  small thread that posts the stop.
 - The agent is restarted only by a send, never by itself. Messages
   queued when it died are sent first, in order.
 - Idle means: agent up, `session.state idle`, no open turn, no pending
@@ -226,13 +261,27 @@ ends the oldest message is sent.
   session waiting on an approval is never parked.
 - Parking closes the agent, not the session, so the adapter's final
   `session.state closed` is recorded as `parked`.
+- **Options.** A `set_option` that took effect is kept for every
+  later start of the agent, in memory and in `spec.json`. Plan mode is
+  a mode like the permission modes: choosing a permission mode leaves
+  plan mode, turning plan mode on keeps the permission mode to return
+  to, and an approved plan (`kind: plan`, allowed) ends plan mode. So a
+  restart applies the last change, never an older one.
 - Every start after the first passes the harness's session id as
   `resume_id`. The id comes from the adapter's `start`, and after a
   keeper restart from `keeper.json` or the log's last `session.state`.
 
 ### After a keeper dies
 
-The agent dies with its keeper (its stdin closes). The next keeper of
+The agent dies with its keeper (its stdin closes). One that ignores
+that would run on beside its replacement, both writing one session, so
+the next keeper ends it first: a keeper leads its own process group and
+its agent is a member, and when the old leader is gone but the group
+still has members, they get SIGTERM, then SIGKILL after 2 seconds
+(`_reap_orphans`). A pid is not handed out again while a group still
+carries it, so this cannot reach a stranger.
+
+The next keeper of
 the session opens the same log and, before it starts the agent, writes
 `approval.resolved {source: agent_exit}` for every request
 `log.recovery.pending` shows open and `turn.ended {status:
@@ -302,7 +351,10 @@ Results:
 |---|---|
 | macOS 27.3, launchd, 2026-11-21 | pass: the keeper outlived `launchctl kickstart -k` and `launchctl bootout`, and answered `status` afterwards |
 | macOS, `--control` (no `AbandonProcessGroup`) | the keeper survived as well: its own process group is already enough on this macOS. The key is kept as a second guard, as G1 specifies |
-| Linux, systemd | see the pull request: the check runs in CI (`keeper-survival`), not on a developer Mac |
+| Linux (GitHub `ubuntu-latest`, systemd user manager), CI job `keeper-survival`, 2026-11-21 | pass: the keeper ran in `swe-keeper-<slug>.scope`, outlived `systemctl --user restart` and `stop`, and answered `status` afterwards |
+| Linux, `--control` (no scope unit) | the keeper died with the restart: it sat in the hub unit's cgroup. The scope unit is what keeps it alive |
+
+Linux was not run on a developer machine; the CI job is the check.
 
 ## Memory
 
@@ -340,6 +392,14 @@ return that.
 - Only the last 4096 command ids are remembered. An older id sent
   again is applied again.
 - `spawn` waits by looking at `keeper.json` every 50 ms.
+- A dead keeper's orphaned agent is found through the keeper's process
+  group. An agent that moved itself to another group is not found, and
+  neither is one whose dead keeper has not been reaped yet (its pid
+  still exists as a zombie).
+- A failing disk can still lose a command: a receipt written but not
+  fsynced is refused under its id, yet a later keeper that finds only
+  the first receipt answers a retry `duplicate` of `accepted`. It is
+  never applied twice.
 - A keeper that is parked never exits by itself. The hub ends it with
   `stop`.
 
@@ -362,7 +422,11 @@ return that.
   session's journal from seq 0.
 - **Replies are receipts.** Map the reply's `status` onto the store's
   receipt. `duplicate` carries `first`. A `rejected` send while
-  `agent_down` carries the reason to show.
+  `agent_down` carries the reason to show. `not_recorded`, `too_large`
+  and `queue_full` are reasons a person should see.
+- **Requests are bounded.** `KeeperClient.request` gives up on a write
+  that blocks for 10 seconds (a keeper that stopped reading) and closes
+  the connection; reconnect with the last seq.
 - **Lost connection.** `KeeperClient` hands a `{"t":"closed"}` frame
   when the socket ends. `find(session_key)` then says whether the
   keeper is alive (reconnect with the last seq), `exited`, or lost.

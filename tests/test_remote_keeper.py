@@ -18,13 +18,18 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from swe.remote import launchd, systemd
+from swe.remote.adapters import events as ev
 from swe.remote.adapters import fake
 from swe.remote.adapters.base import AdapterError, Caps, StartSpec
 from swe.remote.keeper import discovery, ipc
+from swe.remote.keeper import process as keeper_process
+from swe.remote.keeper.log import EventLog, Replay
 from swe.remote.keeper.process import Keeper
 from swe.remote.protocol import key_slug
 
@@ -118,6 +123,14 @@ class Feed:
             and f["e"].get("command_id") == command_id,
             f"the result of {command_id}")["e"]
 
+    def receipt(self, command_id: str) -> dict:
+        """Read until the ``command.receipt`` of ``command_id``."""
+        return self.until(
+            lambda f: f["t"] == "event"
+            and f["e"]["type"] == "command.receipt"
+            and f["e"].get("command_id") == command_id,
+            f"the receipt of {command_id}")["e"]
+
     def live(self) -> dict:
         return self.until(lambda f: f["t"] == "live", "the end of replay")
 
@@ -157,8 +170,10 @@ class KeeperCase(unittest.TestCase):
         kw.setdefault("home", self.home)
         kw.setdefault("runtime", self.runtime)
         kw.setdefault("clock", self.clock)
-        keeper = Keeper(session, StartSpec(session, "/tmp", harness="claude"),
-                        self.factory, log_options=log_options, **kw)
+        spec = kw.pop("spec", None) or StartSpec(session, "/tmp",
+                                                 harness="claude")
+        keeper = Keeper(session, spec, self.factory,
+                        log_options=log_options, **kw)
         if start:
             keeper.start()
             self.addCleanup(self.stop, keeper)
@@ -826,7 +841,7 @@ class TestKeeperCrash(KeeperCase):
         self.send(feed, "a", command_id="a")
         feed.event("approval.requested")
         self.send(feed, "b", command_id="b", device="mac")
-        feed.event("queue.updated")
+        feed.receipt("b")
         cursor = feed.seqs()[-1]
         kill(keeper)
         feed.closed()
@@ -947,6 +962,281 @@ class TestKeeperCrash(KeeperCase):
                           for e in feed.events("turn.started")], ["a", "b"])
         self.assertEqual(self.send(feed, "x", command_id="a")["status"],
                          "duplicate")
+
+
+class TestDurability(KeeperCase):
+    """What a crash or a failing disk may and may not lose."""
+
+    def flaky(self):
+        """A log fsync that fails while ``broken`` is set."""
+        broken = threading.Event()
+        # The keeper says so in its output each time; not here.
+        self.enterContext(mock.patch.object(keeper_process.logger,
+                                            "warning"))
+
+        def fsync(fd: int) -> None:
+            if broken.is_set():
+                raise OSError(28, "No space left on device")
+
+        return broken, fsync
+
+    def test_a_command_whose_receipt_is_not_on_disk_is_not_run(self):
+        broken, fsync = self.flaky()
+        keeper = self.keeper({"turns": [[fake.say("one")]]},
+                             log_options={"fsync": fsync})
+        feed = self.connect(keeper)
+        feed.live()
+        broken.set()
+        refused = self.send(feed, "hello", command_id="c-1")
+        self.assertEqual((refused["status"], refused["reason"]),
+                         ("rejected", "not_recorded"))
+        self.assertTrue(keeper.sync(WAIT))
+        self.assertEqual([c.name for c in self.adapters[0].calls],
+                         ["start"])
+        broken.clear()
+        # Under that id the command stays refused, whatever a later
+        # keeper finds in the log: it is never applied late.
+        again = self.send(feed, "hello", command_id="c-1")
+        self.assertEqual((again["status"], again["first"]),
+                         ("duplicate", "rejected"))
+        self.assertEqual(self.send(feed, "hello",
+                                   command_id="c-2")["status"], "accepted")
+        feed.event("turn.ended", status="completed")
+        self.assertEqual(
+            [e["command_id"] for e in feed.events("turn.started")], ["c-2"])
+
+    def test_a_write_that_fails_leaves_the_id_free(self):
+        keeper = self.keeper({"turns": [[fake.say("one")]]})
+        feed = self.connect(keeper)
+        feed.live()
+        with mock.patch.object(keeper.log, "emit", return_value=None):
+            refused = self.send(feed, "hello", command_id="c-1")
+            self.assertEqual((refused["status"], refused["reason"]),
+                             ("rejected", "not_recorded"))
+        self.assertEqual(self.send(feed, "hello",
+                                   command_id="c-1")["status"], "accepted")
+        feed.event("turn.ended", status="completed")
+
+    def test_the_queue_is_written_before_its_receipt(self):
+        keeper = self.keeper({"turns": [[fake.ask("ok?")]]})
+        feed = self.connect(keeper)
+        feed.live()
+        self.send(feed, "a", command_id="a")
+        feed.event("approval.requested")
+        self.send(feed, "b", command_id="b")
+        feed.receipt("b")
+        types = [(e["type"], e.get("command_id")) for e in feed.events()]
+        self.assertLess(types.index(("queue.updated", None)),
+                        types.index(("command.receipt", "b")))
+
+    def test_a_queued_message_without_a_receipt_is_still_taken(self):
+        # A keeper that died between writing the queue and the receipt.
+        log = EventLog(S, home=self.home, fsync=lambda fd: None,
+                       background=False)
+        log.emit(ev.queue_updated(S, [{"command_id": "b", "text": "b",
+                                       "mode": "queue"}]))
+        log.close()
+        keeper = self.keeper({"turns": [[fake.say("b done")]]})
+        feed = self.connect(keeper)
+        self.assertTrue(feed.result("b")["data"]["ok"])
+        self.assertEqual(self.send(feed, "b", command_id="b")["status"],
+                         "duplicate")
+        self.assertEqual(len(feed.events("turn.started")), 1)
+
+    def test_a_queued_send_that_cannot_be_recorded_is_taken_back(self):
+        broken, fsync = self.flaky()
+        keeper = self.keeper({"turns": [[fake.ask("ok?")]]},
+                             log_options={"fsync": fsync})
+        feed = self.connect(keeper)
+        feed.live()
+        self.send(feed, "a", command_id="a")
+        feed.event("approval.requested")
+        self.send(feed, "b", command_id="b")
+        broken.set()
+        req = feed.client.request
+        self.assertEqual(self.send(feed, "c", command_id="c")["reason"],
+                         "not_recorded")
+        self.assertEqual(req("queue_edit", command_id="e1", target="b",
+                             text="changed")["reason"], "not_recorded")
+        self.assertEqual(req("queue_remove", command_id="e2",
+                             target="b")["reason"], "not_recorded")
+        broken.clear()
+        self.assertEqual(self.status(feed)["queue"], [
+            {"command_id": "b", "text": "b", "mode": "queue"}])
+
+    def test_replay_reports_history_dropped_on_any_page(self):
+        # The cap can drop segments a replay has not reached yet: the
+        # second page then comes back truncated.
+        e = [dict(ev.tool_updated(S, f"c{i}", text="x"), seq=i)
+             for i in range(1, 9)]
+        pages = [Replay(e[0:2], oldest_seq=1, more=True),
+                 Replay(e[5:7], oldest_seq=6, truncated=True,
+                        reason="evicted", more=True,
+                        marker={"type": "log.truncated", "before_seq": 6}),
+                 Replay(e[7:8], oldest_seq=6)]
+        log = mock.Mock()
+        log.replay.side_effect = pages
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        conn = keeper_process._Conn(mock.Mock(log=log, replay_page=2), a, 1)
+        conn._replay(0, 8)
+        reader = ipc.LineReader(b)
+        frames = [reader.read(WAIT) for _ in range(7)]
+        self.assertEqual(
+            [f["t"] if f["t"] != "event" else f["e"]["seq"] for f in frames],
+            [1, 2, "gap", 6, 7, 8, "live"])
+        self.assertEqual((frames[2]["oldest_seq"], frames[2]["reason"]),
+                         (6, "evicted"))
+        self.assertEqual([c.args[0] for c in log.replay.call_args_list],
+                         [0, 2, 7])
+
+
+class TestLimits(KeeperCase):
+    def test_a_message_too_large_for_a_frame_is_refused(self):
+        keeper = self.keeper({"turns": [[fake.ask("ok?")]]})
+        feed = self.connect(keeper)
+        feed.live()
+        big = "x" * (keeper_process.MAX_TEXT_BYTES + 1)
+        reply = self.send(feed, big)
+        self.assertEqual((reply["status"], reply["reason"]),
+                         ("rejected", "too_large"))
+        reply = self.send(feed, "hi", attachments=["/a"] * 101)
+        self.assertEqual(reply["reason"], "too_large")
+        self.send(feed, "a", command_id="a")
+        feed.event("approval.requested")
+        self.send(feed, "b", command_id="b")
+        self.assertEqual(feed.client.request(
+            "queue_edit", command_id=self.cid(), target="b",
+            text=big)["reason"], "too_large")
+
+    def test_the_queue_is_bounded_so_it_always_fits_one_frame(self):
+        keeper = self.keeper({"turns": [[fake.ask("ok?")]]})
+        feed = self.connect(keeper)
+        feed.live()
+        self.send(feed, "a")
+        feed.event("approval.requested")
+        with mock.patch.object(keeper_process, "QUEUE_MAX_ITEMS", 2):
+            self.assertEqual(self.send(feed, "b")["status"], "queued")
+            self.assertEqual(self.send(feed, "c")["status"], "queued")
+            full = self.send(feed, "d")
+            self.assertEqual((full["status"], full["reason"]),
+                             ("rejected", "queue_full"))
+        with mock.patch.object(keeper_process, "QUEUE_MAX_BYTES", 400):
+            self.assertEqual(self.send(feed, "y" * 300)["reason"],
+                             "queue_full")
+            self.assertEqual(feed.client.request(
+                "queue_edit", command_id=self.cid(), target="c3",
+                text="y" * 300)["reason"], "too_large")
+        self.assertEqual(len(self.status(feed)["queue"]), 2)
+        self.assertLess(keeper_process.QUEUE_MAX_BYTES * 2, ipc.MAX_LINE)
+
+    def test_a_queued_secret_is_redacted_where_it_is_shown(self):
+        secret = "use OPENAI_API_KEY=sk-abc123def456ghi789 for it"
+        keeper = self.keeper({"turns": [[fake.ask("ok?")],
+                                        [fake.say("done")]]})
+        feed = self.connect(keeper)
+        feed.live()
+        self.send(feed, "a", command_id="a")
+        feed.event("approval.requested")
+        self.send(feed, secret, command_id="b")
+        shown = feed.event("queue.updated")["data"]["items"][0]["text"]
+        self.assertEqual(shown, "use OPENAI_API_KEY=[REDACTED] for it")
+        self.assertEqual(self.status(feed)["queue"][0]["text"], shown)
+        self.assertEqual(self.connect(keeper, last_seq=None)
+                         .client.welcome["queue"][0]["text"], shown)
+        segment = keeper.log.segments()[-1][1]
+        self.assertNotIn(b"sk-abc123", segment.read_bytes())
+        # The agent still gets the message as it was typed.
+        feed.client.request("respond", command_id="ok", request_id="r1",
+                            decision="allow")
+        feed.result("b")
+        sent = [c.args[0].text for c in self.adapters[0].calls
+                if c.name == "send_turn"]
+        self.assertEqual(sent, ["a", secret])
+
+
+class TestOptionsPersist(KeeperCase):
+    CAPS = Caps(plan_mode=True,
+                options=frozenset({"model", "permission_mode"}))
+
+    def test_an_option_change_is_kept_for_the_next_keeper(self):
+        discovery.write_spec(S, harness="claude", cwd="/tmp", model="opus",
+                             home=self.home)
+        keeper = self.keeper({"caps": self.CAPS})
+        feed = self.connect(keeper)
+        feed.live()
+        feed.client.request("set_option", command_id="m", name="model",
+                            value="haiku")
+        feed.result("m")
+        spec = discovery.read_spec(S, self.home)
+        self.assertEqual(spec["model"], "haiku")
+        # A change the agent refused is not kept.
+        feed.client.request("park", command_id="p")
+        feed.result("p")
+        self.assertEqual(discovery.read_spec(S, self.home)["model"],
+                         "haiku")
+        self.assertFalse(discovery.update_spec("claude:none", self.home,
+                                               model="x"))
+
+    def test_choosing_a_permission_mode_leaves_plan_mode(self):
+        discovery.write_spec(S, harness="claude", cwd="/tmp",
+                             plan_mode=True, home=self.home)
+        spec = StartSpec(S, "/tmp", harness="claude", plan_mode=True)
+        keeper = self.keeper({"caps": self.CAPS}, {"caps": self.CAPS},
+                             spec=spec)
+        feed = self.connect(keeper)
+        feed.live()
+        self.assertTrue(self.adapters[0].spec.plan_mode)
+        feed.client.request("set_option", command_id="m",
+                            name="permission_mode", value="default")
+        feed.result("m")
+        feed.client.request("park", command_id="p")
+        feed.result("p")
+        self.send(feed)
+        feed.event("turn.ended")
+        resumed = self.adapters[1].spec
+        self.assertEqual((resumed.plan_mode, resumed.permission_mode),
+                         (False, "default"))
+        stored = discovery.read_spec(S, self.home)
+        self.assertEqual((stored["plan_mode"], stored["permission_mode"]),
+                         (False, "default"))
+
+    def test_an_approved_plan_ends_plan_mode(self):
+        spec = StartSpec(S, "/tmp", harness="claude", plan_mode=True)
+        keeper = self.keeper(
+            {"caps": self.CAPS,
+             "turns": [[fake.ask("the plan", kind="plan")]]},
+            {"caps": self.CAPS}, spec=spec)
+        feed = self.connect(keeper)
+        feed.live()
+        self.send(feed, "plan it")
+        feed.event("approval.requested")
+        feed.client.request("respond", command_id="ok", request_id="r1",
+                            decision="allow")
+        feed.event("turn.ended")
+        feed.client.request("park", command_id="p")
+        feed.result("p")
+        self.send(feed, "go")
+        feed.event("turn.ended")
+        self.assertFalse(self.adapters[1].spec.plan_mode)
+
+    def test_turning_plan_mode_on_keeps_the_permission_mode(self):
+        keeper = self.keeper({"caps": self.CAPS}, {"caps": self.CAPS})
+        feed = self.connect(keeper)
+        feed.live()
+        for cid, name, value in (("a", "permission_mode", "acceptEdits"),
+                                 ("b", "plan_mode", True)):
+            feed.client.request("set_option", command_id=cid, name=name,
+                                value=value)
+            feed.result(cid)
+        feed.client.request("park", command_id="p")
+        feed.result("p")
+        self.send(feed)
+        feed.event("turn.ended")
+        resumed = self.adapters[1].spec
+        self.assertEqual((resumed.plan_mode, resumed.permission_mode),
+                         (True, "acceptEdits"))
 
 
 class TestIdlePark(KeeperCase):
@@ -1167,6 +1457,49 @@ class TestSocketSafety(KeeperCase):
             ipc.LineReader(b).read(WAIT)
         with self.assertRaises(TimeoutError):
             ipc.LineReader(b).read(0.01)
+        # A line past the limit that arrives whole, newline and all, in
+        # one read is refused just the same.
+        c, d = socket.socketpair()
+        self.addCleanup(c.close)
+        self.addCleanup(d.close)
+        c.sendall(b'{"pad":"' + b"x" * 100 + b'"}\n{"ok":1}\n')
+        reader = ipc.LineReader(d, max_line=64)
+        with self.assertRaises(ipc.IpcError):
+            reader.read(WAIT)
+        c.sendall(b'{"pad":"' + b"x" * 40 + b'"}\n')
+        self.assertEqual(ipc.LineReader(d, max_line=64).read(WAIT),
+                         {"pad": "x" * 40})
+
+    def test_a_request_to_a_keeper_that_stopped_reading_times_out(self):
+        self.runtime.mkdir(mode=0o700)
+        path = self.runtime / "k-stuck.sock"
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        server.bind(str(path))
+        server.listen(1)
+        client = ipc.KeeperClient(path, send_timeout=0.2)
+        self.addCleanup(client.close)
+
+        def welcome() -> socket.socket:
+            conn, _ = server.accept()
+            ipc.LineReader(conn).read(WAIT)
+            ipc.send_frame(conn, {"t": "welcome", "v": 1, "last_seq": 0})
+            return conn          # and never reads again
+
+        held: list[socket.socket] = []
+        thread = threading.Thread(target=lambda: held.append(welcome()))
+        thread.start()
+        client.connect()
+        thread.join(WAIT)
+        self.addCleanup(held[0].close)
+        # The write itself blocks once the socket's buffer is full; it
+        # is bounded, and the stream is then given up.
+        with self.assertRaises(ipc.IpcError) as ctx:
+            client.request("send", timeout=WAIT, command_id="x",
+                           text="y" * 4_000_000)
+        self.assertIn("could not reach the keeper", str(ctx.exception))
+        with self.assertRaises(ipc.IpcError):
+            client.request("status")
 
 
 class TestDiscovery(KeeperCase):
@@ -1386,7 +1719,7 @@ class RealProcess(unittest.TestCase):
         asked = feed.event("approval.requested")
         self.assertEqual(feed.client.request(
             "send", command_id="b", text="second")["status"], "queued")
-        feed.event("queue.updated")
+        feed.receipt("b")
         cursor = feed.seqs()[-1]
 
         os.kill(info.pid, signal.SIGKILL)
@@ -1429,6 +1762,35 @@ class RealProcess(unittest.TestCase):
         self.assertEqual(self.procs[-1].wait(WAIT), discovery.EXIT_OK)
         done = discovery.find(S, self.home)
         self.assertEqual((done.alive, done.state), (False, "exited"))
+
+    def test_an_agent_that_outlives_its_keeper_is_ended_by_the_next(self):
+        # ``linger``: the agent ignores the end of its stdin, so it does
+        # not exit when its keeper is killed.
+        discovery.write_spec(S, harness="claude", cwd=str(self.home),
+                             home=self.home)
+        info = self.spawn(mode="linger")
+        feed = self.feed(info)
+        feed.event("session.state", state="idle")
+        children = subprocess.run(
+            ["pgrep", "-P", str(info.pid)], capture_output=True,
+            text=True).stdout.split()
+        self.assertEqual(len(children), 1)
+        agent = int(children[0])
+        os.kill(info.pid, signal.SIGKILL)
+        self.procs[0].wait(WAIT)
+        feed.closed()
+        os.kill(agent, 0)                       # still running
+
+        again = self.spawn(mode="ok")
+        # The next keeper ended it before starting an agent of its own.
+        with self.assertRaises(ProcessLookupError):
+            os.kill(agent, 0)
+        feed = self.feed(again)
+        feed.event("session.state", state="idle")
+        self.assertIn("a dead keeper",
+                      (again.dir / discovery.OUT_FILE).read_text())
+        feed.client.request("stop", command_id="stop")
+        self.assertEqual(self.procs[-1].wait(WAIT), discovery.EXIT_OK)
 
     def test_sigterm_stops_it_cleanly(self):
         discovery.write_spec(S, harness="claude", cwd=str(self.home),

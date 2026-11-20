@@ -59,6 +59,8 @@ SOCKET_PATH_MAX = 103
 
 HELLO_TIMEOUT_S = 10.0
 REQUEST_TIMEOUT_S = 90.0
+# How long one write may block before the peer counts as stuck.
+SEND_TIMEOUT_S = 10.0
 
 
 class IpcError(Exception):
@@ -208,6 +210,10 @@ class LineReader:
     def read(self, timeout: float | None = None) -> dict | None:
         while True:
             nl = self._buf.find(b"\n")
+            if nl > self._max:
+                # However the bytes arrived: one read can carry a line
+                # past the limit together with its newline.
+                raise IpcError("a frame passed the size limit")
             if nl >= 0:
                 raw = bytes(self._buf[:nl])
                 del self._buf[:nl + 1]
@@ -282,8 +288,10 @@ class KeeperClient:
                  version: int = VERSION, min_version: int = MIN_VERSION,
                  name: str = "hub",
                  on_frame: Callable[[dict], None] | None = None,
-                 timeout: float = HELLO_TIMEOUT_S) -> None:
+                 timeout: float = HELLO_TIMEOUT_S,
+                 send_timeout: float = SEND_TIMEOUT_S) -> None:
         self.path = Path(path)
+        self.send_timeout = send_timeout
         self.last_seq = last_seq
         self.offer = (version, min_version)
         self.name = name
@@ -320,6 +328,9 @@ class KeeperClient:
             if uid is not None and uid != os.getuid():
                 raise Unsafe(f"{self.path} is served by another user")
             sock.settimeout(None)
+            # A keeper that stops reading must not hang a request in
+            # its write, before the wait for a reply even starts.
+            set_send_timeout(sock, self.send_timeout)
             send_frame(sock, {"t": "hello", "v": self.offer[0],
                               "min_v": self.offer[1],
                               "last_seq": self.last_seq,
@@ -409,6 +420,9 @@ class KeeperClient:
         except OSError as exc:
             with self._lock:
                 self._waiting.pop(rpc, None)
+            # Part of a frame may be on the wire: the stream cannot be
+            # used again.
+            self._hang_up()
             raise IpcError(f"could not reach the keeper: {exc}") from exc
         try:
             reply = box.get(timeout=timeout)
@@ -425,8 +439,7 @@ class KeeperClient:
     def closed(self) -> bool:
         return self._closed
 
-    def close(self) -> None:
-        """Hang up. Idempotent; the keeper keeps running."""
+    def _hang_up(self) -> None:
         sock, self._sock = self._sock, None
         if sock is not None:
             try:
@@ -434,6 +447,10 @@ class KeeperClient:
             except OSError:
                 pass
             sock.close()
+
+    def close(self) -> None:
+        """Hang up. Idempotent; the keeper keeps running."""
+        self._hang_up()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(5.0)

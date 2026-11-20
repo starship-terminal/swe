@@ -12,7 +12,9 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import socket
 import sys
+import threading
 
 from swe.remote.adapters import registry
 from swe.remote.adapters.base import StartSpec
@@ -81,12 +83,45 @@ def main(argv: list[str] | None = None) -> int:
     except (ipc.IpcError, LogError, OSError) as exc:
         print(f"keeper: could not start: {exc}", file=sys.stderr)
         return discovery.EXIT_FAILED
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_: keeper.request_stop("signal"))
+    watch = _stop_on_signal(keeper)
+    keeper.run()
+    del watch
+    return discovery.EXIT_OK
+
+
+def _stop_on_signal(keeper: Keeper) -> tuple:
+    """Stop the keeper on SIGTERM or SIGINT, whichever thread the
+    signal lands on.
+
+    A Python signal handler runs only when the main thread next runs
+    bytecode, and the main thread here sleeps on its inbox for up to
+    half an hour. The kernel may hand the signal to any other thread,
+    which does not wake that sleep. So the signal's number is written
+    to a socket (``set_wakeup_fd``, done in C by whichever thread got
+    it) and a small thread turns it into a stop."""
+    reader, writer = socket.socketpair()
+    writer.setblocking(False)
+    signal.set_wakeup_fd(writer.fileno(), warn_on_full_buffer=False)
+    stops = (signal.SIGTERM, signal.SIGINT)
+    for signum in stops:
+        signal.signal(signum, lambda *_: None)
     # Detached from every terminal: a hangup is not for us.
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    keeper.run()
-    return discovery.EXIT_OK
+
+    def watch() -> None:
+        while True:
+            try:
+                data = reader.recv(16)
+            except OSError:
+                return
+            if not data:
+                return
+            if any(byte in stops for byte in data):
+                keeper.request_stop("signal")
+
+    threading.Thread(target=watch, daemon=True,
+                     name="swe-keeper-signals").start()
+    return reader, writer
 
 
 if __name__ == "__main__":

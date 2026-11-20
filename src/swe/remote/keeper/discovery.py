@@ -277,6 +277,20 @@ def write_spec(session_key: str, *, harness: str, cwd: str,
     return folder / SPEC_FILE
 
 
+def update_spec(session_key: str, home: Path | str | None = None,
+                **changes: Any) -> bool:
+    """Change fields of a stored spec (the keeper records an option
+    change here, so the next keeper starts the agent the same way).
+    False when there is no spec for this session."""
+    path = keeper_dir_for(session_key, home) / SPEC_FILE
+    raw = read_json(path)
+    if raw is None or raw.get("session") != session_key:
+        return False
+    raw.update(changes)
+    write_json(path, raw)
+    return True
+
+
 def read_spec(session_key: str,
               home: Path | str | None = None) -> dict | None:
     """The stored spec, with every field present and typed, or None

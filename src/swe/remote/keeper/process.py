@@ -52,6 +52,7 @@ import logging
 import os
 import queue
 import selectors
+import signal
 import socket
 import threading
 import time
@@ -67,6 +68,9 @@ from swe.remote.adapters.base import (
 from swe.remote.keeper import discovery, ipc
 from swe.remote.keeper.log import EventLog, current_boot_id
 from swe.remote.protocol import key_slug
+# The same redaction the adapters apply to message text before it is
+# logged (see the adapter contract in adapters/base.py).
+from swe.reports.transcripts import _redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +81,7 @@ RESTART_WINDOW_S = 10 * 60.0
 # Frames one client may have waiting before it counts as stuck.
 CLIENT_BUFFER = 8192
 # How long one write to a client may block before it counts as stuck.
-SEND_TIMEOUT_S = 10.0
+SEND_TIMEOUT_S = ipc.SEND_TIMEOUT_S
 REPLAY_PAGE = 500
 # Command ids remembered for ``duplicate`` answers.
 RECENT_COMMANDS = 4096
@@ -85,6 +89,15 @@ RECENT_COMMANDS = 4096
 # recent command ids.
 SCAN_BYTES = 64 << 20
 MAX_ID = 200
+# One message's text, as JSON. A frame is limited to ipc.MAX_LINE, and
+# the whole queue travels in one frame (queue.updated, welcome.queue).
+MAX_TEXT_BYTES = 1 << 20
+MAX_ATTACHMENTS = 100
+QUEUE_MAX_ITEMS = 100
+QUEUE_MAX_BYTES = 4 << 20
+# How long a starting keeper gives a dead keeper's orphaned agent to
+# exit after SIGTERM before it kills it.
+ORPHAN_GRACE_S = 2.0
 
 # keeper.json's ``state``.
 STARTING, RUNNING, PARKED, AGENT_DOWN, EXITED = (
@@ -274,18 +287,18 @@ class _Conn:
     def _replay(self, after: int | None, until: int) -> None:
         log = self.keeper.log
         cursor = after
-        first = True
         while cursor is not None and cursor < until:
             try:
                 page = log.replay(cursor, until_seq=until,
                                   limit=self.keeper.replay_page)
             except (OSError, ValueError):
                 break
-            if first and page.truncated:
+            if page.truncated:
+                # On any page, not only the first: the cap can drop
+                # segments this replay has not reached yet.
                 ipc.send_frame(self.sock, {
                     "t": "gap", "oldest_seq": page.oldest_seq,
                     "reason": page.reason, "marker": page.marker})
-            first = False
             for event in page.events:
                 ipc.send_frame(self.sock, {"t": "event", "e": event})
             if not page.more or not page.events:
@@ -312,12 +325,14 @@ class _Conn:
         sub = self.sub
         if sub is not None:
             sub.close()
+        # Forgotten before the socket closes: once the peer sees the
+        # end of the stream, the keeper no longer counts it.
+        self.keeper._forget(self)
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
         self.sock.close()
-        self.keeper._forget(self)
 
 
 class Keeper:
@@ -407,6 +422,7 @@ class Keeper:
         self._caps = Caps()
         self._options: dict[str, Any] = {}
         self._transcript: dict | None = None
+        self._log_errors = 0
         # Read by connection threads: the last session.state seen, and a
         # snapshot the loop replaces whole.
         self._state = "starting"
@@ -452,9 +468,12 @@ class Keeper:
             if previous and isinstance(previous.get("harness_session_id"),
                                        str):
                 self._harness_id = previous["harness_session_id"]
+            if previous:
+                self._reap_orphans(previous.get("pid"), sleep)
+            options = dict(self._log_options)
+            options.setdefault("on_error", self._log_failed)
             self.log = EventLog(self.session_key, home=self.home,
-                                first_seq=self._first_seq,
-                                **self._log_options)
+                                first_seq=self._first_seq, **options)
             try:
                 runtime = ipc.ensure_runtime_dir(self._runtime)
                 path = ipc.socket_path(self.dir, runtime)
@@ -487,6 +506,51 @@ class Keeper:
             target=self._accept, daemon=True,
             name=f"swe-keeper-accept-{self.slug}")
         self._accept_thread.start()
+
+    def _log_failed(self, exc: BaseException, event: dict | None) -> None:
+        """The log could not write or fsync (a full disk, an I/O
+        error). Counted, so a command whose receipt did not reach the
+        disk is not acted on."""
+        self._log_errors += 1
+        logger.warning("keeper log %s: %s", self.dir, exc)
+
+    def _reap_orphans(self, old_pid: Any,
+                      sleep: Callable[[float], None] = time.sleep) -> None:
+        """End what a dead keeper left running. An agent normally exits
+        when its keeper dies (its stdin closes), but one that ignores
+        that would run on beside the agent this keeper starts, both
+        writing one session.
+
+        A keeper is the leader of its own process group and its agent
+        is a member. This keeper holds the session's lock, so the old
+        keeper is gone; if its process group still has members while
+        its leader does not exist, they are that keeper's orphans. (A
+        pid cannot be handed out again while a group still carries it,
+        so this cannot hit a stranger.)"""
+        if not isinstance(old_pid, int) or isinstance(old_pid, bool) \
+                or old_pid <= 1 or old_pid == os.getpid() \
+                or old_pid == os.getpgrp():
+            return
+        try:
+            os.kill(old_pid, 0)
+            return  # a process has this pid: not ours to judge
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(old_pid, signum)
+            except OSError:
+                return  # no such group: nothing was left behind
+            logger.warning("ending the agent a dead keeper (pid %d) left "
+                           "running", old_pid)
+            for _ in range(int(ORPHAN_GRACE_S / 0.05)):
+                try:
+                    os.killpg(old_pid, 0)
+                except OSError:
+                    return
+                sleep(0.05)
 
     def _write_info(self, state: str) -> None:
         info = {
@@ -676,9 +740,16 @@ class Keeper:
             self._state = event["data"]["state"]
         return self.log.emit(event)
 
+    def _shown_queue(self) -> list[dict]:
+        """The queue as events and clients see it: message text
+        redacted, as the adapter redacts a message it sends. The text
+        as typed stays in memory only."""
+        return [dict(i, text=_redact_secrets(i["text"]))
+                for i in self._queue]
+
     def _publish(self) -> None:
         self._public = {
-            "queue": [dict(i) for i in self._queue],
+            "queue": self._shown_queue(),
             "agent": self._agent,
             "caps": self._caps.as_dict(),
             "harness_session_id": self._harness_id,
@@ -717,6 +788,10 @@ class Keeper:
         # read_back is newest first; duplicates are answered oldest
         # dropped first.
         self._seen = collections.OrderedDict(reversed(self._seen.items()))
+        # A message can be in the queue without its receipt (the queue
+        # is written first): it is still a command already taken.
+        for item in self._queue:
+            self._seen.setdefault(item["command_id"], "queued")
         if harness_id:
             self._harness_id = harness_id
         self._publish()
@@ -894,19 +969,38 @@ class Keeper:
         handler(conn, rpc, cid, frame)
 
     def _receipt(self, conn: _Conn, rpc: Any, cid: str, op: str,
-                 status: str, reason: str | None = None) -> None:
+                 status: str, reason: str | None = None) -> bool:
         """Record the answer to a command (durably, before it is acted
-        on) and send it back."""
+        on) and send it back. False when the log could not keep the
+        receipt (a full disk, an I/O error): the command is then
+        answered ``rejected`` and must not be applied, or a retry after
+        a restart would apply it a second time."""
+        errors = self._log_errors
+        stamped = self._emit(ev.command_receipt(self.session_key, cid,
+                                                status, reason=reason, op=op))
+        if stamped is None or self._log_errors != errors:
+            if stamped is not None and status != "rejected":
+                # Written but perhaps not on disk. A later keeper may
+                # or may not find that receipt, so the command is
+                # refused for good under this id: recorded as rejected
+                # (best effort) and remembered as such.
+                self._seen[cid] = "rejected"
+                self._emit(ev.command_receipt(
+                    self.session_key, cid, "rejected",
+                    reason="not_recorded", op=op))
+            conn.post({"t": "reply", "id": rpc, "status": "rejected",
+                       "reason": "not_recorded", "op": op,
+                       "command_id": cid})
+            return False
         self._seen[cid] = status
         while len(self._seen) > RECENT_COMMANDS:
             self._seen.popitem(last=False)
-        self._emit(ev.command_receipt(self.session_key, cid, status,
-                                      reason=reason, op=op))
         reply = {"t": "reply", "id": rpc, "status": status, "op": op,
                  "command_id": cid}
         if reason:
             reply["reason"] = reason
         conn.post(reply)
+        return True
 
     def _result(self, cid: str, op: str, ok: bool, *,
                 note: str | None = None, cancelled: bool | None = None,
@@ -916,9 +1010,12 @@ class Keeper:
                                      request_id=request_id))
 
     def _call(self, cid: str, op: str, fn: Callable[[], Any], *,
-              request_id: str | None = None) -> bool:
+              request_id: str | None = None,
+              then: Callable[[], Any] | None = None) -> bool:
         """Run one adapter call for an accepted command and record how
-        it went."""
+        it went. ``then`` runs after a call that worked and before its
+        result is recorded, so whoever sees the result sees its effects
+        too."""
         try:
             fn()
         except AdapterError as exc:
@@ -931,13 +1028,14 @@ class Keeper:
             self._result(cid, op, False, note=str(exc),
                          request_id=request_id)
             return False
+        if then is not None:
+            then()
         self._result(cid, op, True, request_id=request_id)
         return True
 
     def _queue_changed(self) -> None:
         self._publish()
-        self._emit(ev.queue_updated(self.session_key,
-                                    [dict(i) for i in self._queue]))
+        self._emit(ev.queue_updated(self.session_key, self._shown_queue()))
 
     def _op_send(self, conn: _Conn, rpc: Any, cid: str, frame: dict) -> None:
         text = frame.get("text")
@@ -951,6 +1049,10 @@ class Keeper:
                 or mode not in ev.QUEUE_MODES:
             self._receipt(conn, rpc, cid, "send", "rejected", "bad_request")
             return
+        if len(attachments) > MAX_ATTACHMENTS or len(ipc.encode(
+                {"text": text, "attachments": attachments})) > MAX_TEXT_BYTES:
+            self._receipt(conn, rpc, cid, "send", "rejected", "too_large")
+            return
         item: dict[str, Any] = {"command_id": cid, "text": text}
         if device:
             item["by"] = device
@@ -962,20 +1064,33 @@ class Keeper:
             return
         busy = self.log.snapshot().open_turn is not None
         if busy and mode == "steer" and self._caps.steer:
-            self._receipt(conn, rpc, cid, "send", "accepted")
+            if not self._receipt(conn, rpc, cid, "send", "accepted"):
+                return
             adapter = self._adapter
             assert adapter is not None
             self._call(cid, "send", lambda: adapter.steer(_turn(item)))
             return
         if busy or self._queue:
             item["mode"] = "queue"
+            if len(self._queue) >= QUEUE_MAX_ITEMS or len(ipc.encode(
+                    {"items": self._queue + [item]})) > QUEUE_MAX_BYTES:
+                self._receipt(conn, rpc, cid, "send", "rejected",
+                              "queue_full")
+                return
+            # The queue is written before the receipt, and the
+            # receipt's fsync carries both to disk: a crash between the
+            # two leaves a queued message with no receipt (rebuilt, and
+            # counted as taken), never a receipt with no message.
             self._queue.append(item)
-            self._receipt(conn, rpc, cid, "send", "queued")
             self._queue_changed()
+            if not self._receipt(conn, rpc, cid, "send", "queued"):
+                self._queue.remove(item)
+                self._queue_changed()
+                return
             self._drain()
             return
-        self._receipt(conn, rpc, cid, "send", "accepted")
-        self._send_now(item)
+        if self._receipt(conn, rpc, cid, "send", "accepted"):
+            self._send_now(item)
 
     def _send_now(self, item: dict) -> bool:
         """Start a turn with ``item``. False when it could not start; a
@@ -1027,7 +1142,8 @@ class Keeper:
                       frame: dict) -> None:
         if not self._need_agent(conn, rpc, cid, "interrupt"):
             return
-        self._receipt(conn, rpc, cid, "interrupt", "accepted")
+        if not self._receipt(conn, rpc, cid, "interrupt", "accepted"):
+            return
         if frame.get("clear_queue") is True and self._queue:
             dropped, self._queue = self._queue, []
             self._queue_changed()
@@ -1043,8 +1159,9 @@ class Keeper:
         if not self._need_agent(conn, rpc, cid, "respond"):
             return
         rid = frame.get("request_id")
-        open_ids = {e["data"]["request_id"]
-                    for e in self.log.snapshot().pending}
+        asked = {e["data"]["request_id"]: e
+                 for e in self.log.snapshot().pending}
+        open_ids = set(asked)
         if not isinstance(rid, str) or rid not in open_ids:
             # Never asked, or someone else answered first.
             self._receipt(conn, rpc, cid, "respond", "rejected",
@@ -1058,11 +1175,18 @@ class Keeper:
         except ValueError as exc:
             self._receipt(conn, rpc, cid, "respond", "rejected", str(exc))
             return
-        self._receipt(conn, rpc, cid, "respond", "accepted")
+        if not self._receipt(conn, rpc, cid, "respond", "accepted"):
+            return
         adapter = self._adapter
         assert adapter is not None
+        then = None
+        if asked[rid]["data"].get("kind") == "plan" \
+                and answer.decision in ("allow", "always"):
+            # An approved plan ends plan mode; a later start must not
+            # put the agent back in it.
+            then = lambda: self._remember("plan_mode", False)  # noqa: E731
         self._call(cid, "respond", lambda: adapter.respond(rid, answer),
-                   request_id=rid)
+                   request_id=rid, then=then)
 
     def _op_set_option(self, conn: _Conn, rpc: Any, cid: str,
                        frame: dict) -> None:
@@ -1077,17 +1201,39 @@ class Keeper:
             self._receipt(conn, rpc, cid, "set_option", "rejected",
                           str(exc))
             return
-        self._receipt(conn, rpc, cid, "set_option", "accepted")
+        if not self._receipt(conn, rpc, cid, "set_option", "accepted"):
+            return
         adapter = self._adapter
         if adapter is None:
             # No agent now: the next start carries it.
-            self._options[name] = value
+            self._remember(name, value)
             self._result(cid, "set_option", True,
                          note="applies when the agent starts")
             return
-        if self._call(cid, "set_option",
-                      lambda: adapter.set_option(name, value)):
-            self._options[name] = value
+        self._call(cid, "set_option",
+                   lambda: adapter.set_option(name, value),
+                   then=lambda: self._remember(name, value))
+
+    def _remember(self, name: str, value: Any) -> None:
+        """Keep an option that took effect, for every later start of
+        the agent: in memory, and in ``spec.json`` so the next keeper
+        of the session starts the agent the same way.
+
+        Plan mode is a mode like the permission modes: choosing a
+        permission mode leaves plan mode, so the last change of the two
+        is the one a restart applies."""
+        changes = {name: value}
+        if name == "permission_mode" and (
+                self._options.get("plan_mode") or self.spec.plan_mode):
+            changes["plan_mode"] = False
+        if all(self._options.get(k, getattr(self.spec, k)) == v
+               for k, v in changes.items()):
+            return
+        self._options.update(changes)
+        try:
+            discovery.update_spec(self.session_key, self.home, **changes)
+        except OSError:
+            logger.exception("could not record %s in spec.json", name)
 
     def _op_stop_task(self, conn: _Conn, rpc: Any, cid: str,
                       frame: dict) -> None:
@@ -1111,7 +1257,8 @@ class Keeper:
         if not isinstance(value, str) or not value:
             self._receipt(conn, rpc, cid, op, "rejected", "bad_request")
             return
-        self._receipt(conn, rpc, cid, op, "accepted")
+        if not self._receipt(conn, rpc, cid, op, "accepted"):
+            return
         adapter = self._adapter
         assert adapter is not None
         self._call(cid, op, lambda: call(adapter, value))
@@ -1134,9 +1281,22 @@ class Keeper:
             self._receipt(conn, rpc, cid, "queue_edit", "rejected",
                           "bad_request")
             return
-        self._receipt(conn, rpc, cid, "queue_edit", "accepted")
-        self._queue[at] = dict(self._queue[at], text=text)
+        before = self._queue[at]
+        edited = self._queue[:at] + [dict(before, text=text)] \
+            + self._queue[at + 1:]
+        if len(ipc.encode({"text": text})) > MAX_TEXT_BYTES \
+                or len(ipc.encode({"items": edited})) > QUEUE_MAX_BYTES:
+            self._receipt(conn, rpc, cid, "queue_edit", "rejected",
+                          "too_large")
+            return
+        # As for a queued send: the change first, then the receipt
+        # whose fsync carries both.
+        self._queue = edited
         self._queue_changed()
+        if not self._receipt(conn, rpc, cid, "queue_edit", "accepted"):
+            self._queue[at] = before
+            self._queue_changed()
+            return
         self._result(cid, "queue_edit", True)
 
     def _op_queue_remove(self, conn: _Conn, rpc: Any, cid: str,
@@ -1146,9 +1306,12 @@ class Keeper:
             self._receipt(conn, rpc, cid, "queue_remove", "rejected",
                           "not_queued")
             return
-        self._receipt(conn, rpc, cid, "queue_remove", "accepted")
         item = self._queue.pop(at)
         self._queue_changed()
+        if not self._receipt(conn, rpc, cid, "queue_remove", "accepted"):
+            self._queue.insert(at, item)
+            self._queue_changed()
+            return
         self._result(item["command_id"], "send", False, cancelled=True,
                      note="removed from the queue")
         self._result(cid, "queue_remove", True)
@@ -1159,11 +1322,14 @@ class Keeper:
         if self.log.snapshot().open_turn is not None or self._queue:
             self._receipt(conn, rpc, cid, "park", "rejected", "busy")
             return
-        self._receipt(conn, rpc, cid, "park", "accepted")
+        if not self._receipt(conn, rpc, cid, "park", "accepted"):
+            return
         self._park("parked on request")
         self._result(cid, "park", True)
 
     def _op_stop(self, conn: _Conn, rpc: Any, cid: str, frame: dict) -> None:
+        # A stop is honoured even when the disk refuses the receipt: it
+        # is how a keeper in trouble is ended.
         self._receipt(conn, rpc, cid, "stop", "accepted")
         self._result(cid, "stop", True)
         self._stopping = True
@@ -1185,7 +1351,7 @@ class Keeper:
             "oldest_seq": self.log.oldest_seq,
             "open_turn": snap.open_turn,
             "pending": [e["data"]["request_id"] for e in snap.pending],
-            "queue": [dict(i) for i in self._queue],
+            "queue": self._shown_queue(),
             "caps": self._caps.as_dict(),
             "harness_session_id": self._harness_id,
             "clients": clients,
