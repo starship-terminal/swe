@@ -101,6 +101,8 @@ jobs:
     # milestone G2): its package tests on macOS. The iPhone proof
     # harness under Proof/ needs a stub hub and a simulator and runs by
     # hand (Proof/run-proof.sh), not here.
+    # ios-unit-tests.yml runs a copy of these steps on a pull request
+    # that changes the package; change both files together.
     name: Session web shell tests
     runs-on: macos-26
     defaults:
@@ -121,6 +123,8 @@ jobs:
     # The iPhone app's unit tests had no job at all. The UI test target
     # needs a paired hub, so only SWERemoteTests runs here, on the
     # first available iPhone simulator of the image's Xcode.
+    # ios-unit-tests.yml runs a copy of these steps on a pull request
+    # that changes app/ios/; change both files together.
     name: iOS app unit tests
     runs-on: macos-26
     defaults:
