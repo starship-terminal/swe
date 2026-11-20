@@ -530,7 +530,7 @@ class TestRecovery(LogBase):
         self.assertEqual(path.read_bytes(), damaged)  # left as evidence
         rep = again.replay()
         self.assertEqual([e["seq"] for e in rep.events], [1, 2, 3, 4, 5])
-        self.assertEqual(rep.skipped, 1)  # the out-of-order one is dropped
+        self.assertEqual(rep.skipped, 2)  # the garbage and the out-of-order one
         self.assertEqual(again.emit(upd(6))["seq"], 6)
 
     def test_a_crash_on_the_same_boot_leaves_no_gap(self):
@@ -1074,6 +1074,77 @@ class TestReviewRound1(LogBase):
         rep = again.replay(0)
         self.assertEqual([e["seq"] for e in rep.events], [100])
         self.assertEqual(rep.skipped, 1)
+
+
+class TestNeverCutARecord(LogBase):
+    """Opening cuts only a torn tail, never a line that parses as a
+    record, and numbers past every seq on disk."""
+
+    def append(self, path: Path, *seqs: int) -> None:
+        with open(path, "ab") as fh:
+            for seq in seqs:
+                fh.write(json.dumps(dict(upd(seq), seq=seq)).encode() + b"\n")
+
+    def test_a_too_high_record_cuts_nothing_and_raises_the_next_seq(self):
+        log = self.make()
+        log.emit(upd(1))
+        log.emit(upd(2))
+        path = log.segments()[-1][1]
+        crash(log)
+        self.append(path, 9000, 3, 4)
+        before = path.read_bytes()
+        again = self.make()
+        self.assertEqual(again.recovery.torn_bytes, 0)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(again.recovery.skipped_lines, 2)  # 3 and 4
+        self.assertEqual(again.recovery.last_seq, 9000)
+        self.assertEqual(again.recovery.next_seq, 9001)
+        self.assertEqual(again.emit(upd(5))["seq"], 9001)
+        rep = again.replay(0)
+        self.assertEqual([e["seq"] for e in rep.events], [1, 2, 9000, 9001])
+        self.assertEqual(rep.skipped, 2)  # 3 and 4: kept, never replayed
+
+    def test_a_trailing_out_of_order_record_is_kept(self):
+        log = self.make()
+        for i in range(1, 4):
+            log.emit(upd(i))
+        path = log.segments()[-1][1]
+        crash(log)
+        self.append(path, 1)
+        with open(path, "ab") as fh:
+            fh.write(b'{"v":2,"ty')  # and a real torn tail after it
+        again = self.make()
+        self.assertEqual(again.recovery.torn_bytes, len(b'{"v":2,"ty'))
+        self.assertEqual(len(path.read_bytes().splitlines()), 4)
+        self.assertEqual(again.recovery.skipped_lines, 1)
+        self.assertEqual(again.emit(upd(4))["seq"], 4)
+
+    def test_trailing_lines_that_are_not_records_are_cut(self):
+        log = self.make()
+        log.emit(upd(1))
+        path = log.segments()[-1][1]
+        good = path.read_bytes()
+        crash(log)
+        with open(path, "ab") as fh:
+            fh.write(b"not json\n")
+            fh.write(json.dumps(dict(upd(2), seq=0)).encode() + b"\n")
+        again = self.make()
+        self.assertEqual(path.read_bytes(), good)
+        self.assertEqual(again.recovery.skipped_lines, 0)
+        self.assertEqual(again.emit(upd(2))["seq"], 2)
+
+    def test_a_newest_segment_of_only_stale_records_is_kept(self):
+        log = self.make(segment_bytes=400, cap_bytes=1 << 20)
+        while len(log.segments()) < 2:
+            log.emit(upd(1))
+        first, path, _ = log.segments()[-1]
+        crash(log)
+        path.write_bytes(json.dumps(dict(upd(1), seq=1)).encode() + b"\n")
+        again = self.make(segment_bytes=400, cap_bytes=1 << 20)
+        self.assertTrue(path.exists())
+        self.assertEqual(again.recovery.torn_bytes, 0)
+        self.assertEqual(again.recovery.skipped_lines, 1)
+        self.assertEqual(again.recovery.next_seq, first)
 
 
 class TestJournalHelper(unittest.TestCase):

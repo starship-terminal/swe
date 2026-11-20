@@ -178,7 +178,8 @@ class Replay:
 class Recovery:
     """What opening the log found.
 
-    ``last_seq`` is the newest seq on disk (0 for none); ``next_seq`` the
+    ``last_seq`` is the highest seq on disk in the newest segment, in
+    order or not (0 for none); ``next_seq`` the
     one the next event gets. ``torn_bytes`` were cut from the tail (a
     crash mid-write); ``skipped_lines`` are corrupt lines left in place
     in the newest segment. ``seq_gap`` seqs were skipped because the
@@ -283,35 +284,45 @@ def _marker_of(meta: dict) -> dict | None:
 
 @dataclass
 class _Scan:
-    last: dict | None
+    max_seq: int
     good_end: int
     size: int
     skipped: int
 
 
 def _scan_segment(path: Path, floor: int) -> _Scan:
-    """Read one segment forward. ``good_end`` is the byte just past the
-    last valid, newline-terminated record; whatever follows it is a torn
-    tail. Invalid lines before that point are counted in ``skipped``. A
-    record is valid when it parses, its seq is at least the segment's
-    name (``floor``) and above the record before it."""
-    last = None
-    good_end = offset = skipped = bad_run = 0
+    """Read one segment forward.
+
+    ``good_end`` is the byte just past the last newline-terminated line
+    that parses as a record (:func:`_parse`, any seq of at least 1);
+    only what follows it is a torn tail. Opening never cuts a parseable
+    record: one below the segment's name (``floor``) or not above the
+    in-order record before it stays on disk and is counted in
+    ``skipped`` with the unparseable lines before ``good_end``.
+    ``max_seq`` is the highest seq of any parseable record, in order or
+    not, so the next seq never reuses one already on disk."""
+    last = 0
+    max_seq = good_end = offset = skipped = bad_run = 0
     with open(path, "rb") as fh:
         for raw in fh:
             offset += len(raw)
             if not raw.endswith(b"\n"):
                 break
-            rec = _parse(raw, floor)
-            if rec is None or (
-                    last is not None and rec["seq"] <= last["seq"]):
+            rec = _parse(raw)
+            if rec is None:
                 bad_run += 1
                 continue
             skipped += bad_run
             bad_run = 0
-            last, good_end = rec, offset
+            good_end = offset
+            seq = rec["seq"]
+            max_seq = max(max_seq, seq)
+            if seq < floor or seq <= last:
+                skipped += 1  # kept as evidence; replay skips it too
+            else:
+                last = seq
         size = os.fstat(fh.fileno()).st_size
-    return _Scan(last, good_end, size, skipped)
+    return _Scan(max_seq, good_end, size, skipped)
 
 
 def _open_segments(segs: list[tuple[int, Path]], after_seq: int):
@@ -371,7 +382,9 @@ def _replay(handles, after_seq: int, until_seq: int | None,
                 continue
             seq = rec["seq"]
             if seq <= prev:
-                continue  # before the cursor, or out of order
+                if seq > after_seq:
+                    skipped += 1  # out of order: kept on disk, not replayed
+                continue
             if until_seq is not None and seq > until_seq:
                 done = True
                 break
@@ -576,8 +589,7 @@ class EventLog:
         # before the old segments are unlinked.
         while len(segs) > 1 and segs[0][0] < before:
             segs.pop(0)[1].unlink(missing_ok=True)
-        torn = skipped = 0
-        last: dict | None = None
+        torn = skipped = last_on_disk = 0
         active_size = 0
         while segs:
             first, path = segs[-1]
@@ -586,21 +598,23 @@ class EventLog:
             if scan.size > scan.good_end:
                 torn += scan.size - scan.good_end
                 self._cut(path, scan.good_end)
-            if scan.last is None:
+            if scan.good_end == 0:
                 path.unlink(missing_ok=True)
                 segs.pop()
                 continue
-            last, active_size = scan.last, scan.good_end
+            last_on_disk, active_size = scan.max_seq, scan.good_end
             break
         self._sync_dir()
-        last_on_disk = last["seq"] if last else 0
         meta_first = _nat(meta.get("first_seq"))
         self._first_seq = meta_first or (segs[0][0] if segs else first_seq)
         # ``floor`` is the lowest seq any later open may hand out, and the
         # marker's ``before_seq`` was handed out before its segment went:
         # neither a crash gap nor an eviction can be undone by the disk.
+        # The newest segment's name bounds it too: older segments hold
+        # only seqs below it, whatever the newest one's records say.
         nxt = max(last_on_disk + 1, self._first_seq,
-                  _nat(meta.get("floor")), before)
+                  _nat(meta.get("floor")), before,
+                  segs[-1][0] if segs else 0)
         gap = 0
         reserved = _nat(meta.get("reserved"))
         same_boot = bool(self._boot) and meta.get("boot") == self._boot

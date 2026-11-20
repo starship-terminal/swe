@@ -129,10 +129,11 @@ The boot id is `/proc/sys/kernel/random/boot_id` on Linux and
    is lost, so no gap can be applied).
 3. Unlink segments named below the marker's `before_seq`: an eviction
    that a crash interrupted after writing the marker.
-4. Scan the newest segment forward. Everything after the last valid,
-   newline-terminated record is the torn tail: it is cut off with
-   `ftruncate` and fsynced (`recovery.torn_bytes`). A segment left
-   empty is unlinked and the one before it is scanned the same way.
+4. Scan the newest segment forward. The torn tail is everything after
+   the last newline-terminated line that parses as a record (any seq of
+   at least 1, in order or not): it is cut off with `ftruncate` and
+   fsynced (`recovery.torn_bytes`). A segment left empty is unlinked and
+   the one before it is scanned the same way.
 5. Pick the next seq (above), apply the cap, write `meta.json` with a
    fresh lease, fsync the newest segment once (the last run's writes may
    still be only in the page cache), and open it for append.
@@ -148,12 +149,22 @@ an int `seq` of at least 1, at least the segment's name, and above the
 record before it. A complete JSON line without its `\n` is torn too:
 `\n` is written in the same `os.write` as the line.
 
+**Opening never deletes a record.** Only a torn tail is cut: bytes after
+the last `\n`, and trailing complete lines that do not parse as a record
+at all. A line that parses as a record but fails the floor or the order
+check stays on disk wherever it sits, even after the last in-order
+record, and counts in `recovery.skipped_lines`. The next seq is above
+every seq of a parseable record in the newest segment (in order or not)
+and at least that segment's name, so nothing already on disk is reused;
+`recovery.last_seq` is that highest seq.
+
 **Corruption in the middle.** An invalid line with a valid record after
 it is not a torn write: one writer, appends only, and a torn tail is
 always cut before the next append. It is external damage, so it is left
 in place as evidence and skipped by every reader (`recovery.skipped_lines`
 counts it in the newest segment, `Replay.skipped` in what a replay
-read). Numbering goes on from the last valid record.
+read). Out-of-order records past the cursor are skipped by replay and
+counted there too.
 
 **A failed write.** The segment is cut back to its size before the
 write and the seq is not used (the event was never delivered, so the
@@ -195,7 +206,7 @@ mid-read stays readable through its open handle.
 | `truncated` | the caller asked for history before `oldest_seq` (`after_seq + 1 < oldest_seq`); the events from `oldest_seq` on are still returned |
 | `reason` | `evicted` (the cap dropped it; see `marker`) or `before_start` (it predates the log: a session continued from the hub journal) |
 | `more` | `limit` cut the read; page on with `after_seq` = the last event's seq |
-| `skipped` | corrupt lines passed over, including a record numbered below its file's name |
+| `skipped` | lines passed over: corrupt ones, a record numbered below its file's name, and a record past the cursor that is not above the one before it |
 
 Seqs inside a crash gap are not truncation: nothing was ever kept
 there, and a replay from inside the gap simply starts at the next seq.
@@ -245,6 +256,14 @@ already guarantees one keeper per session; the log's own lock also
 covers a stale keeper, a test or a tool that opens the log directly.
 Closing the log (or the process dying) drops the lock. Readers never
 lock: `read_log` and `replay` read only complete lines.
+
+## Limits
+
+- The format has no per-line checksum, so a bit flip that still parses
+  (a digit of `seq`, say) cannot be told from a real record. A record
+  numbered too high is kept and raises the next seq past it, and the
+  in-order records after it are kept on disk but skipped by replay. A
+  checksum per line is a possible later change.
 
 ## What G5 must know
 
