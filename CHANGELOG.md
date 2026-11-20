@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Leaving a skill with Save all refreshes the Skills list.** The unsaved-changes prompt's Save all wrote SKILL.md without telling the page, so the list kept the old description until Refresh. It now reads the skills again when any file was written, also when another file failed to save, as the editor's own Save does.
+
 - **A SKILL.md description written as a YAML block shows and saves.** The frontmatter form read only `key: value` lines, so a `description: |` or `>` block, or a plain value wrapped onto indented lines, never showed, and the form was often one locked `name` field. The Mac app and the web app now read block scalars (with `-`/`+` chomping and an indentation digit) and wrapped plain values as YAML does. An unchanged value keeps the file byte for byte, a changed value with line breaks is written as a `|` block at the block's own indentation, and one without goes back to a single line. Nested maps and lists are left untouched. CRLF files keep their line endings; before, the app saw no frontmatter in one and would have added a second.
 
 - **Grok 4.6 shows its intelligence score on the Models page.** Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.
