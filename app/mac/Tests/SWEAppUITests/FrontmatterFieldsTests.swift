@@ -1,25 +1,32 @@
+import Foundation
+import SWECore
 import SwiftUI
 import Testing
 @testable import SWEApp
 
-/// A Frontmatter row's binding outlives its field when a reload or revert
-/// shrinks the list; reading it then must not trap.
+/// The skill rail's frontmatter fields read and write the SKILL.md draft
+/// the editor shows: one document, so one Save writes both.
 @Suite @MainActor struct FrontmatterFieldsTests {
-    private final class Box { var fields: [(key: String, value: String)] = [] }
+    @Test func aFieldReadsAndWritesTheSharedDraft() {
+        let document = InstructionDocument(url: URL(fileURLWithPath: "/nonexistent/SKILL.md"))
+        document.text = "---\nname: demo\ndescription: >\n  Old words\n  folded.\nmetadata:\n  a: b\n---\n\nBody\n"
+        var edits = 0
+        let description = SkillDetailContent.field("description", of: document, name: "demo") { edits += 1 }
+        #expect(description.wrappedValue == "Old words folded.\n")
 
-    @Test func aRowPastTheEndReadsEmptyAndDropsWrites() {
-        let box = Box()
-        box.fields = [("name", "demo"), ("description", "old")]
-        let fields = Binding(get: { box.fields }, set: { box.fields = $0 })
-        let row = FrontmatterCard.value(fields, at: 1)
-        #expect(row.wrappedValue == "old")
-        row.wrappedValue = "new"
-        #expect(box.fields[1].value == "new")
+        description.wrappedValue = "New words.\nTwo lines."
+        #expect(document.text == "---\nname: demo\ndescription: |-\n  New words.\n  Two lines.\nmetadata:\n  a: b\n---\n\nBody\n")
+        #expect(description.wrappedValue == "New words.\nTwo lines.")
+        #expect(edits == 1)
 
-        box.fields = [("name", "demo")]
-        #expect(row.wrappedValue == "")
-        row.wrappedValue = "late"
-        #expect(box.fields.count == 1)
-        #expect(box.fields[0].value == "demo")
+        // Setting what is already there writes nothing and is no edit.
+        description.wrappedValue = "New words.\nTwo lines."
+        #expect(edits == 1)
+
+        // The name is the skill's id: the field never writes it.
+        let name = SkillDetailContent.field("name", of: document, name: "demo") { edits += 1 }
+        name.wrappedValue = "other"
+        #expect(name.wrappedValue == "demo")
+        #expect(edits == 1)
     }
 }

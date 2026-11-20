@@ -16,11 +16,17 @@ struct SkillsPage: View {
 
     /// A skill's detail is on screen (`DetailOpenKey`).
     @State private var detailOpen = false
+    /// The skill open in its detail page, nil while the list shows. Kept
+    /// here, not in the list: the page stops scrolling while a detail is
+    /// open (its editor fills the window and scrolls itself), and that
+    /// swap rebuilds the content below it.
+    @State private var opened: Skill?
 
     var body: some View {
         Page(title: "Skills",
              subtitle: "Every skill on this Mac outside a plugin, and which harnesses load it.",
-             back: detailOpen ? ("Back to all skills", { app.navReselects += 1 }) : nil) {
+             back: detailOpen ? ("Back to all skills", { app.navReselects += 1 }) : nil,
+             scrolls: opened == nil) {
             // The harness links fold into one line in the header, so the
             // first skill sits right under the filter bar.
             if case .loaded(let inventory) = model.inventory {
@@ -39,7 +45,7 @@ struct SkillsPage: View {
             .keyboardShortcut("r", modifiers: .command)
             .help("Refresh (⌘R)")
         } content: {
-            InstalledSkills(model: model, newSkill: { adding = true }) {
+            InstalledSkills(model: model, opened: $opened, newSkill: { adding = true }) {
                 app.pluginsTab = .explore
                 app.selection = .plugins
             }
@@ -134,10 +140,10 @@ private struct NewSkillSheet: View {
 private struct InstalledSkills: View {
     @Environment(AppModel.self) private var app
     @Bindable var model: SkillsModel
+    /// The skill open in its detail page, nil while the list shows.
+    @Binding var opened: Skill?
     var newSkill: () -> Void
     var openPlugins: () -> Void
-    /// The skill open in its detail page, nil while the list shows.
-    @State private var opened: Skill?
 
     var body: some View {
         if let opened {
