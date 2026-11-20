@@ -2,30 +2,28 @@ import AppKit
 import SWECore
 import SwiftUI
 
-/// The hook scripts under `~/.swe/hooks`, laid out by the event that
-/// fires them: pick a harness, read its session from SessionStart to
-/// SessionEnd, and click a script to open it in the panel beside the list.
-/// Linking goes through `swe init` — the only writer of links — and a new
-/// script comes from `swe hooks new`. A harness's settings file is never
-/// written here: the new-hook sheet shows the stanza to paste instead.
+/// The hook scripts under `~/.swe/hooks` as one table: a row per script per
+/// event that fires it, for one harness or every harness, with the scripts
+/// nothing fires at the bottom. Clicking a row opens the hook in the table's
+/// place, its facts and runs beside the script's editor. Linking goes
+/// through `swe init` (the only writer of links) and a new script comes
+/// from `swe hooks new`. A harness's settings file is never written here:
+/// the new-hook sheet shows the stanza to paste instead.
 struct HooksPage: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var adding = false
-    /// The hook open in the side panel, nil when none is.
+    /// The hook open in the table's place, nil while the table shows.
     @State private var opened: Hook?
-    /// The harness tab; one that's gone falls back to the first tab.
+    /// The harness dropdown's pick; empty, or one that's gone, is every
+    /// harness (`HookTable.harness(stored:in:)`).
     @AppStorage("hooksHarness") private var harness = ""
     /// Lay out herdr's, Agent Relay's and other installers' hooks too.
     @AppStorage("hooksShowForeign") private var showForeign = false
-    /// The span run counts cover: the timeline's picker, remembered.
+    /// The span run counts cover: the range menu, remembered.
     @AppStorage("hooksStatsWindow") private var statsWindow = HookStatsWindow.week
-    /// The board's width, for the narrow layout; 0 until the first layout.
-    @State private var boardWidth: CGFloat = 0
-
-    /// Under this, the list and a 440pt panel can't sit side by side: the
-    /// open hook takes the board's place until it's closed. 900pt windows
-    /// leave about 610pt here.
-    private static let sideBySideWidth: CGFloat = 980
+    /// The Check control's findings are folded open under the filter row.
+    @State private var showFindings = false
 
     /// App-wide, so a list outlives a trip to another page and the last
     /// one shows at once.
@@ -33,14 +31,22 @@ struct HooksPage: View {
     /// Run counts, app-wide for the same reason.
     private var stats: HookStatsModel { app.hookStats }
 
+    private var animation: Animation? {
+        reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration)
+    }
+
     /// Asks swe for the run counts of the picked window, off the main actor.
     private func loadStats() async {
         await stats.load(window: statsWindow, swe: app.swe, for: app.swePath)
     }
 
     var body: some View {
+        // The open hook's editor fills the window and scrolls itself, so
+        // the page scrolls only while the table shows.
         Page(title: "Hooks",
-             subtitle: "Scripts in ~/.swe/hooks, by the event that fires them in each harness.") {
+             subtitle: "Scripts in ~/.swe/hooks, by the event that fires them in each harness.",
+             back: opened == nil ? nil : ("Back to all hooks", { app.navReselects += 1 }),
+             scrolls: opened == nil) {
             Button("New hook", systemImage: "plus") { adding = true }
                 .primaryButton()
                 .disabled(model.creating)
@@ -53,13 +59,20 @@ struct HooksPage: View {
             .keyboardShortcut("r", modifiers: .command)
             .help("Read the hooks and their run counts again (⌘R)")
         } content: {
-            list
+            if let error = model.actionError { ErrorCard(message: error) }
+            if let opened {
+                detail(for: opened)
+                    .transition(.opacity)
+            } else {
+                list
+                    .transition(.opacity)
+            }
         }
         .task(id: app.swePath) { await model.loadIfStale(swe: app.swe, for: app.swePath) }
-        // Counts load with the page, and again when the picker moves or the
-        // swe changes; the Refresh button runs them too. Never on a timer.
+        // Counts load with the page, and again when the range menu moves or
+        // the swe changes; the Refresh button runs them too. Never on a timer.
         .task(id: [statsWindow.rawValue, app.swePath]) { await loadStats() }
-        // The ⌘K search's hook pick opens its panel. Retried on each
+        // The ⌘K search's hook pick opens its detail. Retried on each
         // load: the pick can land before the inventory does.
         .task(id: app.pendingHook) { applyPendingHook() }
         .onChange(of: model.hooks) { _, _ in applyPendingHook() }
@@ -71,7 +84,6 @@ struct HooksPage: View {
     }
 
     @ViewBuilder private var list: some View {
-        if let error = model.actionError { ErrorCard(message: error) }
         switch model.state {
         case .idle, .loading:
             SkeletonRows(rows: 6, shape: .hook, label: "Reading hooks…")
@@ -87,19 +99,19 @@ struct HooksPage: View {
                 ErrorCard(message: "The hooks list loaded, but its check didn't run: \(checkError)")
             }
             LinksStrip(hooks: inventory.hooks)
-            if !inventory.findings.isEmpty {
-                FindingsCard(findings: inventory.findings)
-            }
             if inventory.hooks.isEmpty {
+                if !inventory.findings.isEmpty {
+                    FindingsCard(findings: inventory.findings)
+                }
                 EmptyCard(text: "No hooks in ~/.swe/hooks yet. A hook script runs when its harness fires an event.",
                           icon: "bolt", actionTitle: "New hook") { adding = true }
             } else {
-                board(inventory.hooks)
+                overview(inventory)
             }
         }
     }
 
-    /// The ⌘K search's pick: open its row's panel, and clear the pending
+    /// The ⌘K search's pick: open its row's detail, and clear the pending
     /// key only once a loaded inventory holds the hook.
     private func applyPendingHook() {
         guard let key = app.pendingHook,
@@ -108,76 +120,113 @@ struct HooksPage: View {
         app.pendingHook = nil
     }
 
-    /// The harness tabs and its timeline, the scripts nothing fires, and
-    /// the open hook's panel to the right; in a narrow window the open
-    /// hook takes the board's place instead.
-    private func board(_ hooks: [Hook]) -> some View {
-        let tabs = HookTimeline.harnesses(in: hooks)
-        let current = tabs.contains(harness) ? harness : (tabs.first ?? "")
-        let timeline = HookTimeline(harness: current, hooks: hooks, includeForeign: showForeign)
-        let idle = HookTimeline.notRunning(in: hooks)
-        let wide = boardWidth == 0 || boardWidth >= Self.sideBySideWidth
-        let counts = stats.state(for: statsWindow)
-        return Group {
-            if let opened, !wide {
-                panel(for: opened, in: hooks, counts: counts)
-            } else {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if !tabs.isEmpty {
-                            // The tabs refuse to shrink: past one row they
-                            // wrap into a grid, the checkbox below them.
-                            ViewThatFits(in: .horizontal) {
-                                HStack(spacing: 12) {
-                                    harnessTabs(tabs, current: current)
-                                    Spacer(minLength: 12)
-                                    foreignToggle(timeline.foreignCount)
-                                }
-                                VStack(alignment: .leading, spacing: 8) {
-                                    harnessTabs(tabs, current: current, columns: 4)
-                                    foreignToggle(timeline.foreignCount)
-                                }
-                            }
-                            TimelineCard(timeline: timeline, opened: opened, counts: counts,
-                                         window: $statsWindow) { opened = $0 }
-                        }
-                        if !idle.isEmpty {
-                            NotRunningCard(hooks: idle, opened: opened) { opened = $0 }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if let opened {
-                        panel(for: opened, in: hooks, counts: counts).frame(width: 440)
+    private func open(_ hook: Hook) {
+        withAnimation(animation) { opened = hook }
+    }
+
+    /// The filter row, the check's findings when folded open, and the table.
+    @ViewBuilder private func overview(_ inventory: HookInventory) -> some View {
+        let hooks = inventory.hooks
+        let harnesses = HookTimeline.harnesses(in: hooks)
+        let picked = HookTable.harness(stored: harness, in: hooks)
+        let table = HookTable(hooks: hooks, harness: picked, includeForeign: showForeign)
+        // The labels never wrap: past one row, the checkbox takes a line
+        // of its own under the menus.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                harnessMenu(harnesses, picked: picked)
+                rangeMenu
+                foreignToggle(table.foreignCount)
+                Spacer(minLength: 8)
+                checkToggle(inventory.findings)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    harnessMenu(harnesses, picked: picked)
+                    rangeMenu
+                    Spacer(minLength: 8)
+                    checkToggle(inventory.findings)
+                }
+                foreignToggle(table.foreignCount)
+            }
+        }
+        if showFindings && !inventory.findings.isEmpty {
+            FindingsCard(findings: inventory.findings)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+        if table.rows.isEmpty {
+            EmptyCard(text: Self.emptyLine(table), icon: "bolt")
+        } else {
+            Card {
+                VStack(alignment: .leading, spacing: 0) {
+                    HooksTable(table: table, counts: stats.state(for: statsWindow), open: open)
+                    if let picked, !table.quietEvents.isEmpty {
+                        Divider().overlay(Theme.border)
+                        QuietEvents(harness: picked, events: table.quietEvents)
+                            .padding(.top, 8)
                     }
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boardWidth = $0 }
     }
 
-    private func panel(for opened: Hook, in hooks: [Hook], counts: HookStatsState) -> some View {
-        // A reload swaps the inventory: follow the same script's row.
-        let hook = hooks.first { $0.rowKey == opened.rowKey } ?? opened
-        return HookDetailView(hook: hook, counts: counts, window: statsWindow,
-                              onBack: { self.opened = nil })
+    /// Why the table has no rows: only other tools' scripts are declared
+    /// and they're hidden, or nothing is declared at all.
+    private static func emptyLine(_ table: HookTable) -> String {
+        let name = table.harness.map { HarnessMark($0).name }
+        if table.foreignCount > 0 {
+            return name.map { "Only other tools' hooks are declared for \($0). Turn on Other tools to see them." }
+                ?? "Only other tools' hooks are declared. Turn on Other tools to see them."
+        }
+        return name.map { "Nothing is declared for \($0) yet." } ?? "No settings file declares a hook yet."
     }
 
-    private func harnessTabs(_ tabs: [String], current: String, columns: Int = 1) -> some View {
-        Tabs(options: tabs.map { ($0, HarnessMark($0).name) },
-             selection: Binding(get: { current }, set: { harness = $0 }),
-             icons: Dictionary(uniqueKeysWithValues: tabs.map { ($0, $0) }),
-             fillWidth: columns > 1, columns: columns)
+    /// Every harness first, then each harness with a declared hook, its
+    /// logo beside it. Closed, it says "All" so the label stays short.
+    private func harnessMenu(_ harnesses: [String], picked: String?) -> some View {
+        SelectMenu(label: "Harness",
+                   options: [(String?.none, "All harnesses", nil)]
+                       + harnesses.map { (String?.some($0), HarnessMark($0).name, $0) },
+                   selection: Binding(get: { picked },
+                                      set: { pick in withAnimation(animation) { harness = pick ?? "" } }),
+                   width: nil,
+                   title: picked.map { HarnessMark($0).name } ?? "All")
+    }
+
+    private var rangeMenu: some View {
+        SelectMenu(options: HookStatsWindow.allCases.map { ($0, $0.title) },
+                   selection: $statsWindow, width: nil)
+            .help("The span the Fires, Blocks and Rate columns count. They add up every harness that runs the script.")
     }
 
     @ViewBuilder private func foreignToggle(_ count: Int) -> some View {
         if count > 0 {
-            Toggle("Other tools (\(count))", isOn: $showForeign)
+            Toggle("Other tools (\(count))", isOn: Binding(
+                get: { showForeign },
+                set: { on in withAnimation(animation) { showForeign = on } }))
                 .toggleStyle(.checkbox)
                 .font(Theme.caption).foregroundStyle(Theme.textSecondary)
                 .fixedSize()
                 .help("Scripts herdr, Agent Relay and other installers declared. SWE lists them but doesn't manage them.")
         }
+    }
+
+    /// "Check: 1 finding": folds `swe hooks check`'s findings open under
+    /// the filter row. Hidden while the check finds nothing.
+    @ViewBuilder private func checkToggle(_ findings: [HookFinding]) -> some View {
+        if !findings.isEmpty {
+            CheckToggle(count: findings.count, isOpen: showFindings) {
+                withAnimation(animation) { showFindings.toggle() }
+            }
+        }
+    }
+
+    /// The open hook in the table's place.
+    private func detail(for opened: Hook) -> some View {
+        // A reload swaps the inventory: follow the same script's row.
+        let hook = model.hooks.first { $0.rowKey == opened.rowKey } ?? opened
+        return HookDetailView(hook: hook, counts: stats.state(for: statsWindow), window: statsWindow,
+                              onBack: { withAnimation(animation) { self.opened = nil } })
     }
 
     /// swe's refusal of a page it does not have reads friendlier said plain.
@@ -269,13 +318,17 @@ private struct LinksStrip: View {
 }
 
 /// The `swe hooks check` report: a declaration naming a script that is
-/// gone, a linked script nothing declares, or a script never linked.
+/// gone, a linked script nothing declares, or a script never linked. It
+/// opens from the filter row's Check control, which already says "Check".
 private struct FindingsCard: View {
     var findings: [HookFinding]
 
     var body: some View {
-        Card(title: "Check", subtitle: "swe hooks check compares the declarations, the links and the hub.") {
+        Card {
             VStack(alignment: .leading, spacing: 0) {
+                Text("swe hooks check compares the declarations, the links and the hub.")
+                    .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                    .padding(.bottom, 4)
                 ForEach(Array(findings.enumerated()), id: \.element.id) { index, finding in
                     if index > 0 { Divider().overlay(Theme.border) }
                     HStack(alignment: .top, spacing: 10) {
@@ -296,124 +349,252 @@ private struct FindingsCard: View {
     }
 }
 
-// MARK: - Timeline
-
-/// One harness's session, event by event: each lane names the event and
-/// lists the scripts declared on it. Events nothing fires on fold into one
-/// line at the bottom and open in place, in session order.
-private struct TimelineCard: View {
-    var timeline: HookTimeline
-    var opened: Hook?
-    /// The run counts for the picked window, beside every script.
-    var counts: HookStatsState
-    @Binding var window: HookStatsWindow
-    var open: (Hook) -> Void
-    @State private var showQuiet = false
+/// The filter row's Check control: a warning mark, the finding count and
+/// a chevron, drawn like the menus beside it so the row reads as one.
+private struct CheckToggle: View {
+    var count: Int
+    var isOpen: Bool
+    var toggle: () -> Void
+    @State private var hovering = false
 
     var body: some View {
-        let quiet = timeline.quietEvents
-        let lanes = Dictionary(uniqueKeysWithValues: timeline.lanes.map { ($0.event, $0) })
-        let events = showQuiet ? HookEvents.sorted(Array(lanes.keys) + quiet) : timeline.lanes.map(\.event)
-        // The column labels sit on the first lane with scripts in it.
-        let labelled = events.first { lanes[$0] != nil }
-        Card(title: "Session timeline",
-             subtitle: "Run counts add up every harness that runs the script.",
-             accessory: {
-                 SelectMenu(options: HookStatsWindow.allCases.map { ($0, $0.title) },
-                            selection: $window, width: nil)
-             }) {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(Theme.warningText)
+                Text("Check: \(count) \(count == 1 ? "finding" : "findings")")
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                    .font(Theme.font(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .font(Theme.bodySmall)
+            .padding(.horizontal, 12)
+            .frame(height: Theme.fieldHeight)
+            .background(Theme.field, in: .rect(cornerRadius: Theme.selectRadius))
+            .overlay(RoundedRectangle(cornerRadius: Theme.selectRadius)
+                .strokeBorder(hovering || isOpen ? Theme.borderHover : Theme.border, lineWidth: 1))
+            .contentShape(.rect(cornerRadius: Theme.selectRadius))
+        }
+        .plainButton(cornerRadius: Theme.selectRadius)
+        .onHover { hovering = $0 }
+        .fixedSize()
+        .help(isOpen ? "Hide what swe hooks check found" : "Show what swe hooks check found")
+        .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
+    }
+}
+
+// MARK: - Table
+
+/// The table's column widths for the width it has. Matcher and the
+/// script's summary give way first, then the Harness column drops its
+/// names for logos; past that the table scrolls sideways, like the other
+/// tables, rather than squeezing a column.
+@MainActor
+private struct HookColumns {
+    let script: CGFloat
+    let event: CGFloat
+    let matcher: CGFloat
+    /// 0 when one harness is picked: the column is gone.
+    let harness: CGFloat
+    /// The Harness column shows logos only.
+    let compactHarness: Bool
+    let fires: CGFloat
+    let blocks: CGFloat
+    let rate: CGFloat
+
+    /// Cells pad their text this far from their column edges.
+    static let inset: CGFloat = 8
+
+    var showsHarness: Bool { harness > 0 }
+    /// The fixed columns' separators: one before each column but Script.
+    var separators: CGFloat { showsHarness ? 6 : 5 }
+    var total: CGFloat { script + event + matcher + harness + fires + blocks + rate + separators }
+    /// Everything right of the Script column, for a not-running row's span.
+    var afterScript: CGFloat { total - script - 1 }
+
+    init(available: CGFloat, showsHarness: Bool) {
+        let scriptMin = Theme.scaled(150)
+        // The Script width under which the harness names fold to logos.
+        let scriptComfort = Theme.scaled(220)
+        // The Script width Matcher waits for before it widens.
+        let scriptIdeal = Theme.scaled(280)
+        let matcherMin = Theme.scaled(64)
+        let matcherIdeal = Theme.scaled(112)
+        event = Theme.scaled(136)
+        fires = Theme.scaled(52)
+        blocks = Theme.scaled(52)
+        rate = Theme.scaled(44)
+        let fixed = event + fires + blocks + rate + CGFloat(showsHarness ? 6 : 5)
+        let full = Theme.scaled(128), compact = Theme.scaled(60)
+        if !showsHarness {
+            harness = 0
+            compactHarness = false
+        } else if available - fixed - full >= scriptComfort + matcherMin {
+            harness = full
+            compactHarness = false
+        } else {
+            harness = compact
+            compactHarness = true
+        }
+        let flexible = max(available - fixed - harness, scriptMin + matcherMin)
+        matcher = min(max(flexible - scriptIdeal, matcherMin), matcherIdeal)
+        script = flexible - matcher
+    }
+}
+
+/// One row per script per event, in session order, then the scripts
+/// nothing fires; the same header, dividers and hover fill as the MCP
+/// servers and Skills tables. A row opens its hook.
+private struct HooksTable: View {
+    var table: HookTable
+    /// The run counts for the picked window, beside every script.
+    var counts: HookStatsState
+    var open: (Hook) -> Void
+
+    /// Rows the table shows before folding behind a Show more row.
+    private static let foldLimit = 20
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showAll = false
+    /// The card's inner width: the table fills it, and scrolls only past it.
+    @State private var available: CGFloat = 0
+
+    var body: some View {
+        let columns = HookColumns(available: available, showsHarness: table.harness == nil)
+        ScrollView(.horizontal) {
             VStack(alignment: .leading, spacing: 0) {
-                if timeline.lanes.isEmpty {
-                    Text(timeline.foreignCount > 0
-                         ? "Only other tools' hooks are declared for \(HarnessMark(timeline.harness).name). Turn on Other tools to see them."
-                         : "Nothing is declared for \(HarnessMark(timeline.harness).name) yet.")
-                        .font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
-                        .padding(.vertical, 8)
+                header(columns)
+                Divider().overlay(Theme.border)
+                let shown = RowFold.visible(table.rows, limit: Self.foldLimit, expanded: showAll)
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, row in
+                    HookRow(row: row, columns: columns,
+                            cells: counts.cells(for: row.hook.source)) { open(row.hook) }
+                    if index < shown.count - 1 { Divider().overlay(Theme.border) }
                 }
-                ForEach(Array(events.enumerated()), id: \.element) { index, event in
-                    if index > 0 { Divider().overlay(Theme.border) }
-                    LaneRow(event: event, caption: HookEvents.caption(for: event),
-                            showsColumns: event == labelled) {
-                        if let lane = lanes[event] {
-                            ForEach(lane.entries) { entry in
-                                EntryRow(entry: entry, isOpen: opened?.rowKey == entry.hook.rowKey,
-                                         cells: counts.cells(for: entry.hook.source)) {
-                                    open(entry.hook)
-                                }
-                            }
-                        } else {
-                            Text("Nothing runs")
-                                .font(Theme.caption).foregroundStyle(Theme.textMuted)
-                                .padding(.vertical, 5)
+                let hidden = RowFold.hiddenCount(total: table.rows.count, limit: Self.foldLimit)
+                if hidden > 0 {
+                    Divider().overlay(Theme.border)
+                    ExpandRow(isExpanded: showAll, hidden: hidden,
+                              help: (expand: "Show every row",
+                                     collapse: "Show only the first \(Self.foldLimit)"),
+                              edge: .inset) {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration)) {
+                            showAll.toggle()
                         }
                     }
                 }
-                if !quiet.isEmpty {
-                    Divider().overlay(Theme.border)
-                    Button { showQuiet.toggle() } label: {
-                        Label(showQuiet ? "Hide events with nothing on them"
-                                        : "\(quiet.count) more \(quiet.count == 1 ? "event has" : "events have") nothing on them",
-                              systemImage: showQuiet ? "chevron.up" : "chevron.down")
-                            .font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                            .padding(.vertical, 4)
-                            .contentShape(.rect)
-                    }
-                    .plainButton(cornerRadius: Theme.smallRadius)
-                    .padding(.top, 8)
-                }
             }
+            // Exactly the card's width, or the columns' minimum if wider, so
+            // a long name truncates instead of pushing the numbers away.
+            .frame(width: max(available, columns.total), alignment: .leading)
         }
+        .scrollIndicators(.automatic)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
+    }
+
+    /// The column names. Each separator reaches through the row's bottom
+    /// padding to the divider, so the column edges read as one line.
+    private func header(_ columns: HookColumns) -> some View {
+        let inset = HookColumns.inset
+        return HStack(spacing: 0) {
+            Text("Script")
+                .padding(.trailing, inset)
+                .frame(width: columns.script, alignment: .leading)
+            columnSeparator().padding(.bottom, -8)
+            Text("Event")
+                .padding(.horizontal, inset)
+                .frame(width: columns.event, alignment: .leading)
+            columnSeparator().padding(.bottom, -8)
+            Text("Matcher")
+                .padding(.horizontal, inset)
+                .frame(width: columns.matcher, alignment: .leading)
+            if columns.showsHarness {
+                columnSeparator().padding(.bottom, -8)
+                Text("Harness")
+                    .padding(.horizontal, columns.compactHarness ? 4 : inset)
+                    .frame(width: columns.harness,
+                           alignment: columns.compactHarness ? .center : .leading)
+            }
+            columnSeparator().padding(.bottom, -8)
+            Text("Fires")
+                .padding(.horizontal, inset)
+                .frame(width: columns.fires, alignment: .trailing)
+            columnSeparator().padding(.bottom, -8)
+            Text("Blocks")
+                .padding(.horizontal, inset)
+                .frame(width: columns.blocks, alignment: .trailing)
+            columnSeparator().padding(.bottom, -8)
+            Text("Rate")
+                .padding(.leading, inset)
+                .frame(width: columns.rate, alignment: .trailing)
+        }
+        .lineLimit(1)
+        .font(Theme.tableHeader)
+        .tracking(0.12)
+        .foregroundStyle(Theme.tableHeaderText)
+        .padding(.bottom, 8)
     }
 }
 
-/// The event's name and when it fires on the left, its scripts on the right.
-private struct LaneRow<Content: View>: View {
-    var event: String
-    var caption: String?
-    /// Label the number columns above this lane's scripts.
-    var showsColumns = false
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(event)
-                    .font(Theme.font(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Theme.textPrimary)
-                if let caption {
-                    Text(caption).font(Theme.caption).foregroundStyle(Theme.textMuted)
-                }
-            }
-            .frame(width: 168, alignment: .leading)
-            .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 2) {
-                if showsColumns { StatColumnLabels() }
-                content
-            }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Rows pad themselves for their hover fill; this keeps
-                // their text in line with the event name's column edge.
-                .padding(.leading, -8)
-        }
-        .padding(.vertical, 8)
-    }
-}
-
-/// One script on one event: its name, the tool it's gated to, anything
-/// wrong with it, and its header line. Another installer's script reads
-/// quieter, behind a puzzle-piece mark.
-private struct EntryRow: View {
-    var entry: HookTimeline.Entry
-    var isOpen: Bool
+/// One row: a script on one event with its matcher, harness and run
+/// counts, or a script nothing fires, muted, its reason across the rest.
+/// Another installer's script reads quieter, behind a puzzle-piece mark.
+private struct HookRow: View {
+    var row: HookTable.Row
+    var columns: HookColumns
     var cells: HookStatsCells
     var open: () -> Void
+    @State private var hovering = false
+
+    private var hook: Hook { row.hook }
 
     var body: some View {
-        let hook = entry.hook
+        Button(action: open) {
+            HStack(spacing: 0) {
+                scriptCell
+                    .padding(.trailing, HookColumns.inset)
+                    .frame(width: columns.script, alignment: .leading)
+                columnSeparator()
+                if let event = row.event {
+                    eventCell(event)
+                        .padding(.horizontal, HookColumns.inset)
+                        .frame(width: columns.event, alignment: .leading)
+                    columnSeparator()
+                    matcherCell
+                        .padding(.horizontal, HookColumns.inset)
+                        .frame(width: columns.matcher, alignment: .leading)
+                    if columns.showsHarness {
+                        columnSeparator()
+                        harnessCell
+                            .padding(.horizontal, columns.compactHarness ? 4 : HookColumns.inset)
+                            .frame(width: columns.harness,
+                                   alignment: columns.compactHarness ? .center : .leading)
+                    }
+                    StatCells(cells: cells, columns: columns)
+                } else {
+                    notRunningCell
+                        .padding(.leading, HookColumns.inset)
+                        .frame(width: columns.afterScript, alignment: .leading)
+                }
+            }
+            .padding(.vertical, 8)
+            .background(hovering ? Theme.rowHover : .clear)
+            .contentShape(.rect)
+        }
+        .plainButton(cornerRadius: Theme.smallRadius)
+        .onHover { hovering = $0 }
+        .help(hook.summary.isEmpty ? "Open \(hook.script)" : hook.summary)
+        .accessibilityLabel(Text(spoken))
+    }
+
+    /// The name, anything wrong with it, and its header line under it.
+    private var scriptCell: some View {
         let summary = HookTimeline.shortSummary(hook.summary)
-        HookButton(isOpen: isOpen, help: hook.summary.isEmpty ? "Open \(hook.script)" : hook.summary, action: open) {
-            HStack(spacing: 8) {
-                if entry.isForeign {
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                if row.isForeign {
                     Image(systemName: "puzzlepiece.extension")
                         .font(Theme.font(size: 11))
                         .foregroundStyle(Theme.textMuted)
@@ -421,70 +602,119 @@ private struct EntryRow: View {
                 }
                 Text(hook.script)
                     .font(Theme.font(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundStyle(entry.isForeign ? Theme.textSecondary : Theme.textPrimary)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                if let matcher = entry.matcherLabel { MatcherPill(text: matcher) }
-                if let problem = hook.problem { Badge(problem) }
-                if !summary.isEmpty {
-                    Text(summary)
-                        .font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1).truncationMode(.tail)
+                    .foregroundStyle(row.isForeign || !row.isRunning ? Theme.textSecondary : Theme.textPrimary)
+                    .lineLimit(1).truncationMode(.middle)
+                // "Not installed" is skipped's word for a missing harness;
+                // a not-running row's reason says the real one.
+                if let problem = hook.problem, row.isRunning || hook.state != .skipped {
+                    Badge(problem).fixedSize()
                 }
-                Spacer(minLength: 0)
-                StatCells(cells: cells)
+            }
+            if !summary.isEmpty {
+                Text(summary)
+                    .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                    .lineLimit(1).truncationMode(.tail)
             }
         }
     }
-}
 
-/// The three number columns on every script row, and their labels. The
-/// widths are shared so the labels, the numbers and the loading bars line
-/// up, and the page does not shift when the numbers arrive.
-private enum StatColumns {
-    @MainActor static var fires: CGFloat { Theme.scaled(44) }
-    @MainActor static var blocks: CGFloat { Theme.scaled(52) }
-    @MainActor static var rate: CGFloat { Theme.scaled(44) }
-    static let gap: CGFloat = 8
-}
-
-/// `Fires`, `Blocks` and `Rate` over the columns, right-aligned. It pads
-/// like a row, so the labels sit over the numbers.
-private struct StatColumnLabels: View {
-    var body: some View {
-        HStack(spacing: StatColumns.gap) {
-            label("Fires", width: StatColumns.fires)
-            label("Blocks", width: StatColumns.blocks)
-            label("Rate", width: StatColumns.rate)
+    /// The event's name and when it fires.
+    private func eventCell(_ event: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(event)
+                .font(Theme.font(size: 12, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1).truncationMode(.tail)
+            if let caption = HookEvents.caption(for: event) {
+                Text(caption)
+                    .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                    .lineLimit(1).truncationMode(.tail)
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 2)
-        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private func label(_ text: String, width: CGFloat) -> some View {
-        Text(text).font(Theme.caption).foregroundStyle(Theme.textMuted)
-            .lineLimit(1)
-            .frame(width: width, alignment: .trailing)
+    @ViewBuilder private var matcherCell: some View {
+        if let label = row.matcherLabel {
+            MatcherPill(text: label).help(label)
+        }
+    }
+
+    /// The harness's logo and name; the logo alone when narrow.
+    @ViewBuilder private var harnessCell: some View {
+        let mark = HarnessMark(hook.harness)
+        HStack(spacing: 6) {
+            if let icon = mark.icon { HarnessIcon(harness: icon, size: 16) }
+            if !columns.compactHarness || mark.icon == nil {
+                Text(mark.name)
+                    .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+        }
+        .help(mark.name)
+    }
+
+    /// "Not running" and why, across every column right of Script.
+    private var notRunningCell: some View {
+        HStack(spacing: 8) {
+            // Every harness's rows say whose folder it is; a folder that is
+            // no harness has no mark to show.
+            if columns.showsHarness, let icon = HarnessMark(hook.harness).icon {
+                HarnessIcon(harness: icon, size: 14)
+                    .help(HarnessMark(hook.harness).name)
+            }
+            Text("Not running")
+                .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).fixedSize()
+            Text(Self.reason(hook))
+                .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                .lineLimit(1).truncationMode(.tail)
+        }
+    }
+
+    /// swe's note on the row, else the script's header line, else the plain fact.
+    static func reason(_ hook: Hook) -> String {
+        if !hook.detail.isEmpty { return hook.detail.prefix(1).uppercased() + hook.detail.dropFirst() }
+        let summary = HookTimeline.shortSummary(hook.summary)
+        return summary.isEmpty ? "No settings file declares it" : summary
+    }
+
+    private var spoken: String {
+        var parts = [hook.script]
+        if row.isForeign { parts.append("declared by another tool") }
+        if let problem = hook.problem { parts.append(problem) }
+        if let event = row.event {
+            parts.append("on \(event)")
+            if let label = row.matcherLabel { parts.append(label) }
+            if columns.showsHarness { parts.append(HarnessMark(hook.harness).name) }
+            parts.append(StatCells.spoken(cells))
+        } else {
+            parts.append("not running, \(Self.reason(hook))")
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
-/// One script's fires, blocks and block rate. Bars stand in while swe
-/// reads, dashes when it could not answer, and the numbers fade in
-/// (unless Reduce Motion is on).
+/// One script's fires, blocks and block rate, each behind its column's
+/// separator. Bars stand in while swe reads, dashes when it could not
+/// answer, and the numbers fade in (unless Reduce Motion is on).
 private struct StatCells: View {
     var cells: HookStatsCells
+    var columns: HookColumns
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: StatColumns.gap) {
-            cell(fires, width: StatColumns.fires, bar: 20)
-            cell(blocks, width: StatColumns.blocks, bar: 20)
-            cell(rate, width: StatColumns.rate, bar: 26)
+        HStack(spacing: 0) {
+            columnSeparator()
+            cell(fires, bar: 20).padding(.horizontal, HookColumns.inset)
+                .frame(width: columns.fires, alignment: .trailing)
+            columnSeparator()
+            cell(blocks, bar: 20).padding(.horizontal, HookColumns.inset)
+                .frame(width: columns.blocks, alignment: .trailing)
+            columnSeparator()
+            cell(rate, bar: 26).padding(.leading, HookColumns.inset)
+                .frame(width: columns.rate, alignment: .trailing)
         }
         .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: cells)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(spoken))
     }
 
     private typealias Figure = (text: String, color: Color)?
@@ -514,16 +744,17 @@ private struct StatCells: View {
         }
     }
 
-    private var spoken: String {
+    /// What VoiceOver reads for the three numbers.
+    static func spoken(_ cells: HookStatsCells) -> String {
         switch cells {
-        case .loading: "Counting runs"
-        case .dashes: "Run counts unavailable"
+        case .loading: "counting runs"
+        case .dashes: "run counts unavailable"
         case .counts(let c):
-            c.hasRuns ? "\(c.fires) runs, \(c.blocks) blocked, block rate \(c.rateLabel)" : "No runs"
+            c.hasRuns ? "\(c.fires) runs, \(c.blocks) blocked, block rate \(c.rateLabel)" : "no runs"
         }
     }
 
-    private func cell(_ figure: Figure, width: CGFloat, bar: CGFloat) -> some View {
+    private func cell(_ figure: Figure, bar: CGFloat) -> some View {
         ZStack(alignment: .trailing) {
             if let figure {
                 Text(figure.text)
@@ -538,7 +769,7 @@ private struct StatCells: View {
                     .transition(.opacity)
             }
         }
-        .frame(width: width, height: Theme.scaled(16), alignment: .trailing)
+        .frame(maxWidth: .infinity, minHeight: Theme.scaled(16), alignment: .trailing)
     }
 }
 
@@ -551,92 +782,65 @@ private struct MatcherPill: View {
         Text(text)
             .font(Theme.font(size: 11, weight: .medium, design: .monospaced))
             .foregroundStyle(Theme.link)
-            .lineLimit(1)
+            .lineLimit(1).truncationMode(.tail)
             .padding(.horizontal, 7)
             .padding(.vertical, 1)
             .background(Theme.link.opacity(0.12), in: .capsule)
     }
 }
 
-/// Your scripts no settings file declares: a skeleton not pasted in yet, a
-/// dormant shared script, a folder that is no harness.
-private struct NotRunningCard: View {
-    var hooks: [Hook]
-    var opened: Hook?
-    var open: (Hook) -> Void
+/// The events one harness supports that nothing shown is declared on: a
+/// muted line under the table that opens in place, in session order.
+private struct QuietEvents: View {
+    var harness: String
+    var events: [String]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var open = false
 
     var body: some View {
-        Card(title: "Not running", subtitle: "No settings file declares these, so no harness fires them.") {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(hooks, id: \.rowKey) { hook in
-                    HookButton(isOpen: opened?.rowKey == hook.rowKey, help: "Open \(hook.script)") {
-                        open(hook)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text(hook.script)
-                                .font(Theme.font(size: 13, weight: .medium, design: .monospaced))
-                                .foregroundStyle(Theme.textPrimary)
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration)) { open.toggle() }
+            } label: {
+                Label(open ? "Hide events with nothing on them"
+                           : "\(events.count) more \(events.count == 1 ? "event has" : "events have") nothing on them",
+                      systemImage: open ? "chevron.up" : "chevron.down")
+                    .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                    .padding(.vertical, 4)
+                    .contentShape(.rect)
+            }
+            .plainButton(cornerRadius: Theme.smallRadius)
+            .help("Events \(HarnessMark(harness).name) fires that no script shown here runs on")
+            if open {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(events, id: \.self) { event in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(event)
+                                .font(Theme.font(size: 12, design: .monospaced))
+                                .foregroundStyle(Theme.textSecondary)
                                 .lineLimit(1)
-                                .layoutPriority(1)
-                            // A folder that is no harness has no mark to show.
-                            if HarnessMark(hook.harness).icon != nil {
-                                HarnessMarkView(harness: hook.harness, size: 13)
-                                    .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                                .frame(width: Theme.scaled(160), alignment: .leading)
+                            if let caption = HookEvents.caption(for: event) {
+                                Text(caption).font(Theme.caption).foregroundStyle(Theme.textMuted)
+                                    .lineLimit(1)
                             }
-                            // "Not installed" is skipped's word for a missing
-                            // harness; the detail says the real reason.
-                            if let problem = hook.problem, hook.state != .skipped { Badge(problem) }
-                            Text(reason(hook))
-                                .font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                                .lineLimit(1).truncationMode(.tail)
-                            Spacer(minLength: 0)
                         }
                     }
                 }
+                .padding(.bottom, 4)
+                .transition(.opacity)
             }
-            .padding(.horizontal, -8)
         }
-    }
-
-    /// swe's note on the row, else the script's header line, else the plain fact.
-    private func reason(_ hook: Hook) -> String {
-        if !hook.detail.isEmpty { return hook.detail.prefix(1).uppercased() + hook.detail.dropFirst() }
-        let summary = HookTimeline.shortSummary(hook.summary)
-        return summary.isEmpty ? "No settings file declares it" : summary
     }
 }
 
-/// A clickable hook row: a hover fill, and the selected fill while its
-/// panel is open.
-private struct HookButton<Label: View>: View {
-    var isOpen: Bool
-    var help: String
-    var action: () -> Void
-    @ViewBuilder var label: Label
-    @State private var hovering = false
+// MARK: - Hook detail
 
-    var body: some View {
-        Button(action: action) {
-            label
-                .padding(.vertical, 5)
-                .padding(.horizontal, 8)
-                .contentShape(.rect)
-        }
-        .plainButton(cornerRadius: Theme.controlRadius)
-        .background(isOpen ? Theme.selected : hovering ? Theme.panelHover : .clear,
-                    in: .rect(cornerRadius: Theme.controlRadius))
-        .onHover { hovering = $0 }
-        .help(help)
-    }
-}
-
-// MARK: - Hook panel
-
-/// One hook beside the list: what fires it and where it's declared, where
-/// it's linked, and the script itself in a raw editor. The script is the
-/// hub copy under ~/.swe/hooks; edits to it reach every link `swe init`
-/// made. InstructionDocument preserves the file's executable bit across a
-/// save.
+/// One hook in the table's place: a rail with what fires it, where it's
+/// declared and linked, and how it ran, beside the script in a raw editor
+/// that fills the window. The script is the hub copy under ~/.swe/hooks;
+/// edits to it reach every link `swe init` made. InstructionDocument
+/// preserves the file's executable bit across a save.
 private struct HookDetailView: View {
     @Environment(AppModel.self) private var app
     var hook: Hook
@@ -645,8 +849,11 @@ private struct HookDetailView: View {
     var window: HookStatsWindow
     var onBack: () -> Void
 
-    /// The model's, not the view's: closing the panel keeps the drafts so
-    /// an edit survives a trip to another hook and the app's quit check
+    /// The rail's width, the AGENTS.md chapter rail's.
+    private static let railWidth: CGFloat = 300
+
+    /// The model's, not the view's: going back keeps the drafts so an
+    /// edit survives a trip to another hook and the app's quit check
     /// still sees it.
     private var drafts: PrimitiveDrafts { app.hooks.drafts }
     @State private var leaving = false
@@ -655,9 +862,8 @@ private struct HookDetailView: View {
     /// path it was worked out for; nil until the first lands.
     @State private var found: (path: String, check: HookScript)?
     /// `swe hooks info`'s take on the script, for the command line and
-    /// timeout the list leaves out, with the source it was asked for: the
-    /// panel stays up while another hook loads, and must not show the
-    /// last one's details under the new name.
+    /// timeout the list leaves out, with the source it was asked for, so
+    /// a reply for another hook never shows under this one's name.
     @State private var info: (source: String, info: HookInfo)?
     /// Bumped by `reload()` so the check is worked out again after a save.
     @State private var refresh = 0
@@ -683,11 +889,90 @@ private struct HookDetailView: View {
             if let leaveError {
                 ErrorCard(message: leaveError)
             }
+            HStack(alignment: .top, spacing: 12) {
+                rail
+                    .frame(width: Self.railWidth)
+                    .frame(maxHeight: .infinity)
+                scriptPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .task(id: [hook.source, home.path, String(refresh)]) {
+            let source = hook.source, home = home
+            let (check, folder) = await offMain {
+                var directory: ObjCBool = false
+                let folder = FileManager.default.fileExists(atPath: source, isDirectory: &directory)
+                    && directory.boolValue
+                return (HookScript(source: source, home: home), folder)
+            }
+            guard !Task.isCancelled else { return }
+            // Open the document here, never in body: document(for:) writes
+            // the drafts store, which body must not do mid-update.
+            if check.exists && !folder { drafts.document(for: source) }
+            isFolder = folder
+            found = (source, check)
+        }
+        // Refetch on a refreshed row or a save: the row the page hands
+        // down may differ from what the first look fetched.
+        .task(id: InfoKey(hook: hook, refresh: refresh)) {
+            let source = hook.source
+            let fetched = try? await app.swe.hookInfo(name: hook.script)
+            guard !Task.isCancelled else { return }
+            info = fetched.map { (source, $0) }
+        }
+        // The page header's back chevron (and its ⌘[) and reselecting the
+        // Hooks sidebar item both come through here.
+        .onChange(of: app.navReselects) { leave() }
+        .alert("Unsaved changes", isPresented: $leaving) {
+            Button("Save") { saveAndLeave() }
+            // Discard drops the document, so reopening reads disk, not
+            // the edit that was thrown away.
+            Button("Discard", role: .destructive) {
+                drafts.remove(under: hook.source)
+                onBack()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("“\(hook.script)” has unsaved changes.")
+        }
+    }
+
+    /// Re-asks `swe hooks info` when the hook row changes under the open
+    /// detail (a Refresh) or after a save (`reload` bumps `refresh`).
+    private struct InfoKey: Equatable {
+        var hook: Hook
+        var refresh: Int
+    }
+
+    /// The left rail: the script and its summary, its declaration, and its
+    /// runs. It scrolls on its own when it is taller than the window.
+    private var rail: some View {
+        Strip {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    identity
+                    Divider().overlay(Theme.border)
+                    declaration
+                    HookRunsGroup(source: hook.source, counts: counts, window: window)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 4)
+            }
+            .scrollIndicators(.automatic)
+            .frame(maxHeight: .infinity)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    /// The right pane: the lock note over a read-only script, then the
+    /// editor, or why there is none.
+    @ViewBuilder private var scriptPane: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if let check, !check.editable {
                 PrimitiveLockNote(text: "Only scripts inside ~/.swe/hooks can be edited, so \(hook.script) is read-only.")
             }
-            header
-            HookRunsCard(source: hook.source, counts: counts, window: window)
             if let check {
                 if !check.exists {
                     Card {
@@ -709,7 +994,7 @@ private struct HookDetailView: View {
                         readOnly: !check.editable,
                         rawOnly: true,
                         onSaved: reload)
-                        .frame(height: 460)
+                        .frame(maxHeight: .infinity)
                 } else {
                     SkeletonLines(rows: 10, label: "Opening the script…")
                 }
@@ -717,143 +1002,107 @@ private struct HookDetailView: View {
                 SkeletonDetail(label: "Checking the script…")
             }
         }
-        .task(id: [hook.source, home.path, String(refresh)]) {
-            let source = hook.source, home = home
-            let (check, folder) = await offMain {
-                var directory: ObjCBool = false
-                let folder = FileManager.default.fileExists(atPath: source, isDirectory: &directory)
-                    && directory.boolValue
-                return (HookScript(source: source, home: home), folder)
-            }
-            guard !Task.isCancelled else { return }
-            // Open the document here, never in body: document(for:) writes
-            // the drafts store, which body must not do mid-update.
-            if check.exists && !folder { drafts.document(for: source) }
-            isFolder = folder
-            found = (source, check)
-        }
-        // Refetch on a refreshed row or a save: the row the list hands
-        // down may differ from what the first look fetched.
-        .task(id: InfoKey(hook: hook, refresh: refresh)) {
-            let source = hook.source
-            let fetched = try? await app.swe.hookInfo(name: hook.script)
-            guard !Task.isCancelled else { return }
-            info = fetched.map { (source, $0) }
-        }
-        .onChange(of: app.navReselects) { leave() }
-        // Invisible, but its shortcut closes the panel: reselecting the
-        // Hooks sidebar item does it by pointer.
-        .background(Button("Close", action: leave)
-            .keyboardShortcut("[", modifiers: .command)
-            .opacity(0)
-            .accessibilityHidden(true))
-        .alert("Unsaved changes", isPresented: $leaving) {
-            Button("Save") { saveAndLeave() }
-            // Discard drops the document, so reopening reads disk, not
-            // the edit that was thrown away.
-            Button("Discard", role: .destructive) {
-                drafts.remove(under: hook.source)
-                onBack()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("“\(hook.script)” has unsaved changes.")
-        }
     }
 
-    /// Re-asks `swe hooks info` when the hook row changes under the open
-    /// panel (a Refresh) or after a save (`reload` bumps `refresh`).
-    private struct InfoKey: Equatable {
-        var hook: Hook
-        var refresh: Int
-    }
-
-    private var header: some View {
-        let declared = placement?.declared ?? hook.declared
+    /// The script's name, its header line and Show in Finder.
+    private var identity: some View {
         let summary = [placement?.summary ?? "", hook.summary].first { !$0.isEmpty } ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 6) {
+                Text(hook.script)
+                    .font(Theme.font(size: 16, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(2).truncationMode(.middle)
+                Spacer(minLength: 8)
+                Button { NSWorkspace.shared.activateFileViewerSelecting([source]) } label: {
+                    Image(systemName: "folder")
+                }
+                .iconButton()
+                .help("Show in Finder")
+                .accessibilityLabel("Show in Finder")
+            }
+            if !summary.isEmpty {
+                Text(summary).font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Where the script is declared and linked: the harness, the events
+    /// it runs on, the command, the settings files, the link.
+    private var declaration: some View {
+        let declared = placement?.declared ?? hook.declared
         let settings = declared.map(\.settings).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         let others = (hook.eventsSupported ?? []).filter { event in !declared.contains { $0.event == event } }
-        return Card {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(hook.script)
-                        .font(Theme.font(size: 16, weight: .semibold, design: .monospaced))
-                        .lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    Button { NSWorkspace.shared.activateFileViewerSelecting([source]) } label: {
-                        Image(systemName: "folder")
-                    }
-                    .iconButton()
-                    .help("Show in Finder")
-                    Button(action: leave) { Image(systemName: "xmark") }
-                        .iconButton()
-                        .help("Close (⌘[)")
-                }
-                HStack(spacing: 6) {
-                    HarnessMarkView(harness: hook.harness, size: 14)
-                    Text(HarnessMark(hook.harness).name)
-                    // "Harness" is every row's tier but two; only those say so.
-                    if let tier = hook.tier, tier != .harness { Badge(tier.title) }
-                    if let problem = hook.problem { Badge(problem) }
-                }
-                .font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                if !summary.isEmpty {
-                    Text(summary).font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    if declared.isEmpty {
-                        InfoLine("Runs") {
-                            Text("Never: no settings file declares it")
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Declaration").font(Theme.cardTitle).foregroundStyle(Theme.textPrimary)
+            VStack(alignment: .leading, spacing: 8) {
+                InfoLine("Harness") {
+                    FlowLayout(spacing: 6, lineSpacing: 6) {
+                        HStack(spacing: 6) {
+                            if let icon = HarnessMark(hook.harness).icon { HarnessIcon(harness: icon, size: 14) }
+                            Text(HarnessMark(hook.harness).name)
                                 .font(Theme.caption).foregroundStyle(Theme.textSecondary)
                         }
-                    } else {
-                        InfoLine("Runs") {
-                            FlowLayout(spacing: 6, lineSpacing: 6) {
-                                ForEach(Array(declared.enumerated()), id: \.offset) { _, declaration in
-                                    HStack(spacing: 4) {
-                                        Badge(declaration.label)
-                                        if let timeout = declaration.timeout {
-                                            Text("\(timeout.formatted())s")
-                                                .font(Theme.caption).foregroundStyle(Theme.textMuted)
-                                                .help("Timeout")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if let command = declared.first(where: { !$0.command.isEmpty })?.command {
-                            InfoLine("Command") { mono(command) }
-                        }
-                        InfoLine("Declared in") {
-                            VStack(alignment: .leading, spacing: 2) {
-                                ForEach(settings, id: \.self) { path in
-                                    HStack(spacing: 4) {
-                                        mono(displayPath(path))
-                                        if isManaged(path) {
-                                            Image(systemName: "lock")
-                                                .font(Theme.font(size: 10))
-                                                .foregroundStyle(Theme.textMuted)
-                                                .hoverTip("Another tool owns this file; SWE never writes it.")
-                                        }
+                        // "Harness" is every row's tier but two; only those say so.
+                        if let tier = hook.tier, tier != .harness { Badge(tier.title) }
+                        if let problem = hook.problem { Badge(problem) }
+                    }
+                }
+                if declared.isEmpty {
+                    InfoLine("Runs") {
+                        Text("Never: no settings file declares it")
+                            .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    InfoLine("Runs") {
+                        FlowLayout(spacing: 6, lineSpacing: 6) {
+                            ForEach(Array(declared.enumerated()), id: \.offset) { _, declaration in
+                                HStack(spacing: 4) {
+                                    Badge(declaration.label)
+                                    if let timeout = declaration.timeout {
+                                        Text("\(timeout.formatted())s")
+                                            .font(Theme.caption).foregroundStyle(Theme.textMuted)
+                                            .help("Timeout")
                                     }
                                 }
                             }
                         }
                     }
-                    InfoLine("Linked at") { mono(displayPath(hook.destination)) }
-                    if !hook.detail.isEmpty {
-                        InfoLine("Note") {
-                            Text(hook.detail).font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                    if let command = declared.first(where: { !$0.command.isEmpty })?.command {
+                        InfoLine("Command") { mono(command) }
+                    }
+                    InfoLine("Declared in") {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(settings, id: \.self) { path in
+                                HStack(spacing: 4) {
+                                    mono(displayPath(path))
+                                    if isManaged(path) {
+                                        Image(systemName: "lock")
+                                            .font(Theme.font(size: 10))
+                                            .foregroundStyle(Theme.textMuted)
+                                            .hoverTip("Another tool owns this file; SWE never writes it.")
+                                            .help("Another tool owns this file; SWE never writes it.")
+                                    }
+                                }
+                            }
                         }
                     }
-                    if !others.isEmpty {
-                        InfoLine("Can also run") {
-                            Text("\(others.count) other \(others.count == 1 ? "event" : "events")")
-                                .font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                                .hoverTip(others.joined(separator: ", "), title: "Events this script handles")
-                        }
+                }
+                InfoLine("Linked at") { mono(displayPath(hook.destination)) }
+                if !hook.detail.isEmpty {
+                    InfoLine("Note") {
+                        Text(hook.detail).font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if !others.isEmpty {
+                    InfoLine("Can also run") {
+                        Text("\(others.count) other \(others.count == 1 ? "event" : "events")")
+                            .font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                            .hoverTip(others.joined(separator: ", "), title: "Events this script handles")
+                            .help(others.joined(separator: ", "))
                     }
                 }
             }
@@ -865,6 +1114,7 @@ private struct HookDetailView: View {
             .font(Theme.font(size: 12, design: .monospaced))
             .foregroundStyle(Theme.textSecondary)
             .lineLimit(1).truncationMode(.middle)
+            .help(text)
     }
 
     /// `swe hooks check` notes a settings file another tool owns (nix,
@@ -874,20 +1124,20 @@ private struct HookDetailView: View {
     }
 
     /// This hook's own draft. Another hook's edit stays in the drafts
-    /// store when the panel switches to this one: the app's quit check
-    /// still sees it, and reopening that hook brings it back. So closing
-    /// asks about, saves or discards this script only.
+    /// store when this one opens: the app's quit check still sees it, and
+    /// reopening that hook brings it back. So going back asks about,
+    /// saves or discards this script only.
     private var draft: InstructionDocument? {
         drafts.documents[hook.source].flatMap { $0.isDirty ? $0 : nil }
     }
 
-    /// Close with nothing unsaved here; otherwise ask first.
+    /// Back to the table with nothing unsaved here; otherwise ask first.
     private func leave() {
         if draft == nil { onBack() } else { leaving = true }
     }
 
-    /// Save the script, then close; a save that fails keeps the panel open
-    /// and says why.
+    /// Save the script, then go back; a save that fails keeps the detail
+    /// open and says why.
     private func saveAndLeave() {
         Task {
             if let draft, await draft.save() != .saved || draft.isDirty {
@@ -905,10 +1155,10 @@ private struct HookDetailView: View {
     }
 }
 
-/// How the selected hook did in the window: fires, blocks and the last
-/// block, why it blocked and its newest runs. Nothing shows while swe
-/// cannot answer; the panel is whole without it.
-private struct HookRunsCard: View {
+/// How the open hook did in the window: fires, blocks and the last block,
+/// why it blocked and its newest runs. Nothing shows while swe cannot
+/// answer; the rail is whole without it.
+private struct HookRunsGroup: View {
     @Environment(AppModel.self) private var app
     /// The hook's source, which the counts are keyed by.
     var source: String
@@ -918,7 +1168,7 @@ private struct HookRunsCard: View {
 
     private static let recentLimit = 5
 
-    /// Whether the panel lists recent runs: swe answered, knows which runs
+    /// Whether the group lists recent runs: swe answered, knows which runs
     /// are this script's, and it ran.
     private var wantsRecent: Bool {
         guard case .ready(let table) = counts else { return false }
@@ -931,26 +1181,29 @@ private struct HookRunsCard: View {
             case .unavailable:
                 EmptyView()
             case .loading:
-                Card(title: "Runs", subtitle: window.title) { loadingBody }
+                section { loadingBody }
             case .ready(let table):
                 let summed = table.counts(for: source)
-                Card(title: "Runs", subtitle: window.title) {
+                section {
                     if !table.identified {
                         Text("This swe is too old to say which runs belong to this script.")
                             .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
                     } else if table.isUnknown(source) {
                         Text("swe can't tell which runs belong to this script.")
                             .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
                     } else if summed.hasRuns { readyBody(summed) } else {
                         Text(window.emptyLine)
                             .font(Theme.bodySmall).foregroundStyle(Theme.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: Theme.fadeDuration), value: counts)
-        // The log is asked for again whenever the counts are: a new window,
-        // a refresh, or the panel moving to another hook.
+        // The log is asked for again whenever the counts are: a new window
+        // or a refresh.
         .task(id: RecentKey(source: source, wanted: wantsRecent, window: window,
                             answered: app.hookStats.completed)) {
             guard wantsRecent else { return }
@@ -963,6 +1216,18 @@ private struct HookRunsCard: View {
         var wanted: Bool
         var window: HookStatsWindow
         var answered: Int
+    }
+
+    /// The rail's divider, "Runs" and the range it covers, then `content`.
+    private func section<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().overlay(Theme.border)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Runs").font(Theme.cardTitle).foregroundStyle(Theme.textPrimary)
+                Text(window.title).font(Theme.caption).foregroundStyle(Theme.textSecondary)
+            }
+            content()
+        }
     }
 
     /// Bars shaped like the tiles and lines that follow.
@@ -1046,6 +1311,7 @@ private struct HookRunsCard: View {
     private func tile(_ label: String, _ value: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(Theme.caption).foregroundStyle(Theme.textMuted)
+                .lineLimit(1).minimumScaleFactor(0.8)
             Text(value)
                 .font(Theme.font(size: 16, weight: .semibold))
                 .foregroundStyle(color)
@@ -1058,7 +1324,8 @@ private struct HookRunsCard: View {
     }
 }
 
-/// A label column and its value, one fact per line in the hook panel.
+
+/// A label column and its value, one fact per line in the hook's rail.
 private struct InfoLine<Content: View>: View {
     var label: String
     @ViewBuilder var content: Content
