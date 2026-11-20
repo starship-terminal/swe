@@ -137,8 +137,8 @@ Explore's other writes are left out; they stay in `swe` and the Mac app:
 - **Rename** of a marketplace or plugin display name. The names the app
   saved in `~/.swe/config/plugin-display-names.json` are read (never
   written) so rows are named the same.
-- The plugin detail page's manifest form and file editor, and Show in
-  Finder. The web detail is a read-only sheet.
+- The plugin detail page's rail (manifest fields, file list) and inline
+  file editor, and Show in Finder. The web detail is a read-only sheet.
 
 Also different:
 

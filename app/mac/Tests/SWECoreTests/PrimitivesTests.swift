@@ -462,7 +462,6 @@ final class PrimitiveHome {
             ("yes", #""yes""#),
             ("1.0", #""1.0""#),
             ("- item", #""- item""#),
-            ("say \"hi\"\nthen go", #""say \"hi\"\nthen go""#),
             ("Plain words, fine.", "Plain words, fine."),
             ("bell\u{07}here", #""bell\u0007here""#),
         ]
@@ -471,6 +470,10 @@ final class PrimitiveHome {
             #expect(edited.contains("description: \(written)\n"), "\(typed)")
             #expect(MarkdownFrontmatter(text: edited)?.fields.first { $0.key == "description" }?.value == typed)
         }
+        // A value over several lines is a literal block instead, where
+        // nothing needs quoting.
+        let block = MarkdownFrontmatter.update(skill, set: [(key: "description", value: "say \"hi\"\nthen go")])
+        #expect(block.contains("description: |-\n  say \"hi\"\n  then go\nlicense: MIT"))
     }
 
     /// A quoted value reads without its quotes, and saving the form
@@ -508,6 +511,164 @@ final class PrimitiveHome {
         }
         let plain = MarkdownFrontmatter.update("---\nkind: x # c\n---\n", set: [(key: "kind", value: "z")])
         #expect(plain == "---\nkind: z # c\n---\n")
+    }
+}
+
+/// Block scalars and plain values over several lines: read as YAML reads
+/// them (the expected values come from Ruby's Psych, which is libyaml),
+/// left byte for byte when unchanged, and written back as a `|` block.
+@Suite struct FrontmatterBlockTests {
+    private func description(_ text: String) -> String? {
+        MarkdownFrontmatter(text: text)?.fields.first { $0.key == "description" }?.value
+    }
+
+    private func frontmatter(_ inside: String) -> String { "---\n" + inside + "---\n\n# Body\n" }
+
+    @Test func blockValuesReadAsYAMLReadsThem() {
+        let cases: [(inside: String, value: String)] = [
+            ("description: |\n  Line one.\n  Line two.\nname: x\n", "Line one.\nLine two.\n"),
+            ("description: >\n  Fold these\n  into one.\n\n  New para.\nname: x\n", "Fold these into one.\nNew para.\n"),
+            ("description: |-\n  a\n  b\n\nname: x\n", "a\nb"),
+            ("description: |+\n  a\n  b\n\n\nname: x\n", "a\nb\n\n\n"),
+            ("description: >+\n  a\n\n", "a\n\n"),
+            ("description: >\n  a\n  b\n    code\n  c\n", "a b\n  code\nc\n"),
+            ("description: |2\n    lead\n  b\n", "  lead\nb\n"),
+            ("description: >-4\n      x\n    y\n", "  x\ny"),
+            ("description: | # note\n  text\n", "text\n"),
+            ("description: |\nname: x\n", ""),
+            ("description: |\n  a\n    \n  b\n", "a\n  \nb\n"),
+            ("description: |\n\n  a\n", "\na\n"),
+            ("description: |\n  a\n  \tb\n", "a\n\tb\n"),
+            ("description: >\n  a\n\n\n  b\n", "a\n\nb\n"),
+            ("description: >\n  a\n   \n  b\n", "a\n \nb\n"),
+        ]
+        for (inside, value) in cases {
+            #expect(description(frontmatter(inside)) == value, "\(inside)")
+        }
+    }
+
+    @Test func plainValuesOverSeveralLinesFold() {
+        #expect(description(frontmatter("description: Use this when\n  the user asks for\n\n  a review.\nname: x\n"))
+                == "Use this when the user asks for\na review.")
+        #expect(description(frontmatter("description:\n  starts below\n  and wraps\n")) == "starts below and wraps")
+    }
+
+    /// Lists, maps and anything else under a key stay where they are, and
+    /// the key is reported locked rather than offered empty.
+    @Test func nestedValuesStayInOther() {
+        let inside = "name: x\ndescription: |\n  Words.\nmetadata:\n  author: me\n  tags: [a]\ntriggers:\n  - one\n  - two\nlist: a\n  - b\nquoted: \"a\n  b\"\n"
+        let front = MarkdownFrontmatter(text: frontmatter(inside))
+        #expect(front?.fields.map(\.key) == ["name", "description"])
+        #expect(front?.fields[1].value == "Words.\n")
+        #expect(front?.lockedKeys == ["metadata", "triggers", "list", "quoted"])
+        #expect(front?.other == ["metadata:", "  author: me", "  tags: [a]", "triggers:", "  - one", "  - two",
+                                 "list: a", "  - b", "quoted: \"a", "  b\""])
+        // A block followed by an indented line it did not take is locked too.
+        let bad = MarkdownFrontmatter(text: frontmatter("description: |\n    deep\n  shallow\n"))
+        #expect(bad?.lockedKeys == ["description"])
+    }
+
+    /// Saving with nothing changed writes the file as it was, for every
+    /// shape the form reads.
+    @Test func anUnchangedValueKeepsTheFile() {
+        let text = frontmatter("name: x # id\ndescription: >-\n  Fold\n  me.\n\n# a comment\nother: |+\n  kept\n\n\nplain: one\n  two\nmetadata:\n  a: b\n")
+        let fields = MarkdownFrontmatter(text: text)?.fields.map { ($0.key, $0.value) } ?? []
+        #expect(fields.map(\.0) == ["name", "description", "other", "plain"])
+        #expect(MarkdownFrontmatter.update(text, set: fields) == text)
+    }
+
+    @Test func aChangedValueWithBreaksIsALiteralBlockAtItsIndent() {
+        let text = frontmatter("name: x\ndescription: >\n    Old words\n    folded.\nmetadata:\n  a: b\n")
+        let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: "New words.\nSecond line.\n")])
+        #expect(edited == frontmatter("name: x\ndescription: |\n    New words.\n    Second line.\nmetadata:\n  a: b\n"))
+        // A single-line field taking a break gets a new block, 2 spaces
+        // in, keeping its comment.
+        let single = MarkdownFrontmatter.update(frontmatter("description: one # c\n"),
+                                                set: [(key: "description", value: "one\ntwo")])
+        #expect(single == frontmatter("description: |- # c\n  one\n  two\n"))
+    }
+
+    @Test func aChangedValueWithoutBreaksGoesBackToOneLine() {
+        let text = frontmatter("description: |\n  Was\n  long.\n\nname: x\n")
+        let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: "Short: now")])
+        #expect(edited == frontmatter("description: \"Short: now\"\n\nname: x\n"))
+        let plain = MarkdownFrontmatter.update(frontmatter("description: a\n  b\nname: x\n"),
+                                               set: [(key: "description", value: "c")])
+        #expect(plain == frontmatter("description: c\nname: x\n"))
+    }
+
+    /// What the field shows after a write is exactly what was typed, so a
+    /// text field bound through `update` never jumps under the cursor.
+    @Test func everyTypedValueReadsBack() {
+        let typed = ["a\nb", "a\nb\n", "a\nb\n\n\n", " lead\nb", "\nstarts empty", "\n lead", "  \nspaces first",
+                     "tab\n\tin", "trailing \nspaces ", "a\n\n\nb", "\n\n", "\n", "a\r\nb", "a\n---\nb",
+                     "bell\u{07}\nx", "sep\u{2028}\nx", "# not a comment\nreally", "key: value\n- item",
+                     "plain", "", "Fix: it", "x",
+                     "a\n ", "a\n   ", "a\n \n", "a\n\n ", " \n", "a\n\t", "a\n\n", "a\n\n\n\n", "  \n  \n"]
+        let starts = [frontmatter("name: x\ndescription: old\n"),
+                      frontmatter("name: x\ndescription: >\n    old\n"),
+                      frontmatter("name: x\n"),
+                      frontmatter("description: old\n\nlicense: MIT\n"),
+                      frontmatter("description: old\n      \n\t\nlicense: MIT\n"),
+                      frontmatter("description: |+\n  old\n\n\nlicense: MIT\n"),
+                      frontmatter("description: old\n\n"),
+                      "# no frontmatter\n"]
+        for start in starts {
+            for value in typed {
+                let edited = MarkdownFrontmatter.update(start, set: [(key: "description", value: value)])
+                let front = MarkdownFrontmatter(text: edited)
+                #expect(front?.lockedKeys == [], "\(start.debugDescription) <- \(value.debugDescription)")
+                #expect(description(edited) == value, "\(start.debugDescription) <- \(value.debugDescription)")
+                if start.contains("license") {
+                    #expect(front?.fields.last?.key == "license", "\(start.debugDescription) <- \(value.debugDescription)")
+                }
+                #expect(edited.hasSuffix(start.hasPrefix("---") ? "# Body\n" : "# no frontmatter\n"))
+            }
+        }
+    }
+
+    /// A `+` block keeps the empty lines after it, so the blank lines that
+    /// already followed the field must not join the value (review on
+    /// #1985: `old\n\nlicense` set to `a\n\n` read back `a\n\n\n`).
+    @Test func blankLinesAfterTheFieldDoNotJoinAKeptBlock() {
+        let text = frontmatter("description: old\n\nlicense: MIT\n")
+        let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: "a\n\n")])
+        #expect(description(edited) == "a\n\n")
+        #expect(MarkdownFrontmatter(text: edited)?.fields.first { $0.key == "license" }?.value == "MIT")
+        // Blank lines after a clip or strip block are not its value, so
+        // they stay as the separator they were.
+        let clipped = MarkdownFrontmatter.update(text, set: [(key: "description", value: "a\nb")])
+        #expect(clipped == frontmatter("description: |-\n  a\n  b\n\nlicense: MIT\n"))
+    }
+
+    /// A last line of only spaces is content to the block but blank to a
+    /// scan that ignores the block's indentation; the two disagreed, and
+    /// the field turned locked while it was being typed (review on #1985).
+    @Test func aLastLineOfSpacesKeepsTheFieldEditable() {
+        let text = frontmatter("name: x\ndescription: old\nlicense: MIT\n")
+        for value in ["a\n ", "a\n   ", "a\n \n", "a\n\n ", " \n", "a\n\t"] {
+            let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: value)])
+            let front = MarkdownFrontmatter(text: edited)
+            #expect(front?.lockedKeys == [], "\(value.debugDescription)")
+            #expect(description(edited) == value, "\(value.debugDescription)")
+            #expect(SkillFrontmatterForm.rows(in: edited, name: "x").map(\.key) == ["name", "description", "license"])
+        }
+        // Read from a file, the same block reads with its last line.
+        #expect(description(frontmatter("description: |-\n  a\n   \nname: x\n")) == "a\n ")
+    }
+
+    /// CRLF files read like LF ones, an unchanged save keeps every byte,
+    /// and lines the form writes take the file's ending.
+    @Test func crlfLinesKeepTheirEndings() {
+        let text = "---\r\nname: x\r\ndescription: |\r\n  one\r\n  two\r\n---\r\nbody\r\n"
+        let front = MarkdownFrontmatter(text: text)
+        #expect(front?.fields.map(\.key) == ["name", "description"])
+        #expect(front?.fields[1].value == "one\ntwo\n")
+        let fields = front?.fields.map { ($0.key, $0.value) } ?? []
+        #expect(MarkdownFrontmatter.update(text, set: fields) == text)
+        let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: "three\nfour"),
+                                                          (key: "license", value: "MIT")])
+        #expect(edited == "---\r\nname: x\r\ndescription: |-\r\n  three\r\n  four\r\nlicense: MIT\r\n---\r\nbody\r\n")
     }
 }
 
@@ -795,6 +956,36 @@ final class PrimitiveHome {
         drafts.remove(under: "/tmp/a/b.md")
         #expect(drafts.documents["/tmp/a/b.md"] == nil)
         #expect(drafts.documents.keys.sorted() == ["/tmp/other.md"])
+    }
+
+    @MainActor @Test func saveAllWritesWhatItCanAndNamesTheRest() async throws {
+        let t = try PrimitiveHome()
+        let kept = try t.write("plugin/a.md", "a\n")
+        let stale = try t.write("plugin/b.md", "b\n")
+        let clean = try t.write("plugin/c.md", "c\n")
+        let drafts = PrimitiveDrafts()
+        for file in [kept, stale, clean] { drafts.document(for: file.path) }
+        await drafts.settled()
+        // Nothing unsaved: nothing written, nothing to report.
+        var result = await drafts.saveAll()
+        #expect(!result.wrote && result.failed.isEmpty)
+
+        drafts.documents[kept.path]?.text = "a, edited\n"
+        drafts.documents[stale.path]?.text = "b, edited\n"
+        // Something else rewrote b.md since it was opened: its save is refused.
+        try "b, from elsewhere\n".write(to: stale, atomically: true, encoding: .utf8)
+        result = await drafts.saveAll()
+        // One file landed, so the page's lists must read the disk again
+        // even though the other is still unsaved.
+        #expect(result.wrote)
+        #expect(result.failed == ["b.md"])
+        #expect(try String(contentsOf: kept, encoding: .utf8) == "a, edited\n")
+        #expect(try String(contentsOf: stale, encoding: .utf8) == "b, from elsewhere\n")
+        #expect(drafts.dirty.keys.sorted() == [stale.path])
+
+        // Only the refused file is left: nothing is written this time.
+        result = await drafts.saveAll()
+        #expect(!result.wrote && result.failed == ["b.md"])
     }
 }
 

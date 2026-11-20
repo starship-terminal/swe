@@ -2122,20 +2122,6 @@ private struct CompiledOutputSheet: View {
     }
 }
 
-/// A compact bordered band above the editor: a label, then what it's about.
-struct Strip<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) { content }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card, in: .rect(cornerRadius: Theme.blockRadius))
-            .overlay(RoundedRectangle(cornerRadius: Theme.blockRadius).strokeBorder(Theme.border, lineWidth: 1))
-    }
-}
-
 /// Where each harness's instruction file points, from `swe init --check`,
 /// as one strip of dots and names so the editor keeps the full width.
 private struct LinksStrip: View {

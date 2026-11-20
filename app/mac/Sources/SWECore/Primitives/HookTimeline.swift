@@ -1,9 +1,10 @@
 import Foundation
 
-/// The Hooks page's main view: one harness's declared hooks laid out by the
-/// event that fires them, in the order a session meets those events. A
-/// hook declared on three events sits in three lanes; one declared on none
-/// never fires and goes to `HookTimeline.notRunning` instead.
+/// One harness's declared hooks laid out by the event that fires them, in
+/// the order a session meets those events; `HookTable` flattens it into the
+/// Hooks page's rows. A hook declared on three events sits in three lanes;
+/// one declared on none never fires and goes to `HookTimeline.notRunning`
+/// instead.
 public struct HookTimeline: Sendable, Equatable {
     /// One declaration of one hook: the script, and the matcher that gates
     /// it on this event.
@@ -117,6 +118,98 @@ public struct HookTimeline: Sendable, Equatable {
     }
 }
 
+/// The Hooks page's table: one row per script per event it is declared on,
+/// for one harness or for every harness at once, then the scripts nothing
+/// declares as rows of their own at the bottom. Built from `HookTimeline`,
+/// so a lane's dedupe and entry order carry over unchanged.
+public struct HookTable: Sendable, Equatable {
+    /// One row: a declaration of a script on an event, or a script that
+    /// never fires (`event` nil).
+    public struct Row: Identifiable, Sendable, Equatable {
+        public let hook: Hook
+        /// The event the declaration fires on; nil for a script no
+        /// settings file declares.
+        public let event: String?
+        /// The matcher's pattern; empty when the event has none.
+        public let matcher: String
+        /// The matcher worth showing, by `HookTimeline.Entry.matcherLabel`'s
+        /// rule; nil on a not-running row.
+        public let matcherLabel: String?
+
+        /// A script another installer declared (herdr, Agent Relay).
+        public var isForeign: Bool { hook.tier == .foreign }
+        /// Some settings file declares it, so a harness fires it.
+        public var isRunning: Bool { event != nil }
+        /// The hook a click opens, `harness|source`: the same script in two
+        /// harnesses is two hooks, and the ⌘K search keys hooks this way.
+        public var hookKey: String { "\(hook.harness)|\(hook.id)" }
+        public var id: String { "\(hookKey)|\(event ?? "")|\(matcher)" }
+
+        init(entry: HookTimeline.Entry, event: String) {
+            hook = entry.hook
+            self.event = event
+            matcher = entry.matcher
+            matcherLabel = entry.matcherLabel
+        }
+
+        init(idle hook: Hook) {
+            self.hook = hook
+            event = nil
+            matcher = ""
+            matcherLabel = nil
+        }
+    }
+
+    /// The harness shown, nil for every harness.
+    public let harness: String?
+    /// The declared rows in session order, then the not-running ones.
+    public let rows: [Row]
+    /// Foreign hooks declared in the harnesses shown, on screen or not:
+    /// the "Other tools (N)" count.
+    public let foreignCount: Int
+    /// Events the one harness supports that nothing shown is declared on,
+    /// in session order; empty for every harness, where it means nothing.
+    public let quietEvents: [String]
+
+    /// - Parameters:
+    ///   - hooks: the whole inventory.
+    ///   - harness: the one harness to show, nil for all of them.
+    ///   - includeForeign: lay out other installers' hooks too.
+    public init(hooks: [Hook], harness: String?, includeForeign: Bool) {
+        self.harness = harness
+        let shown = harness.map { [$0] } ?? HookTimeline.harnesses(in: hooks)
+        let timelines = shown.map { HookTimeline(harness: $0, hooks: hooks, includeForeign: includeForeign) }
+        // Session order across harnesses: Cursor's `preToolUse` sits with
+        // Claude Code's `PreToolUse`, the harnesses in their dropdown
+        // order, then each lane's own entry order.
+        var declared: [(rank: Int, event: String, harness: Int, index: Int, row: Row)] = []
+        for (h, timeline) in timelines.enumerated() {
+            for lane in timeline.lanes {
+                for entry in lane.entries {
+                    declared.append((HookEvents.rank(lane.event), lane.event.lowercased(), h,
+                                     declared.count, Row(entry: entry, event: lane.event)))
+                }
+            }
+        }
+        declared.sort { a, b in
+            if a.rank != b.rank { return a.rank < b.rank }
+            if a.event != b.event { return a.event < b.event }
+            if a.harness != b.harness { return a.harness < b.harness }
+            return a.index < b.index
+        }
+        let idle = HookTimeline.notRunning(in: hooks).filter { harness == nil || $0.harness == harness }
+        rows = declared.map(\.row) + idle.map(Row.init(idle:))
+        foreignCount = timelines.reduce(0) { $0 + $1.foreignCount }
+        quietEvents = harness == nil ? [] : timelines.first?.quietEvents ?? []
+    }
+
+    /// The harness a stored pick names, nil (every harness) when it is
+    /// empty or names no harness with a declared hook.
+    public static func harness(stored: String, in hooks: [Hook]) -> String? {
+        HookTimeline.harnesses(in: hooks).contains(stored) ? stored : nil
+    }
+}
+
 /// Hook event names across harnesses: the order a session meets them and a
 /// few words on when each fires. Names compare case-insensitively, so
 /// Cursor's `preToolUse` sits with Claude Code's `PreToolUse`.
@@ -179,10 +272,14 @@ public enum HookEvents {
 
     public static func sorted(_ events: [String]) -> [String] {
         events.sorted { a, b in
-            let ra = order.firstIndex(of: a.lowercased()) ?? order.count
-            let rb = order.firstIndex(of: b.lowercased()) ?? order.count
+            let ra = rank(a), rb = rank(b)
             if ra != rb { return ra < rb }
             return a < b
         }
+    }
+
+    /// Where an event falls in a session; unknown events share the last rank.
+    static func rank(_ event: String) -> Int {
+        order.firstIndex(of: event.lowercased()) ?? order.count
     }
 }

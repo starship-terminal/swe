@@ -278,12 +278,11 @@ context7      ✓        …   ✓
 
 ### 6. Hooks (0:15)
 
-Open **Hooks**. `block-force-push.py` is in the **Not running** card ("No
-settings file declares these, so no harness fires them.") with a
-**Disabled** badge.
+Open **Hooks**. `block-force-push.py` is a muted row at the bottom of the
+table, "Not running" across its columns, with a **Disabled** badge.
 
-Source: `app/mac/Sources/SWEApp/Pages/HooksPage.swift` (`NotRunningCard`
-and the Disabled badge).
+Source: `app/mac/Sources/SWEApp/Pages/HooksPage.swift` (`HookRow`'s
+not-running cell and the Disabled badge).
 
 ```bash
 on_a swe hooks list
@@ -412,8 +411,9 @@ Hook drift
   ✓ declared, linked and present all agree
 ```
 
-Press Refresh on **Hooks**: the page now has a Claude Code tab, and
-`block-force-push.py` sits on the PreToolUse lane with a `Bash` matcher pill.
+Press Refresh on **Hooks**: `block-force-push.py` moves up the table to a
+PreToolUse row with a `Bash` matcher pill, and the Harness menu now lists
+Claude Code.
 
 Show what it does by handing it the event Claude Code would send:
 
