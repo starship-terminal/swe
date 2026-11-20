@@ -1602,11 +1602,13 @@ class TestAdapterOptions(_FakeCase):
                           started["status"], started["can_stop"],
                           started["parent_turn_id"]),
                          ("task-1", "subagent", "running", True, turn_id))
-        sub_tool = [e for e in sink.of("tool.started")
-                    if e["data"]["name"] == "Bash"][0]
+        # The subagent's message comes after `task_started` on the wire,
+        # so its tool event is waited for, not read off the sink at once:
+        # on a slow runner the list was still empty.
+        sub_tool = self.wait(
+            sink, lambda e: e["type"] == "tool.started"
+            and e["data"]["name"] == "Bash", "the subagent's tool.started")
         self.assertEqual(sub_tool["data"]["task_id"], "task-1")
-        self.assertNotIn("sub words", [e["data"]["text"] for e in
-                                       sink.of("message.completed")])
         with self.assertRaises(AdapterError) as ctx:
             adapter.stop_task("ghost")
         self.assertEqual(ctx.exception.code, "unknown_task")
@@ -1616,6 +1618,10 @@ class TestAdapterOptions(_FakeCase):
                           sink.of("task.updated")], ["running", "stopped"])
         self.assertEqual(sink.of("tool.completed")[-1]["data"]["status"],
                          "cancelled")
+        # Checked once the turn is over, when nothing more can arrive: the
+        # subagent's own words never become a message of the session's.
+        self.assertNotIn("sub words", [e["data"]["text"] for e in
+                                       sink.of("message.completed")])
         with self.assertRaises(AdapterError):
             adapter.stop_task("task-1")
 
