@@ -279,7 +279,9 @@ the next keeper ends it first: a keeper leads its own process group and
 its agent is a member, and when the old leader is gone but the group
 still has members, they get SIGTERM, then SIGKILL after 2 seconds
 (`_reap_orphans`). A pid is not handed out again while a group still
-carries it, so this cannot reach a stranger.
+carries it, so this cannot reach a stranger. It is done only when
+`keeper.json` carries this boot's id: after a restart of the machine
+the saved pid names nothing of the keeper's.
 
 The next keeper of
 the session opens the same log and, before it starts the agent, writes

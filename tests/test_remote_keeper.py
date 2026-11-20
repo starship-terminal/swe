@@ -1538,6 +1538,73 @@ class TestDiscovery(KeeperCase):
                          (False, False, "exited"))
         self.assertEqual(discovery.discover(self.home, alive_only=True), [])
 
+    def orphan(self) -> tuple[int, int]:
+        """A process group whose leader has exited and whose one member
+        lives on: ``(leader pid, member pid)``. What a killed keeper
+        leaves when its agent does not exit."""
+        leader = subprocess.Popen(
+            [sys.executable, "-c",
+             "import subprocess, sys\n"
+             "child = subprocess.Popen([sys.executable, '-c', "
+             "'import time; time.sleep(600)'])\n"
+             "print(child.pid, flush=True)\n"],
+            stdout=subprocess.PIPE, text=True, start_new_session=True)
+        member = int(leader.stdout.readline())
+        leader.stdout.close()
+        leader.wait(WAIT)
+
+        def end() -> None:
+            try:
+                os.kill(member, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        self.addCleanup(end)
+        return leader.pid, member
+
+    def left_by(self, pid: int, boot: str) -> None:
+        folder = discovery.keeper_dir_for(S, self.home)
+        folder.mkdir(parents=True, exist_ok=True)
+        discovery.write_json(folder / discovery.KEEPER_FILE, {
+            "session": S, "pid": pid, "state": "running", "boot": boot})
+
+    def test_a_dead_keepers_orphan_is_ended_only_within_one_boot(self):
+        from swe.remote.keeper.log import current_boot_id
+
+        boot = current_boot_id()
+        if not boot:
+            self.skipTest("this OS does not name its boot")
+        leader, member = self.orphan()
+        self.enterContext(mock.patch.object(keeper_process.logger,
+                                            "warning"))
+        # keeper.json from another boot: the pid in it means nothing
+        # now, and the group it names is left alone.
+        for stale in ("an-earlier-boot", ""):
+            self.left_by(leader, stale)
+            self.keeper().stop()
+            os.kill(member, 0)
+        self.left_by(leader, boot)
+        self.keeper()
+        with self.assertRaises(ProcessLookupError):
+            os.kill(member, 0)
+
+    def test_a_pid_that_is_in_use_is_never_signalled(self):
+        from swe.remote.keeper.log import current_boot_id
+
+        # The saved pid belongs to a live process (here: a group leader
+        # that is still running), so nothing is judged an orphan.
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(600)"],
+            start_new_session=True)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.left_by(proc.pid, current_boot_id())
+        self.keeper()
+        self.assertIsNone(proc.poll())
+        keeper = self.keeper(start=False, session="claude:other")
+        for odd in (None, "12", True, 0, 1, os.getpid(), os.getpgrp()):
+            keeper._reap_orphans(odd, sleep=lambda s: None)
+
     def test_a_damaged_keeper_json_is_read_as_far_as_it_goes(self):
         folder = discovery.keeper_dir_for(S, self.home)
         folder.mkdir(parents=True)
@@ -1768,14 +1835,23 @@ class RealProcess(unittest.TestCase):
         # not exit when its keeper is killed.
         discovery.write_spec(S, harness="claude", cwd=str(self.home),
                              home=self.home)
+        # The agent says who it is: a wrapper notes its pid, then
+        # becomes the fake (an exec keeps the pid).
+        pid_file = self.home / "agent.pid"
+        wrapper = self.home / "agent.py"
+        wrapper.write_text(
+            "import os, sys\n"
+            f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+            f"os.execv(sys.executable, [sys.executable, {str(FAKE_CLAUDE)!r}]"
+            " + sys.argv[1:])\n")
+        (self.home / ".swe" / "config" / "harness.json").write_text(
+            json.dumps({"claude": {"capabilities": {"session": {
+                "adapter": "claude_stream",
+                "argv": [sys.executable, str(wrapper)]}}}}))
         info = self.spawn(mode="linger")
         feed = self.feed(info)
         feed.event("session.state", state="idle")
-        children = subprocess.run(
-            ["pgrep", "-P", str(info.pid)], capture_output=True,
-            text=True).stdout.split()
-        self.assertEqual(len(children), 1)
-        agent = int(children[0])
+        agent = int(pid_file.read_text())
         os.kill(info.pid, signal.SIGKILL)
         self.procs[0].wait(WAIT)
         feed.closed()

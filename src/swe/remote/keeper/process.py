@@ -468,7 +468,11 @@ class Keeper:
             if previous and isinstance(previous.get("harness_session_id"),
                                        str):
                 self._harness_id = previous["harness_session_id"]
-            if previous:
+            boot = current_boot_id()
+            if previous and boot and previous.get("boot") == boot:
+                # Only within one boot: after a restart of the machine
+                # the saved pid names nothing of ours, and could name a
+                # stranger's process group.
                 self._reap_orphans(previous.get("pid"), sleep)
             options = dict(self._log_options)
             options.setdefault("on_error", self._log_failed)
