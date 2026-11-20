@@ -179,45 +179,61 @@ _KNOWN_TOKEN_RE = re.compile(
 )
 # The pattern above wants a token to stand alone. A key can also sit
 # right after a letter or digit: ``\nsk-ant-...`` in a JSON string shown
-# raw, ``0msk-...`` after a colour code that lost its ESC. The two
+# raw, ``0msk-...`` after a colour code that lost its ESC. The three
 # patterns below find those. They run after the first, so they can only
 # add to what is masked.
 #
-# Most prefixes are safe to take there, since no word contains them. Two
-# are also the tail of ordinary words (``task-``, ``risk-ant``,
-# ``laughs_``), so after a letter or digit they need more than the
-# prefix:
+# Most prefixes are safe to take there, since no word contains them.
+# Three also turn up inside ordinary text (``task-``, ``risk-ant``,
+# ``laughs_``, ``surveyJsonSchema``), so after a letter or digit they
+# need more than the prefix:
 #
 # - ``sk-ant-`` with Anthropic's kind and version (``api03-``);
 # - ``ghp_`` and its siblings at GitHub's full length of 36;
+# - ``eyJ`` with a second part that opens with ``eyJ`` too, as a JWT's
+#   claims do. ``surveyJsonSchema.properties.questionList`` is three
+#   names joined by dots;
 # - any other ``sk-`` with a part, between hyphens or underscores, of 20
 #   or more letters and digits that has a digit in it. Words joined by
 #   hyphens have no such part, and neither does a hyphenated UUID. This
-#   one is a judgement on looks, so it has its own pattern and runs
-#   last: in ``mask-TeyJ...`` the JWT goes first, whole, before its
-#   first part can be read as an ``sk-`` key.
+#   one is a judgement on looks, so it runs last: in ``mask-TeyJ...``
+#   the JWT goes first, whole, before its first part can be read as an
+#   ``sk-`` key.
 #
-# A long run of text can hold many places such a token might start, and
-# each must not read the whole run again: a JWT's first part stops at
-# the next ``eyJ``, and the search from one ``sk-`` stops at the next.
+# A long run of letters, digits, hyphens and underscores can hold many
+# places a JWT or an ``sk-`` key might start, and trying each one would
+# read the run once per start. Those two patterns are tried once per
+# run, from its first character, and mask from the first start in it:
 #
-# Every shape starts with one of a few letters; checking that first is
-# cheaper than trying each shape at every character.
+# - the JWT pattern looks ahead for the two dotted parts before it looks
+#   for ``eyJ``, so the first ``eyJ`` with enough after it matches;
+# - the ``sk-`` pattern settles on the first ``sk-`` for good (the
+#   atomic group). A later one would see fewer parts, so it could not
+#   match where the first did not.
+_RUN_START = r"(?<![A-Za-z0-9_-])"
+_GLUED_JWT_RE = re.compile(
+    _RUN_START
+    + r"(?=[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,})"
+    r"([A-Za-z0-9_-]*?[A-Za-z0-9])"
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+)
 _GLUED_TOKEN_RE = re.compile(
-    r"(?<=[A-Za-z0-9])(?=[sgxAe])(?:"
+    # Every shape here starts with one of four letters; checking that
+    # first is cheaper than trying each shape at every character.
+    r"(?<=[A-Za-z0-9])(?=[sgxA])(?:"
     r"sk-ant-[a-z]{2,8}[0-9]{2}-[A-Za-z0-9_-]{16,}|"
     r"github_pat_[A-Za-z0-9_]{20,}|"
     r"gh[opusr]_[A-Za-z0-9]{36,}|"
     r"xox[baprs]-[A-Za-z0-9-]{16,}|"
     r"AIza[A-Za-z0-9_-]{30,}|"
-    r"AKIA[0-9A-Z]{16}|"
-    r"eyJ(?:(?!eyJ)[A-Za-z0-9_-]){8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    r"AKIA[0-9A-Z]{16}"
     r")(?![A-Za-z0-9])"
 )
 _GLUED_SK_RE = re.compile(
-    r"(?<=[A-Za-z0-9])sk-"
-    r"(?=(?:(?:(?!sk-)[A-Za-z0-9])*[_-])*?(?=[A-Za-z0-9]{20})[A-Za-z]*[0-9])"
-    r"[A-Za-z0-9_-]{16,}(?![A-Za-z0-9])"
+    _RUN_START
+    + r"(?>([A-Za-z0-9_-]*?[A-Za-z0-9])sk-)"
+    r"(?=(?:[A-Za-z0-9]*[_-])*?(?=[A-Za-z0-9]{20})[A-Za-z]*[0-9])"
+    r"[A-Za-z0-9_-]{16,}"
 )
 
 
@@ -229,8 +245,13 @@ def _redact_secrets(text: str) -> str:
     text = _ENV_ASSIGNMENT_RE.sub(r"\1[REDACTED]", text)
     text = _JSON_SECRET_RE.sub(r"\1\"[REDACTED]\"", text)
     text = _KNOWN_TOKEN_RE.sub("[REDACTED]", text)
+    # Most text holds neither prefix; a substring check skips the pass.
+    if "eyJ" in text:
+        text = _GLUED_JWT_RE.sub(r"\1[REDACTED]", text)
     text = _GLUED_TOKEN_RE.sub("[REDACTED]", text)
-    return _GLUED_SK_RE.sub("[REDACTED]", text)
+    if "sk-" in text:
+        text = _GLUED_SK_RE.sub(r"\1[REDACTED]", text)
+    return text
 
 
 def _clean_text(value: Any) -> str:

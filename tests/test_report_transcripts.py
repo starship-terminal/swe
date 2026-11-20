@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sqlite3
@@ -969,6 +970,44 @@ class SecretRedactorBoundaryTest(unittest.TestCase):
         self.assertEqual(self.redact(f"mask-T{jwt} x"), "mask-T[REDACTED] x")
         self.assertEqual(self.redact(f"desksk-{jwt}"), "desksk-[REDACTED]")
 
+    def test_a_jwt_whose_header_holds_another_eyj(self):
+        # ``{"alg":"HS256","kid":"aaa쉬"}`` encodes with a second ``eyJ``
+        # four characters from its end, too few for a header of its own.
+        # The match starts at the first ``eyJ`` and runs to the dot
+        # whatever the header holds.
+        def b64(raw):
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+        header = b64('{"alg":"HS256","kid":"aaa쉬"}'.encode())
+        self.assertEqual(header.count("eyJ"), 2)
+        self.assertEqual(header[-7:-4], "eyJ")
+        payload = b64(b'{"sub":"1234567890"}')
+        signature = b64(bytes(range(32)))
+        early = "eyJ" + "a" * 9 + "eyJ" + "b" * 20
+        for head in (header, early):
+            jwt = f"{head}.{payload}.{signature}"
+            for before in ("T", "9", "task-list-T"):
+                with self.subTest(head=head[:12], before=before):
+                    self.assertEqual(self.redact(f"{before}{jwt} x"),
+                                     f"{before}[REDACTED] x")
+            self.assertEqual(self.redact(jwt), "[REDACTED]")
+
+    def test_dotted_names_that_hold_eyj_are_left_alone(self):
+        for code in (
+            "surveyJsonSchema.properties.questionList",
+            "apiKeyJsonSerializer.serializeToString.toByteArray",
+            "com.example.monkeyJugglerService.controllers.MainController",
+            "publicKeyJwkThumbprint.generated.snapshot",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(self.redact(code), code)
+
+    def test_an_sk_key_that_holds_another_sk_goes_whole(self):
+        # Masking from the second ``sk-`` would leave the key's head.
+        key = "sk-proj-abc_Xsk-" + _MIXED * 3
+        self.assertEqual(self.redact(f"T{key} x"), "T[REDACTED] x")
+        self.assertEqual(self.redact(f"{key} x"), "[REDACTED] x")
+
     def test_nothing_the_stand_alone_pattern_masks_is_lost(self):
         # A token after a letter can end at a dot, in the middle of a
         # JWT that stands alone further on. The stand-alone pattern runs
@@ -997,15 +1036,28 @@ class SecretRedactorBoundaryTest(unittest.TestCase):
             with self.subTest(prose=prose):
                 self.assertEqual(self.redact(prose), prose)
 
-    def test_a_long_run_of_hyphenated_words_is_left_alone(self):
+    def test_a_long_run_with_many_places_to_start_is_left_alone(self):
         # Every ``sk-`` and ``eyJ`` here is a place a token might start,
-        # and none does. Each search stops at the next one, so the run
-        # is read a few times over, not once per start.
-        for part in ("task-", "ask" + "a" * 30 + "-", "risk_x9-", "eyJ",
-                     "eyJ" + "a" * 9, "laughs_"):
-            prose = part * 20000
-            self.assertEqual(self.redact(prose), prose)
+        # and none does. A run is tried once, from its first character,
+        # so it is read a few times over, not once per start.
+        n = 20000
+        for prose in (
+            "task-" * n, ("ask" + "a" * 30 + "-") * n, "risk_x9-" * n,
+            "eyJ" * n, ("eyJ" + "a" * 9) * n, "laughs_" * n,
+            _MIXED * 2 + "-" + "task-" * n,
+            ("TeyJ" + "a" * 10 + ".") * n,
+            "T" + "eyJ" * n + ".eyJaaaaaaaa.b",
+            ("a" * 12 + ".eyJaaaaaa.") * n,
+        ):
+            with self.subTest(prose=prose[:16]):
+                self.assertEqual(self.redact(prose), prose)
 
+    def test_a_long_run_that_ends_in_a_key_goes_from_its_first_start(self):
+        out = self.redact("task-" * 20000 + _MIXED * 2 + " x")
+        self.assertEqual(out, "ta[REDACTED] x")
+        jwt = _GLUED_KEYS["jwt"]
+        out = self.redact("T" + "eyJ" * 20000 + jwt[3:] + " x")
+        self.assertEqual(out, "T[REDACTED] x")
 
 if __name__ == "__main__":
     unittest.main()
