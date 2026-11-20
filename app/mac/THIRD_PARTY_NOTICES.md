@@ -270,8 +270,9 @@ release archive):
 | libedit (`readline`), loaded from macOS's `/usr/lib` | BSD-3-Clause | `python-libedit.txt` |
 | ncurses (`_curses`), loaded from macOS's `/usr/lib` | X11 (MIT-style) | `python-ncurses.txt` |
 
-The `libcrypto.3.dylib` that `bundle-swe.sh` adds for the Droid auth
-decryptor is Homebrew's OpenSSL 3 (Apache-2.0); its licence ships beside it
+The `libcrypto.3.dylib` that `bundle-swe.sh` builds for the Droid auth
+decryptor is OpenSSL 3.6.5 (Apache-2.0), pinned by checksum in that
+script and built for the host architecture. Its licence ships beside it
 as `Contents/Resources/swe/python/lib/OPENSSL-LICENSE.txt`.
 
 ## References without copied code

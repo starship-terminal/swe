@@ -33,6 +33,8 @@
 # `python_version` changes, check that archive's python/licenses/ and
 # PYTHON.json (build_info.extensions[*].license_paths) for new libraries,
 # `otool -L` the interpreter, and update Licenses/ and THIRD_PARTY_NOTICES.md.
+# The Droid decryptor's libcrypto is a separate pin (`openssl_version`
+# below); bumping it means re-checking its LICENSE.txt still ships.
 set -euo pipefail
 
 bundle="${1:?usage: bundle-swe.sh <path/to/SWE.app>}"
@@ -110,33 +112,90 @@ find "$py" -name '__pycache__' -type d -prune -exec rm -rf {} +
 # outside dylib (e.g. /usr/lib/libcrypto.dylib) aborts the process, so a
 # libcrypto that codesign then signs with the app goes in lib/, the only
 # place _load_libcrypto looks when SWE_BUNDLED_PYTHON is set.
-libcrypto=""
-# Arch-ordered defaults: an Intel Python under Rosetta needs /usr/local's
-# library, an arm64 one needs /opt/homebrew's; the wrong arch's dylib
-# cannot load on either.
-if [ "$triple" = "aarch64-apple-darwin" ]; then
-  brew_libs="/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib /usr/local/opt/openssl@3/lib/libcrypto.3.dylib"
-else
-  brew_libs="/usr/local/opt/openssl@3/lib/libcrypto.3.dylib /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib"
-fi
-for cand in ${SWE_LIBCRYPTO:+"$SWE_LIBCRYPTO"} ${QUIVER_LIBCRYPTO:+"$QUIVER_LIBCRYPTO"} $brew_libs; do
-  if [ -f "$cand" ]; then libcrypto="$cand"; break; fi
-done
-if [ -z "$libcrypto" ]; then
-  echo "bundle-swe: warning: no libcrypto.3.dylib found; Droid limit decryption is off" >&2
-else
-  cp "$libcrypto" "$py/lib/libcrypto.3.dylib"
-  openssl_share="$(dirname "$(dirname "$libcrypto")")/share/openssl"
-  license="${SWE_LIBCRYPTO_LICENSE:-${QUIVER_LIBCRYPTO_LICENSE:-}}"
-  for cand in ${license:+"$license"} "$openssl_share/LICENSE.txt"              "$(dirname "$libcrypto")/../LICENSE.txt"; do
-    if [ -f "$cand" ]; then license="$cand"; break; fi
-  done
-  if [ ! -f "$license" ]; then
-    echo "bundle-swe: no OpenSSL LICENSE.txt next to $libcrypto; set SWE_LIBCRYPTO_LICENSE" >&2
-    exit 1
+#
+# The dylib is built here from a pinned OpenSSL release, once per
+# architecture, and kept in the Python cache. A Mac with no Homebrew
+# (the usual case on a machine that only has Nix) used to warn and ship
+# the app with Droid decryption off.
+openssl_version="3.6.5"
+openssl_sha256="a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98"
+openssl_tag="openssl-${openssl_version}"
+openssl_archive="${openssl_tag}.tar.gz"
+openssl_url="https://github.com/openssl/openssl/releases/download/${openssl_tag}/${openssl_archive}"
+# darwin64-arm64-cc / darwin64-x86_64-cc. uname -m, not $triple: the
+# Python triple says aarch64, and OpenSSL's Configure does not.
+case "$(uname -m)" in
+  arm64) openssl_target="darwin64-arm64-cc" ;;
+  x86_64) openssl_target="darwin64-x86_64-cc" ;;
+  *) echo "bundle-swe: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
+libcrypto="${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-$cache/libcrypto-${openssl_version}-${openssl_target}.dylib}}"
+license="${SWE_LIBCRYPTO_LICENSE:-${QUIVER_LIBCRYPTO_LICENSE:-$cache/openssl-${openssl_version}-LICENSE.txt}}"
+if [ -z "${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-}}" ]; then
+  if [ ! -f "$libcrypto" ] || [ ! -f "$license" ]; then
+    echo "bundle-swe: building OpenSSL $openssl_version ($openssl_target)" >&2
+    src_tar="$cache/$openssl_archive"
+    verify_openssl() { [ "$(shasum -a 256 "$1" | cut -d' ' -f1)" = "$openssl_sha256" ]; }
+    if [ ! -f "$src_tar" ] || ! verify_openssl "$src_tar"; then
+      partial="$(mktemp "$cache/$openssl_archive.XXXXXX")"
+      if ! curl --fail --location --silent --show-error --retry 3 -o "$partial" "$openssl_url"; then
+        rm -f "$partial"
+        echo "bundle-swe: couldn't download $openssl_url" >&2
+        exit 1
+      fi
+      if ! verify_openssl "$partial"; then
+        rm -f "$partial"
+        echo "bundle-swe: checksum mismatch for $openssl_archive" >&2
+        exit 1
+      fi
+      mv -f "$partial" "$src_tar"
+    fi
+    work="$(mktemp -d "$cache/openssl-build.XXXXXX")"
+    tar -xzf "$src_tar" -C "$work"
+    # no-apps: the openssl CLI is not bundled. no-shared is not set, so
+    # Configure emits libcrypto.3.dylib. Prefix is discarded; install_name
+    # is rewritten to @rpath below so the dylib loads from python/lib.
+    # Configure and make print pages of progress; keep that in a log and
+    # show the tail only when the build fails.
+    build_log="$work/build.log"
+    if ! (cd "$work/$openssl_tag" && \
+          ./Configure "$openssl_target" no-apps --prefix="$work/prefix" \
+            --libdir=lib >"$build_log" 2>&1 && \
+          make -j"$(sysctl -n hw.ncpu)" build_libs >>"$build_log" 2>&1 && \
+          make install_dev >>"$build_log" 2>&1); then
+      echo "bundle-swe: OpenSSL $openssl_version failed to build" >&2
+      tail -n 40 "$build_log" >&2 || true
+      rm -rf "$work"
+      exit 1
+    fi
+    built="$work/prefix/lib/libcrypto.3.dylib"
+    if [ ! -f "$built" ]; then
+      rm -rf "$work"
+      echo "bundle-swe: OpenSSL built no libcrypto.3.dylib" >&2
+      exit 1
+    fi
+    staged="$(mktemp "$cache/libcrypto.XXXXXX")"
+    cp "$built" "$staged"
+    chmod 755 "$staged"
+    install_name_tool -id "@rpath/libcrypto.3.dylib" "$staged"
+    mv -f "$staged" "$libcrypto"
+    chmod 644 "$libcrypto"
+    cp "$work/$openssl_tag/LICENSE.txt" "$license"
+    rm -rf "$work"
   fi
-  cp "$license" "$py/lib/OPENSSL-LICENSE.txt"
 fi
+if [ ! -f "$libcrypto" ]; then
+  echo "bundle-swe: libcrypto.3.dylib not found at $libcrypto" >&2
+  exit 1
+fi
+if [ ! -f "$license" ]; then
+  echo "bundle-swe: no OpenSSL LICENSE.txt at $license; set SWE_LIBCRYPTO_LICENSE" >&2
+  exit 1
+fi
+cp "$libcrypto" "$py/lib/libcrypto.3.dylib"
+chmod 755 "$py/lib/libcrypto.3.dylib"
+install_name_tool -id "@rpath/libcrypto.3.dylib" "$py/lib/libcrypto.3.dylib"
+cp "$license" "$py/lib/OPENSSL-LICENSE.txt"
 
 # The package, without anything a previous run left behind.
 site="$stdlib/site-packages"

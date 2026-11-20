@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Droid limits on a Mac with no Homebrew.** `bundle-swe.sh` used to
+  copy `libcrypto.3.dylib` from Homebrew's OpenSSL and warn when it was
+  missing, which left Droid auth decryption off. It now builds a pinned
+  OpenSSL 3.6.5 for the host architecture and fails the build if that
+  dylib cannot be produced.
+
 ### Added
 
 - **The Models chart keeps a model's last intelligence score when Artificial Analysis stops publishing it.** Artificial Analysis moved its Intelligence Index to v5 and re-ran only some models, so Claude 4.5 Sonnet, Grok 4.5, Gemini 2.5 Flash, Gemini 3.1 Pro Preview and about 600 others showed "No score". The catalog now keeps each model's last score with its index version and date. A model with no current score draws its last one as a dashed outline bar after a divider, tagged with the version or the month ("Oct ’26"), and the table shows it muted. Index versions are not on one scale, so a dashed bar never ranks against a current one or enters Top 25. A catalog that predates this is filled once from the older download still on disk.
