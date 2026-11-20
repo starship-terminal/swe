@@ -134,6 +134,53 @@ import Testing
         #expect(PrimitiveTree.manifestEntries(root: try t.dir(".swe/plugins/hub/empty")).isEmpty)
     }
 
+    @Test func aFileAManifestLinksToIsListedOnce() throws {
+        let t = try PrimitiveHome()
+        let root = try plugin(t)
+        let fm = FileManager.default
+        // `.mcp.json` is a link to a file Other files lists, and Codex's
+        // manifest a link to one inside a skill's folder.
+        try t.write(".swe/plugins/hub/release-tools/config/mcp.json", "{}")
+        try fm.createSymbolicLink(at: root.appending(path: ".mcp.json"),
+                                  withDestinationURL: root.appending(path: "config/mcp.json"))
+        try t.write(".swe/plugins/hub/release-tools/skills/changelog/codex.json", "{}")
+        try fm.createDirectory(at: root.appending(path: ".codex-plugin"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: root.appending(path: ".codex-plugin/plugin.json"),
+                                  withDestinationURL: root.appending(path: "skills/changelog/codex.json"))
+
+        let tree = PrimitiveTree(root: root)
+        let manifests = PrimitiveTree.manifestEntries(root: root)
+        #expect(manifests.map(\.name) == [".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".mcp.json"])
+        // Listed as they are, the two files would each have two rows.
+        let twice = PluginFileOutline(tree: tree, root: root, manifests: manifests)
+        #expect(twice.filePaths.contains(root.appending(path: "config/mcp.json").path))
+
+        let outline = PluginFileOutline(tree: tree.dropping(filesSharedWith: manifests), root: root,
+                                        manifests: manifests)
+        // The manifests keep their rows; the files they link to go.
+        #expect(outline.sections[0].nodes.map(\.name) == manifests.map(\.name))
+        #expect(!outline.filePaths.contains(root.appending(path: "config/mcp.json").path))
+        #expect(!outline.filePaths.contains(root.appending(path: "skills/changelog/codex.json").path))
+        #expect(Set(outline.filePaths.map { FolderOwners.realPath($0) }).count == outline.filePaths.count)
+        // The skill keeps its folder and its other files; `config` held
+        // only the linked file, so it leaves Other files.
+        let skills = try #require(outline.sections.first { $0.kind == .skills })
+        #expect(skills.count == 2)
+        #expect(skills.nodes[0].children.map(\.name) == ["SKILL.md", "scripts", "README.md"])
+        #expect(outline.sections.first { $0.kind == .other }?.nodes.map(\.name) == ["docs", "LICENSE", "README.md"])
+        #expect(outline.sections.first { $0.kind == .other }?.count == 3)
+
+        // No manifests, nothing to resolve or drop.
+        #expect(tree.dropping(filesSharedWith: []) == tree)
+        // A group whose only file a manifest links to goes with it.
+        let bare = try t.dir(".swe/plugins/hub/bare")
+        try t.write(".swe/plugins/hub/bare/mcp.json", "{}")
+        try fm.createSymbolicLink(at: bare.appending(path: ".mcp.json"),
+                                  withDestinationURL: bare.appending(path: "mcp.json"))
+        let only = PrimitiveTree(root: bare).dropping(filesSharedWith: PrimitiveTree.manifestEntries(root: bare))
+        #expect(only.sections.isEmpty)
+    }
+
     @Test func theSkillOutlineStillLeadsWithItsOwnSkillMd() throws {
         // The two outlines share one builder: a plugin's skills lead with
         // SKILL.md one folder down, a skill's own folder at its top.

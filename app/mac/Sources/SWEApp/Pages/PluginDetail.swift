@@ -260,7 +260,11 @@ struct PluginDetailContent: View {
             let walked = await offMain {
                 let tree = PrimitiveTree(root: dir)
                 let manifests = PrimitiveTree.manifestEntries(root: dir)
-                return (PluginFileOutline(tree: tree, root: dir, manifests: manifests), tree.trashablePaths(dir))
+                // A manifest that links to a file the tree lists keeps its
+                // row; the other goes, so the file opens as one document.
+                let outline = PluginFileOutline(tree: tree.dropping(filesSharedWith: manifests),
+                                                root: dir, manifests: manifests)
+                return (outline, tree.trashablePaths(dir))
             }
             guard !Task.isCancelled else { return }
             files = (dir.path, walked.0, walked.1)
