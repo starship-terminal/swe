@@ -143,6 +143,8 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 </ul>
 <h3 id="fixed"><a class="anchor" href="#fixed"></a>Fixed</h3>
 <ul>
+<li><p><strong>Leaving a skill with Save all refreshes the Skills list.</strong> The unsaved-changes prompt's Save all wrote SKILL.md without telling the page, so the list kept the old description until Refresh. It now reads the skills again when any file was written, also when another file failed to save, as the editor's own Save does.</p>
+</li>
 <li><p><strong>A SKILL.md description written as a YAML block shows and saves.</strong> The frontmatter form read only <code>key: value</code> lines, so a <code>description: |</code> or <code>&gt;</code> block, or a plain value wrapped onto indented lines, never showed, and the form was often one locked <code>name</code> field. The Mac app and the web app now read block scalars (with <code>-</code>/<code>+</code> chomping and an indentation digit) and wrapped plain values as YAML does. An unchanged value keeps the file byte for byte, a changed value with line breaks is written as a <code>|</code> block at the block's own indentation, and one without goes back to a single line. Nested maps and lists are left untouched. CRLF files keep their line endings; before, the app saw no frontmatter in one and would have added a second.</p>
 </li>
 <li><p><strong>Grok 4.6 shows its intelligence score on the Models page.</strong> Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.</p>
