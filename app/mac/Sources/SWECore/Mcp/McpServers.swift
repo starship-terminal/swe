@@ -631,7 +631,8 @@ extension SweClient {
         try await call(["mcp", "info", name, "--json"])
     }
 
-    /// `swe mcp tools NAME --json`: spawns the server for a handshake, so
+    /// `swe mcp tools NAME --json`: spawns a command server (or asks a
+    /// URL one over http) for a handshake, so
     /// this is lazy in the UI. A failed handshake still prints its
     /// document — `error` — on a nonzero exit.
     public func mcpTools(server name: String) async throws -> McpToolsResult {

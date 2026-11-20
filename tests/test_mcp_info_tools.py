@@ -247,12 +247,14 @@ class McpInfoToolsTest(unittest.TestCase):
         self.assertIn("exited", d["error"])
         self.assertIn("cannot load config", d["error"])
 
-    def test_tools_refuses_a_remote_server(self):
-        self.claude_write({"web": {"url": "https://x.example/mcp"}})
+    def test_tools_refuses_a_legacy_sse_server(self):
+        # A streamable-http server is probed (tests/test_mcp_probe_http.py);
+        # the older sse transport is still out of reach.
+        self.claude_write({"web": {"url": "https://x.example/sse", "type": "sse"}})
         r = self.run_mcp("tools", "web", "--json")
         self.assertEqual(r.returncode, 1)
         d = json.loads(r.stdout)["data"]
-        self.assertIn("stdio only", d["error"])
+        self.assertIn("sse transport", d["error"])
 
     def test_tools_follows_next_cursor_pages(self):
         path = self.script("paging.py", PAGING_SERVER)
@@ -272,6 +274,40 @@ class McpInfoToolsTest(unittest.TestCase):
         r = self.run_mcp("tools", "nope")
         self.assertEqual(r.returncode, 1)
         self.assertIn("Unknown server", r.stdout + r.stderr)
+
+
+
+class ProbeDeadServerTest(unittest.TestCase):
+    """A server that dies before the first write: the probe must name the
+    exit and quote stderr, not the broken pipe the death caused. The
+    command-level test above only hits this when the child loses a race."""
+
+    @staticmethod
+    def _close(pipe):
+        try:
+            pipe.close()
+        except OSError:
+            pass  # the write end of a dead child's pipe
+
+    def test_write_to_an_exited_server_reports_the_exit(self):
+        import subprocess as sp
+        from swe.mcp import probe
+
+        proc = sp.Popen(
+            [sys.executable, "-c",
+             "import sys; sys.stderr.write('cannot load config'); sys.exit(3)"],
+            stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            self.addCleanup(self._close, pipe)
+        proc.wait(timeout=10)
+        errbuf = probe._StderrTail()
+        with self.assertRaises(probe.ProbeError) as caught:
+            # Larger than a pipe buffer is not needed: the reader is gone.
+            probe._send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize"}, errbuf)
+        message = str(caught.exception)
+        self.assertIn("exited (status 3)", message)
+        self.assertIn("cannot load config", message)
+        self.assertNotIn("Broken pipe", message)
 
 
 if __name__ == "__main__":

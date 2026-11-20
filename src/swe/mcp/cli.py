@@ -3042,18 +3042,21 @@ MCP_HELP = {
   {c('cyan', 'swe mcp tools <name>')}          List a server's tools by live handshake
   {c('cyan', 'swe mcp tools <name> --json')}   Machine-readable tool list
 
-  Spawns the configured command, runs the MCP initialize + tools/list
-  exchange, prints what the server offers, and kills it. The definition
-  the probe runs is the hub's when the hub holds one — a shared server's
-  harness entry points at the gateway, not the server itself — with
-  ${'{'}NAME{'}'} secrets resolved into the child environment.
+  Runs the MCP initialize + tools/list exchange and prints what the
+  server offers. A command server is spawned for it and killed after; a
+  server at a URL is asked over streamable http with its configured
+  headers. The definition the probe runs is the hub's when the hub holds
+  one — a shared server's harness entry points at the gateway, not the
+  server itself — with ${'{'}NAME{'}'} secrets resolved into the child
+  environment or the request headers.
 
 {c('bold', 'Flags')}
   --timeout=N         Seconds to wait for initialize and for tools/list
   --json              Print the result as one JSON document
 
-  Stdio servers only; a remote server's tools come from whoever serves
-  its URL.
+  A redirect is refused, so the headers never reach another host. A
+  server that wants a browser sign-in answers 401 and is reported as
+  such, and the older sse transport is not probed.
 
 {c('bold', 'Examples')}
   swe mcp tools github
@@ -3770,14 +3773,22 @@ def cmd_tools(args):
             print(f"{name}: {msg}", file=refusal)
         return 1
 
-    if st != "stdio":
-        return fail(f"the tools probe speaks stdio only; this server is {st}")
-    from swe.mcp.probe import ProbeError, inspect_stdio
+    if st == "http" and str(canonical.get("type") or "").lower() == "sse":
+        return fail("the tools probe speaks stdio and streamable http; "
+                    "this server uses the older sse transport")
+    if st not in ("stdio", "http"):
+        return fail(f"the tools probe speaks stdio and http; this server is {st}")
+    from swe.mcp.probe import ProbeError, inspect_http, inspect_stdio
     try:
-        result = inspect_stdio(str(canonical.get("command") or ""),
-                               canonical.get("args") or [],
-                               canonical.get("env") or {},
-                               timeout_s=timeout)
+        if st == "http":
+            result = inspect_http(str(canonical.get("url") or ""),
+                                  canonical.get("headers") or {},
+                                  timeout_s=timeout)
+        else:
+            result = inspect_stdio(str(canonical.get("command") or ""),
+                                   canonical.get("args") or [],
+                                   canonical.get("env") or {},
+                                   timeout_s=timeout)
     except ProbeError as exc:
         # Server stderr lands in the message; a child that logs a token
         # must not hand it back through our output.
