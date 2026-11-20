@@ -27,7 +27,7 @@ import Testing
     }
 }
 
-@Suite struct SkillDetailLayoutTests {
+@Suite struct SkillDetailLayoutRuleTests {
     @Test func theRailNarrowsBeforeTheEditorGetsCramped() {
         // A 900pt window: 624pt of page beside the standard sidebar.
         #expect(SkillDetailLayout.railWidth(available: 624) == 232)

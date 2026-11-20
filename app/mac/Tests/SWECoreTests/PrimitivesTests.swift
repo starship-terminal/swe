@@ -603,18 +603,58 @@ final class PrimitiveHome {
         let typed = ["a\nb", "a\nb\n", "a\nb\n\n\n", " lead\nb", "\nstarts empty", "\n lead", "  \nspaces first",
                      "tab\n\tin", "trailing \nspaces ", "a\n\n\nb", "\n\n", "\n", "a\r\nb", "a\n---\nb",
                      "bell\u{07}\nx", "sep\u{2028}\nx", "# not a comment\nreally", "key: value\n- item",
-                     "plain", "", "Fix: it", "x"]
+                     "plain", "", "Fix: it", "x",
+                     "a\n ", "a\n   ", "a\n \n", "a\n\n ", " \n", "a\n\t", "a\n\n", "a\n\n\n\n", "  \n  \n"]
         let starts = [frontmatter("name: x\ndescription: old\n"),
                       frontmatter("name: x\ndescription: >\n    old\n"),
                       frontmatter("name: x\n"),
+                      frontmatter("description: old\n\nlicense: MIT\n"),
+                      frontmatter("description: old\n      \n\t\nlicense: MIT\n"),
+                      frontmatter("description: |+\n  old\n\n\nlicense: MIT\n"),
+                      frontmatter("description: old\n\n"),
                       "# no frontmatter\n"]
         for start in starts {
             for value in typed {
                 let edited = MarkdownFrontmatter.update(start, set: [(key: "description", value: value)])
+                let front = MarkdownFrontmatter(text: edited)
+                #expect(front?.lockedKeys == [], "\(start.debugDescription) <- \(value.debugDescription)")
                 #expect(description(edited) == value, "\(start.debugDescription) <- \(value.debugDescription)")
+                if start.contains("license") {
+                    #expect(front?.fields.last?.key == "license", "\(start.debugDescription) <- \(value.debugDescription)")
+                }
                 #expect(edited.hasSuffix(start.hasPrefix("---") ? "# Body\n" : "# no frontmatter\n"))
             }
         }
+    }
+
+    /// A `+` block keeps the empty lines after it, so the blank lines that
+    /// already followed the field must not join the value (review on
+    /// #1985: `old\n\nlicense` set to `a\n\n` read back `a\n\n\n`).
+    @Test func blankLinesAfterTheFieldDoNotJoinAKeptBlock() {
+        let text = frontmatter("description: old\n\nlicense: MIT\n")
+        let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: "a\n\n")])
+        #expect(description(edited) == "a\n\n")
+        #expect(MarkdownFrontmatter(text: edited)?.fields.first { $0.key == "license" }?.value == "MIT")
+        // Blank lines after a clip or strip block are not its value, so
+        // they stay as the separator they were.
+        let clipped = MarkdownFrontmatter.update(text, set: [(key: "description", value: "a\nb")])
+        #expect(clipped == frontmatter("description: |-\n  a\n  b\n\nlicense: MIT\n"))
+    }
+
+    /// A last line of only spaces is content to the block but blank to a
+    /// scan that ignores the block's indentation; the two disagreed, and
+    /// the field turned locked while it was being typed (review on #1985).
+    @Test func aLastLineOfSpacesKeepsTheFieldEditable() {
+        let text = frontmatter("name: x\ndescription: old\nlicense: MIT\n")
+        for value in ["a\n ", "a\n   ", "a\n \n", "a\n\n ", " \n", "a\n\t"] {
+            let edited = MarkdownFrontmatter.update(text, set: [(key: "description", value: value)])
+            let front = MarkdownFrontmatter(text: edited)
+            #expect(front?.lockedKeys == [], "\(value.debugDescription)")
+            #expect(description(edited) == value, "\(value.debugDescription)")
+            #expect(SkillFrontmatterForm.rows(in: edited, name: "x").map(\.key) == ["name", "description", "license"])
+        }
+        // Read from a file, the same block reads with its last line.
+        #expect(description(frontmatter("description: |-\n  a\n   \nname: x\n")) == "a\n ")
     }
 
     /// CRLF files read like LF ones, an unchanged save keeps every byte,

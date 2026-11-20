@@ -165,8 +165,11 @@ def frontmatter(text: str) -> list[dict] | None:
         header = _BLOCK_HEADER.match(raw)
         if header:
             value, content_end, consumed = _block(inside, i + 1, header)
-            # An indented line the block did not take is YAML the form can't read.
-            if content_end == end:
+            # An indented line the block did not take is YAML the form can't
+            # read. The block's own rules decide its extent: a line of only
+            # spaces deeper than its indentation is its content, though blank
+            # to the scan above.
+            if content_end >= end:
                 fields.append({"key": key, "value": value})
                 i = consumed
                 continue

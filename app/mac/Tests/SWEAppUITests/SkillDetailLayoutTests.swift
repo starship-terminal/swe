@@ -108,24 +108,21 @@ import Testing
         Text("12 calls across 5 sessions · last used 2026-11-18")
             .font(Theme.caption).foregroundStyle(Theme.textSecondary))
 
-    /// Lays `host` out and hands the main actor back until `done` holds,
-    /// bounded by `gateTimeout`. A test on the main actor can't spin the
-    /// run loop for this: it runs inside a main-queue job, so the view's
-    /// tasks and `Page`'s first-frame hop, which need the main queue,
-    /// would wait behind it.
-    private func settle(_ host: NSView, until done: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + gateTimeout
-        while ContinuousClock.now < deadline {
-            host.layoutSubtreeIfNeeded()
-            if done() { return true }
-            await Task.yield()
-        }
-        return done()
+    /// Where the PNGs go; nil (the usual run) renders only the states the
+    /// layout assertions need.
+    nonisolated private static let snapshots = ProcessInfo.processInfo.environment["SWE_SKILL_DETAIL_SNAPSHOT_DIR"]
+
+    /// Every scroll view under `view`.
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        view.subviews.flatMap { sub in ((sub as? NSScrollView).map { [$0] } ?? []) + scrollViews(in: sub) }
     }
 
     /// Renders `content` in the Skills page at each window size, waits for
     /// its loads, runs `prepare`, then checks the panes and writes a PNG.
-    private func check(_ state: String, wait: Set<String>,
+    /// With `legacyScrollers`, each window is checked a second time with
+    /// every scroll view switched to always-visible scrollers, as CI's
+    /// runners draw them: they take 17pt from a scrolling pane.
+    private func check(_ state: String, wait: Set<String>, legacyScrollers: Bool = false,
                        prepare: (PrimitiveDrafts) -> Void = { _ in },
                        _ make: (SkillDetailProbe, PrimitiveDrafts) -> SkillDetailContent) async throws {
         _ = NSApplication.shared
@@ -146,51 +143,78 @@ import Testing
             shown.contentView = host
             shown.orderFront(nil)
             defer { shown.orderOut(nil) }
-            #expect(await settle(host) {
+            // Parks on a gate the probe's changes open; SwiftUI keeps
+            // laying out and running the view's tasks meanwhile.
+            #expect(await observed {
                 wait.isSubset(of: probe.loaded)
                     && drafts.documents.values.allSatisfy { $0.state != .loading }
                     && probe.pane.height > 0
             }, "\(state) at \(window.name): \(probe.loaded)")
             prepare(drafts)
-            // A layout pass, a turn of the main actor and another layout
-            // for what `prepare` changed.
-            host.layoutSubtreeIfNeeded()
-            await Task.yield()
+            // A layout pass for what `prepare` changed.
             host.layoutSubtreeIfNeeded()
 
-            // Nothing is wider than the page, and the editor never drops
-            // under 380pt beside the rail.
             let content = panel.width - 80
+            let stacked = SkillDetailLayout.stacks(available: Double(content))
             let here = "\(state) at \(window.name)"
-            #expect(probe.rail.minX >= 40 - 1 && probe.rail.maxX <= panel.width - 40 + 1, "\(here): rail \(probe.rail)")
-            #expect(abs(probe.pane.maxX - (panel.width - 40)) < 1, "\(here): pane \(probe.pane)")
-            if SkillDetailLayout.stacks(available: Double(content)) {
-                #expect(abs(probe.rail.width - content) < 1, "\(here): rail \(probe.rail)")
-                #expect(abs(probe.pane.width - content) < 1, "\(here): pane \(probe.pane)")
-                #expect(probe.pane.height >= CGFloat(SkillDetailLayout.stackedEditorHeight) - 1, "\(here): pane \(probe.pane)")
-                #expect(probe.pane.minY > probe.rail.maxY, "\(here): \(probe.rail) \(probe.pane)")
-            } else {
-                // The rail keeps its width and the editor fills the
-                // page's height beside it.
-                let rail = SkillDetailLayout.railWidth(available: Double(content))
-                #expect(abs(probe.rail.width - CGFloat(rail)) < 1, "\(here): rail \(probe.rail)")
-                #expect(probe.pane.width >= CGFloat(SkillDetailLayout.stackedBelow) - 1, "\(here): pane \(probe.pane)")
-                #expect(abs(probe.rail.height - probe.pane.height) < 1, "\(here): \(probe.rail) \(probe.pane)")
-                // Under the page's header, down to its bottom padding.
-                // Global frames count from the window's top, title bar
-                // included.
-                let titleBar = shown.frame.height - panel.height
-                #expect(abs(probe.pane.maxY - titleBar - (panel.height - 36)) < 1, "\(here): pane \(probe.pane)")
-                #expect(probe.pane.height > panel.height * 0.7, "\(here): pane \(probe.pane)")
-            }
+            assertLayout(probe, panel: panel, shown: shown, stacked: stacked, here: here)
+            try snapshot(host, "\(state)-\(window.name)")
 
-            if let dir = ProcessInfo.processInfo.environment["SWE_SKILL_DETAIL_SNAPSHOT_DIR"],
-               let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                host.cacheDisplay(in: host.bounds, to: rep)
-                let png = try #require(rep.representation(using: .png, properties: [:]))
-                try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-                try png.write(to: URL(fileURLWithPath: dir).appending(path: "\(state)-\(window.name).png"))
+            if legacyScrollers {
+                // Every scroll view to legacy, then the notice AppKit posts
+                // when the system setting changes: SwiftUI's scroll views
+                // lay their content out again for it.
+                for scrollView in Self.scrollViews(in: host) { scrollView.scrollerStyle = .legacy }
+                NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+                host.layoutSubtreeIfNeeded()
+                if stacked {
+                    // The page scrolls, so its scroller takes its width.
+                    #expect(await observed { probe.rail.width < content - 10 }, "\(here), legacy: \(probe.rail)")
+                }
+                assertLayout(probe, panel: panel, shown: shown, stacked: stacked, here: here + ", legacy")
+                try snapshot(host, "\(state)-\(window.name)-legacy")
             }
+        }
+    }
+
+    /// `host` as `<name>.png` in the snapshot folder, when one is set.
+    private func snapshot(_ host: NSView, _ name: String) throws {
+        guard let dir = Self.snapshots, let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let png = try #require(rep.representation(using: .png, properties: [:]))
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try png.write(to: URL(fileURLWithPath: dir).appending(path: name + ".png"))
+    }
+
+    /// Nothing is wider than the page, and the editor never drops under
+    /// 380pt beside the rail. Stacked, rail and editor share the width the
+    /// page's scroll view gives them, all of it with overlay scrollers and
+    /// all but a legacy scroller's width with those.
+    private func assertLayout(_ probe: SkillDetailProbe, panel: CGSize, shown: NSWindow,
+                              stacked: Bool, here: String) {
+        let content = panel.width - 80
+        let scroller = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        #expect(probe.rail.minX >= 40 - 1 && probe.rail.maxX <= panel.width - 40 + 1, "\(here): rail \(probe.rail)")
+        #expect(probe.pane.maxX <= panel.width - 40 + 1, "\(here): pane \(probe.pane)")
+        if stacked {
+            #expect(abs(probe.rail.width - probe.pane.width) < 1, "\(here): \(probe.rail) \(probe.pane)")
+            #expect(probe.pane.width <= content + 1 && probe.pane.width >= content - scroller - 1,
+                    "\(here): pane \(probe.pane)")
+            #expect(probe.pane.height >= CGFloat(SkillDetailLayout.stackedEditorHeight) - 1, "\(here): pane \(probe.pane)")
+            #expect(probe.pane.minY > probe.rail.maxY, "\(here): \(probe.rail) \(probe.pane)")
+        } else {
+            // The rail keeps its width and the editor fills the page's
+            // height beside it, out to the page's edge.
+            let rail = SkillDetailLayout.railWidth(available: Double(content))
+            #expect(abs(probe.rail.width - CGFloat(rail)) < 1, "\(here): rail \(probe.rail)")
+            #expect(abs(probe.pane.maxX - (panel.width - 40)) < 1, "\(here): pane \(probe.pane)")
+            #expect(probe.pane.width >= CGFloat(SkillDetailLayout.stackedBelow) - 1, "\(here): pane \(probe.pane)")
+            #expect(abs(probe.rail.height - probe.pane.height) < 1, "\(here): \(probe.rail) \(probe.pane)")
+            // Under the page's header, down to its bottom padding. Global
+            // frames count from the window's top, title bar included.
+            let titleBar = shown.frame.height - panel.height
+            #expect(abs(probe.pane.maxY - titleBar - (panel.height - 36)) < 1, "\(here): pane \(probe.pane)")
+            #expect(probe.pane.height > panel.height * 0.7, "\(here): pane \(probe.pane)")
         }
     }
 
@@ -209,12 +233,14 @@ import Testing
     @Test func defaultOpensSkillMdWithDetailsClosed() async throws {
         let f = try Fixture()
         let skill = f.skill(".swe/skills/code-review")
-        try await check("default", wait: loads(f.url(".swe/skills/code-review/SKILL.md").path)) { probe, drafts in
+        try await check("default", wait: loads(f.url(".swe/skills/code-review/SKILL.md").path),
+                        legacyScrollers: true) { probe, drafts in
             content(f, skill, drafts: drafts, probe: probe)
         }
     }
 
-    @Test func detailsOpenWithALongDescription() async throws {
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func detailsOpenWithALongDescription() async throws {
         let f = try Fixture()
         let skill = f.skill(".swe/skills/code-review", description: String(
             repeating: "Review a pull request for correctness, security and tests before it merges. ", count: 4))
@@ -223,7 +249,8 @@ import Testing
         }
     }
 
-    @Test func aBlockDescriptionShowsInTheField() async throws {
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aBlockDescriptionShowsInTheField() async throws {
         let f = try Fixture()
         let skill = f.skill(".swe/skills/release-notes")
         let file = f.url(".swe/skills/release-notes/SKILL.md").path
@@ -238,7 +265,8 @@ import Testing
         }
     }
 
-    @Test func aNestedFileIsPicked() async throws {
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aNestedFileIsPicked() async throws {
         let f = try Fixture()
         let skill = f.skill(".swe/skills/code-review")
         let run = f.url(".swe/skills/code-review/scripts/run.sh").path
@@ -251,7 +279,8 @@ import Testing
         }
     }
 
-    @Test func aDirtyDraftShowsItsDots() async throws {
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aDirtyDraftShowsItsDots() async throws {
         let f = try Fixture()
         let skill = f.skill(".swe/skills/code-review")
         let readme = f.url(".swe/skills/code-review/README.md").path
@@ -268,7 +297,8 @@ import Testing
         }
     }
 
-    @Test func aReadOnlySkillLocksItsFields() async throws {
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aReadOnlySkillLocksItsFields() async throws {
         let f = try Fixture()
         let skill = f.skill("vendor/skills/vendor-skill", source: .catalog)
         try await check("readonly", wait: loads(f.url("vendor/skills/vendor-skill/SKILL.md").path)) { probe, drafts in
@@ -276,7 +306,8 @@ import Testing
         }
     }
 
-    @Test func aBinaryFileCannotPreview() async throws {
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aBinaryFileCannotPreview() async throws {
         let f = try Fixture()
         let skill = f.skill(".swe/skills/code-review")
         let logo = f.url(".swe/skills/code-review/assets/logo.png").path

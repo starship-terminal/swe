@@ -235,8 +235,10 @@ public struct MarkdownFrontmatter: Sendable, Equatable {
             if let header = BlockHeader(raw) {
                 let block = decodeBlock(lines, from: i + 1, header: header)
                 // An indented line the block did not take (indented less
-                // than its content) is YAML the form can't read.
-                entry = block.contentEnd == end
+                // than its content) is YAML the form can't read. The block's
+                // own rules decide its extent: a line of only spaces deeper
+                // than its indentation is its content, though blank above.
+                entry = block.contentEnd >= end
                     ? Entry(key: key, lines: i..<block.consumed, value: block.value,
                             comment: header.comment, indent: block.indent)
                     : Entry(key: key, lines: i..<end)
@@ -405,11 +407,12 @@ public struct MarkdownFrontmatter: Sendable, Equatable {
 
     /// The lines that write `key: value`: one line when the value has no
     /// break (or can't go in a block), else a `|` block at `indent`.
-    private static func render(_ key: String, _ value: String, comment: String, indent: Int) -> [String] {
+    private static func render(_ key: String, _ value: String, comment: String, indent: Int)
+        -> (lines: [String], block: Bool, keeps: Bool) {
         if value.contains("\n"), let block = literal(value, indent: indent) {
-            return ["\(key): \(block.header)\(comment)"] + block.lines
+            return (["\(key): \(block.header)\(comment)"] + block.lines, true, block.header.hasSuffix("+"))
         }
-        return [(value.isEmpty ? key + ":" : key + ": " + scalar(value)) + comment]
+        return ([(value.isEmpty ? key + ":" : key + ": " + scalar(value)) + comment], false, false)
     }
 
     /// `value` as a literal block: the header (`|`, then the indentation
@@ -439,6 +442,10 @@ public struct MarkdownFrontmatter: Sendable, Equatable {
         let header = "|" + (first.first == " " ? String(indent) : "") + chomp
         let lines = rows.map { $0.isEmpty ? "" : pad + $0 }
             + Array(repeating: "", count: max(0, trailing - 1))
+        // Read it back the way the form will: a block that would not give
+        // back exactly `value`, or would lock the field, is not written.
+        let back = entries(["k: " + header] + lines)
+        guard back.count == 1, back[0].value == value else { return nil }
         return (header, lines)
     }
 
@@ -597,13 +604,17 @@ public struct MarkdownFrontmatter: Sendable, Equatable {
     public static func update(_ text: String, set values: [(key: String, value: String)]) -> String {
         guard let found = range(in: text) else {
             let end = text.contains("\r\n") ? "\r\n" : "\n"
-            let block = values.flatMap { render($0.key, $0.value, comment: "", indent: 2) }
+            let block = values.flatMap { render($0.key, $0.value, comment: "", indent: 2).lines }
             return (["---"] + block + ["---", ""]).joined(separator: end) + end + text
         }
         let lines = Self.lines(text[found.range])
         var out: [Line] = []
         var left = values
-        for entry in entries(lines.map(\.text)) {
+        let all = entries(lines.map(\.text))
+        var next = 0
+        while next < all.count {
+            let entry = all[next]
+            next += 1
             let original = lines[entry.lines]
             guard let key = entry.key,
                   let at = left.firstIndex(where: { $0.key == key }) else {
@@ -621,11 +632,23 @@ public struct MarkdownFrontmatter: Sendable, Equatable {
                 continue
             }
             let end = original.first?.end ?? found.end
-            out += render(key, value, comment: entry.comment, indent: entry.indent ?? 2)
-                .map { Line(text: $0, end: end) }
+            let rendered = render(key, value, comment: entry.comment, indent: entry.indent ?? 2)
+            out += rendered.lines.map { Line(text: $0, end: end) }
+            guard rendered.block else { continue }
+            // A block reads on over the blank lines after it: a `+` block
+            // would take them into its value, and a line of spaces deeper
+            // than its indentation is content to any block. Take them in
+            // here: a `+` block's own empty lines already end it, and other
+            // blocks get them back as plain empty lines.
+            var blanks: [Line] = []
+            while next < all.count, all[next].key == nil, isBlank(lines[all[next].lines.lowerBound].text) {
+                blanks.append(lines[all[next].lines.lowerBound])
+                next += 1
+            }
+            if !rendered.keeps { out += blanks.map { Line(text: "", end: $0.end) } }
         }
         // Before the closing fence.
-        out += left.flatMap { render($0.key, $0.value, comment: "", indent: 2) }
+        out += left.flatMap { render($0.key, $0.value, comment: "", indent: 2).lines }
             .map { Line(text: $0, end: found.end) }
         return String(text[..<found.range.lowerBound])
             + out.map { $0.text + $0.end }.joined()

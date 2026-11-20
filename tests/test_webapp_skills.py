@@ -74,6 +74,13 @@ class TestFrontmatter(unittest.TestCase):
         self.assertEqual(page.frontmatter("---\n" + inside + "---\n"), [
             {"key": "name", "value": "x"}, {"key": "description", "value": "Words.\n"}])
 
+    def test_a_last_line_of_spaces_is_the_blocks(self):
+        # A line of only spaces deeper than the block's indentation is its
+        # content; the scan that ignores indentation used to call it blank
+        # and drop the field (review on #1985).
+        fields = page.frontmatter("---\ndescription: |-\n  a\n   \nname: x\n---\n")
+        self.assertEqual(fields, [{"key": "description", "value": "a\n "}, {"key": "name", "value": "x"}])
+
     def test_crlf_lines_read_like_lf(self):
         text = "---\r\nname: x\r\ndescription: |\r\n  one\r\n  two\r\n---\r\nbody\r\n"
         self.assertEqual(page.frontmatter(text), [

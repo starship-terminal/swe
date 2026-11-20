@@ -29,8 +29,10 @@ struct SkillDetailView: View {
 }
 
 /// What a test watches on a skill detail it renders offscreen: the loads
-/// that have landed and where the two panes sit.
+/// that have landed and where the two panes sit. Observable, so a test
+/// parks on a gate until they change instead of polling.
 @MainActor
+@Observable
 final class SkillDetailProbe {
     /// "folders", "files", "skill" (SKILL.md's check) and "file:<path>"
     /// (the picked file's check), as each lands.
