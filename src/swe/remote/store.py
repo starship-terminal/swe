@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -313,7 +314,9 @@ def _no_secrets(value: Any, where: str) -> None:
                     f"{where}: {k!r} looks like a credential; the store "
                     "keeps no secrets")
             _no_secrets(v, f"{where}.{k}")
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
+        # Every container json.dumps serialises: dicts, lists, tuples
+        # (and their subclasses, which isinstance covers).
         for item in value:
             _no_secrets(item, where)
 
@@ -345,16 +348,44 @@ def _options(options: dict | None) -> str:
     return _canon(options)
 
 
+# Each result field's type, as the ``command.result`` event declares it
+# (adapters/events.py). ``op`` is not here: it always comes from the
+# stored command.
+_RESULT_TYPES: dict[str, type] = {
+    "ok": bool, "note": str, "degraded": bool, "cancelled": bool,
+    "request_id": str, "launch_id": str,
+}
+
+
 def _result(result: dict, op: str) -> str:
+    """``result`` as stored: typed fields only, None ones dropped, and
+    ``op`` the stored command's (a different one is a ValueError)."""
     if not isinstance(result, dict):
         raise ValueError("result must be a JSON object")
     unknown = set(result) - RESULT_KEYS
     if unknown:
         raise ValueError(f"result: unknown keys {sorted(unknown)}")
+    given = result.get("op")
+    if given is not None and given != op:
+        raise ValueError(f"result.op is {given!r}, but the command's op "
+                         f"is {op!r}")
     if not isinstance(result.get("ok"), bool):
         raise ValueError("result.ok must be a bool")
-    return _canon({"op": op, **{k: v for k, v in result.items()
-                                if v is not None}})
+    out: dict[str, Any] = {"op": op}
+    for key, kind in _RESULT_TYPES.items():
+        value = result.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, kind):
+            raise ValueError(f"result.{key} must be a {kind.__name__}")
+        out[key] = value
+    return _canon(out)
+
+
+def _check_reason(reason: Any) -> str | None:
+    if reason is not None and not isinstance(reason, str):
+        raise ValueError("reason must be a string")
+    return reason
 
 
 def _check_id(value: str, what: str) -> str:
@@ -417,6 +448,12 @@ def _tighten(path: Path) -> None:
 
 _MAGIC = b"SQLite format 3\x00"
 
+# The file's identity in one statement, so one snapshot.
+_IDENTITY_SQL = (
+    "SELECT (SELECT application_id FROM pragma_application_id), "
+    "(SELECT user_version FROM pragma_user_version), "
+    "(SELECT count(*) FROM sqlite_master WHERE type = 'table')")
+
 
 def _header(path: Path) -> None:
     """Refuse from the file's own header bytes, before SQLite opens it:
@@ -437,25 +474,29 @@ def _header(path: Path) -> None:
             "Move it aside to start a new store")
     version = int.from_bytes(head[60:64], "big", signed=True)
     app = int.from_bytes(head[68:72], "big", signed=True)
-    if (app, version) != (0, 0):
+    # Only what the header alone settles: another program's id, or a
+    # newer version. An app id of 0 with a version is left to _probe,
+    # which reads both in one transaction.
+    if app not in (0, APPLICATION_ID) or version > len(MIGRATIONS):
         _refusal(path, app, version, None)
 
 
 def _probe(path: Path) -> tuple[int, int, int]:
     """``(application_id, user_version, tables)`` read through a
     read-only connection, which can neither write the file nor
-    checkpoint a WAL into it when it closes."""
+    checkpoint a WAL into it when it closes. All three come from one
+    read transaction: read apart, a store another thread is creating
+    could show its version without its application id yet."""
     uri = f"file:{urllib.parse.quote(str(path))}?mode=ro"
     try:
-        conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
+        conn = sqlite3.connect(uri, uri=True, isolation_level=None,
+                               timeout=BUSY_TIMEOUT_MS / 1000)
     except sqlite3.Error as exc:
         raise StoreError(f"{path}: cannot open ({exc})") from None
     try:
-        app = conn.execute("PRAGMA application_id").fetchone()[0]
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-        tables = conn.execute(
-            "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
-        ).fetchone()[0]
+        conn.execute("BEGIN")
+        app, version, tables = conn.execute(_IDENTITY_SQL).fetchone()
+        conn.execute("COMMIT")
     except sqlite3.Error as exc:
         raise StoreError(
             f"{path} is not a readable SQLite database ({exc}); it was "
@@ -480,6 +521,43 @@ def _refusal(path: Path, app: int, version: int,
             f"{path} holds schema version {version}, and this swe knows "
             f"versions up to {len(MIGRATIONS)}. It was left as it is; "
             "update swe to use it")
+
+
+def _busy(exc: sqlite3.OperationalError) -> bool:
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return code & 0xFF == sqlite3.SQLITE_BUSY
+    return "locked" in str(exc)
+
+
+def _set_wal(conn: sqlite3.Connection, path: Path, *,
+             pause: Callable[[float], None] = time.sleep,
+             now: Callable[[], float] = time.monotonic) -> None:
+    """Turn WAL on, unless it already is.
+
+    Two connections switching a new file out of rollback mode at once
+    both hold a shared lock and want an exclusive one; SQLite answers
+    one of them SQLITE_BUSY at once, without the busy handler (waiting
+    would deadlock). That one backs off and tries again, for at most
+    the busy timeout: by then the other has switched the file and the
+    first check sees WAL."""
+    deadline = now() + BUSY_TIMEOUT_MS / 1000
+    delay = 0.002
+    while True:
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            if str(mode).lower() != "wal":
+                mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            break
+        except sqlite3.OperationalError as exc:
+            if not _busy(exc) or now() >= deadline:
+                raise
+            pause(delay)
+            delay = min(delay * 2, 0.05)
+    if str(mode).lower() != "wal":
+        raise StoreError(
+            f"{path}: SQLite would not turn on WAL (got {mode}); keep the "
+            "store on a local disk")
 
 
 class Store:
@@ -507,11 +585,7 @@ class Store:
             isolation_level=None, check_same_thread=False)
         try:
             conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-            mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-            if str(mode).lower() != "wal":
-                raise StoreError(
-                    f"{self.path}: SQLite would not turn on WAL (got "
-                    f"{mode}); keep the store on a local disk")
+            _set_wal(conn, self.path)
             # FULL: a receipt that returned is on disk, so a power cut
             # cannot forget a command and apply its retry a second time.
             conn.execute("PRAGMA synchronous = FULL")
@@ -550,11 +624,7 @@ class Store:
         try:
             # Read again under the write lock: another process may have
             # migrated (or a newer swe written) since the probe.
-            app = conn.execute("PRAGMA application_id").fetchone()[0]
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-            tables = conn.execute(
-                "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
-            ).fetchone()[0]
+            app, version, tables = conn.execute(_IDENTITY_SQL).fetchone()
             _refusal(self.path, app, version, tables)
             for number, step in MIGRATIONS[version:]:
                 if number != version + 1:
@@ -872,14 +942,18 @@ class Store:
             raise ValueError("device must be a device id")
         if not isinstance(hold_s, (int, float)) or hold_s <= 0:
             raise ValueError("hold_s must be a positive number")
+        _check_reason(reason)
         body = _payload(payload)
-        now = self._clock()
-        expires = now + hold_s if status == "held" else None
-        result = finished = None
+        result = None
         if status == "rejected":
             result = _result({"ok": False, "note": reason}, op)
-            finished = now
         with self._write() as db:
+            # The clock is read once the write lock is held, so a long
+            # wait for it cannot stamp the command (or start its hold)
+            # in the past.
+            now = self._clock()
+            expires = now + hold_s if status == "held" else None
+            finished = now if status == "rejected" else None
             row = db.execute(
                 "SELECT session_key, machine, op, payload, status, reason, "
                 "result FROM commands WHERE command_id = ?",
@@ -910,24 +984,30 @@ class Store:
                    result: dict | None = None) -> bool:
         """Move a command along: ``held`` to ``accepted``, ``queued`` or
         ``rejected``; ``queued`` to ``accepted`` or ``rejected``.
-        Atomic and conditional: False when the command is unknown or
-        its status does not allow the move, so two threads delivering
-        the same held command cannot both win. A held command at or
+        Atomic and conditional: False when the command is unknown, has
+        finished (it has a result, whatever its status), or its status
+        does not allow the move, so two threads delivering the same
+        held command cannot both win and a finished receipt never
+        changes. A held command at or
         past its deadline cannot be delivered even before
         ``expire_held`` sweeps it: False, and the row is left for the
         sweep to reject (``held`` to ``rejected`` stays allowed).
         A move to ``rejected`` stores ``result`` (default ``{ok:
         false, note: reason}``) and finishes the command."""
         _check_in(to, STORED_STATUSES, "to")
+        _check_reason(reason)
         if result is not None and to != "rejected":
             raise ValueError("only a rejection carries a result here; "
                              "use set_result")
-        now = self._clock()
         with self._write() as db:
-            row = db.execute("SELECT status, op, expires_at FROM commands "
-                             "WHERE command_id = ?", (command_id,)
-                             ).fetchone()
-            if row is None or to not in _TRANSITIONS[row[0]]:
+            # After the lock: a hold that ran out while this call waited
+            # for it has run out.
+            now = self._clock()
+            row = db.execute("SELECT status, op, expires_at, result "
+                             "FROM commands WHERE command_id = ?",
+                             (command_id,)).fetchone()
+            if row is None or row[3] is not None \
+                    or to not in _TRANSITIONS[row[0]]:
                 return False
             if row[0] == "held" and to != "rejected" \
                     and row[2] is not None and row[2] <= now:
@@ -981,16 +1061,18 @@ class Store:
         where, args = _filters(("machine", machine))
         where = (where + " AND" if where else " WHERE") + \
             " status = 'held' AND expires_at > ?"
-        return [_command(r) for r in self._read(
-            f"SELECT {_COMMAND_COLS} FROM commands{where} ORDER BY id",
-            (*args, self._clock()))]
+        with self._lock:
+            rows = self._read(
+                f"SELECT {_COMMAND_COLS} FROM commands{where} ORDER BY id",
+                (*args, self._clock()))
+        return [_command(r) for r in rows]
 
     def expire_held(self) -> list[Command]:
         """Reject every held command past its deadline (reason
         ``expired``) and return them, oldest first, so the hub can send
         each one's ``command.result``."""
-        now = self._clock()
         with self._write() as db:
+            now = self._clock()
             rows = db.execute(
                 f"SELECT {_COMMAND_COLS} FROM commands WHERE status = "
                 "'held' AND expires_at <= ? ORDER BY id", (now,)).fetchall()
@@ -1037,8 +1119,8 @@ class Store:
         recognised only while its row exists."""
         if older_than_s < HOLD_S:
             raise ValueError("retention is shorter than the 24 hour hold")
-        cutoff = self._clock() - older_than_s
         with self._write() as db:
+            cutoff = self._clock() - older_than_s
             commands = db.execute(
                 "DELETE FROM commands WHERE result IS NOT NULL AND "
                 "status != 'held' AND finished_at < ?", (cutoff,)).rowcount
@@ -1054,19 +1136,23 @@ class Store:
     def backup(self, dest: Path | str) -> Path:
         """Copy the store to ``dest`` through SQLite's backup API, which
         reads through this connection and so includes commits still in
-        the ``-wal`` file. ``dest`` must not exist; it is written beside
-        itself under a temporary name, made a single self-contained
-        file (rollback journal, no ``-wal``), then renamed into place,
-        mode 0600."""
+        the ``-wal`` file. Each call writes its own temporary file beside
+        ``dest`` (0600, from ``mkstemp``), makes it a single
+        self-contained file (rollback journal, no ``-wal``), fsyncs it,
+        then publishes it with a hard link, which fails if ``dest``
+        exists, even one another process made during the copy: a backup
+        never overwrites (FileExistsError). The call removes only the
+        temporary files it made. ``dest``'s folder must exist."""
         dest = Path(dest)
         if dest.exists():
             raise FileExistsError(f"{dest} exists; backup never "
                                   "overwrites")
-        tmp = dest.with_name(f".{dest.name}.tmp-{os.getpid()}")
-        for leftover in (tmp, Path(f"{tmp}-wal"), Path(f"{tmp}-shm"),
-                         Path(f"{tmp}-journal")):
-            leftover.unlink(missing_ok=True)
-        _private_file(tmp)
+        fd, name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".tmp",
+                                    dir=dest.parent)
+        os.close(fd)
+        tmp = Path(name)
+        mine = (tmp, Path(f"{tmp}-wal"), Path(f"{tmp}-shm"),
+                Path(f"{tmp}-journal"))
         try:
             out = sqlite3.connect(str(tmp), isolation_level=None)
             try:
@@ -1078,16 +1164,25 @@ class Store:
                     raise StoreError(f"backup failed its check: {check}")
             finally:
                 out.close()
-            fd = os.open(tmp, os.O_RDONLY)
+            _fsync(tmp)
             try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            os.replace(tmp, dest)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+                os.link(tmp, dest)
+            except FileExistsError:
+                raise FileExistsError(f"{dest} appeared during the backup; "
+                                      "backup never overwrites") from None
+            _fsync(dest.parent)
+        finally:
+            for path in mine:
+                path.unlink(missing_ok=True)
         return dest
+
+
+def _fsync(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 class _Tx:

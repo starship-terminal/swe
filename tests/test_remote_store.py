@@ -198,30 +198,96 @@ class TestOpen(StoreCase):
                 Store(self.path, clock=self.clock)
         self.assertIn("local disk", str(caught.exception))
 
-    def test_two_first_opens_at_once_both_succeed(self) -> None:
-        errors: list[BaseException] = []
-        stores: list[Store] = []
-        gate = threading.Barrier(4)
+    def test_wal_switch_backs_off_when_busy(self) -> None:
+        self.path.parent.mkdir(parents=True)
+        conn = self.raw()
+        real = conn.execute
+        busy = sqlite3.OperationalError("database is locked")
+        pauses: list[float] = []
 
-        def run() -> None:
-            try:
-                gate.wait()
-                stores.append(Store(self.path, clock=self.clock))
-            except BaseException as exc:  # noqa: BLE001 - reported below
-                errors.append(exc)
+        class Busy:
+            left = 3
 
-        threads = [threading.Thread(target=run) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        for s in stores:
-            self.addCleanup(s.close)
-        self.assertEqual(errors, [])
-        self.assertEqual(len(stores), 4)
-        self.assertEqual(
-            self.raw().execute("PRAGMA user_version").fetchone()[0],
-            SCHEMA_VERSION)
+            def execute(self, sql, *args):
+                if sql == "PRAGMA journal_mode = WAL" and self.left:
+                    self.left -= 1
+                    raise busy
+                return real(sql, *args)
+
+        store_mod._set_wal(Busy(), self.path, pause=pauses.append,
+                           now=lambda: 0.0)
+        self.assertEqual(pauses, [0.002, 0.004, 0.008])
+        self.assertEqual(real("PRAGMA journal_mode").fetchone()[0], "wal")
+        # Already WAL: nothing to switch, so nothing to wait for.
+        store_mod._set_wal(Busy(), self.path, pause=pauses.append)
+        self.assertEqual(len(pauses), 3)
+
+    def test_wal_switch_gives_up_after_the_busy_timeout(self) -> None:
+        self.path.parent.mkdir(parents=True)
+        conn = self.raw()
+        real = conn.execute
+        clock = [0.0]
+
+        class AlwaysBusy:
+            def execute(self, sql, *args):
+                if sql == "PRAGMA journal_mode = WAL":
+                    raise sqlite3.OperationalError("database is locked")
+                return real(sql, *args)
+
+        def pause(seconds: float) -> None:
+            clock[0] += seconds
+
+        with self.assertRaises(sqlite3.OperationalError):
+            store_mod._set_wal(AlwaysBusy(), self.path, pause=pause,
+                               now=lambda: clock[0])
+        self.assertGreaterEqual(clock[0], store_mod.BUSY_TIMEOUT_MS / 1000)
+
+        class Broken:
+            def execute(self, sql, *args):
+                raise sqlite3.OperationalError("disk I/O error")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            store_mod._set_wal(Broken(), self.path, pause=pause)
+
+    def test_busy_reads_the_error_code(self) -> None:
+        exc = sqlite3.OperationalError("whatever")
+        exc.sqlite_errorcode = sqlite3.SQLITE_BUSY | (1 << 8)
+        self.assertTrue(store_mod._busy(exc))
+        exc.sqlite_errorcode = sqlite3.SQLITE_IOERR
+        self.assertFalse(store_mod._busy(exc))
+
+    def test_many_first_opens_at_once_all_succeed(self) -> None:
+        # Fresh paths, each opened by 12 threads (12 Store objects) at
+        # once; a probe that read the identity in pieces saw a half-made
+        # store and refused it as foreign.
+        for round_ in range(15):
+            path = self.dir / f"fresh{round_}" / "remote.sqlite"
+            errors: list[BaseException] = []
+            stores: list[Store] = []
+            gate = threading.Barrier(12)
+
+            def run() -> None:
+                try:
+                    gate.wait()
+                    stores.append(Store(path, clock=self.clock))
+                except BaseException as exc:  # noqa: BLE001 - below
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=run) for _ in range(12)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            for s in stores:
+                self.addCleanup(s.close)
+            self.assertEqual(errors, [], f"round {round_}")
+            self.assertEqual(len(stores), 12)
+            stores[0].record_command("c1", session=SESSION, op="send",
+                                     status="accepted")
+            self.assertEqual(stores[-1].get_command("c1").status, "accepted")
+            self.assertEqual(
+                self.raw(path).execute("PRAGMA user_version").fetchone()[0],
+                SCHEMA_VERSION)
 
 
 def _v2(conn: sqlite3.Connection) -> None:
@@ -675,6 +741,8 @@ class TestReceipts(StoreCase):
             ({"payload": {"auth": {"bearer": "abc"}}}, "credential"),
             ({"payload": {"items": [{"api_key": "sk"}]}}, "credential"),
             ({"payload": {"Device_Token": "t"}}, "credential"),
+            ({"payload": {"items": ({"api_key": "x"},)}}, "credential"),
+            ({"payload": {"a": [({"b": {"cookie": "c"}},)]}}, "credential"),
             ({"payload": {1: "x"}}, "strings"),
             ({"payload": {"text": "x" * (1 << 20)}}, "1 MiB"),
             ({"hold_s": 0}, "hold_s"),
@@ -776,6 +844,52 @@ class TestHeld(StoreCase):
         self.assertEqual((again.status, again.original),
                          ("duplicate", "rejected"))
 
+    def waits_for_the_lock(self, s: Store, seconds: float) -> None:
+        """Make every write on ``s`` find ``seconds`` gone by once it
+        holds the write lock, as if it had waited that long for it."""
+        real = s._write
+        clock = self.clock
+
+        class Late:
+            def __init__(self) -> None:
+                self.tx = real()
+
+            def __enter__(self):
+                db = self.tx.__enter__()
+                clock.advance(seconds)
+                return db
+
+            def __exit__(self, *exc):
+                return self.tx.__exit__(*exc)
+
+        s._write = Late  # type: ignore[method-assign]
+
+    def test_the_clock_is_read_after_the_write_lock(self) -> None:
+        s = self.open()
+        s.record_command("h", session=SESSION, op="send", status="held",
+                         hold_s=60)
+        received = s.get_command("h").received_at
+        self.waits_for_the_lock(s, 60)
+        # The hold ran out while transition waited: not delivered.
+        self.assertFalse(s.transition("h", "accepted"))
+        self.assertEqual(s.get_command("h").status, "held")
+        # The sweep that waited sees the same: it expires the command.
+        self.assertEqual([c.command_id for c in s.expire_held()], ["h"])
+        # A new command is stamped with the time it got the lock.
+        s.record_command("n", session=SESSION, op="send", status="held",
+                         hold_s=10)
+        n = s.get_command("n")
+        self.assertEqual(n.received_at, self.clock())
+        self.assertEqual(n.expires_at, self.clock() + 10)
+        self.assertGreater(n.received_at, received)
+
+    def test_prune_reads_its_cutoff_after_the_write_lock(self) -> None:
+        s = self.open()
+        s.record_command("r", session=SESSION, op="send", status="rejected")
+        self.clock.advance(store_mod.RETAIN_S - 1)
+        self.waits_for_the_lock(s, 2)
+        self.assertEqual(s.prune()["commands"], 1)
+
     def test_a_shorter_hold_can_be_asked_for(self) -> None:
         s = self.open()
         s.record_command("h", session=SESSION, op="send", status="held",
@@ -872,10 +986,38 @@ class TestResults(StoreCase):
         s = self.open()
         s.record_command("a", session=SESSION, op="send", status="accepted")
         for result in ({"ok": "yes"}, {"note": "x"}, {"ok": True, "token": 1},
-                       ["ok"]):
+                       ["ok"], {"ok": True, "note": {"text": "x"}},
+                       {"ok": True, "degraded": "yes"},
+                       {"ok": True, "cancelled": 1},
+                       {"ok": True, "request_id": 7},
+                       {"ok": True, "launch_id": ["l1"]},
+                       {"ok": True, "op": "approval"}):
             with self.subTest(result), self.assertRaises(ValueError):
                 s.set_result("a", result)
         self.assertIsNone(s.get_command("a").result)
+        with self.assertRaises(ValueError):
+            s.transition("a", "rejected", reason=7)
+        # The command's own op is accepted, and op always comes from it.
+        self.assertTrue(s.set_result("a", {"ok": True, "op": "send",
+                                           "cancelled": False}))
+        self.assertEqual(s.get_command("a").result,
+                         {"op": "send", "ok": True, "cancelled": False})
+
+    def test_a_finished_receipt_never_changes(self) -> None:
+        s = self.open()
+        s.record_command("q", session=SESSION, op="send", status="queued")
+        self.assertTrue(s.set_result("q", {"ok": True, "note": "sent"}))
+        before = s.get_command("q")
+        self.clock.advance(5)
+        # A late cancellation of a send that already ran.
+        self.assertFalse(s.transition("q", "rejected", reason="removed"))
+        self.assertFalse(s.transition("q", "accepted"))
+        self.assertEqual(s.get_command("q"), before)
+        again = s.record_command("q", session=SESSION, op="send",
+                                 status="queued")
+        self.assertEqual((again.original, again.result),
+                         ("queued", {"op": "send", "ok": True,
+                                     "note": "sent"}))
 
     def test_unfinished_lists_running_commands_without_results(self) -> None:
         s = self.open()
@@ -987,10 +1129,71 @@ class TestBackup(StoreCase):
             s.backup(dest)
         self.assertEqual(dest.read_bytes(), b"keep me")
 
+    def test_a_dest_made_during_the_copy_is_not_overwritten(self) -> None:
+        s = self.open()
+        dest = self.dir / "late.sqlite"
+        dest.write_bytes(b"made by someone else")
+        # The early check misses it, as if it appeared after the check.
+        with mock.patch.object(Path, "exists", return_value=False):
+            with self.assertRaises(FileExistsError):
+                s.backup(dest)
+        self.assertEqual(dest.read_bytes(), b"made by someone else")
+        self.assertEqual(self.temps(), [])
+
+    def temps(self) -> list[str]:
+        return sorted(n for n in os.listdir(self.dir) if n.startswith("."))
+
+    def backup_at_once(self, s: Store, dests: list[Path]) -> list:
+        """Back up to each of ``dests`` from its own thread, all at once;
+        each slot gets the Path or the exception."""
+        out: list = [None] * len(dests)
+        gate = threading.Barrier(len(dests))
+
+        def run(n: int) -> None:
+            gate.wait()
+            try:
+                out[n] = s.backup(dests[n])
+            except BaseException as exc:  # noqa: BLE001 - checked below
+                out[n] = exc
+
+        threads = [threading.Thread(target=run, args=(n,))
+                   for n in range(len(dests))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return out
+
+    def test_backups_from_two_threads_use_their_own_temp_files(
+            self) -> None:
+        s = self.open()
+        s.record_command("c1", session=SESSION, op="send",
+                         status="accepted")
+        a, b = self.dir / "a.sqlite", self.dir / "b.sqlite"
+        self.assertEqual(self.backup_at_once(s, [a, b]), [a, b])
+        for dest in (a, b):
+            self.assertEqual(_mode(dest), 0o600)
+            self.assertEqual(self.open(dest).get_command("c1").status,
+                             "accepted")
+        self.assertEqual(self.temps(), [])
+
+    def test_two_backups_to_one_dest_one_wins(self) -> None:
+        s = self.open()
+        s.record_command("c1", session=SESSION, op="send",
+                         status="accepted")
+        dest = self.dir / "same.sqlite"
+        got = self.backup_at_once(s, [dest, dest])
+        wins = [g for g in got if g == dest]
+        losses = [g for g in got if isinstance(g, FileExistsError)]
+        self.assertEqual((len(wins), len(losses)), (1, 1), got)
+        self.assertEqual(self.open(dest).get_command("c1").status,
+                         "accepted")
+        self.assertEqual(self.temps(), [])
+
     def test_a_failed_backup_leaves_nothing(self) -> None:
         s = self.open()
         dest = self.dir / "b.sqlite"
-        with mock.patch.object(store_mod.os, "replace",
+        with mock.patch.object(store_mod.os, "link",
                                side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 s.backup(dest)

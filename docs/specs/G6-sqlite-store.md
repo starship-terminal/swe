@@ -35,17 +35,22 @@ per machine. Design context: section 2 ("Store", "Command path",
   in `-wal` long after it returned.
 - **Backups** only through `Store.backup(dest)`, which uses the SQLite
   backup API on a live connection, so it includes commits still in the
-  `-wal`. It never overwrites `dest`, writes a temporary file beside it,
-  switches it to a single self-contained file (rollback journal),
-  checks it with `quick_check`, fsyncs and renames it into place, mode
-  0600. A test proves a `-wal`-only commit is in the backup and that a
+  `-wal`. Each call writes its own temporary file beside `dest`
+  (`mkstemp`, mode 0600), switches it to a single self-contained file
+  (rollback journal), checks it with `quick_check` and fsyncs it, then
+  publishes it with a hard link (`os.link`), which fails when `dest`
+  exists. So a backup never overwrites, even a file another process
+  made during the copy: it raises `FileExistsError`. A call removes
+  only the temporary files it made, so backups on two threads never
+  touch each other's. The folder of `dest` must exist and support hard
+  links. A test proves a `-wal`-only commit is in the backup and that a
   plain file copy would have lost it.
 - **No secrets.** Payloads, options and results are checked before they
   reach the disk. Options and results take only allowlisted keys; any
   payload key that names a credential (`token`, `bearer`, `secret`,
-  `password`, `cookie`, `authorization`, `api_key`, ...) at any depth is
-  refused with ValueError. Device ids are stored, never device
-  credentials.
+  `password`, `cookie`, `authorization`, `api_key`, ...) at any depth,
+  inside objects, lists and tuples alike, is refused with ValueError.
+  Device ids are stored, never device credentials.
 
 ## Connection model
 
@@ -60,6 +65,19 @@ writes fails at once with `SQLITE_BUSY` instead of waiting. Reads run
 in autocommit, one statement each, under the same lock. A failed write
 rolls back and releases the lock; a failed `COMMIT` is rolled back too.
 Tests run eight threads over two `Store`s writing at once.
+
+Opening a new file from many threads or processes at once is safe. The
+probe reads the file's identity in one read transaction. Turning WAL on
+is skipped when the file is already WAL. When two connections switch a
+new file at once, SQLite refuses one of them with `SQLITE_BUSY` without
+calling the busy handler, because waiting would deadlock. That one backs
+off (2 ms doubling to 50 ms) and tries again, for at most the busy
+timeout. Tests open 15 fresh files from 12 threads each.
+
+Every write that compares a time (a hold deadline, a prune cutoff) or
+stamps one reads the clock only after it holds the write lock. A call
+that waited for the lock therefore judges by the time it got it: a
+hold that ran out during the wait has run out.
 
 ## Schema (version 1)
 
@@ -141,7 +159,7 @@ marker and no adoption: the adapter names the session id.
 | `device` | TEXT | the sending device's id, null for local |
 | `status` | TEXT | accepted, queued, rejected or held, as it stands now |
 | `reason` | TEXT | why it is held or rejected |
-| `result` | TEXT (JSON) | the `command.result` data (`op`, `ok`, `note?`, `degraded?`, `cancelled?`, `request_id?`, `launch_id?`); null until it finished |
+| `result` | TEXT (JSON) | the `command.result` data, typed as that event declares it: `op` (always the command's own), `ok` (bool), `note?`, `request_id?`, `launch_id?` (strings), `degraded?`, `cancelled?` (bools); null until it finished |
 | `received_at`, `updated_at` | REAL | first arrival, last change |
 | `expires_at` | REAL | the hold deadline; set only while held |
 | `finished_at` | REAL | when the result was stored |
@@ -192,8 +210,13 @@ both deliver one held command: the loser gets False. A held command at
 or past its deadline cannot move to accepted or queued even before the
 sweep; only a rejection or `expire_held` takes it out of held. A move to
 rejected stores a result (the caller's, or `{ok: false, note: reason}`).
-`set_result` refuses a second result, so a replayed `command.result`
-changes nothing.
+
+**A finished receipt never changes.** Once a command has a result, every
+`transition` returns False and changes nothing, whatever its status:
+a queued send that finished is not turned into a rejection by a late
+cancel. `set_result` refuses a second result, so a replayed
+`command.result` changes nothing. A result field of the wrong type, an
+unknown field, or an `op` other than the command's own is a ValueError.
 
 ### Held commands
 
@@ -223,7 +246,10 @@ to `Store` (tests use `FakeClock`).
   version is read from the header bytes first (no SQLite open, so not
   even an empty `-wal` or `-shm` appears), then through a read-only
   connection (which cannot checkpoint a WAL into the file when it
-  closes) to catch a bump still in another process's `-wal`. A file
+  closes) to catch a bump still in another process's `-wal`. That probe
+  reads `application_id`, `user_version` and the table count in one
+  read transaction, so a store another thread is creating at that
+  moment is seen whole or not at all, never as a foreign file. A file
   that is not this store, or not a database, raises `StoreError` and
   is left as it is too. The store never deletes or rebuilds its file:
   it is user data, not a cache.
