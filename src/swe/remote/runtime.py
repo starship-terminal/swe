@@ -1140,16 +1140,23 @@ class SessionRuntime:
         body = {"ok": True, "client_id": target, "op": op,
                 "command_id": cid}
         if op == "edit":
-            status, reason = self.command(key, "queue_edit", device=device,
-                                          command_id=cid, target=target,
-                                          text=text)
-            if status == "rejected":
-                raise _queue_gone(reason)
-            if isinstance(text, str) and any(
-                    q.get("command_id") == target for q in owned.queue):
-                # Kept only while it waits (``_apply`` drops it when it
-                # leaves the queue).
-                owned.edits[target] = text
+            # One edit at a time, so the text remembered here is the
+            # text of the edit the keeper applied last.
+            with owned.cmd_lock:
+                fresh = self.store is None \
+                    or self.store.get_command(cid) is None
+                status, reason = self.command(
+                    key, "queue_edit", device=device, command_id=cid,
+                    target=target, text=text)
+                if status == "rejected":
+                    raise _queue_gone(reason)
+                if fresh and isinstance(text, str) and any(
+                        q.get("command_id") == target for q in owned.queue):
+                    # Only an edit that was applied now: a retry of an
+                    # older edit answers its receipt and changes
+                    # nothing, here or in the keeper. Kept only while
+                    # the message waits (``_apply`` drops it after).
+                    owned.edits[target] = text
             return 200, {**body, "text": text}
         if op != "steer":
             status, reason = self.command(key, "queue_remove", device=device,

@@ -514,6 +514,28 @@ class TestLaunchAndSend(KeeperHubCase):
                          ["second thoughts", secret])
         self.assertEqual(self.srv.state.runtime.session(key).edits, {})
 
+    def test_a_retried_older_edit_does_not_bring_its_text_back(self):
+        key = self.launch([fake.ask("go?", options=OPTIONS)])
+        self.feed.event("approval.requested")
+        self.assertEqual(self.post(key, "message", {
+            "text": "first words", "client_id": "q1"})[0], 202)
+        self.feed.event("queue.updated")
+        for cid, text in (("e1", "draft A"), ("e2", "draft B"),
+                          ("e1", "draft A")):
+            status, out = self.post(key, "queue", {
+                "client_id": "q1", "op": "edit", "text": text,
+                "command_id": cid})
+            self.assertEqual(status, 200, out)
+        # The keeper holds B: the retry of e1 was a stored receipt.
+        self.assertEqual(self.srv.state.runtime.session(key).edits,
+                         {"q1": "draft B"})
+        self.assertEqual(self.post(key, "queue", {
+            "client_id": "q1", "op": "steer"})[0], 200)
+        self.feed.until(lambda e: e["type"] == "message.completed"
+                        and e["data"]["text"] == "draft B", "the steer")
+        self.assertEqual([c.args[0].text for c in self.calls("steer")],
+                         ["draft B"])
+
     def test_an_edit_made_before_a_hub_restart_is_what_send_now_sends(self):
         key = self.launch([fake.ask("go?", options=OPTIONS)])
         self.feed.event("approval.requested")
