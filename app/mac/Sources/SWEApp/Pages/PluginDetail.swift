@@ -842,22 +842,19 @@ struct PluginDetailContent: View {
     }
 
     /// Save every draft, then leave; a file that will not save keeps the
-    /// page open and says why.
+    /// page open and says why. Either way a file that was written has the
+    /// catalog read again: the list and the next open show what
+    /// plugin.json now says, as after the editor's own Save.
     private func saveAllAndLeave() {
         Task {
-            var failed: [String] = []
-            for (path, document) in drafts.dirty {
-                // A save that leaves the file dirty (typed while it ran)
-                // hasn't kept everything either.
-                if await document.save() != .saved || document.isDirty {
-                    failed.append(URL(fileURLWithPath: path).lastPathComponent)
-                }
-            }
-            if failed.isEmpty {
+            let result = await drafts.saveAll()
+            if result.failed.isEmpty {
                 leaveError = nil
+                if result.wrote { onFilesChanged() }
                 onBack()
             } else {
-                leaveError = "Couldn't save \(failed.joined(separator: ", "))."
+                leaveError = "Couldn't save \(result.failed.joined(separator: ", "))."
+                if result.wrote { reload() }
             }
         }
     }

@@ -957,6 +957,36 @@ final class PrimitiveHome {
         #expect(drafts.documents["/tmp/a/b.md"] == nil)
         #expect(drafts.documents.keys.sorted() == ["/tmp/other.md"])
     }
+
+    @MainActor @Test func saveAllWritesWhatItCanAndNamesTheRest() async throws {
+        let t = try PrimitiveHome()
+        let kept = try t.write("plugin/a.md", "a\n")
+        let stale = try t.write("plugin/b.md", "b\n")
+        let clean = try t.write("plugin/c.md", "c\n")
+        let drafts = PrimitiveDrafts()
+        for file in [kept, stale, clean] { drafts.document(for: file.path) }
+        await drafts.settled()
+        // Nothing unsaved: nothing written, nothing to report.
+        var result = await drafts.saveAll()
+        #expect(!result.wrote && result.failed.isEmpty)
+
+        drafts.documents[kept.path]?.text = "a, edited\n"
+        drafts.documents[stale.path]?.text = "b, edited\n"
+        // Something else rewrote b.md since it was opened: its save is refused.
+        try "b, from elsewhere\n".write(to: stale, atomically: true, encoding: .utf8)
+        result = await drafts.saveAll()
+        // One file landed, so the page's lists must read the disk again
+        // even though the other is still unsaved.
+        #expect(result.wrote)
+        #expect(result.failed == ["b.md"])
+        #expect(try String(contentsOf: kept, encoding: .utf8) == "a, edited\n")
+        #expect(try String(contentsOf: stale, encoding: .utf8) == "b, from elsewhere\n")
+        #expect(drafts.dirty.keys.sorted() == [stale.path])
+
+        // Only the refused file is left: nothing is written this time.
+        result = await drafts.saveAll()
+        #expect(!result.wrote && result.failed == ["b.md"])
+    }
 }
 
 @Suite struct OverlaySaveTests {
