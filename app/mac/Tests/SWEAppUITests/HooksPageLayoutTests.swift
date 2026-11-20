@@ -310,7 +310,16 @@ import Testing
         let drafts = PrimitiveDrafts()
         for (width, window) in Self.sizes {
             let editable = await detail(fixture, fixture.editable, drafts: drafts)
-            try await render("detail-\(width)", window: window, detail: true) { editable }
+            let recorder = HookColumnRecorder()
+            try await render("detail-\(width)", window: window, detail: true, recorder: recorder) { editable }
+            // The Runs tiles are one size whichever way they lay out: no
+            // tile shrinks its text to fit.
+            let tiles = ["Fires", "Blocks", "Last block"].compactMap { recorder.tiles[$0] }
+            #expect(tiles.count == 3, "tiles drawn at \(width): \(recorder.tiles.keys.sorted())")
+            if let first = tiles.first {
+                #expect(tiles.allSatisfy { abs($0.height - first.height) < 0.5 },
+                        "tile heights at \(width): \(tiles.map(\.height))")
+            }
             try await render("detail-short-\(width)", window: CGSize(width: window.width, height: 520),
                              detail: true) { editable }
             let readOnly = await detail(fixture, fixture.readOnly, drafts: drafts)

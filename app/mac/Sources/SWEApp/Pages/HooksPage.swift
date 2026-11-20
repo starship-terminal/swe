@@ -520,8 +520,31 @@ enum HookColumn: String, CaseIterable, Sendable {
 final class HookColumnRecorder {
     private(set) var frames: [String: [HookColumn: CGRect]] = [:]
 
+    /// The open hook's Runs tiles, by label, in window coordinates.
+    private(set) var tiles: [String: CGRect] = [:]
+
     func record(_ row: String, _ column: HookColumn, _ frame: CGRect) {
         frames[row, default: [:]][column] = frame
+    }
+
+    func recordTile(_ label: String, _ frame: CGRect) {
+        tiles[label] = frame
+    }
+}
+
+/// Reports a Runs tile's frame to the environment's recorder, if any.
+private struct TileProbe: ViewModifier {
+    @Environment(\.hookColumnRecorder) private var recorder
+    let label: String
+
+    func body(content: Content) -> some View {
+        if let recorder {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                recorder.recordTile(label, $0)
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -1465,13 +1488,21 @@ private struct HookRunsGroup: View {
 
     private func readyBody(_ summed: HookCounts) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                tile("Fires", summed.fires.formatted(),
-                     color: summed.fires > 0 ? Theme.textPrimary : Theme.textMuted)
-                tile("Blocks", summed.blocks.formatted(),
-                     color: summed.blocks > 0 ? Theme.dangerText : Theme.textMuted)
-                tile("Last block", summed.lastBlock.map { HookStatsFormat.relative($0) } ?? "-",
-                     color: summed.lastBlock == nil ? Theme.textMuted : Theme.textPrimary)
+            let fires = tile("Fires", summed.fires.formatted(),
+                             color: summed.fires > 0 ? Theme.textPrimary : Theme.textMuted)
+            let blocks = tile("Blocks", summed.blocks.formatted(),
+                              color: summed.blocks > 0 ? Theme.dangerText : Theme.textMuted)
+            let last = tile("Last block", summed.lastBlock.map { HookStatsFormat.relative($0) } ?? "-",
+                            color: summed.lastBlock == nil ? Theme.textMuted : Theme.textPrimary)
+            // Three across when every value fits whole; otherwise Last
+            // block takes its own row under the other two. The tiles never
+            // shrink their text, so all three stay the same size.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { fires; blocks; last }
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) { fires; blocks }
+                    last
+                }
             }
             if !summed.topReasons.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -1530,14 +1561,16 @@ private struct HookRunsGroup: View {
     private func tile(_ label: String, _ value: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(Theme.caption).foregroundStyle(Theme.textMuted)
-                .lineLimit(1).minimumScaleFactor(0.8)
+                .lineLimit(1)
             Text(value)
                 .font(Theme.font(size: 16, weight: .semibold))
                 .foregroundStyle(color)
-                .lineLimit(1).minimumScaleFactor(0.8)
+                .lineLimit(1)
         }
+        .fixedSize()
         .padding(.horizontal, 10).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(TileProbe(label: label))
         .background(Theme.subtle, in: .rect(cornerRadius: Theme.smallRadius))
         .overlay(RoundedRectangle(cornerRadius: Theme.smallRadius).strokeBorder(Theme.border, lineWidth: 1))
     }
