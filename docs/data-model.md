@@ -44,6 +44,7 @@ be rebuilt; deleting them loses user state.
 | `config/pricing.json` | app + swe (hub) | JSON `{schema: 1, models}`, USD per million tokens | your own per-model prices, which win over the downloaded list | the app's `PricingOverrides` and `ledger/pricing.py` (`save_override`), both atomic and keeping other entries | the usage ledgers, the Pricing and Models pages |
 | `config/model-links.json` | app | JSON | manual links from a logged model name to an Artificial Analysis model | the Models page's Link sheet | `ModelMatcher`, `model_aliases` in `catalog.sqlite` |
 | `data/remote/` | swe (hub, satellite) | JSON files and folders: `devices.json` (paired phone credentials, mode 600), `inbox_dismissals.json`, `session_reads.json`, `session_meta.json` and `tasks.json` (mode 600 each), `ssh.json`, `pairing.json`, `machine.json`, `pair_tokens.json`, `cursors/`, `journal/`, `inbox/` | remote-control state, under the hub repo's `/data/` ignore. Not rebuildable from anywhere: `devices.json` (paired credentials), `session_meta.json` (your pins and titles) and `tasks.json` (session-to-task links); the journals and cursors can be rebuilt from transcripts. The file list and modes are in [remote-control.md](remote-control.md) | `swe remote` and the hub | the hub, `swe remote status` |
+| `data/remote/remote.sqlite` | swe (hub) | SQLite (WAL, `busy_timeout`, `synchronous = FULL`), mode 600 with its `-wal` and `-shm` | the session runtime's store: `sessions`, `keepers`, `launches`, and `commands` with their receipts (schema version in `user_version`; see [Remote store schema](#remote-store-schema-dataremoteremotesqlite-schema-version-1)). Not rebuildable: receipts are what stop a retried send or approval from applying twice. Copied only by `Store.backup` (the backup API), never a file copy; never on a network filesystem. Built in G6, unused until G8 wires it in | `remote/store.py` (`Store`), only the hub | the hub; other processes read through their own connection |
 | `data/github/catalog.sqlite`, `data/github/mirrors/`, `worktrees/` | swe | SQLite; bare git mirrors; per-PR and per-issue checkouts | the repo catalog behind `swe gh sync` and `swe gh repo search` (rebuilt by a sync); one bare mirror per repo; the checkouts `swe gh pr worktree` and `swe gh issue worktree` make (`worktrees/` sits at the `~/.swe` root, gitignored). Mirrors and worktrees can hold an issue branch's commits and edits not yet pushed, so check before deleting them | `github/catalog.py`, `github/manage.py` | `swe gh`, the hub's launch routes |
 | `logs/worktree/<action>-<stamp>-<pid>.json`, `cache/worktree.lock` | swe | JSON, one file per applied run; a mkdir lock with the owner's pid | what each `swe wt prune --yes` / `slim --yes` removed, kept and freed (the `--json` plan plus `at`); dry runs write nothing. `logs/` is gitignored in the hub | `worktrees/actions.py` | `swe wt` |
 | `data/web-status-services.json` | swe (hub) | JSON `{version: 1, services}` | the status pages a browser tracked from the web app's catalogue sheet, shared by every browser the hub serves | `status/tracked.py` (atomic, under an `flock`) | the web app's Service status page |
@@ -224,6 +225,47 @@ Builds before the catalog kept `cache/pricing/litellm.json` and
 `data/artificial-analysis/<endpoint>.json` + `meta.json`. They are imported
 once (the price list per source, AA per endpoint, so an interrupted import
 resumes) and left in place.
+
+## Remote store schema (`data/remote/remote.sqlite`, schema version 1)
+
+`remote/store.py::Store` owns it: one connection behind a lock, every
+write in `BEGIN IMMEDIATE`. The full column list, receipt rules and
+G8 notes are in [G6-sqlite-store.md](specs/G6-sqlite-store.md).
+
+- `sessions(key PK, harness, harness_session_id, machine, cwd, state,
+  control, control_reason, adapter, options, epoch, last_seq,
+  created_at, updated_at, UNIQUE(machine, harness, harness_session_id))`:
+  every SWE-owned session. `control` is `full` or `read_only` (with a
+  reason). `options` is JSON of launch picks only. Never pruned.
+- `keepers(slug PK, session_key, pid, socket_path, ipc_version, state,
+  note, started_at, last_seen)`: the keeper holding each live session.
+- `launches(launch_id PK, command_id UNIQUE, session_key, machine,
+  harness, cwd, options, state, note, created_at, settled_at)`: every
+  launch; `state` leaves `pending` once.
+- `commands(id PK AUTOINCREMENT, command_id UNIQUE, session_key,
+  machine, op, payload, device, status, reason, result, received_at,
+  updated_at, expires_at, finished_at)`: every client write.
+  `command_id` (alias `client_id`) is the idempotency key: a repeat
+  answers `duplicate` with the stored receipt and changes nothing; the
+  same id for a different command is rejected and not stored. `held`
+  commands deliver in `id` order and expire after 24 hours.
+
+Rules:
+
+- No secrets: payload keys naming a credential are refused; options
+  and results take allowlisted keys only.
+- Retention: `prune` drops commands finished over 7 days ago (never a
+  held one, never one with no result), settled launches, and keepers
+  that exited or were lost.
+- Versioning lives in `user_version`, with `application_id`
+  `0x53574552`. Migrations are append-only steps run in one
+  transaction. A newer `user_version` (an older swe opening a newer
+  store) is refused and the file left byte-identical; the store never
+  deletes or rebuilds its file.
+
+### Migration history
+
+- v1: initial schema (sessions / keepers / launches / commands).
 
 ## JSON formats and versions
 
