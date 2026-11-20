@@ -259,13 +259,14 @@ struct PluginDetailContent: View {
             let manifest = manifest
             let walked = await offMain {
                 let tree = PrimitiveTree(root: dir)
-                return (PluginFileOutline(tree: tree, root: dir), tree.trashablePaths(dir))
+                let manifests = PrimitiveTree.manifestEntries(root: dir)
+                return (PluginFileOutline(tree: tree, root: dir, manifests: manifests), tree.trashablePaths(dir))
             }
             guard !Task.isCancelled else { return }
             files = (dir.path, walked.0, walked.1)
             // Nothing picked yet, or the picked file left the folder: the
             // README, the first skill or plugin.json.
-            if selected.map({ $0 != manifest && !walked.0.filePaths.contains($0) }) ?? true {
+            if selected.map({ !walked.0.filePaths.contains($0) }) ?? true {
                 select(walked.0.defaultFile(manifest: manifest), in: walked.0)
             }
             probe?.loaded.insert("files")
@@ -583,21 +584,18 @@ struct PluginDetailContent: View {
             }
             if let outline {
                 let rows = VStack(alignment: .leading, spacing: 1) {
-                    if let manifest {
-                        fileRow(.init(name: "plugin.json", path: manifest, isFolder: false), depth: 0)
-                    }
                     ForEach(outline.sections) { section in
                         Text(section.title)
                             .font(Theme.caption).foregroundStyle(Theme.textSecondary)
                             .padding(.leading, 8)
-                            .padding(.top, 10)
+                            .padding(.top, section.id == outline.sections.first?.id ? 0 : 10)
                             .padding(.bottom, 3)
                             .accessibilityAddTraits(.isHeader)
                         ForEach(visibleRows(section.nodes), id: \.node.id) { row in
                             fileRow(row.node, depth: row.depth)
                         }
                     }
-                    if manifest == nil, outline.sections.isEmpty {
+                    if outline.sections.isEmpty {
                         note("This plugin's folder has no files.").padding(.leading, 8)
                     }
                 }
@@ -632,7 +630,7 @@ struct PluginDetailContent: View {
     private func fileRow(_ node: SkillFileOutline.Node, depth: Int) -> some View {
         // A symlink inside the folder that resolves outside it is not the
         // user's to trash, a skill's SKILL.md goes only with the whole
-        // skill, and plugin.json stays.
+        // skill, and the manifests stay.
         let trashable = editable && (files?.trashable.contains(node.path) ?? false)
         return RailFileRow(node: node, depth: depth,
                            isSelected: !node.isFolder && selected == node.path,
@@ -760,7 +758,7 @@ struct PluginDetailContent: View {
     /// What the pane says with no file in it.
     private var emptyText: String {
         if dir == nil { return "This plugin has no local folder: its files come from a checkout swe manages." }
-        if manifest == nil, outline?.sections.isEmpty == true { return "This plugin's folder has no files." }
+        if outline?.sections.isEmpty == true { return "This plugin's folder has no files." }
         return "Pick a file in the list to open it here."
     }
 

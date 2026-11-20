@@ -1,11 +1,12 @@
 import Foundation
 
-/// A plugin folder's files as the detail rail lists them: `PrimitiveTree`'s
-/// groups (Skills, Commands, Agents, Hooks, Other files), each with its
-/// count and its files nested the way they sit on disk under the group's
-/// folder. A skill is one folder that opens to its files, SKILL.md first.
-/// Built from the tree, so the same files are listed (dotfiles and `.git`
-/// never are) and no disk call runs here.
+/// A plugin folder's files as the detail rail lists them: its manifests
+/// (`PrimitiveTree.manifestEntries`, the config files behind a dot), then
+/// `PrimitiveTree`'s groups (Skills, Commands, Agents, Hooks, Other
+/// files), each with its count and its files nested the way they sit on
+/// disk under the group's folder. A skill is one folder that opens to its
+/// files, SKILL.md first. Built from the tree and the entries handed in,
+/// so no disk call runs here; other dotfiles and `.git` are never listed.
 public struct PluginFileOutline: Sendable, Equatable {
     public struct Section: Sendable, Equatable, Identifiable {
         public var kind: PrimitiveTree.Kind
@@ -22,13 +23,18 @@ public struct PluginFileOutline: Sendable, Equatable {
 
     public var sections: [Section]
 
-    public init(tree: PrimitiveTree, root: URL) {
-        sections = tree.sections.map { section in
+    public init(tree: PrimitiveTree, root: URL, manifests: [PrimitiveTree.Entry] = []) {
+        // Each manifest is one row named by its path under the folder
+        // (`.codex-plugin/plugin.json`): the folder is the harness's name.
+        let lead = manifests.isEmpty ? [] : [Section(
+            kind: .manifests, count: manifests.count,
+            nodes: manifests.map { SkillFileOutline.Node(name: $0.name, path: $0.path, isFolder: false) })]
+        sections = lead + tree.sections.map { section in
             let folder: URL
             let skillFileDepth: Int?
             switch section.kind {
             case .main: (folder, skillFileDepth) = (root, 0)
-            case .other: (folder, skillFileDepth) = (root, nil)
+            case .other, .manifests: (folder, skillFileDepth) = (root, nil)
             case .skills: (folder, skillFileDepth) = (root.appending(path: section.kind.rawValue), 1)
             case .commands, .agents, .hooks:
                 (folder, skillFileDepth) = (root.appending(path: section.kind.rawValue), nil)
@@ -49,7 +55,8 @@ public struct PluginFileOutline: Sendable, Equatable {
 
     /// The file the editor shows when a plugin opens: its README, else the
     /// first skill's SKILL.md, else `manifest` (plugin.json, when the
-    /// plugin is the user's), else the first file listed.
+    /// plugin is the user's), else the first file listed (a manifest, when
+    /// the folder has one).
     public func defaultFile(manifest: String?) -> String? {
         readme ?? firstSkillFile ?? manifest ?? filePaths.first
     }

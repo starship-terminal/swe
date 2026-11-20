@@ -34,6 +34,10 @@ import Testing
                   "keywords": ["release", "notes"]
                 }
                 """)
+            try write(".swe/plugins/kai-hub/release-tools/.codex-plugin/plugin.json",
+                      "{\n  \"name\": \"release-tools\",\n  \"interface\": {\"displayName\": \"Release tools\"}\n}\n")
+            try write(".swe/plugins/kai-hub/release-tools/.mcp.json",
+                      "{\n  \"mcpServers\": {\"github\": {\"command\": \"gh-mcp\"}}\n}\n")
             try write(".swe/plugins/kai-hub/release-tools/README.md", """
                 # Release tools
 
@@ -265,6 +269,15 @@ import Testing
         let manifest = f.path(Self.root + ".claude-plugin/plugin.json")
         try await check("pluginjson", wait: loads(manifest)) { probe, drafts in
             content(f, f.releaseTools, drafts: drafts, selected: manifest, probe: probe)
+        }
+    }
+
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aManifestBehindADotIsPicked() async throws {
+        let f = try Fixture()
+        let mcp = f.path(Self.root + ".mcp.json")
+        try await check("mcpjson", wait: loads(mcp)) { probe, drafts in
+            content(f, f.releaseTools, drafts: drafts, selected: mcp, probe: probe)
         }
     }
 
