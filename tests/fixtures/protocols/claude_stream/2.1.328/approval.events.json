@@ -1,0 +1,488 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.676,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.676,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.676,
+  "turn_id": "t1",
+  "data": {
+   "text": "Use the Write tool to create a file named allowed.txt in the current folder containing the single word yes. Do nothing else."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.676,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.676,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Use the Write tool to create a file named allowed.txt in the current folder containing the single word yes. Do nothing else."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.461,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "Write",
+   "summary": "Write · /work/allowed.txt",
+   "input": {
+    "file_path": "/work/allowed.txt",
+    "content": "yes"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.556,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.556,
+  "turn_id": "t1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000025",
+   "kind": "tool",
+   "prompt": "Allow Write?\nWrite · /work/allowed.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "always",
+     "label": "Always allow",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.557,
+  "turn_id": "t1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000025",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.557,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.685,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "ok",
+   "name": "Write",
+   "output": "File created successfully at: /work/allowed.txt (file state is current in your context — no need to Read it back)",
+   "file_edits": [
+    {
+     "path": "/work/allowed.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,1 @@\n+yes\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.287,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "I created `allowed.tx",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.336,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "t` in the working",
+   "seq": 2,
+   "offset": 21,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.336,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": " directory containing `",
+   "seq": 3,
+   "offset": 38,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.336,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "yes`.",
+   "seq": 4,
+   "offset": 61,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.351,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "I created `allowed.txt` in the working directory containing `yes`."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.362,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 154,
+   "cache_read_tokens": 34429,
+   "cache_write_tokens": 3563,
+   "cost_usd": 0.0008670649999999999,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.364,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.688
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.364,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.364,
+  "turn_id": "t2",
+  "data": {
+   "text": "Use the Write tool to create a file named denied.txt in the current folder containing the single word no. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.364,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.364,
+  "turn_id": "t2",
+  "data": {
+   "id": "t2:user",
+   "kind": "user",
+   "text": "Use the Write tool to create a file named denied.txt in the current folder containing the single word no. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.354,
+  "turn_id": "t2",
+  "data": {
+   "call_id": "toolu_02",
+   "name": "Write",
+   "summary": "Write · /work/denied.txt",
+   "input": {
+    "file_path": "/work/denied.txt",
+    "content": "no"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.374,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.374,
+  "turn_id": "t2",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000063",
+   "kind": "tool",
+   "prompt": "Allow Write?\nWrite · /work/denied.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "always",
+     "label": "Always allow",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_02"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.376,
+  "turn_id": "t2",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000063",
+   "source": "user",
+   "decision": "deny",
+   "text": "The user said no to this."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.376,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.403,
+  "turn_id": "t2",
+  "data": {
+   "call_id": "toolu_02",
+   "status": "error",
+   "name": "Write",
+   "output": "The user said no to this."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.023,
+  "turn_id": "t2",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "denied",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.023,
+  "turn_id": "t2",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.028,
+  "turn_id": "t2",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 132,
+   "cache_read_tokens": 38331,
+   "cache_write_tokens": 265,
+   "cost_usd": 0.0013498999999999998,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "turn_id": "t2",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.666
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

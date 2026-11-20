@@ -1,0 +1,284 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.769,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.769,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.77,
+  "turn_id": "t1",
+  "data": {
+   "text": "Use the Write tool to overwrite notes.txt in the current folder with the single word changed. Do nothing else."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.77,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.77,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Use the Write tool to overwrite notes.txt in the current folder with the single word changed. Do nothing else."
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.537,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:0",
+   "text": "",
+   "duration_s": 0.416
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.806,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "Write",
+   "summary": "Write · /work/notes.txt",
+   "input": {
+    "file_path": "/work/notes.txt",
+    "content": "changed"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.005,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "ok",
+   "name": "Write",
+   "output": "The file /work/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "file_edits": [
+    {
+     "path": "/work/notes.txt",
+     "kind": "modify",
+     "diff": "@@ -1,2 +1,1 @@\n-first line of the notes\n-second line\n+changed\n\\ No newline at end of file\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.786,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "I overwrote `notes",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.864,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": ".txt` in",
+   "seq": 2,
+   "offset": 18,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.867,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": " the working fol",
+   "seq": 3,
+   "offset": 26,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.867,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "der so",
+   "seq": 4,
+   "offset": 42,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.867,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": " it cont",
+   "seq": 5,
+   "offset": 48,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.867,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "ains only",
+   "seq": 6,
+   "offset": 56,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.874,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": " the word `changed`.",
+   "seq": 7,
+   "offset": 65,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.925,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "I overwrote `notes.txt` in the working folder so it contains only the word `changed`."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.94,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 264,
+   "cache_read_tokens": 34425,
+   "cache_write_tokens": 3668,
+   "cost_usd": 0.00093515,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.943,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 3.173
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.943,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.106,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

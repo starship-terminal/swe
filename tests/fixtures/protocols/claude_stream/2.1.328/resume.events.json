@@ -1,0 +1,425 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.792,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.792,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.792,
+  "turn_id": "t1",
+  "data": {
+   "text": "Remember the word kumquat. Reply with exactly: noted"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.792,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.792,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Remember the word kumquat. Reply with exactly: noted"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.671,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:0",
+   "kind": "assistant",
+   "text": "noted",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.676,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:0",
+   "kind": "assistant",
+   "text": "noted"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.776,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 4,
+   "cache_read_tokens": 15537,
+   "cache_write_tokens": 3320,
+   "cost_usd": 0.00057257,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.78,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.988
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.78,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.78,
+  "data": {
+   "state": "closed"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.838,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.838,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.84,
+  "turn_id": "t1",
+  "data": {
+   "text": "What word did I ask you to remember? Reply with that word only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.84,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.84,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "What word did I ask you to remember? Reply with that word only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.302,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "kumquat",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.303,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "kumquat"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.327,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 6,
+   "cache_read_tokens": 15537,
+   "cache_write_tokens": 3369,
+   "cost_usd": 0.001152265,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.327,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.487
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.327,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.327,
+  "data": {
+   "state": "closed"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.521,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.521,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000002"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.523,
+  "turn_id": "t1",
+  "data": {
+   "text": "Reply with the remembered word in capital letters only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.523,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.523,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Reply with the remembered word in capital letters only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.994,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "KUMQUAT",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.268,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "KUMQUAT"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.299,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 9,
+   "cache_read_tokens": 18881,
+   "cache_write_tokens": 73,
+   "cost_usd": 0.0013549,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.305,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.782
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.305,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.305,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

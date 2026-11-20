@@ -1,0 +1,471 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.777,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.777,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.779,
+  "turn_id": "t1",
+  "data": {
+   "text": "Use the Task tool with subagent_type general-purpose and run_in_background true to count slowly from 1 to 50 with the Bash tool, one 'sleep 1; echo n' command per number. Then reply: started"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.779,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.779,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Use the Task tool with subagent_type general-purpose and run_in_background true to count slowly from 1 to 50 with the Bash tool, one 'sleep 1; echo n' command per number. Then reply: started"
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.621,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:0",
+   "text": "",
+   "duration_s": 0.999
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.665,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "Agent",
+   "summary": "Agent · Count 1 to 50 slowly",
+   "input": {
+    "description": "Count 1 to 50 slowly",
+    "subagent_type": "general-purpose",
+    "run_in_background": true,
+    "prompt": "Count slowly from 1 to 50 using the Bash tool. Make one Bash call per number, in order, with the command exactly `sleep 1; echo n`, where n is the number (for example, `sleep 1; echo 1`, then `sleep 1; echo 2`, and so on up to 50). Wait for each call to finish before making the next one. Do not combine numbers into one command. When all 50 are done, reply with a short final report saying the count finished and listing any call that failed."
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "task.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.705,
+  "data": {
+   "task_id": "ac1aa4ba56d4c8f1a",
+   "kind": "subagent",
+   "status": "running",
+   "parent_turn_id": "t1",
+   "title": "Count 1 to 50 slowly",
+   "can_stop": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.744,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "ok",
+   "name": "Agent",
+   "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: ac1aa4ba56d4c8f1a (internal ID - do not mention to user. Use SendMessage with to: 'ac1aa4ba56d4c8f1a', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo not duplicate this agent's work — avoid working with the same files or topics it is using.\noutput_file: /tmp/claude/x\nDo NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification."
+  }
+ },
+ {
+  "v": 2,
+  "type": "task.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.791,
+  "data": {
+   "task_id": "ac1aa4ba56d4c8f1a",
+   "kind": "subagent",
+   "status": "stopped",
+   "parent_turn_id": "t1",
+   "title": "Count 1 to 50 slowly",
+   "can_stop": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.349,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "started",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.364,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "started"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.371,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 511,
+   "cache_read_tokens": 34492,
+   "cache_write_tokens": 4279,
+   "cost_usd": 0.001135695,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.45,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "text": "",
+   "duration_s": 0.407
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.45,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": "The background counting agent was",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.465,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " stopped before",
+   "seq": 2,
+   "offset": 33,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.502,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " it finished, so the",
+   "seq": 3,
+   "offset": 48,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.541,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " count to",
+   "seq": 4,
+   "offset": 68,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.551,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " 50",
+   "seq": 5,
+   "offset": 77,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.56,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " did not complete. The",
+   "seq": 6,
+   "offset": 80,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.579,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " st",
+   "seq": 7,
+   "offset": 102,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.596,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": "op came",
+   "seq": 8,
+   "offset": 105,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.627,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " from the user, not from an",
+   "seq": 9,
+   "offset": 112,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.638,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " error. I haven't read its",
+   "seq": 10,
+   "offset": 139,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.663,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " output file.",
+   "seq": 11,
+   "offset": 165,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.685,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " I can start it again from",
+   "seq": 12,
+   "offset": 178,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.706,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " the",
+   "seq": 13,
+   "offset": 204,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.728,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": " beginning if you want.",
+   "seq": 14,
+   "offset": 208,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.764,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": "The background counting agent was stopped before it finished, so the count to 50 did not complete. The stop came from the user, not from an error. I haven't read its output file. I can start it again from the beginning if you want."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.797,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 4,
+   "output_tokens": 151,
+   "cache_read_tokens": 19865,
+   "cache_write_tokens": 477,
+   "cost_usd": 0.0014698699999999999,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.798,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 6.019
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.798,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.798,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

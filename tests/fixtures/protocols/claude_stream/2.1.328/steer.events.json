@@ -1,0 +1,213 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.201,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.201,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.201,
+  "turn_id": "t1",
+  "data": {
+   "text": "Write the numbers from 1 to 300, one per line, and no other text."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.201,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.201,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Write the numbers from 1 to 300, one per line, and no other text."
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.325,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:0",
+   "text": "",
+   "duration_s": 0.202
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.325,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:1",
+   "kind": "assistant",
+   "text": "1\n2\n3",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.325,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user2",
+   "kind": "user",
+   "text": "Stop counting now and reply only with: steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.344,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_01:1",
+   "kind": "assistant",
+   "text": "1\n2\n3"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.35,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 0,
+   "output_tokens": 0,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0006751000000000001,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.167,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "steered",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.167,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.171,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 4,
+   "cache_read_tokens": 18860,
+   "cache_write_tokens": 100,
+   "cost_usd": 0.0008784000000000001,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.173,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.972
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.173,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.173,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

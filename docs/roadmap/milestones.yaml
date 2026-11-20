@@ -82,7 +82,7 @@
 
 - id: G7
   title: Claude stream adapter, recorder, fixtures
-  status: ready
+  status: done
   depends_on: [G3]
   owns:
     - "src/swe/remote/adapters/claude_stream.py"

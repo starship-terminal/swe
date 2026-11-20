@@ -1,0 +1,923 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.733,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.733,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.843,
+  "turn_id": "t1",
+  "data": {
+   "text": "Make a two-step plan for appending the line 'done' to notes.txt in the current folder. Do not edit anything. Present the plan with the ExitPlanMode tool."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.843,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.843,
+  "turn_id": "t1",
+  "data": {
+   "id": "t1:user",
+   "kind": "user",
+   "text": "Make a two-step plan for appending the line 'done' to notes.txt in the current folder. Do not edit anything. Present the plan with the ExitPlanMode tool."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.567,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "ToolSearch",
+   "summary": "ToolSearch · select:ExitPlanMode",
+   "input": {
+    "query": "select:ExitPlanMode",
+    "max_results": 1
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.579,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "ok",
+   "name": "ToolSearch",
+   "output": "ExitPlanMode"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.072,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_02",
+   "name": "Write",
+   "summary": "Write · /config/plans/make-a-two-step-plan-mutable-reef.md",
+   "input": {
+    "file_path": "/config/plans/make-a-two-step-plan-mutable-reef.md",
+    "content": "# Plan: Append \"done\" to notes.txt\n\n## Context\nThe user wants the line `done` appended to `notes.txt` in the current working directory. Nothing is edited during planning.\n\n## Steps\n1. **Inspect `notes.txt`** (read-only). Confirm the file exists and check whether it ends with a trailing newline, so the new line doesn't get joined to the last existing line.\n2. **Append the line.** Add `done` followed by a newline to the end of `notes.txt`. If the file lacks a trailing newline, add one first. Use `printf` or `echo` with `>>`, or the Edit tool. Don't overwrite the file.\n\n## Verification\nRead the last lines of `notes.txt` and confirm `done` is the final line and the earlier content is unchanged.\n"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.201,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_03",
+   "name": "ExitPlanMode",
+   "summary": "ExitPlanMode",
+   "input": {}
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.669,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_02",
+   "status": "ok",
+   "name": "Write",
+   "output": "File created successfully at: /config/plans/make-a-two-step-plan-mutable-reef.md (file state is current in your context — no need to Read it back)",
+   "file_edits": [
+    {
+     "path": "/config/plans/make-a-two-step-plan-mutable-reef.md",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,11 @@\n+# Plan: Append \"done\" to notes.txt\n+\n+## Context\n+The user wants the line `done` appended to `notes.txt` in the current working directory. Nothing is edited during planning.\n+\n+## Steps\n+1. **Inspect `notes.txt`** (read-only). Confirm the file exists and check whether it ends with a trailing newline, so the new line doesn't get joined to the last existing line.\n+2. **Append the line.** Add `done` followed by a newline to the end of `notes.txt`. If the file lacks a trailing newline, add one first. Use `printf` or `echo` with `>>`, or the Edit tool. Don't overwrite the file.\n+\n+## Verification\n+Read the last lines of `notes.txt` and confirm `done` is the final line and the earlier content is unchanged.\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.674,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.674,
+  "turn_id": "t1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000097",
+   "kind": "plan",
+   "prompt": "# Plan: Append \"done\" to notes.txt\n\n## Context\nThe user wants the line `done` appended to `notes.txt` in the current working directory. Nothing is edited during planning.\n\n## Steps\n1. **Inspect `notes.txt`** (read-only). Confirm the file exists and check whether it ends with a trailing newline, so the new line doesn't get joined to the last existing line.\n2. **Append the line.** Add `done` followed by a newline to the end of `notes.txt`. If the file lacks a trailing newline, add one first. Use `printf` or `echo` with `>>`, or the Edit tool. Don't overwrite the file.\n\n## Verification\nRead the last lines of `notes.txt` and confirm `done` is the final line and the earlier content is unchanged.\n",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Approve plan",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Keep planning",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_03"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.676,
+  "turn_id": "t1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000097",
+   "source": "user",
+   "decision": "deny",
+   "text": "The plan was received. Stop here and wait."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.676,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.706,
+  "turn_id": "t1",
+  "data": {
+   "call_id": "toolu_03",
+   "status": "error",
+   "name": "ExitPlanMode",
+   "output": "The plan was received. Stop here and wait."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.771,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "I've written",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.775,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " the two",
+   "seq": 2,
+   "offset": 12,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.775,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "-step plan and submitted",
+   "seq": 3,
+   "offset": 20,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.775,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " it for your",
+   "seq": 4,
+   "offset": 44,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.775,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " approval. I haven't ed",
+   "seq": 5,
+   "offset": 56,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "ited `",
+   "seq": 6,
+   "offset": 79,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "notes.txt` or an",
+   "seq": 7,
+   "offset": 85,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "ything else.\n\n1. **",
+   "seq": 8,
+   "offset": 101,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "Inspect `notes.tx",
+   "seq": 9,
+   "offset": 120,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "t`.",
+   "seq": 10,
+   "offset": 137,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "** Check that",
+   "seq": 11,
+   "offset": 140,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " the file exists and wh",
+   "seq": 12,
+   "offset": 153,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "ether it ends with a trail",
+   "seq": 13,
+   "offset": 176,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "ing newline.\n2. **",
+   "seq": 14,
+   "offset": 202,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "Append the line.** Add",
+   "seq": 15,
+   "offset": 220,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " `done` and",
+   "seq": 16,
+   "offset": 242,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " a newline to the end of",
+   "seq": 17,
+   "offset": 253,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " the file, without",
+   "seq": 18,
+   "offset": 277,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " overwriting it. If the",
+   "seq": 19,
+   "offset": 295,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " file has",
+   "seq": 20,
+   "offset": 318,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " no trailing newline, add",
+   "seq": 21,
+   "offset": 327,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " one first so",
+   "seq": 22,
+   "offset": 352,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " `",
+   "seq": 23,
+   "offset": 365,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "done` doesn't join the",
+   "seq": 24,
+   "offset": 367,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " last line.",
+   "seq": 25,
+   "offset": 389,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "\n\nAfterw",
+   "seq": 26,
+   "offset": 400,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "ards I",
+   "seq": 27,
+   "offset": 408,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "'d",
+   "seq": 28,
+   "offset": 414,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " read",
+   "seq": 29,
+   "offset": 416,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " the last lines of",
+   "seq": 30,
+   "offset": 421,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " the",
+   "seq": 31,
+   "offset": 439,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " file to confirm `done`",
+   "seq": 32,
+   "offset": 443,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " is the final line and the r",
+   "seq": 33,
+   "offset": 466,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.777,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "est is",
+   "seq": 34,
+   "offset": 494,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.778,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": " unchanged.",
+   "seq": 35,
+   "offset": 500,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.781,
+  "turn_id": "t1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "I've written the two-step plan and submitted it for your approval. I haven't edited `notes.txt` or anything else.\n\n1. **Inspect `notes.txt`.** Check that the file exists and whether it ends with a trailing newline.\n2. **Append the line.** Add `done` and a newline to the end of the file, without overwriting it. If the file has no trailing newline, add one first so `done` doesn't join the last line.\n\nAfterwards I'd read the last lines of the file to confirm `done` is the final line and the rest is unchanged."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.786,
+  "turn_id": "t1",
+  "data": {
+   "input_tokens": 6,
+   "output_tokens": 680,
+   "cache_read_tokens": 55220,
+   "cache_write_tokens": 6580,
+   "cost_usd": 0.028784,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.786,
+  "turn_id": "t1",
+  "data": {
+   "status": "completed",
+   "duration_s": 8.943
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.786,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.797,
+  "turn_id": "t2",
+  "data": {
+   "text": "Reply with exactly: back"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.797,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.797,
+  "turn_id": "t2",
+  "data": {
+   "id": "t2:user",
+   "kind": "user",
+   "text": "Reply with exactly: back"
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.974,
+  "turn_id": "t2",
+  "data": {
+   "id": "msg_04:0",
+   "text": "",
+   "duration_s": 0.537
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.974,
+  "turn_id": "t2",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "back",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.997,
+  "turn_id": "t2",
+  "data": {
+   "id": "msg_04:1",
+   "kind": "assistant",
+   "text": "back"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.008,
+  "turn_id": "t2",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 102,
+   "cache_read_tokens": 14431,
+   "cache_write_tokens": 7521,
+   "cost_usd": 0.029919635,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.009,
+  "turn_id": "t2",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.212
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.009,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.009,
+  "data": {
+   "state": "closed"
+  }
+ }
+]
