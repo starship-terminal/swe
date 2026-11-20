@@ -34,6 +34,10 @@ import Testing
                   "keywords": ["release", "notes"]
                 }
                 """)
+            try write(".swe/plugins/kai-hub/release-tools/.codex-plugin/plugin.json",
+                      "{\n  \"name\": \"release-tools\",\n  \"interface\": {\"displayName\": \"Release tools\"}\n}\n")
+            try write(".swe/plugins/kai-hub/release-tools/.mcp.json",
+                      "{\n  \"mcpServers\": {\"github\": {\"command\": \"gh-mcp\"}}\n}\n")
             try write(".swe/plugins/kai-hub/release-tools/README.md", """
                 # Release tools
 
@@ -235,6 +239,18 @@ import Testing
         #expect(drafts.dirty.isEmpty)
     }
 
+    @Test func theEditorNamesAFileUnderThePluginNotItsFolder() {
+        // A cached copy's folder is named for its version.
+        #expect(PluginDetailContent.fileSubtitle("/cache/composio/0.2.4/commands/connect.md",
+                                                 under: "/cache/composio/0.2.4", plugin: "composio")
+            == "composio/commands/connect.md")
+        #expect(PluginDetailContent.fileSubtitle("/hub/eng/.claude-plugin/plugin.json", under: "/hub/eng/", plugin: "eng")
+            == "eng/.claude-plugin/plugin.json")
+        // A file outside the folder gets its full path instead.
+        #expect(PluginDetailContent.fileSubtitle("/elsewhere/notes.md", under: "/hub/eng", plugin: "eng") == nil)
+        #expect(PluginDetailContent.fileSubtitle("/hub/engine/notes.md", under: "/hub/eng", plugin: "eng") == nil)
+    }
+
     @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
     func detailsOpenWithServersAndAMissingKey() async throws {
         let f = try Fixture()
@@ -265,6 +281,15 @@ import Testing
         let manifest = f.path(Self.root + ".claude-plugin/plugin.json")
         try await check("pluginjson", wait: loads(manifest)) { probe, drafts in
             content(f, f.releaseTools, drafts: drafts, selected: manifest, probe: probe)
+        }
+    }
+
+    @Test(.enabled(if: snapshots != nil, "Snapshot only: the layout assertions run in the default state"))
+    func aManifestBehindADotIsPicked() async throws {
+        let f = try Fixture()
+        let mcp = f.path(Self.root + ".mcp.json")
+        try await check("mcpjson", wait: loads(mcp)) { probe, drafts in
+            content(f, f.releaseTools, drafts: drafts, selected: mcp, probe: probe)
         }
     }
 
