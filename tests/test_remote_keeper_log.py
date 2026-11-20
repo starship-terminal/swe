@@ -248,6 +248,24 @@ class TestSubscribers(LogBase):
         self.assertEqual(len(errors), 2)
         self.assertEqual(log.last_seq, 1)
 
+    def test_a_callback_may_close_its_own_subscription(self):
+        log = self.make()
+        first: list[int] = []
+        second: list[int] = []
+        holder: list = []
+
+        def once(e):
+            first.append(e["seq"])
+            holder[0].close()  # would deadlock if it took the lock
+
+        holder.append(log.subscribe(once))
+        log.subscribe(lambda e: second.append(e["seq"]))
+        log.emit(upd(1))
+        log.emit(upd(2))
+        self.assertEqual(first, [1])
+        self.assertEqual(second, [1, 2])
+        self.assertEqual(len(log._subs), 1)
+
     def test_subscribe_after_close_raises(self):
         log = self.make()
         log.close()
@@ -913,6 +931,30 @@ class TestEdges(LogBase):
             with self.assertRaises(OSError):
                 EventLog(S, home=self.home, background=False)
         self.make()  # the lock is free again
+
+
+class TestJournalHelper(unittest.TestCase):
+    """``journal._records_backward``, which recovery reuses: pinned here
+    so a change in journal.py fails a keeper-log test."""
+
+    def test_records_backward_as_recovery_uses_it(self):
+        from swe.remote.journal import _records_backward
+        big = "x" * (200 << 10)  # spans several 64 KiB read chunks
+        lines = [
+            json.dumps({"type": "turn.started", "seq": 1}),
+            "not json",
+            json.dumps({"type": "message.completed", "seq": 2,
+                        "data": {"text": big}}),
+            json.dumps({"type": "no-seq"}),
+            json.dumps({"type": "approval.requested", "seq": 3}),
+            "",
+        ]
+        path = temp_dir(self) / "events.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+        with open(path, "rb") as fh:
+            got = list(_records_backward(fh))
+        self.assertEqual([r["seq"] for r in got], [3, 2, 1])  # newest first
+        self.assertEqual(got[1]["data"]["text"], big)
 
 
 class TestBootId(unittest.TestCase):

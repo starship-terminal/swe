@@ -239,7 +239,8 @@ lock: `read_log` and `replay` read only complete lines.
   snapshot instead.
 - **Subscriber callbacks run under the log's lock** on the emitting
   thread (usually the adapter's reader). Enqueue and return: no I/O, no
-  blocking, no `emit` or `subscribe` (those raise). Overflow handling
+  blocking, no `emit` or `subscribe` (those raise). A callback may close
+  its own `Subscription`. Overflow handling
   is the subscriber's: a callback that raises is dropped. Events are
   shared dicts; treat them as read-only.
 - **Live text and pending requests** come from the log's own tracking of

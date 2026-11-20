@@ -54,6 +54,7 @@ from typing import Any, Callable
 
 from swe.paths import remote_dir_for
 from swe.remote.adapters import events as ev
+# Reused private helper (newest-first line walk); pinned by TestJournalHelper.
 from swe.remote.journal import _records_backward
 from swe.remote.protocol import key_slug
 
@@ -949,7 +950,8 @@ class EventLog:
 
         ``callback`` runs on the emitting thread with the log locked,
         in seq order: it must be quick (enqueue and return), must not
-        block, and must not call ``emit``. One that raises is dropped.
+        block, and must not call ``emit`` or ``subscribe`` (both raise);
+        closing its own subscription is fine. One that raises is dropped.
         Events are shared: treat them as read-only.
         """
         if self._delivering == threading.get_ident():
@@ -958,6 +960,11 @@ class EventLog:
         token = object()
 
         def close() -> None:
+            if self._delivering == threading.get_ident():
+                # From a callback: this thread already holds the lock,
+                # and delivery walks a copy of the list.
+                self._drop(token)
+                return
             with self._lock:
                 self._drop(token)
 
