@@ -103,12 +103,18 @@ def build_plist(program: list[str], log_path: Path, path_env: str,
     waits (the standalone warp-gate daemon, which keeps its own copy of
     this) asks for ``Interactive`` instead: under ``Background`` one
     server's 6 MB tool list took 6.9 s instead of 1.3 s.
+
+    ``AbandonProcessGroup`` stops launchd from killing what the job
+    started when the job itself exits: the session keepers
+    (``remote/keeper``) hold running agents and must outlive a hub
+    restart.
     """
     return {
         "Label": label,
         "ProgramArguments": program,
         "RunAtLoad": True,
         "KeepAlive": True,
+        "AbandonProcessGroup": True,
         "ThrottleInterval": THROTTLE_S,
         "ProcessType": process_type,
         "StandardOutPath": str(log_path),
@@ -208,6 +214,18 @@ def loaded_pid(run: Runner = subprocess.run, label: str = LABEL) -> tuple[bool, 
         return False, None
     m = re.search(r"^\s*pid = (\d+)", res.stdout or "", re.M)
     return True, int(m.group(1)) if m else None
+
+
+def keeps_children(home: Path | None = None, label: str = LABEL) -> bool | None:
+    """Whether the installed agent's plist tells launchd to leave the
+    job's children running (``AbandonProcessGroup``); None without a
+    readable plist. An agent installed before session keepers existed
+    says False until it is installed again."""
+    try:
+        plist = plistlib.loads(plist_path(home, label).read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+    return plist.get("AbandonProcessGroup") is True
 
 
 def status(home: Path | None = None, run: Runner = subprocess.run,

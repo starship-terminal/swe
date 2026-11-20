@@ -229,6 +229,48 @@ jobs:
           git diff --exit-code -- ../../src/swe/webapp/static/session
           test -z "$(git status --porcelain -- ../../src/swe/webapp/static/session)"
 
+  keeper-survival:
+    # A session keeper (src/swe/remote/keeper) holds a running agent and
+    # must outlive a restart of the hub's service. On Linux that depends
+    # on systemd itself: the hub's unit is stopped with
+    # KillMode=control-group, and only a keeper started in its own scope
+    # unit is left alone. No unit test can show that, so this runs the
+    # real thing against a systemd user manager: a throwaway service
+    # built by systemd.build_unit spawns a keeper, the service is
+    # restarted and then stopped, and the keeper must still answer.
+    # `--control` repeats it without the scope unit and prints what
+    # happens then. The macOS half (launchd) is run by hand; see
+    # docs/specs/G5-keeper-process.md.
+    name: Keeper survives a hub restart (systemd)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Start a systemd user manager for the runner
+        # A runner job is not a login session, so no user manager runs
+        # until lingering starts one.
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="$runtime"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+          for _ in $(seq 1 30); do
+            systemctl --user show-environment >/dev/null 2>&1 && break
+            sleep 1
+          done
+          systemctl --user show-environment >/dev/null
+
+      - name: Restart the service under a running keeper
+        run: python scripts/keeper_survival_check.py --control
+
   install-script:
     # scripts/install.sh end to end in a container per distro shape.
     # ubuntu:22.04 has no Python at all (the uv bootstrap path);

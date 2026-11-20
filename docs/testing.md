@@ -89,6 +89,25 @@ Required steps for any feature that adds files or changes `cmd_*` handlers:
 
 Common pitfall: if a feature works with `PYTHONPATH=src python -m swe.cli` but not with the installed `swe` command, the installed copy is stale (likely a non-editable install). Re-run `pip install -e .` to switch to editable mode and sync with the source tree.
 
+### Session keeper tests
+
+`tests/test_remote_keeper.py` runs a `Keeper` on a thread with the
+scripted `FakeAdapter` and a `FakeClock`, and talks to it over its real
+Unix socket; a test waits on a frame or on `keeper.sync()`, never on a
+sleep. Its home comes from `short_home`, because a socket address is
+limited to about 100 bytes and macOS's default temp folder is half of
+that. `RealProcess` starts `python -m swe.remote.keeper` for real,
+driving `tests/fakes/fake_claude.py`. Every test stops its keepers in
+cleanup.
+
+Whether a keeper outlives a restart of the hub's service depends on
+launchd and systemd themselves, so that has its own check against the
+real service manager: `python3 scripts/keeper_survival_check.py
+[--control]`. CI runs it on Linux (`keeper-survival` in `ci.yml`); run
+it by hand on a Mac after changing `remote/keeper/discovery.py`,
+`remote/launchd.py` or `remote/systemd.py`. It installs a throwaway
+service of its own and touches neither the real hub nor `~/.swe`.
+
 ### Web app tests
 
 `tests/test_webapp_*.py` cover the web app's page data (`/v1/app/*`)

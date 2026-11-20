@@ -24,7 +24,9 @@ from __future__ import annotations
 import getpass
 import os
 import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -103,6 +105,35 @@ def available(run: Runner = subprocess.run) -> bool:
         return _ctl(run, "show-environment").returncode == 0
     except OSError:
         return False
+
+
+def keeper_unit(slug: str) -> str:
+    """The transient unit one session keeper runs in."""
+    return f"swe-keeper-{slug}"
+
+
+def keeper_scope_argv(slug: str, run: Runner = subprocess.run,
+                      which: Callable[[str], str | None] = shutil.which,
+                      platform: str = sys.platform) -> list[str] | None:
+    """The command prefix that starts a keeper in its own unit, or None
+    where there is no systemd user manager to ask (macOS, a container,
+    a login without one).
+
+    The hub's service is stopped with ``KillMode=control-group``, which
+    kills every process in the service's cgroup, detached or not. A
+    keeper started through ``systemd-run --user --unit=swe-keeper-<slug>
+    --collect`` sits in a cgroup of its own and is left alone.
+    ``--scope`` makes systemd-run exec the keeper itself, so the keeper
+    keeps the hub's environment (the agent's keys never ride on a
+    command line) and its pid. ``--collect`` drops the unit even when
+    the keeper failed, so the name is free for the next one.
+    """
+    if not platform.startswith("linux") or which("systemd-run") is None:
+        return None
+    if not available(run):
+        return None
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+            f"--unit={keeper_unit(slug)}", "--"]
 
 
 def _message(res: subprocess.CompletedProcess, what: str) -> str:

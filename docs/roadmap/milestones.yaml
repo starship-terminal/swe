@@ -62,7 +62,7 @@
 
 - id: G5
   title: Keeper process, IPC, discovery, service survival
-  status: todo
+  status: done
   depends_on: [G4]
   owns: ["src/swe/remote/keeper/**", "src/swe/remote/launchd.py", "src/swe/remote/systemd.py"]
   questions: []
