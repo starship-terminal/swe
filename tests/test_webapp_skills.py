@@ -40,6 +40,45 @@ class TestFrontmatter(unittest.TestCase):
             {"key": "name", "value": "tdd"}, {"key": "description", "value": "Use it"},
             {"key": "license", "value": "MIT"}])
 
+    def test_block_values_read_as_yaml_reads_them(self):
+        # The same cases as FrontmatterBlockTests in the Swift suite; the
+        # values come from Ruby's Psych (libyaml).
+        cases = [
+            ("description: |\n  Line one.\n  Line two.\nname: x\n", "Line one.\nLine two.\n"),
+            ("description: >\n  Fold these\n  into one.\n\n  New para.\nname: x\n", "Fold these into one.\nNew para.\n"),
+            ("description: |-\n  a\n  b\n\nname: x\n", "a\nb"),
+            ("description: |+\n  a\n  b\n\n\nname: x\n", "a\nb\n\n\n"),
+            ("description: >+\n  a\n\n", "a\n\n"),
+            ("description: >\n  a\n  b\n    code\n  c\n", "a b\n  code\nc\n"),
+            ("description: |2\n    lead\n  b\n", "  lead\nb\n"),
+            ("description: >-4\n      x\n    y\n", "  x\ny"),
+            ("description: | # note\n  text\n", "text\n"),
+            ("description: |\nname: x\n", ""),
+            ("description: |\n  a\n    \n  b\n", "a\n  \nb\n"),
+            ("description: |\n\n  a\n", "\na\n"),
+            ("description: |\n  a\n  \tb\n", "a\n\tb\n"),
+            ("description: >\n  a\n\n\n  b\n", "a\n\nb\n"),
+            ("description: >\n  a\n   \n  b\n", "a\n \nb\n"),
+            ("description: Use this when\n  the user asks for\n\n  a review.\nname: x\n",
+             "Use this when the user asks for\na review."),
+            ("description:\n  starts below\n  and wraps\n", "starts below and wraps"),
+        ]
+        for inside, value in cases:
+            with self.subTest(inside=inside):
+                fields = page.frontmatter("---\n" + inside + "---\n\n# Body\n")
+                self.assertEqual(next(f["value"] for f in fields if f["key"] == "description"), value)
+
+    def test_nested_values_and_bad_blocks_are_left_out(self):
+        inside = ("name: x\ndescription: |\n  Words.\nmetadata:\n  author: me\ntriggers:\n  - one\n"
+                  "list: a\n  - b\nquoted: \"a\n  b\"\nbad: |\n    deep\n  shallow\n")
+        self.assertEqual(page.frontmatter("---\n" + inside + "---\n"), [
+            {"key": "name", "value": "x"}, {"key": "description", "value": "Words.\n"}])
+
+    def test_crlf_lines_read_like_lf(self):
+        text = "---\r\nname: x\r\ndescription: |\r\n  one\r\n  two\r\n---\r\nbody\r\n"
+        self.assertEqual(page.frontmatter(text), [
+            {"key": "name", "value": "x"}, {"key": "description", "value": "one\ntwo\n"}])
+
     def test_no_frontmatter(self):
         self.assertIsNone(page.frontmatter("# Title\n"))
         self.assertIsNone(page.frontmatter("---\nname: open\n"))

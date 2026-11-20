@@ -21,8 +21,9 @@ struct PrimitiveLockNote: View {
     }
 }
 
-/// The changed-on-disk banner, the same one the AGENTS.md editor shows:
-/// reload the version on disk or overwrite it, never save over it blind.
+/// The manifest form's changed-on-disk banner, the same one the AGENTS.md
+/// editor shows: reload the version on disk or overwrite it, never save
+/// over it blind.
 private struct PrimitiveDiskBanner: View {
     var reload: () -> Void
     var overwrite: () -> Void
@@ -43,7 +44,7 @@ private struct PrimitiveDiskBanner: View {
     }
 }
 
-/// One labeled row of a manifest or frontmatter form.
+/// One labeled row of the manifest form.
 private struct FieldRow: View {
     var label: String
     @Binding var value: String
@@ -197,134 +198,12 @@ struct ManifestCard: View {
     }
 }
 
-// MARK: - Frontmatter card
-
-/// A SKILL.md's frontmatter as a form: `key: value` lines editable (the
-/// `name` key is the skill's id and stays read-only), the body and any
-/// line the form can't show kept byte for byte.
-struct FrontmatterCard: View {
-    /// One frontmatter field per row, folded to `foldLimit` of them.
-    static let foldLimit = 3
-
-    var url: URL
-    var editable: Bool
-    var onSaved: () -> Void
-    @State private var document: InstructionDocument?
-    @State private var fields: [(key: String, value: String)] = []
-    @State private var showsAll = false
-    /// The fields as last read or saved; dirty is theirs alone, since
-    /// editing `fields` never touches `document.text`.
-    @State private var loaded: [(key: String, value: String)] = []
-    @State private var error: String?
-
-    private var formDirty: Bool {
-        !fields.elementsEqual(loaded) { $0.key == $1.key && $0.value == $1.value }
-    }
-
-    var body: some View {
-        Card(title: "Frontmatter", subtitle: displayPath(url)) {
-            if let document {
-                if document.changedOnDisk {
-                    PrimitiveDiskBanner(reload: { Task { await document.load(); await read() } },
-                                        overwrite: { save(overwrite: true) })
-                }
-                if case .failed(let message) = document.state {
-                    Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.dangerText)
-                } else {
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
-                        ForEach(RowFold.visible(Array(fields.indices), limit: Self.foldLimit,
-                                                expanded: showsAll), id: \.self) { i in
-                            GridRow {
-                                FieldRow(label: fields[i].key, value: Self.value($fields, at: i),
-                                         disabled: !editable || fields[i].key == "name")
-                            }
-                        }
-                    }
-                    if RowFold.hiddenCount(total: fields.count, limit: Self.foldLimit) > 0 {
-                        ExpandRow(isExpanded: showsAll,
-                                  hidden: RowFold.hiddenCount(total: fields.count, limit: Self.foldLimit),
-                                  help: (expand: "Show every frontmatter field",
-                                         collapse: "Show the first \(Self.foldLimit) fields"),
-                                  edge: .inset) {
-                            withAnimation(.easeOut(duration: Theme.fadeDuration)) { showsAll.toggle() }
-                        }
-                    }
-                    if fields.isEmpty {
-                        Text("No editable fields.").font(Theme.caption).foregroundStyle(Theme.textSecondary)
-                    }
-                    if let error {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(Theme.caption).foregroundStyle(Theme.dangerText)
-                    }
-                    if editable {
-                        HStack(spacing: 8) {
-                            Spacer()
-                            Button("Revert") { revert() }.secondaryButton().disabled(!formDirty)
-                            Button("Save") { save(overwrite: false) }.primaryButton()
-                                .disabled(!formDirty || document.changedOnDisk)
-                        }
-                    }
-                }
-            } else {
-                SkeletonLines(rows: 4, framed: false)
-            }
-        }
-        // Keyed by the file: a card reused for another plugin or skill
-        // reads that one's file, not the first one's again.
-        .task(id: url) {
-            guard document?.url != url else { return }
-            let doc = InstructionDocument(url: url)
-            await doc.load()
-            // A newer file took the card while this one read.
-            guard !Task.isCancelled else { return }
-            document = doc
-            await read()
-        }
-    }
-
-    /// Field `i`'s value for a row that can outlive it: a reload or revert
-    /// shrinks `fields` while a row built for the old list still reads its
-    /// binding, and `$fields[i]` traps out of range there. Past the end it
-    /// reads empty and drops writes; the row goes with the next update.
-    static func value(_ fields: Binding<[(key: String, value: String)]>, at i: Int) -> Binding<String> {
-        Binding(get: { fields.wrappedValue.indices.contains(i) ? fields.wrappedValue[i].value : "" },
-                set: { if fields.wrappedValue.indices.contains(i) { fields.wrappedValue[i].value = $0 } })
-    }
-
-    /// Revert first: the form reads the file's text, not edits a refused
-    /// save left behind, and a revert after an outside change reloads it.
-    private func read() async {
-        guard let document else { return }
-        await document.revert()
-        fields = MarkdownFrontmatter(text: document.text)?.fields
-            .map { ($0.key, $0.value) } ?? []
-        loaded = fields
-        error = nil
-    }
-
-    private func revert() { Task { await read() } }
-
-    private func save(overwrite: Bool) {
-        guard let document else { return }
-        document.text = MarkdownFrontmatter.update(document.text, set: fields)
-        // What this save writes: a field edited while it runs stays dirty.
-        let submitted = fields
-        Task {
-            switch await document.save(overwrite: overwrite) {
-            case .saved: loaded = submitted; error = nil; onSaved()
-            case .changedOnDisk: error = nil
-            case .failed(let message): error = message
-            }
-        }
-    }
-}
-
 // MARK: - Contents and file pane
 
-/// A plugin or skill folder's files, grouped by kind, with add and trash
-/// when the folder is the user's own. Selecting a file opens it in a
-/// sheet over the page; binaries and anything over a megabyte can't
-/// preview.
+/// A plugin folder's files, grouped by kind, with add and trash when the
+/// folder is the user's own. Selecting a file opens it in a sheet over the
+/// page; binaries and anything over a megabyte can't preview. The skill
+/// detail lists its folder in its own rail instead (`SkillDetail.swift`).
 struct PartsCard: View {
     /// A section header or a top-level entry is one row; the card folds
     /// to `foldLimit` of them. An opened folder's children ride along
@@ -1256,134 +1135,6 @@ private struct PluginInfoCard: View {
             }
             .padding(.vertical, 2)
         }
-    }
-}
-
-// MARK: - Skill detail
-
-/// One skill as a page: its id and source, the harnesses that load it,
-/// the editable frontmatter of its SKILL.md and its folder's files.
-struct SkillDetailView: View {
-    @Environment(AppModel.self) private var app
-    var skill: Skill
-    var home: URL
-    var onBack: () -> Void
-    /// The link chips a shared skill carries, from the Skills page.
-    var links: AnyView?
-    /// The call-count block from the session index, same source.
-    var usage: AnyView?
-
-    @State private var drafts = PrimitiveDrafts()
-    @State private var leaving = false
-    @State private var leaveError: String?
-    /// The skill's folders, worked out off the main actor, with the path
-    /// they were worked out for; nil until the first lands.
-    @State private var found: (path: String, folders: SkillFolders)?
-    /// Bumped by `reload()` so the folders are worked out again after a
-    /// change on disk that leaves the skill's path as it was.
-    @State private var refresh = 0
-
-    private var root: URL { URL(fileURLWithPath: skill.path) }
-    /// The folders for the skill on screen; nil while they are worked
-    /// out, so a result for a skill opened before never shows.
-    private var folders: SkillFolders? {
-        guard let found, found.path == skill.path else { return nil }
-        return found.folders
-    }
-    private var editable: Bool { folders?.editable ?? false }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let leaveError {
-                ErrorCard(message: leaveError)
-            }
-            if folders != nil, !editable {
-                PrimitiveLockNote(text: "Only skills that live under ~/.swe can be edited, so \(skill.name) is read-only.")
-            }
-            Card {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(skill.name).font(Theme.font(size: 16, weight: .semibold))
-                        Badge(skill.source.title)
-                        // A skill adoption carried into the shared library
-                        // names its donor (#1882).
-                        if let donor = skill.adoptedFrom {
-                            Badge("Added from \(HarnessMark(donor).name)")
-                        }
-                        Spacer()
-                        Button { NSWorkspace.shared.activateFileViewerSelecting([root]) } label: {
-                            Label("Show in Finder", systemImage: "folder")
-                        }
-                        .secondaryButton()
-                    }
-                    Text(displayPath(skill.path)).font(Theme.font(size: 12, design: .monospaced)).foregroundStyle(Theme.textSecondary)
-                    if !skill.description.isEmpty {
-                        Text(skill.description).font(Theme.bodySmall).foregroundStyle(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let links { links }
-                    if let usage { usage }
-                }
-            }
-            if let folders {
-                if let skillFile = folders.skillFile {
-                    FrontmatterCard(url: skillFile, editable: folders.skillFileEditable, onSaved: reload)
-                }
-                PartsCard(root: root, editable: editable, drafts: drafts, onChanged: reload)
-            } else {
-                SkeletonRows(rows: 5, shape: .file, label: "Reading the skill's folder…")
-            }
-        }
-        // `realpath` and `fileExists` on a synced or stale folder can
-        // block, so the folders are worked out on a GCD queue (#580). A
-        // new skill or a reload cancels this task, and a cancelled task's
-        // result is dropped. `refresh` is in the key because a reload
-        // (trashing SKILL.md, say) can leave the path unchanged.
-        .task(id: [skill.path, home.path, String(refresh)]) {
-            let path = skill.path, home = home
-            let worked = await offMain { SkillFolders(skillPath: path, home: home) }
-            guard !Task.isCancelled else { return }
-            found = (path, worked)
-        }
-        // The page header's back chevron (and its ⌘[) and reselecting the
-        // Skills sidebar item both come through here.
-        .onChange(of: app.navReselects) { leave() }
-        .preference(key: DetailOpenKey.self, value: true)
-        .alert("Unsaved changes", isPresented: $leaving) {
-            Button("Save all") { saveAllAndLeave() }
-            Button("Discard", role: .destructive) { onBack() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("\(drafts.dirty.count) file\(drafts.dirty.count == 1 ? " has" : "s have") unsaved changes.")
-        }
-    }
-
-    private func leave() {
-        if drafts.dirty.isEmpty { onBack() } else { leaving = true }
-    }
-
-    private func saveAllAndLeave() {
-        Task {
-            var failed: [String] = []
-            for (path, document) in drafts.dirty {
-                // A save that leaves the file dirty (typed while it ran)
-                // hasn't kept everything either.
-                if await document.save() != .saved || document.isDirty {
-                    failed.append(URL(fileURLWithPath: path).lastPathComponent)
-                }
-            }
-            if failed.isEmpty {
-                leaveError = nil
-                onBack()
-            } else {
-                leaveError = "Couldn't save \(failed.joined(separator: ", "))."
-            }
-        }
-    }
-
-    private func reload() {
-        refresh += 1
-        Task { await app.skills.load(for: app.swePath) }
     }
 }
 

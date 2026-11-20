@@ -16,6 +16,7 @@ skill's folder once symlinks resolve, so no request reads anything else.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from swe.webapp.pages import CONFIG_LOCK, PageError, home_path
@@ -132,9 +133,13 @@ def editable(skill_path: str, home: Path) -> bool:
 
 
 def frontmatter(text: str) -> list[dict] | None:
-    """MarkdownFrontmatter's fields: each ``key: value`` line between the
-    opening and closing ``---`` with nothing indented under it; None when
-    the file has no frontmatter."""
+    """MarkdownFrontmatter's fields: each key between the opening and
+    closing ``---`` whose value is a string it can show: a ``key: value``
+    line with nothing indented under it (the value as written), a block
+    scalar (``|`` or ``>``, chomping and an indentation digit) or a plain
+    value carried over indented lines, both read as YAML reads them. Lists,
+    nested maps and anything else under a key are left out. None when the
+    file has no frontmatter. CRLF lines read like LF ones."""
     lines = text.split("\n")
     if not text.startswith("---") or len(lines) < 2 or lines[0].strip() != "---":
         return None
@@ -142,19 +147,151 @@ def frontmatter(text: str) -> list[dict] | None:
         close = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
     except StopIteration:
         return None
-    inside = lines[1:close]
+    inside = [line[:-1] if line.endswith("\r") else line for line in lines[1:close]]
     fields = []
-    for i, line in enumerate(inside):
-        key, colon, value = line.partition(":")
-        if not colon or not key or not all(ch.isalnum() or ch in "-_" for ch in key):
+    i = 0
+    while i < len(inside):
+        parsed = _field(inside[i])
+        if parsed is None:
+            i += 1
             continue
-        following = inside[i + 1] if i + 1 < len(inside) else ""
-        if following[:1] in (" ", "\t"):
-            continue
-        if value.startswith(" "):
-            value = value[1:]
-        fields.append({"key": key, "value": value.strip(" \t")})
+        key, raw = parsed
+        # What hangs off the key: indented lines, and blank lines between them.
+        end = j = i + 1
+        while j < len(inside) and (_blank(inside[j]) or inside[j][:1] in (" ", "\t")):
+            if not _blank(inside[j]):
+                end = j + 1
+            j += 1
+        header = _BLOCK_HEADER.match(raw)
+        if header:
+            value, content_end, consumed = _block(inside, i + 1, header)
+            # An indented line the block did not take is YAML the form can't read.
+            if content_end == end:
+                fields.append({"key": key, "value": value})
+                i = consumed
+                continue
+        elif end == i + 1:
+            fields.append({"key": key, "value": raw})
+        else:
+            value = _plain(raw, inside[i + 1:end])
+            if value is not None:
+                fields.append({"key": key, "value": value})
+        i = end
     return fields
+
+
+# `|` or `>`, at most one chomping indicator and one indentation digit in
+# either order, then an optional comment (MarkdownFrontmatter.BlockHeader).
+_BLOCK_HEADER = re.compile(r"^([|>])(?:([-+])([1-9])?|([1-9])([-+])?)?(?:[ \t]+#.*)?$")
+_NOT_PLAIN_START = set("\"'[]{}&*!|>%@`#,")
+
+
+def _field(line: str) -> tuple[str, str] | None:
+    key, colon, value = line.partition(":")
+    if not colon or not key or not all(ch.isalnum() or ch in "-_" for ch in key):
+        return None
+    if value.startswith(" "):
+        value = value[1:]
+    return key, value.strip(" \t")
+
+
+def _blank(line: str) -> bool:
+    return line.strip(" \t") == ""
+
+
+def _spaces(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _is_break(line: str, indent: int) -> bool:
+    return set(line) <= {" "} and len(line) <= indent
+
+
+def _is_content(line: str, indent: int) -> bool:
+    return _spaces(line) >= indent and not _is_break(line, indent)
+
+
+def _block(lines: list[str], start: int, header: re.Match) -> tuple[str, int, int]:
+    """The block scalar at ``start`` as PyYAML and libyaml read one under a
+    top-level key: its value, the line after its last content line, and the
+    line after the empty lines a ``+`` block keeps."""
+    folded = header.group(1) == ">"
+    chomp = header.group(2) or header.group(5) or ""
+    explicit = header.group(3) or header.group(4)
+    k, breaks = start, 0
+    if explicit:
+        indent = int(explicit)
+        while k < len(lines) and _is_break(lines[k], indent):
+            breaks, k = breaks + 1, k + 1
+    else:
+        deepest = 0
+        while k < len(lines) and set(lines[k]) <= {" "}:
+            deepest, breaks, k = max(deepest, len(lines[k])), breaks + 1, k + 1
+        if k < len(lines):
+            deepest = max(deepest, _spaces(lines[k]))
+        indent = max(1, deepest)
+    value, line_break, content_end = "", "", start
+    while k < len(lines) and _is_content(lines[k], indent):
+        value += "\n" * breaks
+        text = lines[k][indent:]
+        leading_non_space = text[:1] not in (" ", "\t")
+        value += text
+        line_break = "\n"
+        k += 1
+        content_end, breaks = k, 0
+        while k < len(lines) and _is_break(lines[k], indent):
+            breaks, k = breaks + 1, k + 1
+        if not (k < len(lines) and _is_content(lines[k], indent)):
+            break
+        if folded and leading_non_space and lines[k][indent:][:1] not in (" ", "\t"):
+            if breaks == 0:
+                value += " "
+        else:
+            value += line_break
+    if chomp == "":
+        value += line_break
+    elif chomp == "+":
+        value += line_break + "\n" * breaks
+    return value, content_end, k if chomp == "+" else content_end
+
+
+def _starts_plain(s: str) -> bool:
+    if not s or s[0] in _NOT_PLAIN_START or s in ("-", "?", ":"):
+        return False
+    return not s.startswith(("- ", "? ", ": "))
+
+
+def _continues(s: str) -> bool:
+    """A list item, a key or a comment on a line of its own is not more of
+    the value, whatever YAML would make of it."""
+    return (not s.startswith("#") and ": " not in s and " #" not in s and not s.endswith(":")
+            and "\t#" not in s and not s.startswith("- ") and s != "-")
+
+
+def _plain(raw: str, rest: list[str]) -> str | None:
+    """A plain value over indented lines, folded as YAML folds it; None for
+    anything that reads as a list, a map, a comment or another value."""
+    if raw and not (_starts_plain(raw) and _continues(raw) and not re.search(r"[ \t]+#", raw)):
+        return None
+    value, blanks = raw, 0
+    for line in rest:
+        if _blank(line):
+            blanks += 1
+            continue
+        # Tabs never indent YAML.
+        if not line.startswith(" "):
+            return None
+        text = line.strip(" \t")
+        if not _continues(text):
+            return None
+        if not value:
+            if not _starts_plain(text):
+                return None
+            value = text
+        else:
+            value += " " + text if blanks == 0 else "\n" * blanks + text
+        blanks = 0
+    return value or None
 
 
 def read_text(path: Path) -> str | None:

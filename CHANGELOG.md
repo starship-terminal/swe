@@ -27,7 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AgentMail is a service provider.** Settings › Providers › Services and `swe providers list` seed it with `AGENTMAIL_API_KEY` (console at [console.agentmail.to](https://console.agentmail.to)). Check sends `GET https://api.agentmail.to/v0/inboxes` as Bearer; a fake key is refused with 403.
 
+### Changed
+
+- **A skill's detail page is a file rail beside the editor.** The stack of cards (header, Frontmatter, Contents, with every file opening in a sheet) is now two panes, the shape of the AGENTS.md chapter editor. The rail holds the name, source and path with Show in Finder, a Details fold (closed at first) with the description, harness links and usage, the frontmatter form and the folder's files as a tree with an unsaved dot and Move to Trash. The editor beside it shows SKILL.md until another file is picked, fills the window, and keeps each file's unsaved edits while you switch. The frontmatter form edits the same SKILL.md draft as the editor, so one Save writes both; editing a field while another file is open brings SKILL.md back. `name` is shown locked, `description` is a multi-line field, and keys the form can't edit (lists, nested maps) are named instead. In a narrow window the rail narrows to 232pt, and where even that would leave the editor under 380pt (a 900pt window with the sidebar dragged wide) the rail sits over the editor and the two scroll together.
+
 ### Fixed
+
+- **A SKILL.md description written as a YAML block shows and saves.** The frontmatter form read only `key: value` lines, so a `description: |` or `>` block, or a plain value wrapped onto indented lines, never showed, and the form was often one locked `name` field. The Mac app and the web app now read block scalars (with `-`/`+` chomping and an indentation digit) and wrapped plain values as YAML does. An unchanged value keeps the file byte for byte, a changed value with line breaks is written as a `|` block at the block's own indentation, and one without goes back to a single line. Nested maps and lists are left untouched. CRLF files keep their line endings; before, the app saw no frontmatter in one and would have added a second.
 
 - **Grok 4.6 shows its intelligence score on the Models page.** Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.
 

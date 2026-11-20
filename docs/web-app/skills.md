@@ -32,8 +32,9 @@ sheet does; everything else is read only. Module
 - **Detail** (`#/skills?skill=<folder>`): the lock note, the header card
   (name, source badge, path, description, the app's per-source note and the
   link chips: every folder for a shared skill, the loading harnesses
-  otherwise), the SKILL.md frontmatter fields (simple `key: value` lines,
-  as `MarkdownFrontmatter` reads them, folded to 3), the SKILL.md text, and
+  otherwise), the SKILL.md frontmatter fields (`key: value` lines, block
+  scalars and wrapped plain values, as `MarkdownFrontmatter` reads them;
+  lists and nested maps are left out; folded to 3), the SKILL.md text, and
   the Contents card (`PrimitiveTree`'s sections, folded to 3). A file opens
   read only in a sheet.
 
@@ -146,8 +147,9 @@ NUL byte in the first 8 KB, as `PrimitiveTree.isTextFile` decides.
 
 These writes are left out; they stay in `swe skills` and the Mac app:
 
-- Editing the frontmatter form and the files in Contents (Raw/Rich editor,
-  Save, Revert, New part, Move to Trash).
+- Editing the frontmatter form and the folder's files (Raw/Rich editor,
+  Save, Revert, Move to Trash). The Mac app lists the files in a rail
+  beside an inline editor; the web app keeps its Contents card and sheet.
 - Show in Finder, and the sheet's "Open in <editor>" after New skill;
   Open it shows the skill's detail instead.
 
