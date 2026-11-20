@@ -22,7 +22,8 @@ FAKE_CLAUDE_MODE
     ``hook_callback`` before the turn), ``wake`` (a turn the CLI starts
     by itself after the first one), ``cancel`` (withdraws its approval
     with ``control_cancel_request``), ``linger`` (ignores the end of its
-    stdin until it is terminated).
+    stdin until it is terminated), ``deaf`` (answers ``initialize``,
+    then never reads stdin again).
 FAKE_CLAUDE_REPLY
     The assistant's reply text (default ``hello``).
 FAKE_CLAUDE_CAPS
@@ -278,6 +279,9 @@ def control(msg):
             "models": [{"value": "default"}, {"value": "haiku"}],
             "capabilities": ["ui_surface_v1"], "session_state": "idle",
             "account": {"email": "someone@example.com"}})
+        if MODE == "deaf":
+            import threading
+            threading.Event().wait()  # never reads again, until killed
         if MODE == "hook":
             out({"type": "control_request", "request_id": "hook-1",
                  "request": {"subtype": "hook_callback",

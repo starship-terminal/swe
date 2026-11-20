@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000003.014,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Write the numbers from 1 to 400, one per line, and no other text."
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000003.014,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Write the numbers from 1 to 400, one per line, and no other text."
   }
@@ -70,7 +70,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.931,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "name": "Bash",
@@ -87,7 +87,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.08,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "status": "ok",
@@ -99,15 +99,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000008.649,
-  "turn_id": "t1",
+  "ts": 1760000008.687,
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
    "text": "1",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -116,7 +116,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.687,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
@@ -129,7 +129,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.693,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 2,
    "output_tokens": 87,
@@ -145,7 +145,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.693,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "interrupted",
    "duration_s": 5.679
@@ -167,7 +167,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.695,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "text": "Reply with exactly: ok"
   }
@@ -188,9 +188,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.695,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
-   "id": "t2:user",
+   "id": "t-00000001-2:user",
    "kind": "user",
    "text": "Reply with exactly: ok"
   }
@@ -200,14 +200,14 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000009.548,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
    "text": "ok",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -216,7 +216,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.548,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
@@ -229,7 +229,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.552,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "input_tokens": 2,
    "output_tokens": 4,
@@ -245,7 +245,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.552,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "status": "completed",
    "duration_s": 0.857

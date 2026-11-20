@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.547,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Reply with exactly these words and nothing else: hello there"
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.547,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Reply with exactly these words and nothing else: hello there"
   }
@@ -69,14 +69,29 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000004.185,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_01:0",
    "kind": "assistant",
-   "text": "hello there",
+   "text": "hello ",
    "seq": 1,
    "offset": 0,
    "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.189,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01:0",
+   "kind": "assistant",
+   "text": "there",
+   "seq": 2,
+   "offset": 6,
+   "done": true
   }
  },
  {
@@ -85,7 +100,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.189,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_01:0",
    "kind": "assistant",
@@ -98,7 +113,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.206,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 2,
    "output_tokens": 5,
@@ -114,7 +129,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.21,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "completed",
    "duration_s": 1.663

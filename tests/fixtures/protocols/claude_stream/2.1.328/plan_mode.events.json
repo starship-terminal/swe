@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.843,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Make a two-step plan for appending the line 'done' to notes.txt in the current folder. Do not edit anything. Present the plan with the ExitPlanMode tool."
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.843,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Make a two-step plan for appending the line 'done' to notes.txt in the current folder. Do not edit anything. Present the plan with the ExitPlanMode tool."
   }
@@ -70,7 +70,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.567,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "name": "ToolSearch",
@@ -87,7 +87,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.579,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "status": "ok",
@@ -101,7 +101,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.072,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_02",
    "name": "Write",
@@ -118,7 +118,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.201,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_03",
    "name": "ExitPlanMode",
@@ -132,7 +132,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.669,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_02",
    "status": "ok",
@@ -163,7 +163,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.674,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "request_id": "00000000-0000-4000-8000-000000000097",
    "kind": "plan",
@@ -189,7 +189,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.676,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "request_id": "00000000-0000-4000-8000-000000000097",
    "source": "user",
@@ -213,7 +213,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000009.706,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_03",
    "status": "error",
@@ -226,11 +226,11 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.771,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "I've written",
+   "text": "I've ",
    "seq": 1,
    "offset": 0,
    "done": false
@@ -241,13 +241,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.775,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " the two",
+   "text": "written the ",
    "seq": 2,
-   "offset": 12,
+   "offset": 5,
    "done": false
   }
  },
@@ -256,13 +256,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.775,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "-step plan and submitted",
+   "text": "two-step plan and ",
    "seq": 3,
-   "offset": 20,
+   "offset": 17,
    "done": false
   }
  },
@@ -271,13 +271,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.775,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " it for your",
+   "text": "submitted it for ",
    "seq": 4,
-   "offset": 44,
+   "offset": 35,
    "done": false
   }
  },
@@ -286,13 +286,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.775,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " approval. I haven't ed",
+   "text": "your approval. I haven't ",
    "seq": 5,
-   "offset": 56,
+   "offset": 52,
    "done": false
   }
  },
@@ -301,13 +301,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "ited `",
+   "text": "edited ",
    "seq": 6,
-   "offset": 79,
+   "offset": 77,
    "done": false
   }
  },
@@ -316,13 +316,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "notes.txt` or an",
+   "text": "`notes.txt` or ",
    "seq": 7,
-   "offset": 85,
+   "offset": 84,
    "done": false
   }
  },
@@ -331,13 +331,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "ything else.\n\n1. **",
+   "text": "anything else.\n\n1. ",
    "seq": 8,
-   "offset": 101,
+   "offset": 99,
    "done": false
   }
  },
@@ -346,13 +346,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "Inspect `notes.tx",
+   "text": "**Inspect ",
    "seq": 9,
-   "offset": 120,
+   "offset": 118,
    "done": false
   }
  },
@@ -361,13 +361,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "t`.",
+   "text": "`notes.txt`.** Check ",
    "seq": 10,
-   "offset": 137,
+   "offset": 128,
    "done": false
   }
  },
@@ -376,13 +376,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "** Check that",
+   "text": "that the file exists and ",
    "seq": 11,
-   "offset": 140,
+   "offset": 149,
    "done": false
   }
  },
@@ -391,13 +391,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " the file exists and wh",
+   "text": "whether it ends with a ",
    "seq": 12,
-   "offset": 153,
+   "offset": 174,
    "done": false
   }
  },
@@ -406,13 +406,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "ether it ends with a trail",
+   "text": "trailing newline.\n2. ",
    "seq": 13,
-   "offset": 176,
+   "offset": 197,
    "done": false
   }
  },
@@ -421,13 +421,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "ing newline.\n2. **",
+   "text": "**Append the line.** ",
    "seq": 14,
-   "offset": 202,
+   "offset": 218,
    "done": false
   }
  },
@@ -436,13 +436,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "Append the line.** Add",
+   "text": "Add `done` ",
    "seq": 15,
-   "offset": 220,
+   "offset": 239,
    "done": false
   }
  },
@@ -451,13 +451,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " `done` and",
+   "text": "and a newline to the end ",
    "seq": 16,
-   "offset": 242,
+   "offset": 250,
    "done": false
   }
  },
@@ -466,13 +466,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " a newline to the end of",
+   "text": "of the file, ",
    "seq": 17,
-   "offset": 253,
+   "offset": 275,
    "done": false
   }
  },
@@ -481,13 +481,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " the file, without",
+   "text": "without overwriting it. If ",
    "seq": 18,
-   "offset": 277,
+   "offset": 288,
    "done": false
   }
  },
@@ -496,13 +496,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " overwriting it. If the",
+   "text": "the file ",
    "seq": 19,
-   "offset": 295,
+   "offset": 315,
    "done": false
   }
  },
@@ -511,13 +511,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " file has",
+   "text": "has no trailing newline, ",
    "seq": 20,
-   "offset": 318,
+   "offset": 324,
    "done": false
   }
  },
@@ -526,13 +526,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " no trailing newline, add",
+   "text": "add one first ",
    "seq": 21,
-   "offset": 327,
+   "offset": 349,
    "done": false
   }
  },
@@ -541,13 +541,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " one first so",
+   "text": "so ",
    "seq": 22,
-   "offset": 352,
+   "offset": 363,
    "done": false
   }
  },
@@ -556,13 +556,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " `",
+   "text": "`done` doesn't join ",
    "seq": 23,
-   "offset": 365,
+   "offset": 366,
    "done": false
   }
  },
@@ -571,13 +571,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "done` doesn't join the",
+   "text": "the last ",
    "seq": 24,
-   "offset": 367,
+   "offset": 386,
    "done": false
   }
  },
@@ -586,13 +586,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " last line.",
+   "text": "line.\n\n",
    "seq": 25,
-   "offset": 389,
+   "offset": 395,
    "done": false
   }
  },
@@ -601,13 +601,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "\n\nAfterw",
+   "text": "Afterwards ",
    "seq": 26,
-   "offset": 400,
+   "offset": 402,
    "done": false
   }
  },
@@ -616,13 +616,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "ards I",
+   "text": "I'd ",
    "seq": 27,
-   "offset": 408,
+   "offset": 413,
    "done": false
   }
  },
@@ -631,13 +631,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": "'d",
+   "text": "read the last lines ",
    "seq": 28,
-   "offset": 414,
+   "offset": 417,
    "done": false
   }
  },
@@ -646,13 +646,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " read",
+   "text": "of ",
    "seq": 29,
-   "offset": 416,
+   "offset": 437,
    "done": false
   }
  },
@@ -661,13 +661,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " the last lines of",
+   "text": "the file to confirm ",
    "seq": 30,
-   "offset": 421,
+   "offset": 440,
    "done": false
   }
  },
@@ -676,13 +676,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " the",
+   "text": "`done` is the final line and the ",
    "seq": 31,
-   "offset": 439,
+   "offset": 460,
    "done": false
   }
  },
@@ -691,43 +691,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.777,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " file to confirm `done`",
+   "text": "rest ",
    "seq": 32,
-   "offset": 443,
-   "done": false
-  }
- },
- {
-  "v": 2,
-  "type": "message.delta",
-  "session": "fixture:1",
-  "ts": 1760000011.777,
-  "turn_id": "t1",
-  "data": {
-   "id": "msg_03:0",
-   "kind": "assistant",
-   "text": " is the final line and the r",
-   "seq": 33,
-   "offset": 466,
-   "done": false
-  }
- },
- {
-  "v": 2,
-  "type": "message.delta",
-  "session": "fixture:1",
-  "ts": 1760000011.777,
-  "turn_id": "t1",
-  "data": {
-   "id": "msg_03:0",
-   "kind": "assistant",
-   "text": "est is",
-   "seq": 34,
-   "offset": 494,
+   "offset": 493,
    "done": false
   }
  },
@@ -736,14 +706,29 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000011.778,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
-   "text": " unchanged.",
-   "seq": 35,
-   "offset": 500,
+   "text": "is ",
+   "seq": 33,
+   "offset": 498,
    "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.781,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "unchanged.",
+   "seq": 34,
+   "offset": 501,
+   "done": true
   }
  },
  {
@@ -752,7 +737,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000011.781,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
@@ -765,7 +750,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000011.786,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 6,
    "output_tokens": 680,
@@ -781,7 +766,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000011.786,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "completed",
    "duration_s": 8.943
@@ -803,7 +788,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000011.797,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "text": "Reply with exactly: back"
   }
@@ -824,9 +809,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000011.797,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
-   "id": "t2:user",
+   "id": "t-00000001-2:user",
    "kind": "user",
    "text": "Reply with exactly: back"
   }
@@ -837,7 +822,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000012.974,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_04:0",
    "text": "",
@@ -848,15 +833,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000012.974,
-  "turn_id": "t2",
+  "ts": 1760000012.997,
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_04:1",
    "kind": "assistant",
    "text": "back",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -865,7 +850,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000012.997,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_04:1",
    "kind": "assistant",
@@ -878,7 +863,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000013.008,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "input_tokens": 2,
    "output_tokens": 102,
@@ -894,7 +879,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000013.009,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "status": "completed",
    "duration_s": 1.212

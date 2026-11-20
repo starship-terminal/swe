@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000003.77,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Use the Write tool to overwrite notes.txt in the current folder with the single word changed. Do nothing else."
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000003.77,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Use the Write tool to overwrite notes.txt in the current folder with the single word changed. Do nothing else."
   }
@@ -70,7 +70,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.537,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_01:0",
    "text": "",
@@ -83,7 +83,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.806,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "name": "Write",
@@ -100,7 +100,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.005,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "status": "ok",
@@ -120,11 +120,11 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.786,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": "I overwrote `notes",
+   "text": "I overwrote ",
    "seq": 1,
    "offset": 0,
    "done": false
@@ -135,13 +135,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.864,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": ".txt` in",
+   "text": "`notes.txt` ",
    "seq": 2,
-   "offset": 18,
+   "offset": 12,
    "done": false
   }
  },
@@ -150,13 +150,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.867,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": " the working fol",
+   "text": "in the working ",
    "seq": 3,
-   "offset": 26,
+   "offset": 24,
    "done": false
   }
  },
@@ -165,13 +165,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.867,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": "der so",
+   "text": "folder ",
    "seq": 4,
-   "offset": 42,
+   "offset": 39,
    "done": false
   }
  },
@@ -180,13 +180,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.867,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": " it cont",
+   "text": "so it ",
    "seq": 5,
-   "offset": 48,
+   "offset": 46,
    "done": false
   }
  },
@@ -195,13 +195,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.867,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": "ains only",
+   "text": "contains ",
    "seq": 6,
-   "offset": 56,
+   "offset": 52,
    "done": false
   }
  },
@@ -210,14 +210,29 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000006.874,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": " the word `changed`.",
+   "text": "only the word ",
    "seq": 7,
-   "offset": 65,
+   "offset": 61,
    "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.925,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "`changed`.",
+   "seq": 8,
+   "offset": 75,
+   "done": true
   }
  },
  {
@@ -226,7 +241,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.925,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
@@ -239,7 +254,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.94,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 4,
    "output_tokens": 264,
@@ -255,7 +270,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.943,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "completed",
    "duration_s": 3.173

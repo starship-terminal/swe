@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.779,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Use the Task tool with subagent_type general-purpose and run_in_background true to count slowly from 1 to 50 with the Bash tool, one 'sleep 1; echo n' command per number. Then reply: started"
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.779,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Use the Task tool with subagent_type general-purpose and run_in_background true to count slowly from 1 to 50 with the Bash tool, one 'sleep 1; echo n' command per number. Then reply: started"
   }
@@ -70,7 +70,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.621,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_01:0",
    "text": "",
@@ -83,7 +83,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.665,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "name": "Agent",
@@ -106,7 +106,7 @@
    "task_id": "ac1aa4ba56d4c8f1a",
    "kind": "subagent",
    "status": "running",
-   "parent_turn_id": "t1",
+   "parent_turn_id": "t-00000001-1",
    "title": "Count 1 to 50 slowly",
    "can_stop": true
   }
@@ -117,7 +117,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.744,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "status": "ok",
@@ -135,7 +135,7 @@
    "task_id": "ac1aa4ba56d4c8f1a",
    "kind": "subagent",
    "status": "stopped",
-   "parent_turn_id": "t1",
+   "parent_turn_id": "t-00000001-1",
    "title": "Count 1 to 50 slowly",
    "can_stop": false
   }
@@ -144,15 +144,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000007.349,
-  "turn_id": "t1",
+  "ts": 1760000007.364,
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
    "text": "started",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -161,7 +161,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000007.364,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
@@ -174,7 +174,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000007.371,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 4,
    "output_tokens": 511,
@@ -190,7 +190,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.45,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:0",
    "text": "",
@@ -202,11 +202,11 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.45,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": "The background counting agent was",
+   "text": "The background counting agent ",
    "seq": 1,
    "offset": 0,
    "done": false
@@ -217,13 +217,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.465,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " stopped before",
+   "text": "was stopped ",
    "seq": 2,
-   "offset": 33,
+   "offset": 30,
    "done": false
   }
  },
@@ -232,13 +232,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.502,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " it finished, so the",
+   "text": "before it finished, so ",
    "seq": 3,
-   "offset": 48,
+   "offset": 42,
    "done": false
   }
  },
@@ -247,13 +247,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.541,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " count to",
+   "text": "the count ",
    "seq": 4,
-   "offset": 68,
+   "offset": 65,
    "done": false
   }
  },
@@ -262,13 +262,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.551,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " 50",
+   "text": "to ",
    "seq": 5,
-   "offset": 77,
+   "offset": 75,
    "done": false
   }
  },
@@ -277,13 +277,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.56,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " did not complete. The",
+   "text": "50 did not complete. ",
    "seq": 6,
-   "offset": 80,
+   "offset": 78,
    "done": false
   }
  },
@@ -292,13 +292,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.579,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " st",
+   "text": "The ",
    "seq": 7,
-   "offset": 102,
+   "offset": 99,
    "done": false
   }
  },
@@ -307,13 +307,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.596,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": "op came",
+   "text": "stop ",
    "seq": 8,
-   "offset": 105,
+   "offset": 103,
    "done": false
   }
  },
@@ -322,13 +322,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.627,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " from the user, not from an",
+   "text": "came from the user, not from ",
    "seq": 9,
-   "offset": 112,
+   "offset": 108,
    "done": false
   }
  },
@@ -337,13 +337,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.638,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " error. I haven't read its",
+   "text": "an error. I haven't read ",
    "seq": 10,
-   "offset": 139,
+   "offset": 137,
    "done": false
   }
  },
@@ -352,13 +352,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.663,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " output file.",
+   "text": "its output ",
    "seq": 11,
-   "offset": 165,
+   "offset": 162,
    "done": false
   }
  },
@@ -367,13 +367,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.685,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " I can start it again from",
+   "text": "file. I can start it again ",
    "seq": 12,
-   "offset": 178,
+   "offset": 173,
    "done": false
   }
  },
@@ -382,13 +382,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.706,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " the",
+   "text": "from ",
    "seq": 13,
-   "offset": 204,
+   "offset": 200,
    "done": false
   }
  },
@@ -397,14 +397,29 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000008.728,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
-   "text": " beginning if you want.",
+   "text": "the beginning if you ",
    "seq": 14,
-   "offset": 208,
+   "offset": 205,
    "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.764,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:1",
+   "kind": "assistant",
+   "text": "want.",
+   "seq": 15,
+   "offset": 226,
+   "done": true
   }
  },
  {
@@ -413,7 +428,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.764,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_03:1",
    "kind": "assistant",
@@ -426,7 +441,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.797,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 4,
    "output_tokens": 151,
@@ -442,7 +457,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000008.798,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "completed",
    "duration_s": 6.019

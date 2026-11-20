@@ -423,6 +423,50 @@ def sc_approval(spawn, work, ctx):
     return [d]
 
 
+def _settings_files(*roots: str) -> list[str]:
+    """Every settings file under ``roots``, relative to its root."""
+    found = []
+    for root in roots:
+        for path in Path(root).rglob("*"):
+            if path.is_file() and path.name.startswith("settings") \
+                    and path.suffix == ".json":
+                found.append(f"{Path(root).name}/"
+                             f"{path.relative_to(root).as_posix()}")
+    return sorted(found)
+
+
+def sc_always(spawn, work, ctx):
+    """"Always allow" answered the way the adapter answers it: the CLI's
+    own suggestions with every destination set to session. Proves the
+    CLI takes them, asks no more for the same call, and writes no
+    settings file."""
+    d = spawn(permission_mode="default")
+    _handshake(d)
+    asked: list = []
+
+    def always(rid, req):
+        asked.append(req.get("tool_name"))
+        return wire.permission_allow(
+            rid, req.get("input"),
+            wire.session_scoped(req.get("permission_suggestions") or []))
+
+    before = _settings_files(work, ctx["config"])
+    start = d.mark()
+    d.turn("Use the Bash tool to run exactly this command and nothing "
+           "else: touch marker.txt", answer=always)
+    d.settle(start)
+    first = len(asked)
+    start = d.mark()
+    d.turn("Use the Bash tool to run exactly the same command again: "
+           "touch marker.txt. Then reply only with: done", answer=always)
+    d.settle(start)
+    ctx["asked_turn_1"] = first
+    ctx["asked_turn_2"] = len(asked) - first
+    ctx["settings_files_before"] = before
+    ctx["settings_files_after"] = _settings_files(work, ctx["config"])
+    return [d]
+
+
 def sc_interrupt(spawn, work, ctx):
     d = spawn()
     _handshake(d)
@@ -594,6 +638,7 @@ def sc_rewind(spawn, work, ctx):
 SCENARIOS = {
     "hello": sc_hello,
     "approval": sc_approval,
+    "always": sc_always,
     "interrupt": sc_interrupt,
     "plan_mode": sc_plan_mode,
     "plan_approve": sc_plan_approve,
@@ -658,7 +703,7 @@ def record(adapter: str, scenario: str, version: str, raw_dir: Path | None,
     Path(work, "hello.py").write_text('print("hello")\n')
     drivers: list[Driver] = []
     tails: list[list[str]] = []
-    ctx: dict = {}
+    ctx: dict = {"config": config}
 
     def spawn(*, persist: bool = False, env: dict | None = None, **kw):
         kw.setdefault("session_id", "" if kw.get("resume_id") else
@@ -687,6 +732,7 @@ def record(adapter: str, scenario: str, version: str, raw_dir: Path | None,
     except ScenarioError as exc:
         error = str(exc)
     finally:
+        ctx.pop("config", None)
         timer.cancel()
         codes = [d.finish() for d in drivers]
     home = os.path.expanduser("~")

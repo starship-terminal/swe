@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.792,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Remember the word kumquat. Reply with exactly: noted"
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.792,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Remember the word kumquat. Reply with exactly: noted"
   }
@@ -68,15 +68,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000004.671,
-  "turn_id": "t1",
+  "ts": 1760000004.676,
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_01:0",
    "kind": "assistant",
    "text": "noted",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -85,7 +85,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.676,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_01:0",
    "kind": "assistant",
@@ -98,7 +98,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.776,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 2,
    "output_tokens": 4,
@@ -114,7 +114,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.78,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "completed",
    "duration_s": 1.988
@@ -177,7 +177,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.84,
-  "turn_id": "t1",
+  "turn_id": "t-00000002-1",
   "data": {
    "text": "What word did I ask you to remember? Reply with that word only."
   }
@@ -198,9 +198,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.84,
-  "turn_id": "t1",
+  "turn_id": "t-00000002-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000002-1:user",
    "kind": "user",
    "text": "What word did I ask you to remember? Reply with that word only."
   }
@@ -209,15 +209,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000004.302,
-  "turn_id": "t1",
+  "ts": 1760000004.303,
+  "turn_id": "t-00000002-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
    "text": "kumquat",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -226,7 +226,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.303,
-  "turn_id": "t1",
+  "turn_id": "t-00000002-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
@@ -239,7 +239,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.327,
-  "turn_id": "t1",
+  "turn_id": "t-00000002-1",
   "data": {
    "input_tokens": 2,
    "output_tokens": 6,
@@ -255,7 +255,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.327,
-  "turn_id": "t1",
+  "turn_id": "t-00000002-1",
   "data": {
    "status": "completed",
    "duration_s": 1.487
@@ -318,7 +318,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000003.523,
-  "turn_id": "t1",
+  "turn_id": "t-00000003-1",
   "data": {
    "text": "Reply with the remembered word in capital letters only."
   }
@@ -339,9 +339,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000003.523,
-  "turn_id": "t1",
+  "turn_id": "t-00000003-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000003-1:user",
    "kind": "user",
    "text": "Reply with the remembered word in capital letters only."
   }
@@ -350,15 +350,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000004.994,
-  "turn_id": "t1",
+  "ts": 1760000005.268,
+  "turn_id": "t-00000003-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
    "text": "KUMQUAT",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -367,7 +367,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.268,
-  "turn_id": "t1",
+  "turn_id": "t-00000003-1",
   "data": {
    "id": "msg_03:0",
    "kind": "assistant",
@@ -380,7 +380,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.299,
-  "turn_id": "t1",
+  "turn_id": "t-00000003-1",
   "data": {
    "input_tokens": 2,
    "output_tokens": 9,
@@ -396,7 +396,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.305,
-  "turn_id": "t1",
+  "turn_id": "t-00000003-1",
   "data": {
    "status": "completed",
    "duration_s": 1.782

@@ -2,7 +2,7 @@
 
 Status: built (pure additions; nothing calls it yet). G8 wires it into
 the keeper and the hub. The fixtures are real recordings of Claude Code
-2.1.328, not hand-written.
+2.1.328 (12 scenarios), not hand-written.
 
 | File | What it holds |
 |---|---|
@@ -66,13 +66,13 @@ What we write:
 |---|---|
 | `start` | spawn, then `control_request` `initialize` |
 | `send_turn` | `{"type": "user", "message": {"role": "user", "content": "@/a.png text"}, "parent_tool_use_id": null}` (attachments as `@path` refs) |
-| `respond` allow / always / deny | `control_response` success `{"behavior": "allow", "updatedInput": <input>}`, plus `updatedPermissions` (the CLI's `permission_suggestions`) for always; `{"behavior": "deny", "message": <text>}` |
+| `respond` allow / always / deny | `control_response` success `{"behavior": "allow", "updatedInput": <input>}`, plus `updatedPermissions` for always (the CLI's `permission_suggestions` with every `destination` set to `session` and `setMode` ones dropped); `{"behavior": "deny", "message": <text>}` |
 | `interrupt` | `control_request` `interrupt`; answer `{"still_queued": []}` |
 | `set_option("model", m)` | `control_request` `set_model {model}` |
 | `set_option("permission_mode", m)` | `control_request` `set_permission_mode {mode}`; answer `{"mode": m}` |
 | `set_option("plan_mode", true/false)` | `set_permission_mode` `plan`, then back to the mode before it (or `default`) |
 | `stop_task(id)` | `control_request` `stop_task {task_id}`; answer `{}` |
-| `close` | stdin EOF (the CLI drops pending prompts and exits 0), then terminate, then kill |
+| `close` | stdin EOF through the writer thread (the CLI drops pending prompts and exits 0), then terminate, then kill; a writer stuck on a full pipe skips the EOF and goes straight to terminate |
 | (any CLI control request but `can_use_tool`) | `control_response` error, so the CLI never waits on us |
 
 What the CLI prints:
@@ -91,18 +91,56 @@ What the CLI prints:
 | `system` `task_updated` (`patch.status`) / `task_notification` (`status`) | `task.updated` completed / failed / stopped (`killed` is stopped); duplicates dropped |
 | `system` `compact_boundary` | `context.compacted` (`tokens_before` from `compact_metadata.pre_tokens`) |
 | `system` `status` | none (records `permissionMode`) |
-| `stream_event` `content_block_delta` text / thinking | `message.delta` (`id` `<api message id>:<block index>`, `seq` from 1, `offset`) |
+| `stream_event` `content_block_delta` text / thinking | `message.delta` (`id` `<api message id>:<block index>`, `seq` from 1, `offset`), redacted before it goes out (see "Live text and redaction") |
 | `assistant` text block | `message.completed` assistant, same id as its deltas |
 | `assistant` thinking block | `thinking.completed` (`duration_s` from `thinking_duration_ms`) |
-| `assistant` tool_use block | `tool.started` (`summary` like `Bash · ls`, `input` redacted, `task_id` when a subagent made it) |
+| `assistant` tool_use block | `tool.started` (`summary` like `Bash · ls`, `input` redacted key-aware, `task_id` when a subagent made it) |
 | `user` tool_result block | `tool.completed` (ok, error, or cancelled when `tool_use_result.interrupted`; `output` cut at 8000 chars; `file_edits` from a Write or Edit result's `structuredPatch`) |
 | `result` | `usage.updated` (tokens, `cost_usd`, `context_window`); `error` when `is_error` and we did not interrupt; ends the turn itself only for a CLI that sends no state frames |
 | a subagent's lines (`parent_tool_use_id` set) | tool rows only, under the subagent's `task_id`; its text is not forwarded |
 | anything else (`rate_limit_event`, `command_lifecycle`, `background_tasks_changed`, unknown types, non-JSON) | nothing; counted in `StreamState.unknown` |
 
 The adapter emits `turn.started`, `session.state` running and the user's
-`message.completed` itself in `send_turn`, before the line is written,
-and `approval.resolved` (`source: user`) in `respond`.
+`message.completed` itself in `send_turn`, once the line is written, and
+`approval.resolved` (`source: user`) in `respond`.
+
+Turn ids are `t-<run>-<n>`: `<run>` is 8 random hex digits per start of
+the adapter, so one session's log, which spans many starts (a resume
+after a keeper restart, Continue in SWE), never repeats a turn id or a
+user message id (`<turn id>:user`). `replay` passes a fixed run id
+(`00000001` for a fixture's first process) so goldens stay stable.
+
+### Live text and redaction
+
+Every event is redacted before it is emitted, live text included. A
+secret can arrive split across deltas, so each streamed block keeps the
+raw text it has received and sends only a prefix whose redaction cannot
+change (`claude_wire.stable_cut`): text up to the last whitespace; the
+whole line (and the one before it, since a name and its value can sit
+on two lines) when it names a credential (`authorization`, `api_key`,
+`token`, `secret`, `passw`, `private_key`); everything from an open
+`-----BEGIN` until its `-----END ...-----` has arrived. The rest goes out
+as the block's last delta (`done: true`) just before its
+`message.completed` or `thinking.completed`. So offsets always equal the
+length already sent, `seq` runs 1, 2, 3, no text is taken back, and the
+deltas add up to the redacted completed text. Prose streams word by
+word; a line that mentions a credential name streams when it ends.
+
+Tool input and other structured values go through `claude_wire.redact`,
+which is key-aware: a value under a key that names a credential
+(`api_key`, `accessToken`, `client_secret`, `password`, `Authorization`,
+`cookie`, at any depth) is masked whatever it holds; every other string
+goes through the transcript redactor.
+
+### Writing to the CLI
+
+One writer thread owns the CLI's stdin. A caller queues its line and
+waits at most `write_timeout` (10 s) for it to reach the pipe; the
+reader thread's own replies are queued without waiting, so a CLI that
+stops reading can never stall the reader. A write that misses its
+deadline raises `AdapterError(code="timeout")` and kills the child (its
+exit sequence follows: `agent_down`), since the pipe may hold half a
+line. `close` cannot be held up by a stuck writer.
 
 ## Proven by fixture, and unverified
 
@@ -124,7 +162,7 @@ empty `--strict-mcp-config`.
 | Resume by id, fork with `--fork-session --session-id` | proven | `resume` |
 | `rewind_files` restores files (with `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` and a user message `uuid`) | proven on the wire; no SessionAdapter method uses it | `rewind` |
 | Steer (`priority: "now"`) | recorded, left off | `steer` |
-| `always` (sending `updatedPermissions`) | not recorded with the real CLI (fake only) | |
+| "Always allow": the CLI's suggestions sent back with every `destination` set to `session` (`setMode` ones dropped). The CLI took them, did not ask again for the same call in that session (its result says `reason_type: "rule"`), and wrote no settings file in the work folder or the throwaway `CLAUDE_CONFIG_DIR` (both checked before and after) | proven, offered when the CLI sends suggestions | `always` |
 | `--effort` at start; effort mid-session | flag not recorded; no control request exists | |
 | AskUserQuestion answers | not recorded; it arrives as a plain tool approval | |
 | An interrupt while a `can_use_tool` is open | fake only | |
@@ -183,10 +221,14 @@ closest correct thing and nothing in G3 was bent.
    spawn flags and are honoured whatever `Caps.options` says.
 5. **Approval options are synthesized.** `can_use_tool` carries no
    option list. The adapter offers allow, deny and, when the CLI sent
-   `permission_suggestions`, always. "Always" hands those suggestions
-   back as `updatedPermissions`; they can name `destination:
-   localSettings`, which writes `.claude/settings.local.json` in the
-   project. A text-only answer is sent as a deny with that text.
+   `permission_suggestions`, always. The CLI's suggestions name their
+   own `destination` (`localSettings` for a Bash rule, which would write
+   the project's `.claude/settings.local.json`) and can include a
+   `setMode` to `acceptEdits`. "Always" sends them back scoped to the
+   session and without the mode change, so a tap on a phone never
+   writes a settings file or widens the session's mode (mode changes
+   are `set_option`'s). A text-only answer is sent as a deny with that
+   text.
 6. **The init message is per turn.** Feature narrowing from its
    `capabilities` array happens at the first turn, not at `start`; the
    adapter emits a second `session.caps` then.
@@ -195,8 +237,13 @@ closest correct thing and nothing in G3 was bent.
    `updatedInput` with the answers. It maps to a tool approval, not
    `input.requested`, until a fixture shows the shape.
 9. **`transcript_position`** is derived (`<CLAUDE_CONFIG_DIR or
-   ~/.claude>/projects/<cwd with non-alphanumerics as ->/<id>.jsonl`, the
-   rule seen on disk), not reported by the CLI.
+   $HOME/.claude>/projects/<cwd with non-alphanumerics as ->/<id>.jsonl`,
+   the rule seen on disk, read from the environment the child was
+   started with), not reported by the CLI.
+10. **Live text lags at credential names.** To keep secrets out of
+   `message.delta`, a line that mentions `token`, `secret`, `api_key`
+   and the like streams only when it ends (see "Live text and
+   redaction").
 
 ## Recording again for a new CLI version
 
@@ -239,6 +286,10 @@ its own folders).
   as for a terminal session; `TailManager` must skip SWE-owned sessions
   (G1, section 2) or the timeline doubles.
 - Approval `request_id`s are the CLI's UUIDs; respond with them as is.
+- Turn ids are `t-<8 hex>-<n>`, unique across starts of one session;
+  never parse them. The constructor's `run_id` fixes the prefix (tests).
+- A stdin write that times out (`write_timeout`, 10 s) raises `timeout`
+  and kills the child; the keeper sees `agent_down` and restarts it.
 - A plan approval's `prompt` is the whole plan in Markdown; allowing it
   takes the CLI out of plan mode by itself.
 - Implicit turns (gap 1) and background subagents (gap 2) mean a turn

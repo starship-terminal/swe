@@ -36,7 +36,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.676,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "text": "Use the Write tool to create a file named allowed.txt in the current folder containing the single word yes. Do nothing else."
   }
@@ -57,9 +57,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000002.676,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
-   "id": "t1:user",
+   "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Use the Write tool to create a file named allowed.txt in the current folder containing the single word yes. Do nothing else."
   }
@@ -70,7 +70,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.461,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "name": "Write",
@@ -97,7 +97,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.556,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "request_id": "00000000-0000-4000-8000-000000000025",
    "kind": "tool",
@@ -129,7 +129,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.557,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "request_id": "00000000-0000-4000-8000-000000000025",
    "source": "user",
@@ -152,7 +152,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000004.685,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "call_id": "toolu_01",
    "status": "ok",
@@ -172,11 +172,11 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000005.287,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": "I created `allowed.tx",
+   "text": "I created ",
    "seq": 1,
    "offset": 0,
    "done": false
@@ -187,13 +187,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000005.336,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": "t` in the working",
+   "text": "`allowed.txt` in the ",
    "seq": 2,
-   "offset": 21,
+   "offset": 10,
    "done": false
   }
  },
@@ -202,13 +202,13 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000005.336,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": " directory containing `",
+   "text": "working directory containing ",
    "seq": 3,
-   "offset": 38,
+   "offset": 31,
    "done": false
   }
  },
@@ -216,15 +216,15 @@
   "v": 2,
   "type": "message.delta",
   "session": "fixture:1",
-  "ts": 1760000005.336,
-  "turn_id": "t1",
+  "ts": 1760000005.351,
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
-   "text": "yes`.",
+   "text": "`yes`.",
    "seq": 4,
-   "offset": 61,
-   "done": false
+   "offset": 60,
+   "done": true
   }
  },
  {
@@ -233,7 +233,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.351,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "id": "msg_02:0",
    "kind": "assistant",
@@ -246,7 +246,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.362,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "input_tokens": 4,
    "output_tokens": 154,
@@ -262,7 +262,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.364,
-  "turn_id": "t1",
+  "turn_id": "t-00000001-1",
   "data": {
    "status": "completed",
    "duration_s": 2.688
@@ -284,7 +284,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.364,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "text": "Use the Write tool to create a file named denied.txt in the current folder containing the single word no. If you are not allowed, reply only with: denied"
   }
@@ -305,9 +305,9 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000005.364,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
-   "id": "t2:user",
+   "id": "t-00000001-2:user",
    "kind": "user",
    "text": "Use the Write tool to create a file named denied.txt in the current folder containing the single word no. If you are not allowed, reply only with: denied"
   }
@@ -318,7 +318,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.354,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "call_id": "toolu_02",
    "name": "Write",
@@ -345,7 +345,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.374,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "request_id": "00000000-0000-4000-8000-000000000063",
    "kind": "tool",
@@ -377,7 +377,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.376,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "request_id": "00000000-0000-4000-8000-000000000063",
    "source": "user",
@@ -401,7 +401,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000006.403,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "call_id": "toolu_02",
    "status": "error",
@@ -414,14 +414,14 @@
   "type": "message.delta",
   "session": "fixture:1",
   "ts": 1760000007.023,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_04:0",
    "kind": "assistant",
    "text": "denied",
    "seq": 1,
    "offset": 0,
-   "done": false
+   "done": true
   }
  },
  {
@@ -430,7 +430,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000007.023,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "id": "msg_04:0",
    "kind": "assistant",
@@ -443,7 +443,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000007.028,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "input_tokens": 4,
    "output_tokens": 132,
@@ -459,7 +459,7 @@
   "session": "fixture:1",
   "seq": 0,
   "ts": 1760000007.03,
-  "turn_id": "t2",
+  "turn_id": "t-00000001-2",
   "data": {
    "status": "completed",
    "duration_s": 1.666

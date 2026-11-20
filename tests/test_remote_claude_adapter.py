@@ -192,6 +192,23 @@ class TestRecordedFixtures(unittest.TestCase):
         sub_tools = [e for e in of(sub, "tool.started")
                      if e["data"].get("task_id")]
         self.assertTrue(sub_tools, "a subagent's tool call carries task_id")
+        always = scenario("always")
+        self.assertEqual([e["data"]["decision"] for e in
+                          of(always, "approval.resolved")], ["always"])
+        self.assertEqual(len(of(always, "approval.requested")), 1,
+                         "the second identical call is not asked")
+        self.assertEqual([e["data"]["status"] for e in
+                          of(always, "tool.completed")], ["ok", "ok"])
+        notes = _load(FIXTURES / wire.RECORDED_VERSION / "always.jsonl")[0][
+            "notes"]
+        self.assertEqual((notes["asked_turn_1"], notes["asked_turn_2"],
+                          notes["settings_files_after"]), (1, 0, []))
+        sent = [line["msg"] for line in _load(
+            FIXTURES / wire.RECORDED_VERSION / "always.jsonl")[1:]
+            if line.get("dir") == "out"
+            and line.get("msg", {}).get("type") == "control_response"]
+        perms = sent[0]["response"]["response"]["updatedPermissions"]
+        self.assertEqual({p["destination"] for p in perms}, {"session"})
         resume = scenario("resume")
         sids = [e["data"].get("harness_session_id")
                 for e in of(resume, "session.state")
@@ -384,6 +401,132 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(wire._result_text(None), "")
 
 
+SECRETS = (
+    "sk-ant-api03-" + "Q" * 30,
+    "API_KEY=supersecretvalue123",
+    '{"password": "hunter two pass"}',
+    "Authorization: Bearer abcdefghijkl12345",
+    "export GITHUB_TOKEN='ghp_" + "z" * 36 + "'",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\ndef456\n"
+    "-----END RSA PRIVATE KEY-----",
+)
+
+
+class TestStreamedRedaction(unittest.TestCase):
+    """Live text is redacted before it goes out, even when a secret
+    arrives split across chunks."""
+
+    def run_stream(self, kind: str, chunks: list, full: str):
+        st = wire.StreamState("k", clock=lambda: 1.0, run_id="00000000")
+        st.start_events(Caps(), "sid")
+        st.begin_turn("go")
+        btype, dtype, field = (("text", "text_delta", "text")
+                               if kind == "assistant" else
+                               ("thinking", "thinking_delta", "thinking"))
+
+        def se(event):
+            return {"type": "stream_event", "event": event,
+                    "parent_tool_use_id": None, "api_message_id": "m1"}
+
+        out = st.feed(se({"type": "content_block_start", "index": 0,
+                          "content_block": {"type": btype}})).events
+        for chunk in chunks:
+            out += st.feed(se({"type": "content_block_delta", "index": 0,
+                               "delta": {"type": dtype,
+                                         field: chunk}})).events
+        out += st.feed({"type": "assistant", "message": {
+            "id": "m1", "content": [{"type": btype, field: full}]}}).events
+        deltas = [e["data"] for e in out if e["type"] == "message.delta"]
+        done = [e for e in out if e["type"] in ("message.completed",
+                                                "thinking.completed")]
+        return deltas, done[0]["data"]["text"]
+
+    def check(self, deltas, final, secret):
+        offset = 0
+        for n, delta in enumerate(deltas, 1):
+            self.assertEqual(delta["seq"], n)
+            self.assertEqual(delta["offset"], offset)
+            offset += len(delta["text"])
+        self.assertEqual("".join(d["text"] for d in deltas), final)
+        for delta in deltas:
+            self.assertNotIn(secret, delta["text"])
+        self.assertNotIn(secret, final)
+
+    def test_a_secret_split_anywhere_never_streams(self):
+        for secret in SECRETS:
+            full = f"Here it is: {secret} and more words.\nNext line ok."
+            # The part of the secret that must never show: its value.
+            value = secret.split("=")[-1].split(": ")[-1][-12:]
+            for kind in ("assistant", "thinking"):
+                for cut in range(1, len(full)):
+                    with self.subTest(secret=secret[:12], kind=kind,
+                                      cut=cut):
+                        deltas, final = self.run_stream(
+                            kind, [full[:cut], full[cut:]], full)
+                        self.check(deltas, final, value)
+                # Three chunks around the secret too.
+                start = full.index(secret)
+                for a in range(start, start + len(secret)):
+                    b = min(len(full) - 1, a + 5)
+                    deltas, final = self.run_stream(
+                        kind, [full[:a], full[a:b], full[b:]], full)
+                    self.check(deltas, final, value)
+
+    def test_plain_prose_still_streams_word_by_word(self):
+        deltas, final = self.run_stream(
+            "assistant", ["hello ", "there ", "friend"], "hello there friend")
+        self.assertEqual([d["text"] for d in deltas],
+                         ["hello ", "there ", "friend"])
+        self.assertTrue(deltas[-1]["done"])
+        self.assertEqual(final, "hello there friend")
+
+    def test_stable_cut(self):
+        self.assertEqual(wire.stable_cut("one two thr"), 8)
+        self.assertEqual(wire.stable_cut("a\nAPI_KEY=abc def"), 2)
+        self.assertEqual(wire.stable_cut("x -----BEGIN RSA PRIVATE"), 2)
+        self.assertEqual(wire.stable_cut("my token\nnext wo"), 0)
+
+
+class TestKeyAwareRedaction(unittest.TestCase):
+    def test_secret_keys(self):
+        for name in ("api_key", "apiKey", "API_KEY", "access_token",
+                     "accessToken", "GITHUB_TOKEN", "client_secret",
+                     "password", "DB_PASSWORD", "Authorization", "cookie",
+                     "privateKey", "secret_key", "credentials"):
+            self.assertTrue(wire.secret_key(name), name)
+        for name in ("max_tokens", "token_count", "key", "keys", "path",
+                     "monkey", "description", 3, ""):
+            self.assertFalse(wire.secret_key(name), name)
+
+    def test_nested_values_are_masked(self):
+        got = wire.redact({
+            "api_key": "plain-credential-123",
+            "nested": {"list": [{"password": "pw1"}, {"ok": "fine"}],
+                       "headers": {"Authorization": {"scheme": "x"}}},
+            "items": [[{"clientSecret": 42}]],
+            "empty_token": "", "note": "sk-ant-api03-" + "Q" * 30})
+        self.assertEqual(got, {
+            "api_key": "[REDACTED]",
+            "nested": {"list": [{"password": "[REDACTED]"}, {"ok": "fine"}],
+                       "headers": {"Authorization": "[REDACTED]"}},
+            "items": [[{"clientSecret": "[REDACTED]"}]],
+            "empty_token": "", "note": "[REDACTED]"})
+
+    def test_tool_events_use_it(self):
+        st = wire.StreamState("k", clock=lambda: 1.0, run_id="00000000")
+        st.start_events(Caps(), "sid")
+        st.begin_turn("go")
+        out = st.feed({"type": "assistant", "message": {"id": "m", "content": [
+            {"type": "tool_use", "id": "tu", "name": "Call",
+             "input": {"url": "https://x", "api_key": "plain-credential-123",
+                       "opts": [{"token": "t0k"}]}}]}}).events
+        started = [e for e in out if e["type"] == "tool.started"][0]
+        self.assertEqual(started["data"]["input"],
+                         {"url": "https://x", "api_key": "[REDACTED]",
+                          "opts": [{"token": "[REDACTED]"}]})
+        self.assertNotIn("plain-credential-123", json.dumps(out))
+
+
 class TestStreamState(unittest.TestCase):
     def state(self, caps=ALL_CAPS) -> wire.StreamState:
         clock = fake.FakeClock(100.0)
@@ -449,7 +592,7 @@ class TestStreamState(unittest.TestCase):
         self.assertEqual(out[0]["data"]["decision"], "allow")
         reply, _ = st.answer("p2", Answer(option_id="always", device="mac"))
         self.assertEqual(reply["response"]["response"]["updatedPermissions"],
-                         [{"type": "addRules"}])
+                         [{"type": "addRules", "destination": "session"}])
         reply, out = st.answer("p3", Answer(text="use ls -l instead"))
         self.assertEqual(reply["response"]["response"],
                          {"behavior": "deny", "message": "use ls -l instead"})
@@ -459,6 +602,45 @@ class TestStreamState(unittest.TestCase):
         self.assertEqual(out[-1]["data"], {"state": "running"})
         with self.assertRaises(UnknownRequest):
             st.answer("p4", Answer(decision="allow"))
+
+    def test_always_is_session_scoped_and_can_be_switched_off(self):
+        self.assertEqual(wire.session_scoped([
+            {"type": "addRules", "rules": [], "destination": "localSettings"},
+            {"type": "addDirectories", "destination": "userSettings"},
+            {"type": "setMode", "mode": "acceptEdits",
+             "destination": "session"}, "junk"]),
+            [{"type": "addRules", "rules": [], "destination": "session"},
+             {"type": "addDirectories", "destination": "session"}])
+        with mock.patch.object(wire, "OFFER_ALWAYS", False):
+            st = self.state()
+            st.begin_turn("go")
+            out = self.feed(st, self.can_use("p1", suggestions=[
+                {"type": "addRules", "destination": "localSettings"}]))
+            asked = [e for e in out if e["type"] == "approval.requested"][0]
+            self.assertEqual([o["id"] for o in asked["data"]["options"]],
+                             ["allow", "deny"])
+            reply, done = st.answer("p1", Answer(decision="always"))
+            self.assertNotIn("updatedPermissions",
+                             reply["response"]["response"])
+            self.assertEqual(done[0]["data"]["decision"], "allow")
+
+    def test_turn_ids_differ_across_starts(self):
+        ids = set()
+        for _ in range(2):
+            st = wire.StreamState("same-session", clock=lambda: 1.0)
+            st.start_events(Caps(), "sid")
+            for _ in range(3):
+                turn_id, out = st.begin_turn("hi")
+                self.assertRegex(turn_id, r"^t-[0-9a-f]{8}-\d+$")
+                user = [e for e in out if e["type"] == "message.completed"]
+                for made in (turn_id, user[0]["data"]["id"]):
+                    self.assertNotIn(made, ids)
+                    ids.add(made)
+                st.feed({"type": "system", "subtype":
+                         "session_state_changed", "state": "idle"})
+        fixed = wire.StreamState("k", clock=lambda: 1.0, run_id="0000abcd")
+        fixed.start_events(Caps(), "sid")
+        self.assertEqual(fixed.begin_turn("hi")[0], "t-0000abcd-1")
 
     def test_approval_shapes(self):
         st = self.state()
@@ -619,14 +801,20 @@ class TestStreamState(unittest.TestCase):
             {"type": "assistant", "message": {"id": "m2", "content": [
                 {"type": "text", "text": "no stream"}]}})
         types = [e["type"] for e in out]
+        # "Hi " streams at once; "hm" and "there" wait for a word break
+        # and go out as each block's last delta, just before it ends.
         self.assertEqual(types, ["message.delta", "message.delta",
-                                 "message.delta", "thinking.completed",
-                                 "tool.started", "message.completed",
+                                 "thinking.completed", "tool.started",
+                                 "message.delta", "message.completed",
                                  "tool.completed", "message.completed"])
-        self.assertEqual([(e["data"]["id"], e["data"]["seq"],
-                           e["data"]["offset"]) for e in out[:3]],
-                         [("m1:0", 1, 0), ("m1:2", 1, 0), ("m1:2", 2, 3)])
-        self.assertEqual(out[3]["data"], {"id": "m1:0", "text": "hm",
+        self.assertEqual([(e["data"]["id"], e["data"]["text"],
+                           e["data"]["seq"], e["data"]["offset"],
+                           e["data"].get("done", False))
+                          for e in out if e["type"] == "message.delta"],
+                         [("m1:2", "Hi ", 1, 0, False),
+                          ("m1:0", "hm", 1, 0, True),
+                          ("m1:2", "there", 2, 3, True)])
+        self.assertEqual(out[2]["data"], {"id": "m1:0", "text": "hm",
                                           "duration_s": 1.5})
         self.assertEqual(out[5]["data"]["id"], "m1:2")
         self.assertTrue(out[6]["data"]["output"].endswith("…"))
@@ -998,9 +1186,10 @@ class TestAdapterTurns(_FakeCase):
 
     def test_a_turn_the_cli_starts_itself(self):
         adapter, sink, _sid = self.started("wake")
-        adapter.send_turn(TurnInput("go"))
+        first = adapter.send_turn(TurnInput("go"))
         second = self.wait(sink, lambda e: e["type"] == "turn.ended"
-                           and e["turn_id"] == "t2", "the woken turn")
+                           and e["turn_id"] != first, "the woken turn")
+        self.assertRegex(second["turn_id"], r"^t-[0-9a-f]{8}-2$")
         self.assertEqual(second["data"]["status"], "completed")
         self.assertIn("woke up", [e["data"]["text"] for e in
                                   sink.of("message.completed")])
@@ -1111,20 +1300,55 @@ class TestAdapterOptions(_FakeCase):
         with self.assertRaises(AdapterError):
             adapter.stop_task("task-1")
 
-    def test_transcript_position(self):
+    def test_transcript_position_follows_the_child_env(self):
         config = temp_dir(self) / "cfg"
-        adapter, _sink, sid = self.started(env_extra={})
-        self.assertIsNone(adapter.transcript_position())
-        adapter._env["CLAUDE_CONFIG_DIR"] = str(config)
-        folder = config / "projects" / wire.transcript_slug(
-            os.path.realpath(adapter._cwd))
-        folder.mkdir(parents=True)
-        (folder / f"{sid}.jsonl").write_text("{}\n")
-        pos = adapter.transcript_position()
-        self.assertEqual((pos.path, pos.offset),
-                         (str(folder / f"{sid}.jsonl"), 3))
+        home = temp_dir(self) / "home"
+        for env, root in (({"CLAUDE_CONFIG_DIR": str(config)}, config),
+                          ({"HOME": str(home)}, home / ".claude")):
+            with self.subTest(env=sorted(env)):
+                adapter, _sink, sid = self.started(
+                    spec={"env": env}, env_extra={"CLAUDE_CONFIG_DIR": ""})
+                self.assertIsNone(adapter.transcript_position())
+                folder = root / "projects" / wire.transcript_slug(
+                    os.path.realpath(adapter._cwd))
+                folder.mkdir(parents=True)
+                (folder / f"{sid}.jsonl").write_text("{}\n")
+                pos = adapter.transcript_position()
+                self.assertEqual((pos.path, pos.offset),
+                                 (str(folder / f"{sid}.jsonl"), 3))
         self.assertIsNone(claude_stream.ClaudeStreamAdapter()
                           .transcript_position())
+
+    def test_a_cli_that_stops_reading(self):
+        import time as _time
+
+        adapter, sink, _sid = self.started("deaf", write_timeout=0.5)
+        big = "x" * (2 * 1024 * 1024)  # past any pipe buffer
+        began = _time.monotonic()
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput(big))
+        self.assertEqual(ctx.exception.code, "timeout")
+        self.assertLess(_time.monotonic() - began, 5.0)
+        self.assertEqual(sink.of("turn.started"), [])
+        self.wait(sink, lambda e: e["type"] == "session.state"
+                  and e["data"]["state"] == "agent_down", "the kill's exit")
+        began = _time.monotonic()
+        adapter.close(0.5)
+        self.assertLess(_time.monotonic() - began, 5.0)
+        self.assertIsNotNone(adapter._proc.poll(), "the child is gone")
+
+    def test_close_while_the_writer_is_stuck(self):
+        import time as _time
+
+        adapter, sink, _sid = self.started("deaf", write_timeout=30.0)
+        # A reply the reader queues without waiting fills the pipe.
+        adapter._write(wire.user_message("y" * (2 * 1024 * 1024)),
+                       wait=False)
+        began = _time.monotonic()
+        adapter.close(0.5)
+        self.assertLess(_time.monotonic() - began, 8.0)
+        self.assertIsNotNone(adapter._proc.poll(), "the child is gone")
+        self.assertEqual(sink.events[-1]["data"]["state"], "closed")
 
 
 if __name__ == "__main__":

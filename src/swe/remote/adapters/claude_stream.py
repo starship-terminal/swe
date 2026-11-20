@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import collections
 import os
+import queue
 import subprocess
 import threading
 import time
@@ -41,9 +42,11 @@ from swe.remote.adapters.base import (
     TurnInput, Unsupported, check_option,
 )
 
-# How long the handshake, a control request and the kill steps get.
+# How long the handshake, a control request, one stdin write and the
+# kill steps get.
 INIT_TIMEOUT_S = 60.0
 CALL_TIMEOUT_S = 15.0
+WRITE_TIMEOUT_S = 10.0
 _KILL_WAIT_S = 3.0
 
 # Lines of the CLI's stderr kept to explain a failed start or an exit.
@@ -56,6 +59,67 @@ class _Waiter:
     def __init__(self) -> None:
         self.event = threading.Event()
         self.ack: wire.Ack | None = None
+
+
+class _Stalled(Exception):
+    """A stdin write did not reach the pipe in time: the CLI stopped
+    reading."""
+
+
+class _Writer:
+    """The one thread that writes the CLI's stdin.
+
+    A pipe write blocks while the pipe is full, so no caller ever writes
+    itself: ``send`` queues the bytes and waits, bounded, for them to
+    reach the pipe; the reader thread's own replies are queued without
+    waiting, so a CLI that stops reading can never stall the reader.
+    Once a write misses its deadline the writer counts as stalled and
+    takes nothing more; the adapter then kills the child, which ends
+    the blocked write."""
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._queue: queue.Queue = queue.Queue()
+        self.broken = False
+        self.stalled = False
+        threading.Thread(target=self._run, daemon=True,
+                         name="claude-stream-stdin").start()
+
+    def send(self, data: bytes | None, timeout: float | None) -> bool:
+        """Queue ``data`` (None: close stdin). With a ``timeout``, wait
+        that long for it to be written: True when it was, False when the
+        pipe is gone; raises ``_Stalled`` past the deadline. Without
+        one, True once queued."""
+        if self.broken or self.stalled:
+            return False
+        done = threading.Event()
+        result = [False]
+        self._queue.put((data, done, result))
+        if timeout is None:
+            return True
+        if not done.wait(timeout):
+            self.stalled = True
+            raise _Stalled()
+        return result[0]
+
+    def _run(self) -> None:
+        while True:
+            data, done, result = self._queue.get()
+            if data is None or self.broken:
+                _close(self._stream)
+                result[0] = data is None and not self.broken
+                self.broken = True
+                done.set()
+                if data is None:
+                    return
+                continue
+            try:
+                self._stream.write(data)
+                self._stream.flush()
+                result[0] = True
+            except (OSError, ValueError, AttributeError):
+                self.broken = True
+            done.set()
 
 
 class ClaudeStreamAdapter:
@@ -72,7 +136,9 @@ class ClaudeStreamAdapter:
                  clock: Callable[[], float] = time.time,
                  env: dict | None = None,
                  init_timeout: float = INIT_TIMEOUT_S,
-                 call_timeout: float = CALL_TIMEOUT_S) -> None:
+                 call_timeout: float = CALL_TIMEOUT_S,
+                 write_timeout: float = WRITE_TIMEOUT_S,
+                 run_id: str = "") -> None:
         ceiling = caps if caps is not None else (
             getattr(resolved, "caps", None) or Caps())
         self._ceiling = ceiling.narrowed(wire.PROVEN)
@@ -86,8 +152,11 @@ class ClaudeStreamAdapter:
         self._env = dict(os.environ if env is None else env)
         self._init_timeout = init_timeout
         self._call_timeout = call_timeout
+        self._write_timeout = write_timeout
+        self._run_id = run_id
         self._lock = threading.RLock()
-        self._wlock = threading.Lock()
+        self._writer: _Writer | None = None
+        self._child_env: dict = {}
         self._proc: Any = None
         self._sink: EventSink | None = None
         self._state: wire.StreamState | None = None
@@ -134,17 +203,28 @@ class ClaudeStreamAdapter:
         for event in events:
             sink.emit(event)
 
-    def _write(self, message: dict) -> bool:
-        proc = self._proc
-        if proc is None or proc.stdin is None:
+    def _write(self, message: dict, *, wait: bool = True) -> bool:
+        """Write one line through the writer thread: True once written
+        (or queued, with ``wait`` False), False when the pipe is gone.
+        A write that misses ``write_timeout`` kills the child (the CLI
+        stopped reading; its exit sequence follows) and raises
+        AdapterError ``timeout``."""
+        writer = self._writer
+        if writer is None:
             return False
-        with self._wlock:
-            try:
-                proc.stdin.write(wire.encode(message))
-                proc.stdin.flush()
-                return True
-            except (BrokenPipeError, OSError, ValueError):
-                return False
+        try:
+            return writer.send(wire.encode(message),
+                               self._write_timeout if wait else None)
+        except _Stalled:
+            self._kill()
+            raise AdapterError("claude stopped reading its input",
+                               code="timeout") from None
+
+    def _kill(self) -> None:
+        try:
+            self._proc.kill()
+        except (OSError, AttributeError):
+            pass
 
     def _live(self) -> wire.StreamState:
         if self._state is None or self._spec is None:
@@ -166,7 +246,12 @@ class ClaudeStreamAdapter:
         waiter = _Waiter()
         with self._lock:
             self._waiters[rid] = waiter
-            if not self._write(message):
+            try:
+                written = self._write(message)
+            except AdapterError:
+                self._waiters.pop(rid, None)
+                raise
+            if not written:
                 self._waiters.pop(rid, None)
                 raise AdapterError("claude is not reachable",
                                    code="agent_down")
@@ -220,17 +305,19 @@ class ClaudeStreamAdapter:
         self._session_id = session_id
         self._state = wire.StreamState(spec.session_key, clock=self._clock,
                                        caps=self._caps,
-                                       session_id=session_id)
+                                       session_id=session_id,
+                                       run_id=self._run_id)
+        self._child_env = wire.spawn_env(self._env, dict(spec.env))
         try:
             self._proc = self._spawn(
-                argv, cwd=spec.cwd, env=wire.spawn_env(self._env,
-                                                       dict(spec.env)),
+                argv, cwd=spec.cwd, env=self._child_env,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE)
         except (OSError, ValueError) as exc:
             self._failed = True
             raise AdapterError(f"claude did not start: {exc}",
                                code="agent_down") from None
+        self._writer = _Writer(self._proc.stdin)
         self._err_reader = threading.Thread(target=self._read_stderr,
                                             daemon=True,
                                             name="claude-stream-stderr")
@@ -284,10 +371,17 @@ class ClaudeStreamAdapter:
             turn_id, events = state.begin_turn(
                 turn.text, attachments=turn.attachments,
                 command_id=turn.command_id, device=turn.device)
-            if not self._write(wire.user_message(
-                    turn.text, attachments=turn.attachments)):
+            try:
+                written = self._write(wire.user_message(
+                    turn.text, attachments=turn.attachments))
+            except AdapterError:
+                written = None
+            if not written:
                 # Never emitted: the turn did not start.
                 state.turn = None
+                if written is None:
+                    raise AdapterError("claude stopped reading its input",
+                                       code="timeout")
                 raise AdapterError("claude is not reachable",
                                    code="agent_down")
             self._emit(events)
@@ -318,7 +412,12 @@ class ClaudeStreamAdapter:
             state = self._live()
             pending = state.pending.get(request_id)
             reply, events = state.answer(request_id, answer)
-            if not self._write(reply):
+            try:
+                written = self._write(reply)
+            except AdapterError:
+                state.pending[request_id] = pending
+                raise
+            if not written:
                 # Still open: the exit sequence retires it.
                 state.pending[request_id] = pending
                 raise AdapterError("claude is not reachable",
@@ -366,11 +465,13 @@ class ClaudeStreamAdapter:
     def transcript_position(self) -> TranscriptPosition | None:
         """Where Claude Code writes this session's transcript:
         ``<config dir>/projects/<cwd slug>/<session id>.jsonl``, with the
-        config dir from ``CLAUDE_CONFIG_DIR`` or ``~/.claude``."""
+        config dir from ``CLAUDE_CONFIG_DIR`` or ``~/.claude`` as the
+        child saw them (the environment it was started with)."""
         if not self._session_id or not self._cwd:
             return None
-        root = self._env.get("CLAUDE_CONFIG_DIR") or os.path.join(
-            self._env.get("HOME") or os.path.expanduser("~"), ".claude")
+        env = self._child_env or self._env
+        root = env.get("CLAUDE_CONFIG_DIR") or os.path.join(
+            env.get("HOME") or os.path.expanduser("~"), ".claude")
         path = Path(root, "projects",
                     wire.transcript_slug(os.path.realpath(self._cwd)),
                     f"{self._session_id}.jsonl")
@@ -397,14 +498,17 @@ class ClaudeStreamAdapter:
         proc = self._proc
         if proc is None:
             return
-        with self._wlock:
+        writer = self._writer
+        eof = False
+        if writer is not None and not writer.stalled:
+            # EOF goes through the writer, behind anything queued; a
+            # writer stuck on a full pipe gets no say, the kill ends it.
             try:
-                if proc.stdin is not None:
-                    proc.stdin.close()
-            except OSError:
-                pass
+                eof = writer.send(None, min(max(grace_s, 0.1), 1.0))
+            except _Stalled:
+                eof = False
         try:
-            proc.wait(timeout=max(0.0, grace_s))
+            proc.wait(timeout=max(0.0, grace_s) if eof else 0)
         except subprocess.TimeoutExpired:
             try:
                 proc.terminate()
@@ -458,7 +562,9 @@ class ClaudeStreamAdapter:
                 return
             fed = state.feed(msg)
             for reply in fed.replies:
-                self._write(reply)
+                # Queued, never waited on: the reader must keep reading
+                # even when the CLI has stopped reading us.
+                self._write(reply, wait=False)
             if not state.done and self._sink is not None:
                 self._emit(fed.events)
             waiters = [(self._waiters.pop(a.request_id, None), a)

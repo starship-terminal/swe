@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
@@ -38,6 +39,9 @@ from typing import Any, Callable, Iterable
 
 from swe.remote.adapters import events as ev
 from swe.remote.adapters.base import Answer, Caps, UnknownRequest
+# The transcript redactor is the one the G3 contract names for adapter
+# events (base.py, "Redaction"); it is private to its module only by
+# name, and sharing it keeps one set of secret patterns.
 from swe.reports.transcripts import _redact_secrets
 
 # ---------------------------------------------------------------------
@@ -254,6 +258,27 @@ def permission_allow(request_id: str, updated_input: Any,
     return control_success(request_id, resp)
 
 
+# Whether approvals offer "always". The always fixture proves the CLI
+# takes session-scoped rules and asks no more for that call.
+OFFER_ALWAYS = True
+
+
+def session_scoped(suggestions: list) -> list:
+    """The CLI's ``permission_suggestions`` with every ``destination``
+    set to ``session``: an answer from a phone never writes a settings
+    file (``localSettings``, ``projectSettings``, ``userSettings``).
+    ``setMode`` suggestions are dropped: the CLI offers "switch the
+    session to acceptEdits" beside a Bash rule, and a mode change is
+    ``set_option``'s decision, not a side effect of one approval."""
+    out = []
+    for item in suggestions or ():
+        if isinstance(item, dict) and item.get("type") != "setMode":
+            item = dict(item)
+            item["destination"] = "session"
+            out.append(item)
+    return out
+
+
 def permission_deny(request_id: str, message: str,
                     interrupt: bool = False) -> dict:
     """Deny one ``can_use_tool``; ``message`` goes to the model as the
@@ -352,15 +377,80 @@ def _str(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+REDACTED = "[REDACTED]"
+
+# Key name parts that make a value a credential whatever it looks like:
+# the last part of the name (``api_key``, ``clientSecret``,
+# ``GITHUB_TOKEN``, ``password``), or the whole name (``authorization``,
+# ``cookie``). ``max_tokens`` or ``token_count`` are not credentials.
+_SECRET_LAST = frozenset({"token", "secret", "password", "passwd",
+                          "passphrase", "credential", "credentials",
+                          "apikey", "authorization", "cookie"})
+_SECRET_KEY_PREFIX = frozenset({"api", "private", "secret", "access",
+                                "auth", "signing", "encryption"})
+_NAME_PART_RE = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
+
+
+def secret_key(name: Any) -> bool:
+    """Whether a mapping key names a credential (``api_key``,
+    ``accessToken``, ``Authorization``, ``DB_PASSWORD``)."""
+    if not isinstance(name, str):
+        return False
+    parts = [p.lower() for p in _NAME_PART_RE.findall(name)]
+    if not parts:
+        return False
+    if parts[-1] in _SECRET_LAST:
+        return True
+    return parts[-1] == "key" and len(parts) > 1 \
+        and parts[-2] in _SECRET_KEY_PREFIX
+
+
 def redact(value: Any) -> Any:
-    """Secrets out of every string in ``value`` (any JSON shape)."""
+    """Secrets out of ``value`` (any JSON shape): every string through
+    the transcript redactor, and anything under a key that names a
+    credential (at any depth) masked whatever it holds."""
     if isinstance(value, str):
         return _redact_secrets(value)
     if isinstance(value, list):
         return [redact(v) for v in value]
     if isinstance(value, dict):
-        return {str(k): redact(v) for k, v in value.items()}
+        return {str(k): REDACTED if secret_key(k) and v not in (None, "")
+                else redact(v) for k, v in value.items()}
     return value
+
+
+# Where a streamed text may be cut before it is redacted: everything up
+# to the last whitespace, so a token still arriving is held back, unless
+# the line so far could open a secret that runs past whitespace (a
+# quoted value under a credential name, an Authorization header) or a
+# private key block is open; then the whole line, or everything from the
+# block's start, waits.
+_OPEN_LINE_RE = re.compile(
+    r"(?i)authorization|api_?key|token|secret|passw|private_?key")
+_BLOCK_START = "-----BEGIN"
+_BLOCK_END_RE = re.compile(r"-----END [A-Z0-9 ]*-----")
+
+
+def stable_cut(raw: str) -> int:
+    """How much of ``raw`` (a stream's text so far) can be redacted and
+    shown now: a prefix no later text can change the redaction of."""
+    line_start = raw.rfind("\n") + 1
+    # The line before counts too: ``\s*`` between a name and its value
+    # can span a newline.
+    prev_start = raw.rfind("\n", 0, max(0, line_start - 1)) + 1
+    if line_start and _OPEN_LINE_RE.search(raw[prev_start:line_start]):
+        cut = prev_start
+    elif _OPEN_LINE_RE.search(raw[line_start:]):
+        cut = line_start
+    else:
+        cut = max(raw.rfind(" "), raw.rfind("\t"), raw.rfind("\n")) + 1
+    # Never inside a key block: one whose end is not in the cut text
+    # (not arrived, or past the cut) holds everything from its start.
+    for begin in re.finditer(re.escape(_BLOCK_START), raw[:cut]):
+        end = _BLOCK_END_RE.search(raw, begin.end())
+        if end is None or end.end() > cut:
+            return begin.start()
+    return cut
 
 
 def _jsonable(value: Any) -> Any:
@@ -488,6 +578,18 @@ class _Pending:
 
 
 @dataclass
+class _Stream:
+    """One streamed text or thinking block: everything received
+    (``raw``) and the redacted prefix already sent (``shown``)."""
+
+    id: str
+    kind: str
+    seq: int = 0
+    raw: str = ""
+    shown: str = ""
+
+
+@dataclass
 class _Turn:
     turn_id: str
     started: float
@@ -556,8 +658,14 @@ class StreamState:
     """
 
     def __init__(self, session: str, *, clock: Callable[[], float] = time.time,
-                 caps: Caps = Caps(), session_id: str = "") -> None:
+                 caps: Caps = Caps(), session_id: str = "",
+                 run_id: str = "") -> None:
         self.key = session
+        # Turn ids are ``t-<run>-<n>``: one session's log spans many
+        # starts (a resume after a keeper restart, Continue in SWE), and
+        # turn ids key checkpoints and "restore to before this turn",
+        # so each start gets its own run id.
+        self.run_id = run_id or secrets.token_hex(4)
         self.clock = clock
         self.caps = caps
         self.session_id = session_id
@@ -572,7 +680,7 @@ class StreamState:
         self.tasks: dict[str, dict] = {}
         self._task_by_tool: dict[str, str] = {}
         self._tools: dict[str, str] = {}  # call_id -> tool name
-        # (api message id, block index) -> [delta id, kind, seq, offset]
+        # (api message id, block index) -> its stream
         self._blocks: dict[tuple, list] = {}
         # api message id -> {kind: [block indexes in order]}
         self._order: dict[str, dict[str, list]] = {}
@@ -622,7 +730,8 @@ class StreamState:
     def _open_turn(self, out: list, *, by: str = "", text: str = "",
                    command_id: str = "") -> _Turn:
         self._n_turn += 1
-        turn = _Turn(f"t{self._n_turn}", self.clock(), command_id=command_id)
+        turn = _Turn(f"t-{self.run_id}-{self._n_turn}", self.clock(),
+                     command_id=command_id)
         self.turn = turn
         self._out(out, ev.turn_started(
             self.key, turn.turn_id, by=by or None,
@@ -695,12 +804,14 @@ class StreamState:
             # A bare text answer is feedback: the call does not run and
             # the model reads why.
             decision = "deny"
-        if decision == "always" and not pending.suggestions:
+        if decision == "always" and not (OFFER_ALWAYS
+                                         and pending.suggestions):
             decision = "allow"
         if decision in ("allow", "always"):
             reply = permission_allow(
                 request_id, pending.tool_input,
-                pending.suggestions if decision == "always" else None)
+                session_scoped(pending.suggestions)
+                if decision == "always" else None)
         else:
             default = (_PLAN_DENY_MESSAGE if pending.kind == "plan"
                        else _DENY_MESSAGE)
@@ -798,7 +909,8 @@ class StreamState:
                 f"Allow {_str(req.get('display_name')) or name}?")
             detail = tool_summary(name, tool_input)
             prompt = label if detail == name else f"{label}\n{detail}"
-            options = [_ALLOW, _ALWAYS, _DENY] if suggestions \
+            offer_always = bool(suggestions) and OFFER_ALWAYS
+            options = [_ALLOW, _ALWAYS, _DENY] if offer_always \
                 else [_ALLOW, _DENY]
         call_id = _str(req.get("tool_use_id"))
         self.pending[rid] = _Pending(rid, kind, name, tool_input,
@@ -954,24 +1066,45 @@ class StreamState:
             kind = {"text": "assistant", "thinking": "thinking"}.get(btype)
             if kind is None:
                 return
-            self._blocks[key] = [f"{api_id}:{index}", kind, 0, 0]
+            self._blocks[key] = _Stream(f"{api_id}:{index}", kind)
             self._order.setdefault(api_id, {}).setdefault(kind, []).append(
                 index)
         elif etype == "content_block_delta":
             block = self._blocks.get(key)
             delta = event.get("delta")
             if block is None or not isinstance(delta, dict) \
-                    or block[0] in self._completed:
+                    or block.id in self._completed:
                 return
-            text = delta.get("text") if block[1] == "assistant" \
+            text = delta.get("text") if block.kind == "assistant" \
                 else delta.get("thinking")
             if not isinstance(text, str) or not text:
                 return
-            block[2] += 1
-            self._out(fed.events, ev.message_delta(
-                self.key, block[0], block[1], text, block[2],
-                offset=block[3], turn_id=self._tid(), ts=self.clock()))
-            block[3] += len(text)
+            block.raw += text
+            shown = _redact_secrets(block.raw[:stable_cut(block.raw)])
+            self._show(fed.events, block, shown)
+
+    def _show(self, out: list, block: "_Stream", shown: str,
+              done: bool = False) -> None:
+        """Emit what of ``shown`` (the block's redacted text so far) is
+        new. Text is never taken back: a redaction that no longer
+        extends what went out waits (the completed message has it)."""
+        if len(shown) <= len(block.shown) or not shown.startswith(
+                block.shown):
+            return
+        block.seq += 1
+        self._out(out, ev.message_delta(
+            self.key, block.id, block.kind, shown[len(block.shown):],
+            block.seq, offset=len(block.shown), done=done,
+            turn_id=self._tid(), ts=self.clock()))
+        block.shown = shown
+
+    def _flush(self, out: list, bid: str, final: str) -> None:
+        """The rest of a streamed block, as its last delta, just before
+        its completion: the deltas then add up to the completed text."""
+        for block in self._blocks.values():
+            if block.id == bid:
+                self._show(out, block, final, done=True)
+                return
 
     def _block_id(self, api_id: str, kind: str, k: int) -> str:
         """The delta id of the ``k``-th ``kind`` block of an API message,
@@ -1016,17 +1149,20 @@ class StreamState:
                 continue  # a subagent's words stay in its own transcript
             elif btype == "text" and isinstance(block.get("text"), str):
                 bid = self._block_id(api_id, "assistant", k)
+                final = _redact_secrets(block["text"])
+                self._flush(fed.events, bid, final)
                 self._completed.add(bid)
                 self._out(fed.events, ev.message_completed(
-                    self.key, bid, "assistant",
-                    _redact_secrets(block["text"]), turn_id=self._tid(),
+                    self.key, bid, "assistant", final, turn_id=self._tid(),
                     ts=self.clock()))
             elif btype == "thinking":
                 bid = self._block_id(api_id, "thinking", k)
+                final = _redact_secrets(_str(block.get("thinking")))
+                self._flush(fed.events, bid, final)
                 self._completed.add(bid)
                 ms = msg.get("thinking_duration_ms")
                 self._out(fed.events, ev.thinking_completed(
-                    self.key, bid, _redact_secrets(_str(block.get("thinking"))),
+                    self.key, bid, final,
                     duration_s=round(ms / 1000, 3)
                     if isinstance(ms, (int, float)) and not isinstance(
                         ms, bool) and ms >= 0 else None,
@@ -1053,7 +1189,7 @@ class StreamState:
             output = _redact_secrets(_result_text(block.get("content")))
             if len(output) > OUTPUT_LIMIT:
                 output = output[:OUTPUT_LIMIT] + "\n…"
-            edits = file_edits(structured) if status == "ok" and \
+            edits = redact(file_edits(structured)) if status == "ok" and \
                 len(results) == 1 else None
             self._out(fed.events, ev.tool_completed(
                 self.key, call_id, status, name=name, output=output,
@@ -1163,7 +1299,8 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
         if state is None:
             tail = tails[proc] if proc < len(tails) else []
             state = states[proc] = StreamState(
-                session, clock=clock, session_id=_argv_session(tail))
+                session, clock=clock, session_id=_argv_session(tail),
+                run_id=f"{proc + 1:08x}")
         if "exit" in line:
             out.extend(state.closed())
             continue
