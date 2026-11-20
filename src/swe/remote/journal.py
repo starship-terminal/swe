@@ -143,6 +143,61 @@ class Journal:
             self._maybe_trim(path)
             return event
 
+    def hold(self, session_key: str) -> threading.RLock:
+        """The lock every append, read and trim of ``session_key``'s
+        journal takes, for a caller that must decide and append as one
+        step (``with journal.hold(key): ...``). Re-entrant, so the
+        journal's own methods can be called under it."""
+        return _lock_for(self._file(session_key))
+
+    def append_at(self, session_key: str, event: dict) -> bool:
+        """Append ``event`` under the seq it already carries, for a
+        timeline numbered somewhere else (a session keeper's log).
+
+        False, and nothing written, when the journal already holds that
+        seq or a later one: a keeper's replay after a reconnect resends
+        events, and each lands once. Seqs may skip ahead; they never go
+        back. Raises ValueError for an event with no positive int seq.
+        """
+        seq = event.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+            raise ValueError("append_at needs an event with a seq")
+        path = self._file(session_key)
+        with _lock_for(path):
+            if seq <= self.last_seq(session_key):
+                return False
+            line = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                             0o600)
+                with os.fdopen(fd, "ab") as fh:
+                    fh.write(line)
+            except OSError:
+                # Not written, so not counted: the keeper's next replay
+                # brings it again.
+                return False
+            self._seqs[session_key] = seq
+            if str(path) in self._lines:
+                self._lines[str(path)] += 1
+            if str(path) in self._bytes:
+                self._bytes[str(path)] += len(line)
+            self._maybe_trim(path)
+            return True
+
+    def drop(self, session_key: str) -> None:
+        """Delete ``session_key``'s journal: its numbering starts over.
+        For a timeline whose source was replaced (a keeper log that is
+        not the one this journal followed)."""
+        path = self._file(session_key)
+        with _lock_for(path):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            self._seqs.pop(session_key, None)
+            self._lines.pop(str(path), None)
+            self._bytes.pop(str(path), None)
+
     def _maybe_trim(self, path: Path) -> None:
         key = str(path)
         size = self._bytes.get(key)

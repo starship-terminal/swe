@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
             model=spec["model"], effort=spec["effort"],
             permission_mode=spec["permission_mode"],
             plan_mode=spec["plan_mode"], env=spec["env"],
-            harness=spec["harness"])
+            harness=spec["harness"], session_id=spec["session_id"])
     except ValueError as exc:
         print(f"keeper: bad spec.json: {exc}", file=sys.stderr)
         return discovery.EXIT_USAGE

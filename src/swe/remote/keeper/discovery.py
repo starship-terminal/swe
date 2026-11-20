@@ -242,14 +242,14 @@ def connect(info: KeeperInfo, *, last_seq: int | None = None,
 
 
 _SPEC_TEXT = ("harness", "cwd", "resume_id", "model", "effort",
-              "permission_mode")
+              "permission_mode", "session_id")
 
 
 def write_spec(session_key: str, *, harness: str, cwd: str,
                resume_id: str = "", fork: bool = False, model: str = "",
                effort: str = "", permission_mode: str = "",
                plan_mode: bool = False, env: dict | None = None,
-               first_seq: int = 1,
+               first_seq: int = 1, session_id: str = "",
                home: Path | str | None = None) -> Path:
     """Write the keeper's ``spec.json`` and return its path.
 
@@ -271,7 +271,7 @@ def write_spec(session_key: str, *, harness: str, cwd: str,
         "model": model, "effort": effort,
         "permission_mode": permission_mode, "plan_mode": bool(plan_mode),
         "env": {str(k): str(v) for k, v in (env or {}).items()},
-        "first_seq": int(first_seq),
+        "first_seq": int(first_seq), "session_id": session_id,
     }
     write_json(folder / SPEC_FILE, spec)
     return folder / SPEC_FILE

@@ -97,7 +97,7 @@
 
 - id: G8
   title: "Hub on keepers: Claude launch and Continue in SWE"
-  status: todo
+  status: done
   depends_on: [G5, G6, G7]
   owns:
     - "src/swe/remote/hub.py"

@@ -108,6 +108,23 @@ it by hand on a Mac after changing `remote/keeper/discovery.py`,
 `remote/launchd.py` or `remote/systemd.py`. It installs a throwaway
 service of its own and touches neither the real hub nor `~/.swe`.
 
+### Hub on keepers tests
+
+`tests/test_remote_hub_keeper.py` runs the hub's HTTP server (`HubBase`)
+with the session runtime on and an injected spawner, so each keeper is
+a `Keeper` thread driving the scripted `FakeAdapter`, started from the
+`spec.json` the hub wrote. `kill_hub` ends a hub the way a crash does
+(connections dropped, nothing tidied) and a second hub is started over
+the same home while the keepers run on. A test waits on the runtime's
+listener feed (`Feed`: every v2 event taken into a journal), on a
+subscriber queue (`Stream`), or on an HTTP event stream; `drain` asks
+the keeper a question over the hub's own connection, whose answer
+arrives after every event already logged. Nothing sleeps or polls.
+`RealProcess` runs the same flow over real `python -m
+swe.remote.keeper` processes and `tests/fakes/fake_claude.py`. Every
+test stops its keepers in cleanup, and tells its hubs first so they do
+not read the stop as a crash.
+
 ### Web app tests
 
 `tests/test_webapp_*.py` cover the web app's page data (`/v1/app/*`)

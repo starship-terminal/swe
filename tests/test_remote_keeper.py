@@ -1626,7 +1626,7 @@ class TestDiscovery(KeeperCase):
             "session": S, "harness": "claude", "cwd": "/work",
             "resume_id": "abc", "model": "opus", "effort": "",
             "permission_mode": "", "fork": False, "plan_mode": True,
-            "env": {"A": "1"}, "first_seq": 42})
+            "env": {"A": "1"}, "first_seq": 42, "session_id": ""})
         self.assertIsNone(discovery.read_spec("claude:other", self.home))
         with self.assertRaises(ValueError):
             discovery.write_spec(S, harness="claude", cwd="relative",

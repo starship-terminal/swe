@@ -228,6 +228,64 @@ def keeps_children(home: Path | None = None, label: str = LABEL) -> bool | None:
     return plist.get("AbandonProcessGroup") is True
 
 
+def upgrade_plist(home: Path | None = None, label: str = LABEL) -> bool:
+    """Bring an installed agent's plist up to what this swe needs,
+    keeping every other key as it is: today that is
+    ``AbandonProcessGroup``, which an agent installed before session
+    keepers existed lacks. True when the file changed. launchd reads a
+    plist only when the job is loaded, so the change takes effect at
+    the next load (``reload_detached``, a login, an ``--install``)."""
+    path = plist_path(home, label)
+    try:
+        plist = plistlib.loads(path.read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return False
+    if not isinstance(plist, dict) or plist.get("AbandonProcessGroup") is True:
+        return False
+    plist["AbandonProcessGroup"] = True
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(plistlib.dumps(plist))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def running_as(label: str = LABEL, environ=os.environ) -> bool:
+    """Whether this process was started by launchd as the job
+    ``label`` (launchd names the job in ``XPC_SERVICE_NAME``)."""
+    return environ.get("XPC_SERVICE_NAME") == label
+
+
+# Run by ``reload_detached`` with the domain, the label and the plist
+# as $1 to $3. bootstrap right after bootout can fail while launchd is
+# still tearing the old job down, so it is tried a few times.
+_RELOAD_SH = (
+    'launchctl bootout "$1/$2"; n=0; '
+    'while [ "$n" -lt 6 ]; do '
+    'launchctl bootstrap "$1" "$3" && exit 0; '
+    'n=$((n + 1)); sleep 2; done; exit 1'
+)
+
+
+def reload_detached(home: Path | None = None, label: str = LABEL,
+                    popen: Callable[..., object] = subprocess.Popen) -> None:
+    """Load the job again from its plist, from a process outside the
+    job. Unloading the job ends the process that asks for it when that
+    process is the job itself, so the unload and the load run in a
+    shell of their own session: launchd ends a job's process group, and
+    this shell is not in it."""
+    popen(["/bin/sh", "-c", _RELOAD_SH, "sh", _domain(), label,
+           str(plist_path(home, label))],
+          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+
+
 def status(home: Path | None = None, run: Runner = subprocess.run,
            label: str = LABEL, old_label: str | None = None
            ) -> tuple[list[str] | None, bool]:
