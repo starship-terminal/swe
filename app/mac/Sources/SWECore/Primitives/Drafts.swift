@@ -41,6 +41,26 @@ public final class PrimitiveDrafts {
         documents.filter { $0.value.isDirty }
     }
 
+    /// Saves every document with unsaved text, for a page's "Save all"
+    /// before it leaves.
+    /// - Returns: `wrote`, whether any file was written, so the page can
+    ///   have its lists read the disk again even when another file failed;
+    ///   and `failed`, the names of the files that still hold unsaved text
+    ///   (a refused or failed save, or text typed while the save ran), in
+    ///   path order.
+    public func saveAll() async -> (wrote: Bool, failed: [String]) {
+        var wrote = false
+        var failed: [String] = []
+        for (path, document) in dirty.sorted(by: { $0.key < $1.key }) {
+            let outcome = await document.save()
+            if outcome == .saved { wrote = true }
+            if outcome != .saved || document.isDirty {
+                failed.append(URL(fileURLWithPath: path).lastPathComponent)
+            }
+        }
+        return (wrote, failed)
+    }
+
     /// Drop the document at `path` and every document under it, for a
     /// trashed file or folder: a later save-all must not write a file
     /// that no longer exists.

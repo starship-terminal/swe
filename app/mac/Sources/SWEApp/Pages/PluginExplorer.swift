@@ -11,8 +11,11 @@ struct PluginExplorer: View {
     var confirm: (PluginAction) -> Void
     /// A master or column switch's set of actions, confirmed as one batch.
     var confirmBatch: ([PluginAction]) -> Void = { _ in }
-    /// The plugin open in its detail page, nil while the list shows.
-    @State private var opened: ExplorePlugin?
+    /// The plugin open in its detail page, nil while the list shows. Kept
+    /// by the page, not here: the page stops scrolling and hides its tabs
+    /// while a detail is open (its editor fills the window and scrolls
+    /// itself), and that swap rebuilds this view.
+    @Binding var opened: ExplorePlugin?
     /// A marketplace being renamed (display name only) when editable.
     @State private var renaming: String?
     @State private var renameText = ""
@@ -30,32 +33,46 @@ struct PluginExplorer: View {
                     .font(Theme.bodySmall).foregroundStyle(Theme.textPrimary)
             }
         }
-        switch model.state {
-        case .idle, .loading:
-            SkeletonRows(rows: 6, shape: .plugin, label: "Reading local plugins…")
-        case .failed(let message):
-            ErrorCard(message: message)
-        case .loaded:
-            if let opened, let index = model.index {
-                // A reload swaps the index wholesale, so the opened plugin
-                // is re-derived by ref — like SkillsPage follows its row —
-                // or the detail keeps showing a version the catalog no
-                // longer has. A ref the reload dropped takes the detail
-                // back to the list rather than showing what is gone.
-                if let entry = index.entry(for: opened.row.plugin.ref),
-                   let market = index.catalog.marketplaces
-                       .first(where: { $0.name == entry.row.plugin.marketplace }) {
-                    PluginDetailView(entry: entry, market: market, home: home) { self.opened = nil }
-                } else {
-                    content(index)
-                        .onAppear { self.opened = nil }
-                }
-            } else if let index = model.index {
-                content(index)
-            } else {
+        if let (entry, market) = Self.detail(of: opened, in: model.index) {
+            // Outside the switch on the catalog's state: a reload that
+            // fails keeps the last index, and the detail (with its unsaved
+            // drafts) must stay up under the reason, not give way to it.
+            if case .failed(let message) = model.state {
+                ErrorCard(message: message)
+            }
+            PluginDetailView(entry: entry, market: market, home: home) { self.opened = nil }
+        } else {
+            switch model.state {
+            case .idle, .loading:
                 SkeletonRows(rows: 6, shape: .plugin, label: "Reading local plugins…")
+            case .failed(let message):
+                ErrorCard(message: message)
+            case .loaded:
+                if let index = model.index {
+                    content(index)
+                        // A ref the reload dropped takes the detail back to
+                        // the list rather than showing what is gone.
+                        .onAppear { if opened != nil { opened = nil } }
+                } else {
+                    SkeletonRows(rows: 6, shape: .plugin, label: "Reading local plugins…")
+                }
             }
         }
+    }
+
+    /// The opened plugin as the index on show has it, with its marketplace;
+    /// nil when no plugin is open or the catalog no longer lists it. A
+    /// reload swaps the index wholesale, so the opened plugin is re-derived
+    /// by ref, like SkillsPage follows its row, or the detail would keep
+    /// showing a version the catalog no longer has. The Plugins page asks
+    /// too: a detail on screen takes the page's scroll and tabs.
+    static func detail(of opened: ExplorePlugin?, in index: PluginExploreIndex?)
+        -> (entry: ExplorePlugin, market: PluginMarketplace)? {
+        guard let opened, let index,
+              let entry = index.entry(for: opened.row.plugin.ref),
+              let market = index.catalog.marketplaces.first(where: { $0.name == entry.row.plugin.marketplace })
+        else { return nil }
+        return (entry, market)
     }
 
     @ViewBuilder private func content(_ index: PluginExploreIndex) -> some View {
