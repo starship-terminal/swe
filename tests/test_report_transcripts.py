@@ -900,5 +900,112 @@ class SecondaryReaderTest(_HomeCase):
         self.assertIn("kilo a", texts)
 
 
+# Keys built at run time, so no scanner reads a credential in this file.
+# Each has the length and character mix of the real thing.
+_MIXED = "a1B2c3D4e5F6g7H8"
+_GLUED_KEYS = {
+    "anthropic": "sk-ant-api03-" + "Q" * 30,
+    "anthropic admin": "sk-ant-admin01-" + _MIXED * 2,
+    "openai project": "sk-proj-" + _MIXED * 3,
+    "openai legacy": "sk-" + _MIXED * 3,
+    "hex sk": "sk-" + "0123456789abcdef" * 2,
+    "github fine-grained": "github_pat_" + "11ABCDEFG0" + "_" + _MIXED * 2,
+    "github classic": "ghp_" + "z" * 36,
+    "github server": "ghs_" + _MIXED * 2 + "abcd",
+    "slack": "xoxb-" + "1234567890-" + _MIXED,
+    "google": "AIza" + "SyD-" + _MIXED * 2,
+    "aws": "AKIA" + "ABCDEFGH12345678",
+    "jwt": ".".join(("eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0In0",
+                     "SflKxwRJSMeKKF2QT4fw")),
+}
+
+
+class SecretRedactorBoundaryTest(unittest.TestCase):
+    """A credential is masked whatever stands right before it."""
+
+    def redact(self, text):
+        from swe.reports.transcripts import _redact_secrets
+
+        return _redact_secrets(text)
+
+    def test_a_key_right_after_a_letter_digit_underscore_or_quote(self):
+        for name, key in _GLUED_KEYS.items():
+            for before in ("T", "n", "9", "_", '"', "'", " ", "-", "é"):
+                with self.subTest(key=name, before=before):
+                    self.assertEqual(
+                        self.redact(f"see {before}{key} here"),
+                        f"see {before}[REDACTED] here")
+
+    def test_a_key_after_an_escape_left_in_the_text(self):
+        # A JSON string shown raw keeps ``\n`` as two characters, and a
+        # colour code with its ESC gone leaves ``0m``: both put a letter
+        # right before the key.
+        key = _GLUED_KEYS["anthropic"]
+        self.assertEqual(self.redact(f'"line one\\n{key}"'),
+                         '"line one\\n[REDACTED]"')
+        self.assertEqual(self.redact(f"[0m{key}"), "[0m[REDACTED]")
+
+    def test_a_glued_key_after_words_that_end_in_sk(self):
+        # The earlier ``sk-`` in ``task-`` must not use up the match and
+        # let the key through. Words joined to the key by hyphens may go
+        # with it.
+        for name in ("openai legacy", "hex sk", "anthropic", "slack"):
+            key = _GLUED_KEYS[name]
+            for text in (f"task-list-T{key}", f"risk-ant-T{key} x",
+                         f"task-{key}", f"ask-me-task-9{key}."):
+                with self.subTest(key=name, text=text[:14]):
+                    out = self.redact(text)
+                    self.assertNotIn(key, out)
+                    self.assertNotIn(key[-12:], out)
+                    self.assertIn("[REDACTED]", out)
+        anthropic = _GLUED_KEYS["anthropic"]
+        self.assertEqual(self.redact(f"risk-ant-T{anthropic} x"),
+                         "risk-ant-T[REDACTED] x")
+
+    def test_a_jwt_after_a_word_that_ends_in_sk_goes_whole(self):
+        # Its first part alone looks like an ``sk-`` key: 20 letters and
+        # digits. Taking that would leave the payload and signature.
+        jwt = _GLUED_KEYS["jwt"]
+        self.assertEqual(self.redact(f"mask-T{jwt} x"), "mask-T[REDACTED] x")
+        self.assertEqual(self.redact(f"desksk-{jwt}"), "desksk-[REDACTED]")
+
+    def test_nothing_the_stand_alone_pattern_masks_is_lost(self):
+        # A token after a letter can end at a dot, in the middle of a
+        # JWT that stands alone further on. The stand-alone pattern runs
+        # first, so that JWT is already gone.
+        jwt = _GLUED_KEYS["jwt"]
+        for text in (f"Tsk-{_MIXED * 2} {jwt}", f"xxAKIA{'A' * 16}-{jwt}",
+                     f"task-{_MIXED * 2}/{jwt}.", f"9xoxb-{_MIXED}_{jwt}"):
+            with self.subTest(text=text[:16]):
+                out = self.redact(text)
+                for part in jwt.split("."):
+                    self.assertNotIn(part, out)
+
+    def test_ordinary_words_are_left_alone(self):
+        for prose in (
+            "the task-force-recommendations-document is due",
+            "risk-ant and risk-ant-colony-optimization-algorithm",
+            "a desk-top, a desk-booking-application-server",
+            "ask-me-anything-session-notes and mask-rcnn-resnet-backbone",
+            "task-proj-alpha-beta-gamma-delta and disk-usage-analyzer-tool",
+            "branch task-2024-quarterly-report-final-version",
+            "pod flask-7d9f8b6c5d-x2x9k on disk-0123456789abcdef",
+            "task-550e8400-e29b-41d4-a716-446655440000",
+            "test_laughs_internationalization and weighs_" + "a" * 24,
+            "placeholder sk-short and task-short",
+        ):
+            with self.subTest(prose=prose):
+                self.assertEqual(self.redact(prose), prose)
+
+    def test_a_long_run_of_hyphenated_words_is_left_alone(self):
+        # Every ``sk-`` and ``eyJ`` here is a place a token might start,
+        # and none does. Each search stops at the next one, so the run
+        # is read a few times over, not once per start.
+        for part in ("task-", "ask" + "a" * 30 + "-", "risk_x9-", "eyJ",
+                     "eyJ" + "a" * 9, "laughs_"):
+            prose = part * 20000
+            self.assertEqual(self.redact(prose), prose)
+
+
 if __name__ == "__main__":
     unittest.main()

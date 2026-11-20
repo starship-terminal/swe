@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A credential right after a letter or digit is masked.** The transcript redactor, which session reports, `swe remote` and the Claude stream adapter all run text through, only caught a token that stood alone. A key with a letter or digit straight before it passed through whole: `\nsk-ant-...` in a JSON string shown raw, or `0msk-...` after a colour code that lost its escape byte. Anthropic, OpenAI, GitHub, Slack, Google and AWS keys and JWTs are now found there too. Ordinary words are left alone: `task-force-recommendations`, `risk-ant-colony` and a hyphenated UUID after `task-` stay as written, because after a letter an `sk-` key needs Anthropic's `api03-` style prefix or a part of 20 or more letters and digits with a digit in it, and a `ghp_` token needs its full 36 characters.
+
 - **Grok 4.6 shows its intelligence score on the Models page.** Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.
 
 ## [1.2.4] - 2026-11-15
