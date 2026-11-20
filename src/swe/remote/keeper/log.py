@@ -436,6 +436,15 @@ def read_log(session_key: str | None = None, after_seq: int = 0, *,
             fh.close()
 
 
+def _ends_with_newline(path: Path) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) == b"\n"
+    except OSError:
+        return False
+
+
 def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
@@ -559,11 +568,35 @@ class EventLog:
 
     # -- opening -------------------------------------------------------
 
-    def _take_lock(self) -> int:
-        remote = self.dir.parent.parent.parent
-        remote.mkdir(mode=0o700, parents=True, exist_ok=True)
+    def _make_dirs(self) -> None:
+        """Create the folder chain down to ``log/`` and make each new
+        name durable: a folder survives a power loss only once its
+        parent is fsynced. Folders that already existed cost nothing."""
+        missing: list[Path] = []
+        path = self.dir
+        while not path.exists():
+            missing.append(path)
+            if path.parent == path:
+                break
+            path = path.parent
+        # ``remote/`` and the three levels under it are private; anything
+        # above (``~/.swe``, ``data/``) gets the usual mode.
+        private = {self.dir, self.dir.parent, self.dir.parent.parent,
+                   self.dir.parent.parent.parent}
+        created: list[Path] = []
+        for path in reversed(missing):
+            try:
+                path.mkdir(mode=0o700 if path in private else 0o777)
+            except FileExistsError:
+                continue
+            created.append(path)
         for path in (self.dir.parent.parent, self.dir.parent, self.dir):
             _mkdir_private(path)
+        for path in created:
+            self._sync_dir(path.parent)
+
+    def _take_lock(self) -> int:
+        self._make_dirs()
         fd = os.open(self.dir / _LOCK, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -801,17 +834,34 @@ class EventLog:
         self._total += n
 
     def _rotate(self, seq: int) -> None:
+        path = self.dir / segment_name(seq)
+        if self._segments and self._segments[-1][1] == path:
+            # The target is the active file itself (a retry at the seq
+            # that opened it, after a failed write): not a rotation. Keep
+            # its one entry, its size and any pending separator.
+            if self._fd is None:
+                self._fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+            return
         if self._fd is not None:
+            if self._needs_newline:
+                # Best effort: end the partial line before sealing.
+                try:
+                    _write_all(self._fd, b"\n")
+                    self._needs_newline = False
+                    self._grow(1)
+                except OSError:
+                    pass
             # Seal the full segment: only the newest one is repaired on
             # open, so an older one must be whole on disk.
             self._sync()
             os.close(self._fd)
             self._fd = None
-        path = self.dir / segment_name(seq)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         self._fd = fd
-        self._needs_newline = False
         size = os.fstat(fd).st_size
+        # A file new to the log is empty. One that is not may end in a
+        # partial line, which the next record must not be glued to.
+        self._needs_newline = size > 0 and not _ends_with_newline(path)
         self._segments.append([seq, path, size])
         self._total += size
         self._sync_dir()
@@ -866,8 +916,8 @@ class EventLog:
         os.replace(tmp, self.dir / _META)
         self._sync_dir()
 
-    def _sync_dir(self) -> None:
-        fd = os.open(self.dir, os.O_RDONLY)
+    def _sync_dir(self, path: Path | None = None) -> None:
+        fd = os.open(path if path is not None else self.dir, os.O_RDONLY)
         try:
             self._fsync(fd)
         finally:

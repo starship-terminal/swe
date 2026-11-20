@@ -1147,6 +1147,123 @@ class TestNeverCutARecord(LogBase):
         self.assertEqual(again.recovery.next_seq, first)
 
 
+class TestReviewRound2(LogBase):
+    def test_a_retry_at_the_same_seq_keeps_one_segment_and_its_separator(self):
+        event = ev.message_completed(S, "m1", "assistant", "x" * 120)
+        line = keeper_log._encode(dict(event, seq=1))
+        log = self.make(segment_bytes=len(line) + 5,
+                        on_error=lambda exc, e: None)
+        got: list[int] = []
+        log.subscribe(lambda e: got.append(e["seq"]))
+        real = keeper_log._write_all
+
+        def partial(fd, data):
+            if data.startswith(b'{"v":2'):
+                real(fd, data[:10])
+                raise OSError(28, "ENOSPC")
+            real(fd, data)
+
+        with mock.patch.object(keeper_log, "_write_all",
+                               side_effect=partial), \
+                mock.patch.object(keeper_log.os, "ftruncate",
+                                  side_effect=OSError(5, "EIO")):
+            self.assertIsNone(log.emit(event))
+        self.assertTrue(log._needs_newline)
+        # 10 partial bytes plus the line no longer fit: the retry would
+        # have rotated to the same file.
+        out = log.emit(event)
+        self.assertEqual(out["seq"], 1)
+        self.assertEqual(got, [1])
+        segs = log.segments()
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(len({p for _, p, _ in segs}), len(segs))
+        path = segs[0][1]
+        self.assertEqual(segs[0][2], path.stat().st_size)
+        self.assertEqual(log.stats()["bytes"], path.stat().st_size)
+        self.assertEqual(path.stat().st_size, 10 + 1 + len(line))
+        self.assertEqual([e["seq"] for e in log.replay().events], [1])
+        rep = read_log(S, home=self.home)
+        self.assertEqual([e["seq"] for e in rep.events], [1])
+        self.assertEqual(rep.skipped, 1)
+        log.close()
+        again = self.make()
+        self.assertEqual(again.recovery.skipped_lines, 1)
+        self.assertEqual(again.recovery.torn_bytes, 0)
+        self.assertEqual([e["seq"] for e in again.replay().events], [1])
+        self.assertEqual(again.emit(upd(2))["seq"], 2)
+
+    def test_a_partial_line_is_ended_before_its_segment_is_sealed(self):
+        log = self.make(segment_bytes=400, cap_bytes=1 << 20,
+                        on_error=lambda exc, e: None)
+        log.emit(upd(1))
+        real = keeper_log._write_all
+
+        def partial(fd, data):
+            if data.startswith(b'{"v":2'):
+                real(fd, data[:10])
+                raise OSError(28, "ENOSPC")
+            real(fd, data)
+
+        with mock.patch.object(keeper_log, "_write_all",
+                               side_effect=partial), \
+                mock.patch.object(keeper_log.os, "ftruncate",
+                                  side_effect=OSError(5, "EIO")):
+            log.emit(upd(2))
+        while len(log.segments()) < 2:
+            log.emit(upd(3))
+        sealed = log.segments()[0][1]
+        self.assertTrue(sealed.read_bytes().endswith(b"\n"))
+        self.assertEqual(log.stats()["bytes"],
+                         sum(p.stat().st_size for _, p, _ in log.segments()))
+        seqs = [e["seq"] for e in log.replay().events]
+        self.assertEqual(seqs, list(range(1, log.last_seq + 1)))
+
+    def test_a_reopened_non_empty_segment_gets_a_separator(self):
+        log = self.make(segment_bytes=400, cap_bytes=1 << 20)
+        log.emit(upd(1))
+        while True:  # fill until the next emit rotates
+            line = keeper_log._encode(dict(upd(2), seq=log.last_seq + 1))
+            if log.segments()[-1][2] + len(line) > 400:
+                break
+            log.emit(upd(2))
+        stray = log.dir / segment_name(log.last_seq + 1)
+        stray.write_bytes(b'{"partial')
+        log.emit(upd(2))
+        self.assertEqual(log.segments()[-1][1], stray)
+        self.assertEqual(log.segments()[-1][2], stray.stat().st_size)
+        self.assertEqual([e["seq"] for e in read_log(S, home=self.home).events],
+                         list(range(1, log.last_seq + 1)))
+
+    def test_a_new_log_fsyncs_the_parent_of_every_folder_it_made(self):
+        log = self.make()
+        made = [self.home / ".swe", self.home / ".swe" / "data",
+                self.home / ".swe" / "data" / "remote",
+                log.dir.parent.parent, log.dir.parent, log.dir]
+        for folder in made:
+            with self.subTest(folder=folder):
+                self.assertIn(self.ino_of(folder.parent), self.fsyncs)
+        log.close()
+        self.fsyncs.clear()
+        again = self.make()
+        for folder in made[:-1]:  # log/ itself is fsynced for its files
+            with self.subTest(folder=folder):
+                self.assertNotIn(self.ino_of(folder.parent), self.fsyncs)
+        self.assertIn(self.ino_of(again.dir), self.fsyncs)
+
+    def test_only_folders_this_open_made_are_synced(self):
+        remote = self.home / ".swe" / "data" / "remote"
+        remote.mkdir(parents=True)
+        log = self.make()
+        self.assertNotIn(self.ino_of(remote.parent), self.fsyncs)
+        self.assertIn(self.ino_of(remote), self.fsyncs)  # keepers/ is new
+        self.assertEqual(stat.S_IMODE(log.dir.parent.parent.stat().st_mode),
+                         0o700)
+
+    @staticmethod
+    def ino_of(path: Path) -> int:
+        return path.stat().st_ino
+
+
 class TestJournalHelper(unittest.TestCase):
     """``journal._records_backward``, which recovery reuses: pinned here
     so a change in journal.py fails a keeper-log test."""

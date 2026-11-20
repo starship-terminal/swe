@@ -80,6 +80,7 @@ data/remote/keepers/<slug>/log/        0700; <slug> is protocol.key_slug
 | `message.delta` | never |
 | a full segment | fsynced when it is sealed, before the next one is created |
 | a new or removed segment, `meta.json` | the folder is fsynced |
+| a folder this open created (`keepers/`, `<slug>/`, `log/`, and any missing one above) | its parent is fsynced before the log is open, so before any event is delivered; folders that already existed cost nothing |
 
 - Writing before delivery means a keeper crash (the process dies, the
   machine does not) loses nothing a subscriber saw: the page cache
@@ -170,7 +171,12 @@ counted there too.
 write and the seq is not used (the event was never delivered, so the
 seq is free). If the cut fails too, the next append first writes a lone
 `\n`, so the partial bytes become one corrupt line instead of being
-glued to the next record.
+glued to the next record. A retry at the same seq that no longer fits
+the segment is not a rotation: the target would be the active file
+itself, so the log keeps writing to it (separator first) and never
+registers a segment twice. A segment sealed with a partial line pending
+gets its `\n` first (best effort), and a rotation into a file that
+already holds bytes not ending in `\n` starts with one.
 
 ## The cap and the `log.truncated` marker
 
