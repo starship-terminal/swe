@@ -90,6 +90,11 @@ hub's journal for that key is a copy of it:
   `Journal.append_at` under the keeper's own seq, as the v2 event it
   is. A seq the journal already holds is refused, so a replay after a
   reconnect lands each event once.
+- An event the journal cannot write (a full disk) ends that
+  connection: the hub takes nothing more from it, hangs up, and after
+  `RESYNC_WAIT_S` (2 s) connects again from the journal's last seq.
+  Taking the next event instead would leave a hole no replay fills,
+  because a replay starts after the journal's last seq.
 - The hub never numbers an event in that journal itself. `HubState.emit`
   for an owned key sends the event to the session's open streams with
   no seq and records it in the global journal only (ownership changes,
@@ -128,25 +133,44 @@ runtime from the keeper's state changes, by the rule the tailer uses.
 
 `POST /v1/sessions` for a harness the runtime can drive:
 
-1. The hub picks the session id and key, records the session
-   (`starting`) and the launch (`pending`) in the store, writes
-   `spec.json`, and answers 202 with the `launch_id`.
+1. The hub picks the session id and key and stores, in this order:
+   the prompt as a `send` command under the id `<launch_id>-prompt`
+   (`queued`), the launch (`pending`), the session (`starting`). It
+   then writes `spec.json` and answers 202 with the `launch_id`. The
+   prompt is stored before the launch is accepted, so a launch never
+   exists without the message it owes.
 2. A thread starts the keeper (`discovery.spawn`, provider keys in its
-   environment, never in `spec.json`), connects, and sends the prompt
-   as a `send` command under the id `<launch_id>-prompt`.
+   environment, never in `spec.json`) and connects. Connecting
+   delivers every stored command the keeper has not seen, the prompt
+   among them (see "After a hub restart"); the thread then asks for
+   the prompt's receipt under the same id.
 3. The launch settles `started` (store and memory) and
    `session.launched` goes on the global stream, after a catalog
    refresh so the row exists.
 
 There is no pending marker and no adoption on this path
-(`adopt_pending` and `_pending_match` are not used). A retried
-`POST /v1/sessions` with the same `command_id` (or `client_id`) answers
-the launch it already made. `GET /v1/launches/<id>` falls back to the
-store, so it still answers after a hub restart. A launch still
-`pending` in the store when a hub starts is settled: `started` when
-its session is here, else `failed` ("the hub restarted while this was
-starting"). A keeper that will not start settles the launch `failed`
-with the last line it printed.
+(`adopt_pending` and `_pending_match` are not used).
+`GET /v1/launches/<id>` falls back to the store, so it still answers
+after a hub restart. A keeper that will not start settles the launch
+`failed` with the last line it printed.
+
+**One launch per id.** `Store.add_launch` claims the request's
+`command_id` (or `client_id`), and the store allows one launch per id.
+A retry, or a second request racing the first, is answered with the
+launch the id already made (`duplicate: true`) and starts nothing: the
+request that loses the claim drops its in-memory launch and fails its
+own stored prompt. The same id with a different harness, folder,
+prompt, model, effort or provider is refused (409
+`command_id_conflict`).
+
+**A launch cut off by a hub restart.** A launch still `pending` in the
+store when a hub starts is settled there and then:
+
+| What the new hub finds | Launch | Prompt |
+|---|---|---|
+| The keeper is up | `started` | delivered on connect if the keeper never saw it |
+| No keeper, but the session ran (the keeper took the prompt, or the journal has events) | `started` | as the store has it |
+| No keeper and nothing ever ran | `failed` ("the hub restarted while this was starting") | `rejected` with the same note; the session is closed |
 
 `POST /v1/sessions/{key}/fork` starts a keeper with `fork: true` and
 the source's id as `resume_id` when the adapter's caps allow fork;
@@ -183,11 +207,11 @@ Every write to a keeper-held session (`message`, `approval`, `control`,
 | `approval` | `respond` | 200; 409 `approval_failed` when someone answered first |
 | `control` `interrupt` | `interrupt` | 200 |
 | `control` `model`, `effort` | `set_option` | 200; 409 when the adapter cannot set it |
-| `control` `detach`, `kill` | `stop`, then the session is let go | 200 |
+| `control` `detach`, `kill` | `stop`, then the session is let go | 200; 503 `keeper_failed` when the keeper did not stop (the session stays attached) |
 | `control` `detach` `when_idle` | waits for the keeper's state to leave `running` | 202 |
 | `control` `compact`, `clear`, `detach` `keep` | none | 409 `control_failed` |
-| `queue` `edit`, `cancel` | `queue_edit`, `queue_remove` | 200; 409 `not_waiting` |
-| `queue` `steer` | `queue_remove`, then `send` as a steer under a new id | 200 |
+| `queue` `edit`, `cancel` | `queue_edit`, `queue_remove` | 200 `{command_id}`; 409 `not_waiting` |
+| `queue` `steer` | `queue_remove`, then `send` as a steer under an id made from the action's | 200 `{command_id}` |
 | `GET queue` | (the last `queue.updated`) | the waiting sends, `client_id` being the id each was sent under |
 | `command` (new) | `set_option`, `stop_task`, `interrupt`, `park` | 200 `{receipt, command_id}`; 409 `command_rejected`; 409 `not_kept` for a session no keeper holds |
 
@@ -197,6 +221,18 @@ takes `name` (`model`, `effort`, `permission_mode`, `plan_mode`) and
 `value`; `stop_task` a `task_id`; `interrupt` an optional
 `clear_queue`; `park` nothing. It is how plan mode is turned on until
 the session view has its own control.
+
+**Queue actions.** In a `queue` body `client_id` names the queued
+message, so it is never read as the action's id. The action's own id
+is `command_id` (optional): a retry under it answers what the first
+try did, and the same id for another action is refused. Send now
+sends the message as it stands: the last text edited through this
+hub, else the text as it was sent, else the text the queue shows (the
+queue shows text redacted, so that is used only when it differs from
+the redacted original, which means an earlier hub edited it). The
+text is stored in the `queue_remove` command (`resend`), and the steer
+goes under an id made from the action's (`s` + 24 hex of its SHA-1),
+so a retry after a crash between the two sends the same words once.
 
 An approval `decision` of `allow`, `deny` or `always` goes as that
 decision. A menu row number names the request's n-th option
@@ -223,7 +259,11 @@ refusal back.
 3. `welcome` restores what events alone cannot after a restart: the
    state, caps, queue, and the open approval and input requests (the
    inbox and the notification tokens are filled from
-   `welcome.pending`).
+   `welcome.pending`). It is applied before any event of its
+   connection: the client's reader starts inside `connect`, so each
+   connection's frames wait behind a gate that opens once the welcome
+   is in. An event applied first would be overwritten by the older
+   state the welcome carries.
 4. A keeper found dead without a clean stop marks its session cut off
    (below). A live keeper the store does not know is recorded from its
    own `spec.json`.
@@ -290,7 +330,15 @@ the runtime can drive (no `mode`, or `auto`):
 `detach`, `kill`, a failed launch and the terminal-resume case below
 all end in `SessionRuntime.close`: the keeper is stopped (`stop`), its
 last events are taken in, the store row is `closed`, and the key goes
-back to the tailer through `TailManager.hand_back`. Without a mark the
+back to the tailer through `TailManager.hand_back`.
+
+The session is let go only once no keeper holds its lock (looked for
+up to 20 times, 250 ms apart). A keeper that cannot be reached or does
+not stop keeps its session attached and the request answers 503
+`keeper_failed`: letting go would leave an agent running that nobody
+drives, beside whoever resumes the session next. The tailer's cursor
+is written before the key stops being kept, so no tailer can start in
+between from the cursor of before the keeper. Without a mark the
 cursor file is removed, so the next tailer (which finds a journal)
 starts at the transcript's end and journals nothing the keeper already
 logged. The ownership event that follows is journaled by the hub under
@@ -333,7 +381,7 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2 and 3.12 (the suite).
 
 | Check | Result |
 |---|---|
-| `tests.test_remote_hub_keeper` | pass, 20 runs in a row |
+| `tests.test_remote_hub_keeper` (77 tests) | pass, 20 runs in a row, and with no `claude` on `PATH` |
 | Full suite against a throwaway HOME | pass (see the PR) |
 | G1 Verification step 2, against an installed `swe` (`pip install -e .` in a fresh venv), a temp HOME, and harness.json pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py`: `swe config set remote.session_view true`, `swe remote serve`, launch, send (queued), a retried launch and a retried send answered as duplicates, streamed text, `kill -9` the hub mid-turn with the approval open, restart it, the approval still in `/v1/inbox` and the message still in the queue, answer it (a second answer gets 409), the queued turn runs, journal seqs 1..39 equal the keeper's log, `GET /session/` 200, detach ends the keeper | pass |
 | One manual run with the real `claude` 2.1.328 (model `haiku`, a throwaway folder, a throwaway `CLAUDE_CONFIG_DIR`, the recorder's isolation flags), through the hub's HTTP routes: a Bash approval mid-turn (the file appears only after Allow); plan mode turned on with the `command` route, a `kind: plan` approval, then a Write approval and the file; a subagent (`task.updated` running, running, completed); 70 events, no gap in seq | pass, 14 US cents reported |
@@ -354,9 +402,14 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2 and 3.12 (the suite).
 
 - A keeper-held session's `compact` and `clear` controls answer 409.
 - `yolo` launches and explicit attach modes stay on the old paths.
-- Send now on a queued message is a remove and a new send: a hub that
+- Send now on a queued message is a remove and a new send. A hub that
   dies between the two has removed the message (its result says
-  `cancelled`).
+  `cancelled`); a retry of the action under its `command_id` then
+  sends it. An action sent with no `command_id` cannot be retried.
+- An edit to a queued message is remembered by the hub that made it.
+  After a hub restart Send now reads the text the queue shows, which
+  is redacted: an edited message that held a credential is sent with
+  `[REDACTED]` in its place.
 - A free-text `input.requested` has no card on old clients.
 - `effort` at launch is passed to the adapter as a spawn flag; the
   tmux-channel check (`supervise.fresh_launch_error`) still runs first,

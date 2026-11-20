@@ -635,7 +635,7 @@ GET  /v1/sessions/{id}/messages      journal backfill {session, messages, next_b
 GET  /v1/sessions/{id}/commands      the "/" menu: commands this session's harness will run
 POST /v1/sessions/{id}/message       {text, mode: queue|steer, attachments[]}
 GET  /v1/sessions/{id}/queue         queue-mode sends still waiting for idle
-POST /v1/sessions/{id}/queue         {client_id, op: steer|cancel|edit, text?} on one waiting send
+POST /v1/sessions/{id}/queue         {client_id, op: steer|cancel|edit, text?, command_id?} on one waiting send
 POST /v1/sessions/{id}/attachments   multipart upload → staged file, returns ref
 POST /v1/sessions/{id}/approval      {request_id, decision}
 POST /v1/sessions/{id}/pin           {pinned: bool} → pin or unpin on the hub
@@ -1669,17 +1669,17 @@ to all of them when the setting is off.
 
 | What | With a keeper |
 |---|---|
-| `POST /v1/sessions` | the hub picks the session id, starts a keeper and sends the prompt. No pending marker, nothing to adopt. `yolo: true` still launches the old way |
+| `POST /v1/sessions` | the hub picks the session id, stores the prompt, starts a keeper and sends the prompt. No pending marker, nothing to adopt. One launch per `command_id`: a retry, or a second request at the same moment, answers the launch already made; the same id for a different launch answers 409 `command_id_conflict`. `yolo: true` still launches the old way |
 | Attach (`control {op: attach}`, no `mode`) | Continue in SWE: the session is resumed by its own id under a keeper. Refused (409) while it is mid-turn, its transcript moved in the last 5 seconds, or a harness process still has it open (`session_in_use`). An explicit `mode` still asks for that channel |
 | The row | `ownership: attached`, `mode: "keeper"`, `control: "full"`, `state` (the keeper's), `status`, `adapter`, `caps` |
 | `message`, `approval`, `control`, `queue` | stored under `command_id` (or `client_id`) in `remote.sqlite` before delivery. A retry answers the stored receipt (`duplicate: true`) and is not applied again. `message` answers 202 with `receipt` (`accepted` or `queued`) and `waiting` |
 | Two devices answer one approval | the first wins; the second gets 409 `approval_failed` |
-| The queue | lives in the keeper. `GET .../queue` lists it; `edit`, `cancel` and `steer` act on it |
+| The queue | lives in the keeper. `GET .../queue` lists it; `edit`, `cancel` and `steer` act on it. `client_id` names the queued message; an optional `command_id` is the action's own id, and a retry under it is not applied again. Send now sends the text as last edited |
 | The timeline | the keeper's log. The hub journals each event under the keeper's seq and does not tail the CLI's transcript for that session. Today's clients get the same v1 frames as before (`protocol_compat.to_v1`); a question with choices arrives as an approval card |
 | Hub restart | the hub reconnects to every keeper still running, replays from the journal's last seq, and the open approvals and the queue are as they were. A message the old hub accepted and never delivered is delivered |
 | Agent crash | status `error`; the next message restarts the agent in the same keeper |
 | Keeper killed | open approval cards are retired and status turns `error`; the next message starts a new keeper that resumes the harness session |
-| `detach`, `kill` | stop the keeper; the session is a terminal session again (`ownership: observed`) and can be continued later. `detach` with `mode: keep` answers 409 (there is no pane to keep) |
+| `detach`, `kill` | stop the keeper; the session is a terminal session again (`ownership: observed`) and can be continued later. A keeper that does not stop keeps the session attached and answers 503 `keeper_failed`. `detach` with `mode: keep` answers 409 (there is no pane to keep) |
 | `compact`, `clear` | 409 `control_failed`: not available on a keeper yet |
 | `POST /v1/sessions/{key}/command {op, command_id?, ...}` | new, keeper-held sessions only (409 `not_kept` otherwise): `set_option` with `name` (`model`, `effort`, `permission_mode`, `plan_mode`) and `value`, `stop_task` with `task_id`, `interrupt` with an optional `clear_queue`, `park`. Answers `{ok, receipt, command_id}` |
 | Fork | a new keeper that forks by the harness's id, when the adapter can fork |

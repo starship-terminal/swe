@@ -51,8 +51,12 @@ OPTIONS = [{"id": "allow", "label": "Allow", "kind": "allow"},
 
 
 def registry_for(**caps) -> dict:
-    session = {"adapter": ADAPTER, "steer": True, "fork": True,
-               "plan_mode": True, "stop_task": True, "options": ["model"]}
+    # ``argv`` names a program that is there on every machine: without
+    # it the entry inherits the fallback's ``claude``, and the adapter
+    # only resolves where Claude Code happens to be installed.
+    session = {"adapter": ADAPTER, "argv": [sys.executable], "steer": True,
+               "fork": True, "plan_mode": True, "stop_task": True,
+               "options": ["model"]}
     session.update(caps)
     return {"claude": {"capabilities": {"session": session}}}
 
@@ -187,6 +191,14 @@ class HubOps:
 
     def store(self, srv=None) -> Store:
         return (srv or self.srv).state.runtime.store
+
+    def commands(self, key: str | None = None) -> list:
+        """Every stored command (of one session), oldest first."""
+        store = self.store()
+        ids = [r[0] for r in store._read(
+            "SELECT command_id FROM commands ORDER BY id", ())]
+        found = [store.get_command(i) for i in ids]
+        return [c for c in found if key is None or c.session == key]
 
     def drain(self, key: str) -> None:
         """Return once the hub has taken in everything the keeper had
@@ -436,6 +448,93 @@ class TestLaunchAndSend(KeeperHubCase):
         self.assertEqual((status, out["error"]["code"]),
                          (409, "not_waiting"))
 
+    def test_a_queue_action_retried_under_its_id_is_applied_once(self):
+        key = self.launch([fake.ask("go?", options=OPTIONS)])
+        self.feed.event("approval.requested")
+        for cid in ("q1", "q2"):
+            self.assertEqual(self.post(key, "message", {
+                "text": f"text {cid}", "client_id": cid})[0], 202)
+        self.feed.until(lambda e: e["type"] == "queue.updated"
+                        and len(e["data"]["items"]) == 2, "two queued")
+        # ``client_id`` names the queued message; ``command_id`` is the
+        # action's own id, and a retry under it changes nothing more.
+        edit = {"client_id": "q1", "op": "edit", "text": "edited",
+                "command_id": "e1"}
+        for _ in range(2):
+            status, out = self.post(key, "queue", edit)
+            self.assertEqual((status, out["command_id"], out["text"]),
+                             (200, "e1", "edited"))
+        store = self.store()
+        self.assertEqual((store.get_command("e1").op,
+                          store.get_command("q1").op),
+                         ("queue_edit", "send"))
+        steer = {"client_id": "q2", "op": "steer", "command_id": "s1"}
+        for _ in range(2):
+            status, out = self.post(key, "queue", steer)
+            self.assertEqual((status, out["command_id"]), (200, "s1"))
+        self.feed.until(lambda e: e["type"] == "message.completed"
+                        and e["data"]["text"] == "text q2", "the steer")
+        self.drain(key)
+        self.assertEqual([c.args[0].text for c in self.calls("steer")],
+                         ["text q2"])
+        ops = [c.op for c in self.commands(key)]
+        self.assertEqual((ops.count("queue_edit"), ops.count("queue_remove")),
+                         (1, 1))
+        # The same id for another action is refused, not applied.
+        status, out = self.post(key, "queue", {
+            "client_id": "q1", "op": "cancel", "command_id": "e1"})
+        self.assertEqual((status, out["error"]["code"]),
+                         (409, "command_id_conflict"))
+
+    def test_send_now_sends_the_text_as_it_was_last_edited(self):
+        key = self.launch([fake.ask("go?", options=OPTIONS)])
+        self.feed.event("approval.requested")
+        secret = "set password=hunter2 then go"
+        for cid, text in (("q1", "first words"), ("q2", secret)):
+            self.assertEqual(self.post(key, "message", {
+                "text": text, "client_id": cid})[0], 202)
+        self.feed.until(lambda e: e["type"] == "queue.updated"
+                        and len(e["data"]["items"]) == 2, "two queued")
+        status, out = self.post(key, "queue", {
+            "client_id": "q1", "op": "edit", "text": "second thoughts"})
+        self.assertEqual(status, 200, out)
+        self.assertEqual(self.post(key, "queue", {
+            "client_id": "q1", "op": "steer"})[0], 200)
+        # A message never edited goes as it was typed, not as the queue
+        # shows it (the queue shows text redacted).
+        status, listing = self.call("GET", f"/v1/sessions/{key}/queue")
+        self.assertEqual([s["text"] for s in listing["sends"]],
+                         ["set password=[REDACTED] then go"])
+        self.assertEqual(self.post(key, "queue", {
+            "client_id": "q2", "op": "steer"})[0], 200)
+        self.feed.until(lambda e: e["type"] == "queue.updated"
+                        and not e["data"]["items"], "an empty queue")
+        self.drain(key)
+        self.assertEqual([c.args[0].text for c in self.calls("steer")],
+                         ["second thoughts", secret])
+        self.assertEqual(self.srv.state.runtime.session(key).edits, {})
+
+    def test_an_edit_made_before_a_hub_restart_is_what_send_now_sends(self):
+        key = self.launch([fake.ask("go?", options=OPTIONS)])
+        self.feed.event("approval.requested")
+        self.assertEqual(self.post(key, "message", {
+            "text": "first words", "client_id": "q1"})[0], 202)
+        self.feed.event("queue.updated")
+        self.assertEqual(self.post(key, "queue", {
+            "client_id": "q1", "op": "edit", "text": "second thoughts"})[0],
+            200)
+        self.drain(key)
+        self.kill_hub(self.srv)
+        self.feed = Feed(self)
+        self.srv = self.hub()
+        self.assertEqual(self.post(key, "queue", {
+            "client_id": "q1", "op": "steer"})[0], 200)
+        self.feed.until(lambda e: e["type"] == "message.completed"
+                        and e["data"]["text"] == "second thoughts",
+                        "the steer")
+        self.assertEqual([c.args[0].text for c in self.calls("steer")],
+                         ["second thoughts"])
+
     def test_a_launch_retried_under_its_id_is_one_launch(self):
         self.plans.append({"turns": [[fake.say("hi")]]})
         body = {"harness": "claude", "cwd": str(self.work), "prompt": "go",
@@ -449,6 +548,82 @@ class TestLaunchAndSend(KeeperHubCase):
                          (202, first["launch_id"], True, "started"))
         self.assertEqual(len(self.keepers), 1)
         self.assertEqual(len(self.store().list_launches()), 1)
+
+    def test_two_requests_under_one_id_make_one_launch(self):
+        # The second request looked for the launch before the first had
+        # stored it (the check and the claim are not one step): the
+        # store's claim of the id is what decides.
+        self.plans.append({"turns": [[fake.say("hi")]]})
+        body = {"harness": "claude", "cwd": str(self.work), "prompt": "go",
+                "command_id": "launch-1"}
+        stream = Stream(self, self.srv.state, hub_mod.GLOBAL_KEY)
+        status, first = self.call("POST", "/v1/sessions", body)
+        stream.frame("session.launched")
+        rt = self.srv.state.runtime
+        found = rt.launch_for
+        looks = []
+
+        def not_yet(command_id):
+            looks.append(command_id)
+            return None if len(looks) == 1 else found(command_id)
+
+        with mock.patch.object(rt, "launch_for", not_yet):
+            status, again = self.call("POST", "/v1/sessions", body)
+        self.assertEqual((status, again["launch_id"], again["duplicate"],
+                          again["state"]),
+                         (202, first["launch_id"], True, "started"))
+        self.assertEqual(len(looks), 2)
+        store = self.store()
+        self.assertEqual(
+            (len(self.keepers), len(store.list_launches()),
+             len(store.list_sessions()), list(self.srv.state.launches),
+             len(rt.rows())),
+            (1, 1, 1, [first["launch_id"]], 1))
+        # The losing request's own prompt was never sent.
+        prompts = [c for c in self.commands()
+                   if c.command_id.endswith("-prompt")]
+        self.assertEqual(sorted((c.status, bool(c.result and c.result["ok"]))
+                                for c in prompts),
+                         [("accepted", True), ("rejected", False)])
+        self.assertEqual(len(self.calls("send_turn")), 1)
+
+    def test_many_requests_at_once_under_one_id_make_one_launch(self):
+        self.plans.append({"turns": [[fake.say("hi")]]})
+        body = {"harness": "claude", "cwd": str(self.work), "prompt": "go",
+                "command_id": "launch-1"}
+        stream = Stream(self, self.srv.state, hub_mod.GLOBAL_KEY)
+        go = threading.Barrier(4)
+        answers: list = []
+
+        def ask() -> None:
+            go.wait(WAIT)
+            answers.append(self.call("POST", "/v1/sessions", body))
+
+        threads = [threading.Thread(target=ask) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(WAIT)
+        stream.frame("session.launched")
+        self.assertEqual({status for status, _out in answers}, {202})
+        self.assertEqual(len({out["launch_id"] for _s, out in answers}), 1)
+        self.assertEqual(
+            (len(self.keepers), len(self.store().list_launches()),
+             len(self.store().list_sessions())), (1, 1, 1))
+
+    def test_an_id_reused_for_another_launch_is_refused(self):
+        self.plans.append({"turns": [[fake.say("hi")]]})
+        body = {"harness": "claude", "cwd": str(self.work), "prompt": "go",
+                "command_id": "launch-1"}
+        stream = Stream(self, self.srv.state, hub_mod.GLOBAL_KEY)
+        self.assertEqual(self.call("POST", "/v1/sessions", body)[0], 202)
+        stream.frame("session.launched")
+        for change in ({"prompt": "something else"}, {"model": "opus"}):
+            status, out = self.call("POST", "/v1/sessions",
+                                    {**body, **change})
+            self.assertEqual((status, out["error"]["code"]),
+                             (409, "command_id_conflict"), change)
+        self.assertEqual(len(self.keepers), 1)
 
     def test_a_launch_that_cannot_start_fails_and_is_let_go(self):
         def no_keeper(key, **kw):
@@ -716,6 +891,60 @@ class TestControl(KeeperHubCase):
         status, out = self.post(key, "message", {"text": "x"})
         self.assertIn(status, (404, 409))
 
+    def test_a_keeper_that_will_not_stop_keeps_its_session_attached(self):
+        key = self.launch([fake.say("hi")], [fake.say("still here")])
+        self.feed.event("turn.ended")
+        self.drain(key)
+        rt = self.srv.state.runtime
+        ask = runtime_mod.ipc.KeeperClient.request
+
+        def deaf_to_stop(client, op, **fields):
+            if op == "stop":
+                raise runtime_mod.ipc.IpcError("no answer")
+            return ask(client, op, **fields)
+
+        with mock.patch.object(runtime_mod.ipc.KeeperClient, "request",
+                               deaf_to_stop), \
+                mock.patch.object(runtime_mod, "STOP_TRIES", 1), \
+                self.assertLogs("swe.remote.runtime", "WARNING"):
+            status, out = self.post(key, "control", {"op": "detach"})
+        self.assertEqual((status, out["error"]["code"]),
+                         (503, "keeper_failed"))
+        # Nothing was let go: the agent is still running, so the
+        # session is still SWE's, and no tailer reads its transcript.
+        self.assertFalse(self.keepers[0].done)
+        self.assertTrue(rt.owns(key))
+        self.assertNotEqual(self.store().get_session(key).state, "closed")
+        self.assertNotIn(key, self.srv.state.tail_manager.tailers)
+        self.assertEqual(self.post(key, "message", {"text": "more"})[0], 202)
+        self.feed.event("turn.ended")
+        self.assertEqual(len(self.keepers), 1)
+        # Asked again, it stops, and only then is the session let go.
+        status, out = self.post(key, "control", {"op": "detach"})
+        self.assertEqual(status, 200, out)
+        self.assertTrue(self.finished(self.keepers[0]))
+        self.assertFalse(rt.owns(key))
+
+    def test_the_tailers_cursor_is_set_while_the_session_is_still_kept(self):
+        key = self.launch([fake.say("hi")])
+        self.feed.event("turn.ended")
+        rt = self.srv.state.runtime
+        tm = self.srv.state.tail_manager
+        hand_back = tm.hand_back
+        owned_then = []
+
+        def watched(key_, mark=None):
+            owned_then.append(rt.owns(key_))
+            return hand_back(key_, mark)
+
+        with mock.patch.object(tm, "hand_back", watched):
+            self.assertEqual(self.post(key, "control", {"op": "detach"})[0],
+                             200)
+        # While the key is kept no tailer can start on it, so none can
+        # start from the cursor of before the keeper.
+        self.assertEqual(owned_then, [True])
+        self.assertFalse(rt.owns(key))
+
     def test_detach_when_idle_waits_for_the_turn(self):
         key = self.launch([fake.ask("go?", options=OPTIONS)])
         rid = self.feed.event("approval.requested")["data"]["request_id"]
@@ -927,6 +1156,153 @@ class TestHubRestart(KeeperHubCase):
         status, view = self.call("GET", "/v1/launches/lhere")
         self.assertEqual((view["state"], view["key"]), ("started", key))
 
+    def cut_off_launch(self, launch_id: str, prompt: str) -> str:
+        """What a hub leaves when it dies after answering a launch and
+        before its keeper is up: the prompt, the launch and the session
+        stored, a spec on disk, nothing running. Returns the key."""
+        store, mid = self.store(), self.srv.state.machine_id
+        key = "claude:5a0d1f6e-0000-4000-8000-000000000001"
+        store.record_command(
+            f"{launch_id}-prompt", session=key, op="send", status="queued",
+            payload={"text": prompt, "mode": "queue", "attachments": []},
+            machine=mid)
+        store.add_launch(launch_id, machine=mid, harness="claude",
+                         cwd=str(self.work), session=key)
+        store.put_session(key, harness="claude",
+                          harness_session_id=key.partition(":")[2],
+                          machine=mid, cwd=str(self.work), state="starting",
+                          adapter=ADAPTER)
+        discovery.write_spec(key, harness="claude", cwd=str(self.work),
+                             session_id=key.partition(":")[2],
+                             home=self.home)
+        return key
+
+    def test_a_launch_cut_off_before_its_keeper_fails_with_its_prompt(self):
+        key = self.cut_off_launch("lcut", "do the thing")
+        self.kill_hub(self.srv)
+        self.srv = self.hub()
+        # Nothing ran and nothing will: no empty session is left waiting
+        # for a prompt nobody will send.
+        status, view = self.call("GET", "/v1/launches/lcut")
+        self.assertEqual(view["state"], "failed")
+        self.assertIn("restarted", view["note"])
+        store = self.store()
+        prompt = store.get_command("lcut-prompt")
+        self.assertEqual((prompt.status, store.unfinished()),
+                         ("rejected", []))
+        self.assertFalse(self.srv.state.runtime.owns(key))
+        self.assertEqual(store.get_session(key).state, "closed")
+        self.assertEqual(self.keepers, [])
+
+    def test_a_launch_cut_off_after_its_keeper_started_gets_its_prompt(self):
+        key = self.cut_off_launch("lcut", "do the thing")
+        self.plans.append({"turns": [[fake.say("done")]]})
+        self.kill_hub(self.srv)
+        self.spawn(key, home=self.home, runtime=self.home / "rt")
+        self.assertEqual(self.calls("send_turn"), [])
+        self.feed = Feed(self)
+        self.srv = self.hub()
+        # The keeper never saw the prompt; the hub that finds it owes
+        # it, and delivers it once.
+        self.feed.result("lcut-prompt")
+        self.drain(key)
+        self.assertEqual([c.args[0].text for c in self.calls("send_turn")],
+                         ["do the thing"])
+        status, view = self.call("GET", "/v1/launches/lcut")
+        self.assertEqual((view["state"], view["key"]), ("started", key))
+        self.assertTrue(self.store().get_command("lcut-prompt").result["ok"])
+
+    def test_the_welcome_is_applied_before_any_event_of_its_connection(self):
+        self.plans.append({"autoplay": False, "turns": [
+            [fake.say("one"), fake.say("two"), fake.say("three")]]})
+        key = self.launch()
+        adapter = self.adapters[0]
+        self.assertTrue(adapter.step())
+        self.feed.event("message.completed", text="one")
+        self.kill_hub(self.srv)
+        self.assertTrue(adapter.step())
+        order: list[str] = []
+        connect = runtime_mod.ipc.KeeperClient.connect
+        welcome = runtime_mod.SessionRuntime._take_welcome
+        on_frame = runtime_mod.SessionRuntime._on_frame
+
+        def connect_and_wait(client):
+            # Do not return before the reader holds a frame: the frames
+            # are there, and only the welcome keeps them back.
+            reading = threading.Event()
+            deliver = client._on_frame
+
+            def held(frame):
+                reading.set()
+                deliver(frame)
+
+            client._on_frame = held
+            connect(client)
+            self.assertTrue(reading.wait(WAIT))
+
+        def take_welcome(rt, owned, frame):
+            order.append("welcome")
+            welcome(rt, owned, frame)
+
+        def frame_in(rt, owned, gen, frame):
+            order.append(frame.get("t"))
+            on_frame(rt, owned, gen, frame)
+
+        with mock.patch.object(runtime_mod.ipc.KeeperClient, "connect",
+                               connect_and_wait), \
+                mock.patch.object(runtime_mod.SessionRuntime,
+                                  "_take_welcome", take_welcome), \
+                mock.patch.object(runtime_mod.SessionRuntime, "_on_frame",
+                                  frame_in):
+            self.feed = Feed(self)
+            self.srv = self.hub()
+        self.assertEqual(order[:2], ["welcome", "event"])
+        self.assertTrue(self.srv.state.runtime.session(key).connected)
+        adapter.play()
+        self.feed.event("turn.ended", status="completed")
+        self.drain(key)
+        self.assertEqual(self.journal(key),
+                         read_log(key, home=self.home).events)
+
+    def test_an_event_the_journal_could_not_write_is_asked_for_again(self):
+        self.plans.append({"autoplay": False, "turns": [
+            [fake.say("one"), fake.say("two"), fake.say("three")]]})
+        key = self.launch()
+        adapter = self.adapters[0]
+        self.assertTrue(adapter.step())
+        self.feed.event("message.completed", text="one")
+        self.drain(key)
+        journal = self.srv.state.journal
+        append_at = journal.append_at
+        refused: list[int] = []
+
+        def full_disk_once(key_, event):
+            if not refused:
+                refused.append(event["seq"])
+                return False
+            return append_at(key_, event)
+
+        stream = Stream(self, self.srv.state, key)
+        with mock.patch.object(journal, "append_at", full_disk_once), \
+                mock.patch.object(runtime_mod, "RESYNC_WAIT_S", 0), \
+                self.assertLogs("swe.remote.runtime", "WARNING"):
+            adapter.play()
+            self.feed.event("turn.ended", status="completed")
+        self.drain(key)
+        # No hole where the write failed: the hub hung up and asked its
+        # keeper for everything after the last event it kept.
+        seqs = self.seqs(key)
+        self.assertEqual(len(refused), 1)
+        self.assertEqual(seqs, list(range(1, seqs[-1] + 1)))
+        self.assertEqual(self.journal(key),
+                         read_log(key, home=self.home).events)
+        # And a stream that was open saw each of them once, in order.
+        stream.until(lambda f: f.get("seq") == seqs[-1], "the last event")
+        seen = [f["seq"] for f in stream.seen
+                if isinstance(f.get("seq"), int)]
+        self.assertEqual(seen, sorted(set(seen)))
+        self.assertIn(refused[0], seen)
+
     def test_a_clean_stop_leaves_the_keepers_running(self):
         key = self.launch([fake.say("hi")], [fake.say("again")])
         self.feed.event("turn.ended")
@@ -1017,6 +1393,8 @@ class TestAgentCrash(KeeperHubCase):
         # The new agent resumed the same harness session.
         start = self.calls("start", self.adapters[1])[0].args[0]
         self.assertEqual(start.resume_id, self.specs[0]["session_id"])
+        # (The state follows the end of the turn in the log.)
+        self.drain(key)
         self.assertEqual(self.store().get_session(key).state, "idle")
 
     def test_an_agent_that_keeps_dying_refuses_the_send(self):
@@ -1762,13 +2140,16 @@ class TestServiceUpgrade(unittest.TestCase):
         bin_dir = self.home / "bin"
         bin_dir.mkdir()
         log = self.home / "calls"
-        tries = self.home / "tries"
+        tried = self.home / "tried"
+        # Shell builtins only: the stand-in fails the first bootstrap
+        # and passes the second, with no tool looked up on PATH.
         (bin_dir / "launchctl").write_text(
             "#!/bin/sh\n"
             f'echo "$@" >> "{log}"\n'
             'if [ "$1" = bootstrap ]; then\n'
-            f'  echo x >> "{tries}"\n'
-            f'  [ "$(wc -l < "{tries}")" -ge 2 ] || exit 5\n'
+            f'  if [ -e "{tried}" ]; then exit 0; fi\n'
+            f'  : > "{tried}"\n'
+            "  exit 5\n"
             "fi\nexit 0\n")
         os.chmod(bin_dir / "launchctl", 0o755)
         (bin_dir / "sleep").write_text("#!/bin/sh\nexit 0\n")
@@ -1776,7 +2157,8 @@ class TestServiceUpgrade(unittest.TestCase):
         done = subprocess.run(
             ["/bin/sh", "-c", launchd._RELOAD_SH, "sh", "gui/501", "label",
              "/p.plist"],
-            env={"PATH": f"{bin_dir}:/usr/bin:/bin"}, timeout=WAIT)
+            env={"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"},
+            timeout=WAIT)
         self.assertEqual(done.returncode, 0)
         self.assertEqual(log.read_text().splitlines(), [
             "bootout gui/501/label", "bootstrap gui/501 /p.plist",

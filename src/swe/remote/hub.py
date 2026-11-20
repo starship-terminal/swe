@@ -514,6 +514,11 @@ class HubState:
             }
         return launch_id
 
+    def drop_launch(self, launch_id: str) -> None:
+        """Forget a launch that turned out to be another one's retry."""
+        with self._launch_lock:
+            self.launches.pop(launch_id, None)
+
     def settle_launch(self, launch_id: str, **fields) -> bool:
         """Update a pending launch; False when it is gone or settled.
         Without ``state`` it only notes progress (``note``, ``cwd``)."""
@@ -3170,30 +3175,40 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_error(422, "bad_command", str(exc))
             return
+        fields = {"model": cmd["model"] or "", "effort": cmd["effort"] or "",
+                  "provider": cmd["provider"] or ""}
         made = rt.launch_for(command_id)
-        if made:
-            view = state.launch_view(made) or {}
-            self._send_json(202, {
-                "ok": True, "launch_id": made, "duplicate": True,
-                "state": view.get("state") or "pending",
-                "note": view.get("note") or "",
-            })
+        if made is None:
+            launch_id = state.new_launch(machine, cmd["harness"], cmd["cwd"],
+                                         **fields)
+            try:
+                rt.launch(launch_id, cmd["harness"], cmd["cwd"],
+                          cmd["prompt"], command_id=command_id, **fields)
+            except runtime_mod.DuplicateLaunch as dup:
+                # Another request under this id got there first.
+                state.drop_launch(launch_id)
+                made = dup.launch_id
+            except runtime_mod.Refused as exc:
+                state.settle_launch(launch_id, state="failed",
+                                    note=exc.message)
+                self._send_error(exc.status, exc.code, exc.message)
+                return
+            else:
+                self._send_json(202, {
+                    "ok": True, "launch_id": launch_id, "state": "pending",
+                    "note": "starting",
+                })
+                return
+        if not rt.launch_matches(made, cmd["harness"], cmd["cwd"],
+                                 cmd["prompt"], **fields):
+            self._send_error(409, "command_id_conflict", (
+                "command_id was already used for a different launch"))
             return
-        launch_id = state.new_launch(
-            machine, cmd["harness"], cmd["cwd"],
-            model=cmd["model"] or "", effort=cmd["effort"] or "",
-            provider=cmd["provider"] or "")
-        try:
-            rt.launch(launch_id, cmd["harness"], cmd["cwd"], cmd["prompt"],
-                      model=cmd["model"] or "", effort=cmd["effort"] or "",
-                      provider=cmd["provider"] or "", command_id=command_id)
-        except runtime_mod.Refused as exc:
-            state.settle_launch(launch_id, state="failed", note=exc.message)
-            self._send_error(exc.status, exc.code, exc.message)
-            return
+        view = state.launch_view(made) or {}
         self._send_json(202, {
-            "ok": True, "launch_id": launch_id, "state": "pending",
-            "note": "starting",
+            "ok": True, "launch_id": made, "duplicate": True,
+            "state": view.get("state") or "pending",
+            "note": view.get("note") or "",
         })
 
     def _kept(self, key: str, row: dict, action: str,
@@ -3209,7 +3224,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         state, rt = self._state, self._state.runtime
         try:
-            command_id = store_mod.command_id_of(body)
+            # A queue action's ``client_id`` names the queued message,
+            # not the action: only ``command_id`` is the action's own.
+            command_id = store_mod.command_id_of(
+                {"command_id": body.get("command_id")}
+                if action == "queue" else body)
             if action == "message":
                 cmd = protocol.parse_message_command(body)
                 paths = []
@@ -3232,7 +3251,7 @@ class _Handler(BaseHTTPRequestHandler):
                 act = protocol.parse_queue_action(body)
                 self._send_json(*rt.queue_action(
                     key, act["client_id"], act["op"], act["text"],
-                    device=device_id))
+                    device=device_id, command_id=command_id))
             else:
                 self._kept_control(key, body, device_id, command_id)
         except ValueError as exc:

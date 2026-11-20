@@ -27,7 +27,7 @@ Design: docs/specs/G8-hub-on-keepers.md.
 
 from __future__ import annotations
 
-import json
+import hashlib
 import logging
 import os
 import secrets
@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from swe.paths import config_file_for
+# The redaction a keeper applies to the queue text it shows.
+from swe.reports.transcripts import _redact_secrets
 from swe.remote import attachments, protocol, protocol_compat
 from swe.remote.adapters import events as ev
 from swe.remote.adapters import registry as adapter_registry
@@ -61,6 +63,12 @@ STOP_WAIT_S = 20.0
 # the hub decides.
 CONNECT_TRIES = 6
 CONNECT_RETRY_S = 0.25
+# How many times ``close`` looks for a stopped keeper's lock to be free
+# before it says the keeper is still running.
+STOP_TRIES = 20
+# How long the hub waits before it asks a keeper again for events its
+# journal could not take (a full disk does not clear in a millisecond).
+RESYNC_WAIT_S = 2.0
 # An undelivered command older than this is not delivered after a hub
 # restart: the 24 hours the hub holds a message for a sleeping machine.
 REDELIVER_MAX_AGE_S = 24 * 3600.0
@@ -116,6 +124,14 @@ class Refused(Exception):
         self.status, self.code, self.message = status, code, message
 
 
+class DuplicateLaunch(Exception):
+    """The command id of a launch already made one: ``launch_id``."""
+
+    def __init__(self, launch_id: str) -> None:
+        super().__init__(launch_id)
+        self.launch_id = launch_id
+
+
 class _Owned:
     """One session the hub drives through a keeper."""
 
@@ -139,8 +155,14 @@ class _Owned:
         self.title = ""
         self.created_at = created_at
         self.active_at = created_at
+        # Queued messages edited through this hub: command id -> the
+        # text as typed (the keeper's queue shows text redacted).
+        self.edits: dict[str, str] = {}
         self.client: ipc.KeeperClient | None = None
         self.gen = 0
+        # The connection (its gen) whose events stopped being taken in
+        # because the journal could not write one.
+        self.broken = 0
         self.lost = False
         self.closing = False
         # One command to the keeper at a time, and one connect.
@@ -287,16 +309,36 @@ class SessionRuntime:
 
     def _settle_stale_launches(self) -> None:
         """A launch still pending in the store was cut off by a hub
-        restart: it started if its session is here, else it failed."""
-        assert self.store is not None
-        for launch in self.store.list_launches(states=["pending"]):
-            owned = self._sessions.get(launch.session or "")
-            if owned is not None and (owned.connected or owned.harness_id):
-                self.store.settle_launch(launch.launch_id, "started")
-            else:
-                self.store.settle_launch(
-                    launch.launch_id, "failed",
-                    note="the hub restarted while this was starting")
+        restart. It started if its keeper is up (connecting to it just
+        delivered the prompt, when the old hub had not: ``_reconcile``)
+        or if the session ran at all. Otherwise nothing ever ran and
+        nothing will: the launch failed, its prompt with it, and the
+        session is closed, so nobody is shown an empty session that is
+        waiting for a message it will never get."""
+        store = self.store
+        assert store is not None
+        note = "the hub restarted while this was starting"
+        for launch in store.list_launches(states=["pending"]):
+            key = launch.session or ""
+            owned = self._sessions.get(key)
+            prompt = store.get_command(_prompt_id(launch.launch_id))
+            taken = prompt is not None and (prompt.status != "queued"
+                                            or prompt.result is not None)
+            try:
+                if owned is not None and (
+                        owned.connected or taken
+                        or self.hub.journal.last_seq(key) > 0):
+                    store.settle_launch(launch.launch_id, "started")
+                    continue
+                store.settle_launch(launch.launch_id, "failed", note=note)
+                if prompt is not None and not taken:
+                    store.transition(prompt.command_id, "rejected",
+                                     reason=note)
+            except (StoreError, ValueError):
+                logger.exception("settling launch %s", launch.launch_id)
+                continue
+            if owned is not None:
+                self._disown(owned, state="closed")
 
     def stop(self) -> None:
         """Let go of every keeper (they keep running) and close the
@@ -413,35 +455,59 @@ class SessionRuntime:
         check the commands still open against it."""
         with owned.cmd_lock:
             last = self.hub.journal.last_seq(owned.key)
-            client = self._dial(owned, info, last)
-            welcome = client.welcome
-            head = welcome.get("last_seq")
-            if isinstance(head, int) and head < last:
-                # Not the log this journal followed (the keeper's data
-                # was wiped): start the journal over from its log.
-                client.close()
-                self.hub.journal.drop(owned.key)
-                self._truncated(owned.key, 0)
-                client = self._dial(owned, info, 0)
+            client, gate = self._dial(owned, info, last)
+            try:
                 welcome = client.welcome
-            owned.client = client
-            owned.lost = False
-            self._take_welcome(owned, welcome)
+                head = welcome.get("last_seq")
+                if isinstance(head, int) and head < last:
+                    # Not the log this journal followed (the keeper's
+                    # data was wiped): start the journal over from its
+                    # log.
+                    # (Its frames are dropped, not applied: the gen
+                    # moves on before its gate opens.)
+                    client.close()
+                    owned.gen += 1
+                    gate.set()
+                    self.hub.journal.drop(owned.key)
+                    self._truncated(owned.key, 0)
+                    client, gate = self._dial(owned, info, 0)
+                    welcome = client.welcome
+                owned.client = client
+                owned.lost = False
+                # The welcome is the state at the moment the keeper
+                # subscribed this connection; every event it sends is
+                # at or after that. So the welcome goes in first, and
+                # only then are the connection's events let through.
+                self._take_welcome(owned, welcome)
+            finally:
+                gate.set()
             self._note_keeper(owned, info, "live")
             owned.live.wait(REPLAY_WAIT_S)
             self._reconcile(owned)
 
     def _dial(self, owned: _Owned, info: discovery.KeeperInfo,
-              last_seq: int) -> ipc.KeeperClient:
+              last_seq: int) -> tuple[ipc.KeeperClient, threading.Event]:
+        """A connected client and the gate its frames wait behind: the
+        client's reader starts inside ``connect``, and nothing it reads
+        may be applied before the welcome is."""
         owned.gen += 1
         gen = owned.gen
         owned.live.clear()
         owned.gone.clear()
-        client = ipc.KeeperClient(
-            info.socket, last_seq=last_seq,
-            on_frame=lambda frame: self._on_frame(owned, gen, frame))
-        client.connect()
-        return client
+        gate = threading.Event()
+
+        def on_frame(frame: dict) -> None:
+            gate.wait(REPLAY_WAIT_S)
+            self._on_frame(owned, gen, frame)
+
+        client = ipc.KeeperClient(info.socket, last_seq=last_seq,
+                                  on_frame=on_frame)
+        try:
+            client.connect()
+        except BaseException:
+            gate.set()
+            raise
+        return client, gate
 
     def _take_welcome(self, owned: _Owned, welcome: dict) -> None:
         state = welcome.get("state")
@@ -554,13 +620,28 @@ class SessionRuntime:
         if gen != owned.gen:
             return
         kind = frame.get("t")
+        if kind != "closed" and owned.broken == gen:
+            return  # nothing more from a connection that lost an event
         if kind == "event":
             event = frame.get("e")
             if isinstance(event, dict):
                 try:
-                    self._on_event(owned, event)
+                    taken = self._on_event(owned, event)
                 except Exception:
                     logger.exception("keeper event for %s", owned.key)
+                    taken = True
+                if not taken:
+                    # The journal could not write this event. Taking
+                    # the next one would leave a hole no replay fills
+                    # (a replay starts after the journal's last seq), so
+                    # this connection ends here and the next one asks
+                    # for everything from the last event that was kept.
+                    logger.warning("journal write failed for %s; asking "
+                                   "its keeper again", owned.key)
+                    owned.broken = gen
+                    client = owned.client
+                    if client is not None:
+                        client.close()
         elif kind == "live":
             owned.live.set()
         elif kind == "gap":
@@ -588,6 +669,8 @@ class SessionRuntime:
     def _recover(self, owned: _Owned, gen: int) -> None:
         """The connection to a keeper ended and nobody asked for that:
         reconnect when it is alive, else record what happened to it."""
+        if owned.broken == gen and self._stopped.wait(RESYNC_WAIT_S):
+            return
         with owned.cmd_lock:
             if gen != owned.gen or self._stopping or owned.closing \
                     or not self.owns(owned.key):
@@ -638,20 +721,22 @@ class SessionRuntime:
 
     # -- events -------------------------------------------------------
 
-    def _on_event(self, owned: _Owned, event: dict) -> None:
+    def _on_event(self, owned: _Owned, event: dict) -> bool:
+        """Take one keeper event in. False only when the journal could
+        not write it (the caller then stops this connection)."""
         etype = event.get("type")
         if etype == "message.delta":
             for v1 in protocol_compat.to_v1(
                     event, machine=self.hub.machine_id,
                     at_refs=owned.at_refs):
                 self.hub.publish_transient(owned.key, v1)
-            return
+            return True
         seq = event.get("seq")
         if not isinstance(seq, int) or isinstance(seq, bool):
-            return
+            return True
         key = owned.key
         if seq <= self.hub.journal.last_seq(key):
-            return  # already taken in before a reconnect
+            return True  # already taken in before a reconnect
         # Effects first, the journal second: a hub that dies in between
         # is sent this event again, and every effect here can be applied
         # twice. The journal's last seq therefore means "all done up to
@@ -659,7 +744,7 @@ class SessionRuntime:
         old = owned.status
         self._apply(owned, event)
         if not self.hub.journal.append_at(key, event):
-            return
+            return False
         owned.active_at = float(event.get("ts") or time.time())
         v1 = self.v1(key, event)
         if v1 is not None:
@@ -669,6 +754,7 @@ class SessionRuntime:
             self._notify(owned, old, owned.status)
         for listener in self.listeners:
             listener(key, event)
+        return True
 
     def _apply(self, owned: _Owned, event: dict) -> None:
         etype = event.get("type")
@@ -693,6 +779,9 @@ class SessionRuntime:
             items = data.get("items")
             owned.queue = [q for q in items if isinstance(q, dict)] \
                 if isinstance(items, list) else []
+            waiting = {q.get("command_id") for q in owned.queue}
+            for gone in [c for c in owned.edits if c not in waiting]:
+                del owned.edits[gone]
         elif etype in ("approval.requested", "input.requested"):
             rid = data.get("request_id")
             if isinstance(rid, str) and rid:
@@ -1040,33 +1129,79 @@ class SessionRuntime:
                  "queued_at": 0.0} for q in owned.queue]
 
     def queue_action(self, key: str, target: str, op: str, text: str | None,
-                     *, device: str | None = None) -> tuple[int, dict]:
+                     *, device: str | None = None,
+                     command_id: str | None = None) -> tuple[int, dict]:
         """``POST .../queue``: edit, cancel, or send now one queued
-        message, named by the id it was sent under."""
+        message. ``target`` is the id that message was sent under;
+        ``command_id`` is this action's own id, so a retry of the
+        action answers what the first try did."""
         owned = self._owned(key)
-        body = {"ok": True, "client_id": target, "op": op}
+        cid = command_id or new_command_id()
+        body = {"ok": True, "client_id": target, "op": op,
+                "command_id": cid}
         if op == "edit":
             status, reason = self.command(key, "queue_edit", device=device,
-                                          target=target, text=text)
+                                          command_id=cid, target=target,
+                                          text=text)
             if status == "rejected":
                 raise _queue_gone(reason)
+            if isinstance(text, str) and any(
+                    q.get("command_id") == target for q in owned.queue):
+                # Kept only while it waits (``_apply`` drops it when it
+                # leaves the queue).
+                owned.edits[target] = text
             return 200, {**body, "text": text}
-        queued = next((q for q in owned.queue
-                       if q.get("command_id") == target), None)
+        if op != "steer":
+            status, reason = self.command(key, "queue_remove", device=device,
+                                          command_id=cid, target=target)
+            if status == "rejected":
+                raise _queue_gone(reason)
+            return 200, body
+        # Send now. The keeper has no "send this one now": the message
+        # leaves the queue and goes again as a steer under an id made
+        # from this action's. The text to send again is stored with the
+        # removal, so a retry of the action sends the same words.
+        prior = self.store.get_command(cid) if self.store else None
+        if prior is not None and prior.op == "queue_remove" \
+                and prior.payload.get("target") == target:
+            again = str(prior.payload.get("resend") or "")
+            paths = list(prior.payload.get("attachments") or [])
+        else:
+            again, paths = self._queued_text(owned, target)
+        fields: dict[str, Any] = {"target": target, "resend": again}
+        if paths:
+            fields["attachments"] = paths
         status, reason = self.command(key, "queue_remove", device=device,
-                                      target=target)
+                                      command_id=cid, **fields)
         if status == "rejected":
             raise _queue_gone(reason)
-        if op == "steer" and queued is not None:
-            # The keeper has no "send this one now": the message leaves
-            # the queue and goes again as a steer under a new id.
-            stored = self.store.get_command(target) if self.store else None
-            payload = stored.payload if stored is not None else {}
-            self.send(key, str(payload.get("text") or queued.get("text")
-                               or ""), mode="steer",
-                      paths=list(payload.get("attachments") or []),
-                      device=device)
+        self.send(key, again, mode="steer", paths=paths, device=device,
+                  command_id="s" + hashlib.sha1(cid.encode()).hexdigest()[:24])
         return 200, body
+
+    def _queued_text(self, owned: _Owned, target: str
+                     ) -> tuple[str, list[str]]:
+        """The text and files of the queued message ``target`` as they
+        stand now: an edit made through this hub, else what was sent,
+        else what the queue shows. The queue shows text redacted, so it
+        is used only when it is not just the redacted original (the
+        message was edited before this hub started)."""
+        queued = next((q for q in owned.queue
+                       if q.get("command_id") == target), None)
+        if queued is None:
+            raise _queue_gone("not_queued")
+        stored = self.store.get_command(target) if self.store else None
+        payload = stored.payload if stored is not None \
+            and stored.op == "send" else {}
+        paths = list(payload.get("attachments")
+                     or queued.get("attachments") or [])
+        shown = str(queued.get("text") or "")
+        if target in owned.edits:
+            return owned.edits[target], paths
+        original = str(payload.get("text") or "")
+        if original and _redact_secrets(original) == shown:
+            return original, paths
+        return shown, paths
 
     # -- after a restart: commands with no result ---------------------
 
@@ -1172,20 +1307,45 @@ class SessionRuntime:
         key = protocol.session_key(harness, session_id)
         options = {k: v for k, v in (("model", model), ("effort", effort),
                                      ("provider", provider)) if v}
-        try:
-            store.put_session(
-                key, harness=harness, harness_session_id=session_id,
-                machine=self.hub.machine_id, cwd=cwd, state="starting",
-                adapter=resolved.adapter, options=options)
-            store.add_launch(launch_id, machine=self.hub.machine_id,
-                             harness=harness, cwd=cwd, options=options,
-                             command_id=command_id, session=key)
-        except (StoreError, ValueError) as exc:
-            raise Refused(503, "store_failed", str(exc)) from exc
         owned = _Owned(key, harness, session_id, cwd, resolved.adapter,
                        options=options, at_refs=self.at_refs(harness),
                        created_at=time.time())
         owned.title = _title_of(prompt)
+        prompt_id = _prompt_id(launch_id)
+        try:
+            # The prompt first, so a launch never exists without the
+            # message it owes: a hub that dies after this either
+            # delivers it when it reconnects or fails the launch.
+            if prompt.strip():
+                self._record(owned, prompt_id, "send", _prompt_payload(
+                    prompt), None)
+            try:
+                # Then the launch, which claims the command id: of two
+                # requests under one id, one gets here and the other
+                # is told which launch that was.
+                store.add_launch(launch_id, machine=self.hub.machine_id,
+                                 harness=harness, cwd=cwd, options=options,
+                                 command_id=command_id, session=key)
+            except StoreConflict:
+                made = self.launch_for(command_id)
+                if made is None:
+                    raise
+                if prompt.strip():
+                    self._fail(prompt_id, "another request made this launch")
+                raise DuplicateLaunch(made) from None
+            store.put_session(
+                key, harness=harness, harness_session_id=session_id,
+                machine=self.hub.machine_id, cwd=cwd, state="starting",
+                adapter=resolved.adapter, options=options)
+        except (StoreError, ValueError) as exc:
+            # Nothing was started. Whatever was stored says so.
+            try:
+                store.settle_launch(launch_id, "failed", note=str(exc))
+                if prompt.strip() and store.get_command(prompt_id):
+                    self._fail(prompt_id, "the launch could not be stored")
+            except (StoreError, ValueError):
+                logger.exception("undoing launch %s", launch_id)
+            raise Refused(503, "store_failed", str(exc)) from exc
         self._titles[key] = owned.title
         try:
             discovery.write_spec(
@@ -1209,8 +1369,13 @@ class SessionRuntime:
             with owned.cmd_lock:
                 self._ensure_keeper(owned)
             if prompt.strip():
-                self.send(owned.key, prompt,
-                          command_id=f"{launch_id}-prompt")
+                # Connecting already delivered it when the keeper had
+                # not seen it; asking again answers how that went.
+                status, reason = self._deliver(
+                    owned, "send", _prompt_id(launch_id), text=prompt,
+                    mode="queue")
+                if status == "rejected":
+                    raise Refused(409, "send_rejected", _reason(reason))
         except Refused as exc:
             self._launch_failed(owned, launch_id, exc.message)
             return
@@ -1267,6 +1432,25 @@ class SessionRuntime:
         launch = self.store.launch_for_command(command_id)
         return launch.launch_id if launch is not None else None
 
+    def launch_matches(self, launch_id: str, harness: str, cwd: str,
+                       prompt: str, *, model: str = "", effort: str = "",
+                       provider: str = "") -> bool:
+        """Whether ``launch_id`` is the launch these fields ask for: a
+        command id reused for another launch is a conflict, not a
+        retry."""
+        if self.store is None:
+            return False
+        launch = self.store.get_launch(launch_id)
+        if launch is None:
+            return False
+        options = {k: v for k, v in (("model", model), ("effort", effort),
+                                     ("provider", provider)) if v}
+        sent = self.store.get_command(_prompt_id(launch_id))
+        text = str(sent.payload.get("text") or "") if sent is not None \
+            else ""
+        return (launch.harness, launch.cwd, launch.options, text) == (
+            harness, cwd, options, prompt if prompt.strip() else "")
+
     # -- Continue in SWE ----------------------------------------------
 
     def continue_session(self, key: str, session, *, model: str = "",
@@ -1309,7 +1493,14 @@ class SessionRuntime:
             with owned.cmd_lock:
                 self._ensure_keeper(owned)
         except Exception as exc:
-            self._disown(owned, state="closed")
+            info = discovery.find(key, self.home)
+            if info is not None and info.alive:
+                # A keeper came up and then would not answer: stop it
+                # before the session goes back to its terminal. If it
+                # will not stop, ``close`` says so and SWE keeps it.
+                self.close(key, quiet=True)
+            else:
+                self._disown(owned, state="closed")
             if isinstance(exc, Refused):
                 raise
             if isinstance(exc, (StoreError, ValueError, OSError)):
@@ -1359,14 +1550,41 @@ class SessionRuntime:
                         pass
                 client.close()
             owned.client = None
+            if not self._keeper_gone(key):
+                # Still running: the session stays ours. Letting it go
+                # now would leave an agent working that nobody drives,
+                # beside whoever resumes the session next.
+                owned.closing = False
+                threading.Thread(target=self._recover,
+                                 args=(owned, owned.gen),
+                                 name="swe-keeper-recover",
+                                 daemon=True).start()
+                raise Refused(503, "keeper_failed", (
+                    "the session's keeper did not stop; the session is "
+                    "still attached. Try again"))
             self._note_seq(owned)
             self._disown(owned, state="closed", read_only=read_only,
                          tail_from=tail_from)
+
+    def _keeper_gone(self, key: str) -> bool:
+        """Whether no keeper holds ``key``'s lock, looking a few times:
+        a keeper hangs up a moment before it lets its lock go."""
+        for _attempt in range(STOP_TRIES):
+            info = discovery.find(key, self.home)
+            if info is None or not info.alive:
+                return True
+            if self._stopped.wait(CONNECT_RETRY_S):
+                break
+        return False
 
     def _disown(self, owned: _Owned, *, state: str,
                 read_only: str | None = None,
                 tail_from: dict | None = None) -> None:
         key = owned.key
+        # The cursor first, while the key is still ours and so cannot
+        # be tailed: a tailer started in between would pick up the
+        # cursor from before the keeper and journal its turns again.
+        self.hub.tail_manager.hand_back(key, tail_from)
         with self._lock:
             self._sessions.pop(key, None)
         self.hub.restore_approvals(key, {})
@@ -1381,7 +1599,6 @@ class SessionRuntime:
                     self.store.update_session(key, state=state)
             except (StoreError, ValueError):
                 logger.exception("closing %s", key)
-        self.hub.tail_manager.hand_back(key, tail_from)
 
     # -- a parked session someone resumed in a terminal ---------------
 
@@ -1481,6 +1698,15 @@ def hub_global_key() -> str:
     from swe.remote import hub
 
     return hub.GLOBAL_KEY
+
+
+def _prompt_id(launch_id: str) -> str:
+    """The command id a launch's first message is stored under."""
+    return f"{launch_id}-prompt"
+
+
+def _prompt_payload(prompt: str) -> dict:
+    return {"text": prompt, "mode": "queue", "attachments": []}
 
 
 def _DEVICE_OK(device: str) -> bool:
