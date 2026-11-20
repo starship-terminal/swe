@@ -188,7 +188,9 @@ Moves after the first call:
 | accepted, queued | (finished) | `set_result(id, result)`, once |
 
 Every move is conditional on the current status, so two threads cannot
-both deliver one held command: the loser gets False. A move to
+both deliver one held command: the loser gets False. A held command at
+or past its deadline cannot move to accepted or queued even before the
+sweep; only a rejection or `expire_held` takes it out of held. A move to
 rejected stores a result (the caller's, or `{ok: false, note: reason}`).
 `set_result` refuses a second result, so a replayed `command.result`
 changes nothing.
@@ -260,6 +262,11 @@ not be shorter than the 24 hour hold (ValueError).
 - **Launch retries.** `launch_for_command(command_id)` before
   `add_launch`, so a retried `POST /v1/sessions` answers the same
   `launch_id`.
+- **Every write is an fsync** (`synchronous = FULL`). Never call
+  `note_seq` per event: batch it, or call it at turn boundaries.
+- **Payload key names.** The credential denylist refuses any payload
+  key containing `token`, `secret`, `cookie` and the like at any depth,
+  so `max_tokens` is refused too. Name payload keys to avoid them.
 - **One hub at a time.** Two swe versions writing one store at once is
   not supported; the version check runs at open.
 - **What stays elsewhere.** `devices.json`, `session_meta.json` (pins,

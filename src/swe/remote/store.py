@@ -911,8 +911,11 @@ class Store:
         """Move a command along: ``held`` to ``accepted``, ``queued`` or
         ``rejected``; ``queued`` to ``accepted`` or ``rejected``.
         Atomic and conditional: False when the command is unknown or
-        its status does not allow the move (say it expired first), so
-        two threads delivering the same held command cannot both win.
+        its status does not allow the move, so two threads delivering
+        the same held command cannot both win. A held command at or
+        past its deadline cannot be delivered even before
+        ``expire_held`` sweeps it: False, and the row is left for the
+        sweep to reject (``held`` to ``rejected`` stays allowed).
         A move to ``rejected`` stores ``result`` (default ``{ok:
         false, note: reason}``) and finishes the command."""
         _check_in(to, STORED_STATUSES, "to")
@@ -921,10 +924,13 @@ class Store:
                              "use set_result")
         now = self._clock()
         with self._write() as db:
-            row = db.execute("SELECT status, op FROM commands "
+            row = db.execute("SELECT status, op, expires_at FROM commands "
                              "WHERE command_id = ?", (command_id,)
                              ).fetchone()
             if row is None or to not in _TRANSITIONS[row[0]]:
+                return False
+            if row[0] == "held" and to != "rejected" \
+                    and row[2] is not None and row[2] <= now:
                 return False
             if to == "rejected":
                 body = _result(result if result is not None
@@ -989,9 +995,12 @@ class Store:
                 f"SELECT {_COMMAND_COLS} FROM commands WHERE status = "
                 "'held' AND expires_at <= ? ORDER BY id", (now,)).fetchall()
             for r in rows:
+                # The row's own hold, not HOLD_S: record_command takes
+                # a custom ``hold_s``.
+                held_for = _span(r[12] - r[10])
                 body = _result({"ok": False, "note": (
                     "expired: the machine did not come back within "
-                    f"{HOLD_S / 3600:.0f} hours")}, r[4])
+                    f"{held_for}")}, r[4])
                 db.execute(
                     "UPDATE commands SET status = 'rejected', reason = "
                     "'expired', result = ?, finished_at = ?, updated_at = ?"
@@ -1152,6 +1161,15 @@ def _control(control: Any, reason: Any) -> tuple[str, str | None]:
     if reason is not None:
         raise ValueError("control_reason is only for read_only")
     return control, None
+
+
+def _span(seconds: float) -> str:
+    """A hold length for a person: "24 hours", "90 minutes", "45 seconds"."""
+    for size, unit in ((3600, "hour"), (60, "minute"), (1, "second")):
+        if seconds >= size and seconds % size == 0:
+            count = int(seconds // size)
+            return f"{count} {unit}" + ("" if count == 1 else "s")
+    return f"{seconds:g} seconds"
 
 
 def _positive(value: Any, what: str) -> int:

@@ -781,7 +781,36 @@ class TestHeld(StoreCase):
         s.record_command("h", session=SESSION, op="send", status="held",
                          hold_s=60)
         self.clock.advance(60)
-        self.assertEqual([c.command_id for c in s.expire_held()], ["h"])
+        expired = s.expire_held()
+        self.assertEqual([c.command_id for c in expired], ["h"])
+        # The note names the row's own hold, not the 24 hour default.
+        self.assertIn("within 1 minute", expired[0].result["note"])
+        self.assertNotIn("24", expired[0].result["note"])
+
+    def test_a_late_held_command_cannot_be_delivered_before_the_sweep(
+            self) -> None:
+        s = self.open()
+        s.record_command("h", session=SESSION, op="send", status="held",
+                         machine="m2", hold_s=5400)
+        s.record_command("r", session=SESSION, op="send", status="held",
+                         machine="m2", hold_s=5400)
+        self.clock.advance(5400)
+        self.assertFalse(s.transition("h", "accepted"))
+        self.assertFalse(s.transition("h", "queued"))
+        self.assertEqual(s.get_command("h").status, "held")
+        # Rejecting a late one is still allowed.
+        self.assertTrue(s.transition("r", "rejected", reason="session gone"))
+        expired = s.expire_held()
+        self.assertEqual([c.command_id for c in expired], ["h"])
+        self.assertEqual((expired[0].status, expired[0].reason),
+                         ("rejected", "expired"))
+        self.assertIn("within 90 minutes", expired[0].result["note"])
+
+    def test_span_names_the_hold_for_a_person(self) -> None:
+        self.assertEqual(store_mod._span(HOLD_S), "24 hours")
+        self.assertEqual(store_mod._span(3600), "1 hour")
+        self.assertEqual(store_mod._span(45), "45 seconds")
+        self.assertEqual(store_mod._span(1.5), "1.5 seconds")
 
     def test_transition_rules(self) -> None:
         s = self.open()
