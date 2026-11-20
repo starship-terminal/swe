@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-// What each hook did: the counts the Hooks page shows beside every script
-// and in its side panel. They come from `swe hooks stats --sum-harnesses
+// What each hook did: the counts the Hooks page shows on every table row
+// and in an open hook's rail. They come from `swe hooks stats --sum-harnesses
 // --json` (one row per hook) and `swe hooks log --source=<path> --json` (the
 // latest runs); see docs/json-contracts.md, "`swe hooks stats` shape".
 //
@@ -345,7 +345,7 @@ public enum HookStatsState: Sendable, Equatable {
     }
 }
 
-/// "3h ago", for the side panel's last block and recent runs.
+/// "3h ago", for an open hook's last block and recent runs.
 public enum HookStatsFormat {
     public static func relative(_ date: Date, now: Date = Date()) -> String {
         let formatter = RelativeDateTimeFormatter()
@@ -434,7 +434,7 @@ public final class HookStatsModel {
         return recent[key] == nil && !recentFailed.contains(key)
     }
 
-    /// Runs `swe hooks log --source=` for the panel's script: one ask, since
+    /// Runs `swe hooks log --source=` for the open hook's script: one ask, since
     /// swe already gathers a directory hook's executables and a script's
     /// every name under its source.
     public func loadRecent(source: String, window: HookStatsWindow, swe: SweClient,

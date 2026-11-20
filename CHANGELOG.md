@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AgentMail is a service provider.** Settings › Providers › Services and `swe providers list` seed it with `AGENTMAIL_API_KEY` (console at [console.agentmail.to](https://console.agentmail.to)). Check sends `GET https://api.agentmail.to/v0/inboxes` as Bearer; a fake key is refused with 403.
 
+### Changed
+
+- **The Mac Hooks page is a table.** The harness tab strip, which grew with every harness, is a Harness menu at the left of a filter row (All harnesses by default, each harness with its logo), beside the range menu and the Other tools checkbox. The Check card that took a full-width section for one finding is a "Check: N findings" control at the right of that row, closed until clicked, and hidden when the check finds nothing. The Session timeline and Not running cards are one table like the MCP servers and Skills tables: a row per script per event with Script and its summary, Event, Matcher, Harness (when every harness is shown), Fires, Blocks and Rate, in the order a session meets the events, and the scripts nothing fires as muted rows at the bottom with their reason. With one harness picked, a line under the table opens the events nothing is declared on. Clicking a row opens the hook as a full page with the header's back chevron (⌘[): its declaration and runs in a 300pt rail (260pt in a narrower window), and the script's editor filling the rest of the window. Where the editor would drop under 380pt beside the rail (a 900pt window, or a wide sidebar), the rail goes on top at full width, Declaration beside Runs when they fit, and the editor follows under it while the page scrolls instead of a 460pt box in a 440pt side panel. The web Hooks page keeps its layout.
+
 ### Fixed
 
 - **Grok 4.6 shows its intelligence score on the Models page.** Artificial Analysis scored only the Xhigh run of Grok 4.6 on Intelligence Index v5, and the app showed the High entry, which has none. A family now shows the entry Artificial Analysis has scored.
