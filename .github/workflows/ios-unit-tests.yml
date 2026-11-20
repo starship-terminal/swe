@@ -1,0 +1,138 @@
+# The iPhone app's unit tests, and the shared session web shell's package
+# tests, on a pull request that changes them.
+#
+# Both suites otherwise run only nightly (native.yml), and no PR check
+# compiled the iPhone app with the runner's Xcode. The nightly iOS job
+# was red from 2026-10-31 to 2026-11-19 because one expression in
+# app/ios did not type-check on the macos-26 image's Swift 6.3.3 while
+# every developer Mac, on a newer Xcode, accepted it. This runs the same
+# steps on the same image before the merge.
+#
+# Only for changes under app/ios/ and app/shared/SessionWebShell/ (and
+# this file), so the rest of the PR lane stays the fast Linux checks in
+# ci.yml (issue #749). GitHub filters paths per workflow, not per job,
+# so the `changes` job below picks which of the two suites a pull
+# request needs: a change to the iPhone app does not run the package
+# tests, and a change to the package does not build the iPhone app. A
+# change to this file runs both. The iPhone job takes about 10 minutes,
+# nearly all of it the build. The repository is public, so its standard
+# macOS runner minutes are not billed.
+#
+# The steps of the two macOS jobs are copies of native.yml's `ios-unit`
+# and `session-web-shell` jobs (the repository has no reusable workflow
+# or composite action to share them through). Change both files
+# together.
+name: iOS unit tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/ios/**"
+      - "app/shared/SessionWebShell/**"
+      - ".github/workflows/ios-unit-tests.yml"
+  workflow_dispatch:
+
+# A new push to the PR makes the run in flight obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    # Which suite the pull request touches. A run started by hand has no
+    # pull request to compare against and runs both.
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ios: ${{ steps.paths.outputs.ios }}
+      shell: ${{ steps.paths.outputs.shell }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On a pull request the checkout is the merge commit, whose
+          # first parent is the base branch: two commits are enough to
+          # list what the pull request changes.
+          fetch-depth: 2
+
+      - name: Pick the suites
+        id: paths
+        run: |
+          ios=true
+          shell=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            # --no-renames lists a moved file under both its old and its
+            # new path, so moving a file out of a folder still counts.
+            files="$(git diff --name-only --no-renames HEAD^1 HEAD)"
+            printf '%s\n' "$files"
+            workflow='\.github/workflows/ios-unit-tests\.yml$'
+            grep -q -E "^(app/ios/|$workflow)" <<<"$files" || ios=false
+            grep -q -E "^(app/shared/SessionWebShell/|$workflow)" <<<"$files" || shell=false
+          fi
+          echo "ios=$ios" >> "$GITHUB_OUTPUT"
+          echo "shell=$shell" >> "$GITHUB_OUTPUT"
+
+  ios-unit:
+    # The UI test target needs a paired hub, so only SWERemoteTests runs
+    # here, on the first available iPhone simulator of the image's Xcode.
+    name: iOS app unit tests
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app/ios
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate the project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Unit tests
+        timeout-minutes: 30
+        run: |
+          # An iPhone on the newest iOS runtime: older runtimes' devices
+          # can be listed as available with their runtime gone.
+          udid="$(xcrun simctl list devices available --json | jq -r '
+            .devices | to_entries
+            | map(select(.key | test("SimRuntime.iOS-")))
+            | sort_by(.key | capture("iOS-(?<a>[0-9]+)-(?<b>[0-9]+)")
+                | [(.a | tonumber), (.b | tonumber)])
+            | last | .value | map(select(.name | startswith("iPhone")))
+            | .[0].udid')"
+          test -n "$udid" && [ "$udid" != null ]
+          xcodebuild -project SWERemote.xcodeproj -scheme SWERemote \
+            -destination "id=$udid" -derivedDataPath build-sim \
+            -only-testing:SWERemoteTests test
+
+  session-web-shell:
+    # The shared session web view shell's package tests on macOS. The
+    # iPhone proof harness under Proof/ needs a stub hub and a simulator
+    # and runs by hand (Proof/run-proof.sh), not here.
+    name: Session web shell tests
+    needs: changes
+    if: needs.changes.outputs.shell == 'true'
+    runs-on: macos-26
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: app/shared/SessionWebShell
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Package tests
+        timeout-minutes: 15
+        run: swift test

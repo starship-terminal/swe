@@ -84,7 +84,7 @@ Required steps for any feature that adds files or changes `cmd_*` handlers:
 
 1. **Write tests** and run `HOME="$(mktemp -d)" python3 -m unittest discover -s tests -p 'test_*.py'`.
 2. **Reinstall the package** with `pip install -e .` (or `pipx install --force git+...` for pipx installs). With an editable install new files are picked up automatically, but a stale non-editable install won't see them until you reinstall.
-3. **Verify e2e** by running the actual `swe <command>` against a temp HOME, not just `PYTHONPATH=src python -m swe.cli <command>`. CI does the same on every PR (the editable install on Linux), and `release.yml` repeats it on a tag for a built wheel in a clean venv on Linux and macOS, the Nix derivation's output and the bundled app, each against a `mktemp -d` home. The native-only checks that used to sit on the PR path (the macOS install smoke test and the app unit tests) run nightly, on merge_group and on demand in `native.yml`; the Nix build runs on every PR in `ci.yml`, and the app unit tests also run on a PR that changes `app/mac/` (`mac-unit-tests.yml`). Read `.github/workflows/ci.yml` and `release.yml` for the exact commands rather than assuming; that list gets trimmed from time to time.
+3. **Verify e2e** by running the actual `swe <command>` against a temp HOME, not just `PYTHONPATH=src python -m swe.cli <command>`. CI does the same on every PR (the editable install on Linux), and `release.yml` repeats it on a tag for a built wheel in a clean venv on Linux and macOS, the Nix derivation's output and the bundled app, each against a `mktemp -d` home. The native-only checks that used to sit on the PR path (the macOS install smoke test and the app unit tests) run nightly, on merge_group and on demand in `native.yml`; the Nix build runs on every PR in `ci.yml`, the app unit tests also run on a PR that changes `app/mac/` (`mac-unit-tests.yml`), and the iPhone app's unit tests and the session web shell's package tests on a PR that changes `app/ios/` or `app/shared/SessionWebShell/` (`ios-unit-tests.yml`). Read `.github/workflows/ci.yml` and `release.yml` for the exact commands rather than assuming; that list gets trimmed from time to time.
 4. **Open a PR**, one concern per PR, with a clear description of what changed and why.
 
 Common pitfall: if a feature works with `PYTHONPATH=src python -m swe.cli` but not with the installed `swe` command, the installed copy is stale (likely a non-editable install). Re-run `pip install -e .` to switch to editable mode and sync with the source tree.
@@ -124,9 +124,15 @@ lists the current risk areas.
 ## Swift
 
 The iPhone app in `app/ios/` has its own XCTest suite, run on a
-simulator; [app/ios/README.md](../app/ios/README.md) has the command, and
-the nightly `native.yml` runs its unit target. The rest of this section
-is the macOS app, whose package has three test targets: `SWECoreTests`
+simulator; [app/ios/README.md](../app/ios/README.md) has the command.
+CI runs its unit target (`SWERemoteTests`) nightly in `native.yml` and on
+a pull request that changes `app/ios/` (`ios-unit-tests.yml`). The runner's
+Xcode is older than a developer Mac's, and has rejected code that built
+locally, so wait for that check before merging an iPhone change. The same
+workflow runs the `app/shared/SessionWebShell` package tests (`swift
+test` in that folder) on a pull request that changes the package.
+
+The rest of this section is the macOS app, whose package has three test targets: `SWECoreTests`
 (the logic, and almost every test), `SWEAppUITests` (views and AppKit
 glue that need a run loop or a window) and `SWEWidgetsUITests`.
 
@@ -217,6 +223,7 @@ xcrun llvm-cov report \
 Filter the report rows by `Sources/SWECore` or `Sources/SWEWidgetsUI`
 for a per-target total. `SWEApp` is mostly views; `SWEAppUITests`
 covers the parts with logic worth pinning. There is no Swift coverage
-floor in CI, and the macOS unit tests run on pull requests only when they
-change `app/mac/`, so run the suites a change touches before pushing. The report is a guide
+floor in CI, and the native suites run on pull requests only when they
+change that suite's folder (`app/mac/`, `app/ios/` or
+`app/shared/SessionWebShell/`), so run the suites a change touches before pushing. The report is a guide
 for where to add tests.
