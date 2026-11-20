@@ -1,13 +1,19 @@
-"""One-shot MCP handshake: ``initialize`` + ``tools/list`` over stdio.
+"""One-shot MCP handshake: ``initialize`` + ``tools/list``.
 
-`swe mcp tools` spawns the configured command itself, asks for its tool
-list, and kills it. The warp-gate daemon's child machinery is threaded
-and long-lived; this is the synchronous single-probe version. Same wire
-format: newline-delimited JSON-RPC (the stdio transport in the spec).
+`swe mcp tools` spawns a stdio server's configured command itself, asks
+for its tool list, and kills it. The warp-gate daemon's child machinery
+is threaded and long-lived; this is the synchronous single-probe version.
+Same wire format: newline-delimited JSON-RPC (the stdio transport in the
+spec).
+
+A server at a URL gets the same two requests over the streamable HTTP
+transport (``inspect_http``): each JSON-RPC message is one POST, and the
+answer comes back as a JSON body or as a short event stream.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import select
@@ -15,6 +21,9 @@ import shutil
 import signal
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from swe.console import sanitize
 
@@ -117,12 +126,38 @@ def _wait_reply(proc: subprocess.Popen, buf: bytearray,
         buf.extend(chunk)
 
 
-def _send(proc: subprocess.Popen, message: dict) -> None:
+def _send(proc: subprocess.Popen, message: dict,
+          errbuf: _StderrTail | None = None) -> None:
     try:
         proc.stdin.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
         proc.stdin.flush()
     except (OSError, BrokenPipeError) as exc:
+        # A server that died on startup closes its end before the first
+        # write lands: say that it exited, with what it logged, rather
+        # than report the broken pipe the death caused.
+        if errbuf is not None and _died(proc, errbuf):
+            raise _exited_error(proc, errbuf) from exc
         raise ProbeError(f"cannot write to the server: {exc}") from exc
+
+
+def _died(proc: subprocess.Popen, errbuf: _StderrTail) -> bool:
+    """Whether the child has exited, after a short grace; its remaining
+    stderr is drained into ``errbuf`` so the error can quote it."""
+    try:
+        proc.wait(timeout=1.0)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    if proc.stderr is not None:
+        fd = proc.stderr.fileno()
+        while select.select([fd], [], [], 0.2)[0]:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            errbuf.feed(chunk)
+    return True
 
 
 def _stop(proc: subprocess.Popen) -> None:
@@ -181,7 +216,7 @@ def _list_tools(proc: subprocess.Popen, buf: bytearray,
         mid = 2 + page
         params = {"cursor": cursor} if cursor else {}
         _send(proc, {"jsonrpc": "2.0", "id": mid, "method": "tools/list",
-                     "params": params})
+                     "params": params}, errbuf)
         try:
             reply = _wait_reply(proc, buf, errbuf, mid,
                                 time.monotonic() + tools_s)
@@ -249,7 +284,7 @@ def inspect_stdio(command: str, args: list, env: dict | None,
                          "params": {"protocolVersion": PROTOCOL_VERSION,
                                     "capabilities": {},
                                     "clientInfo": {"name": "swe-mcp-probe",
-                                                   "version": "1"}}})
+                                                   "version": "1"}}}, errbuf)
             reply = _wait_reply(proc, buf, errbuf, 1,
                                 time.monotonic() + init_s)
         except TimeoutError:
@@ -257,7 +292,7 @@ def inspect_stdio(command: str, args: list, env: dict | None,
         result = _result_or_raise(reply, "initialize", errbuf)
 
         _send(proc, {"jsonrpc": "2.0",
-                     "method": "notifications/initialized"})
+                     "method": "notifications/initialized"}, errbuf)
         tools_s = TOOLS_TIMEOUT_S if timeout_s is None else timeout_s
         tools = _list_tools(proc, buf, errbuf, tools_s)
         server_info = result.get("serverInfo")
@@ -274,3 +309,264 @@ def inspect_stdio(command: str, args: list, env: dict | None,
         }
     finally:
         _stop(proc)
+
+
+# --- streamable HTTP -------------------------------------------------------
+
+# An error body is quoted back at most this long: a server's HTML error
+# page is not a message.
+_BODY_TAIL = 300
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects: following one would hand the configured headers
+    (often an Authorization token) to a host the config never named."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _http_error_text(exc: urllib.error.HTTPError) -> str:
+    if exc.code in (301, 302, 303, 307, 308):
+        where = exc.headers.get("Location") if exc.headers else None
+        return f"the server redirects to {where}" if where else f"HTTP {exc.code} redirect"
+    if exc.code == 401:
+        return "the server asks for sign-in (HTTP 401); the probe sends only the configured headers"
+    if exc.code == 403:
+        return "the server refused the request (HTTP 403)"
+    try:
+        body = exc.read(4096).decode("utf-8", "replace").strip()
+    except (OSError, ValueError):
+        body = ""
+    detail = f"HTTP {exc.code}"
+    reason = sanitize(" ".join(body.split())[:_BODY_TAIL])
+    return f"{detail}: {reason}" if reason else detail
+
+
+# The most one answer may weigh. A large server's whole tool list is a
+# megabyte or two; past this the body is a fault or an attack, and it is
+# refused before it can fill memory.
+MAX_REPLY_BYTES = 16 * 1024 * 1024
+_READ_CHUNK = 65536
+
+
+def _chunks(response, deadline: float, what: str):
+    """The response body in pieces, bounded in time and in size.
+
+    The socket timeout urllib sets only limits a silence, so a server
+    trickling bytes could hold the probe open for ever: the deadline is
+    checked before every read, and the socket is told how long is left.
+    The total is capped at ``MAX_REPLY_BYTES``. Every way a read can fail
+    becomes a ``ProbeError``: a dropped connection or a body shorter than
+    its declared length must not escape as an http.client exception.
+    """
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    total = 0
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError
+        if sock is not None:
+            try:
+                sock.settimeout(max(left, 0.05))
+            except OSError:
+                pass
+        try:
+            chunk = response.read1(_READ_CHUNK)
+        except TimeoutError:
+            raise
+        except (http.client.HTTPException, OSError, ValueError) as exc:
+            raise ProbeError(f"the connection dropped during {what}: "
+                             f"{exc.__class__.__name__}") from exc
+        if not chunk:
+            if getattr(response, "length", None):
+                raise ProbeError(f"the connection closed before the whole "
+                                 f"answer to {what} arrived")
+            return
+        total += len(chunk)
+        if total > MAX_REPLY_BYTES:
+            raise ProbeError(f"the answer to {what} is larger than "
+                             f"{MAX_REPLY_BYTES // (1024 * 1024)} MB")
+        yield chunk
+
+
+def _read_event_stream(response, mid: int, deadline: float, what: str) -> dict:
+    """The JSON-RPC response for ``mid`` out of a ``text/event-stream``.
+
+    Events are ``data:`` lines ended by a blank line; a server may send
+    notifications or requests of its own before the answer, which are
+    skipped. The stream is abandoned as soon as the answer is read. Lines
+    are split here rather than with ``readline`` so the deadline and the
+    size cap in ``_chunks`` hold inside a single long line too.
+    """
+    data: list[str] = []
+    pending = b""
+    for chunk in _chunks(response, deadline, what):
+        pending += chunk
+        while b"\n" in pending:
+            raw, _, pending = pending.partition(b"\n")
+            line = raw.decode("utf-8", "replace").rstrip("\r")
+            if line.startswith("data:"):
+                data.append(line[5:].lstrip(" "))
+                continue
+            if line:
+                continue  # event:, id:, retry: and comments
+            if not data:
+                continue
+            payload, data = "\n".join(data), []
+            try:
+                message = json.loads(payload)
+            except ValueError:
+                continue
+            if isinstance(message, dict) and message.get("id") == mid:
+                return message
+    raise ProbeError("the server closed the stream before answering")
+
+
+class _HttpSession:
+    """One streamable-HTTP conversation: the URL, the configured headers,
+    and the session id and protocol version the server hands back."""
+
+    def __init__(self, url: str, headers: dict | None):
+        self.url = url
+        self.headers = {str(k): str(v) for k, v in (headers or {}).items()}
+        self.session_id: str | None = None
+        self.protocol: str | None = None
+        self.opener = urllib.request.build_opener(_NoRedirect)
+
+    def _request(self, message: dict | None, method: str = "POST"):
+        headers = dict(self.headers)
+        headers["Accept"] = "application/json, text/event-stream"
+        body = None
+        if message is not None:
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(message, separators=(",", ":")).encode()
+        if self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
+        if self.protocol:
+            headers["MCP-Protocol-Version"] = self.protocol
+        return urllib.request.Request(self.url, data=body, headers=headers,
+                                      method=method)
+
+    def call(self, message: dict, timeout_s: float, what: str) -> dict:
+        """POST one request and return its JSON-RPC response."""
+        deadline = time.monotonic() + timeout_s
+        try:
+            response = self.opener.open(self._request(message), timeout=timeout_s)
+        except urllib.error.HTTPError as exc:
+            detail = _http_error_text(exc)
+            exc.close()
+            raise ProbeError(f"{what} failed: {detail}") from exc
+        except TimeoutError as exc:
+            raise ProbeError(f"no answer to {what} in {timeout_s:.0f}s") from exc
+        except (urllib.error.URLError, http.client.HTTPException,
+                OSError, ValueError) as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, TimeoutError):
+                raise ProbeError(f"no answer to {what} in {timeout_s:.0f}s") from exc
+            raise ProbeError(f"cannot reach the server: "
+                             f"{reason or exc.__class__.__name__}") from exc
+        with response:
+            session = response.headers.get("Mcp-Session-Id")
+            if session:
+                self.session_id = session
+            kind = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            try:
+                if kind == "text/event-stream":
+                    return _read_event_stream(response, message.get("id"),
+                                              deadline, what)
+                raw = b"".join(_chunks(response, deadline, what))
+            except TimeoutError as exc:
+                raise ProbeError(f"no answer to {what} in {timeout_s:.0f}s") from exc
+        try:
+            reply = json.loads(raw)
+        except ValueError as exc:
+            raise ProbeError(f"{what} failed: the answer is not JSON "
+                             f"({kind or 'no content type'})") from exc
+        if isinstance(reply, list):  # a batched answer
+            reply = next((m for m in reply
+                          if isinstance(m, dict) and m.get("id") == message.get("id")), {})
+        return reply if isinstance(reply, dict) else {}
+
+    def notify(self, message: dict, timeout_s: float) -> None:
+        """POST a notification; the server owes no body, so failures of
+        this one message are not the probe's to report."""
+        try:
+            with self.opener.open(self._request(message), timeout=timeout_s):
+                pass
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
+            pass
+
+    def close(self) -> None:
+        """Tell a server that opened a session the probe is done with it."""
+        if not self.session_id:
+            return
+        try:
+            with self.opener.open(self._request(None, method="DELETE"), timeout=3):
+                pass
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
+            pass
+
+
+def _plain_result(reply: dict, what: str) -> dict:
+    if isinstance(reply.get("result"), dict):
+        return reply["result"]
+    error = reply.get("error")
+    detail = error.get("message") if isinstance(error, dict) else error
+    raise ProbeError(f"{what} failed: {sanitize(str(detail)) if detail else 'no result'}")
+
+
+def inspect_http(url: str, headers: dict | None,
+                 timeout_s: float | None = None) -> dict:
+    """Handshake one streamable-HTTP server and list its tools.
+
+    ``url`` and ``headers`` come from the resolved config. Returns the
+    same shape as ``inspect_stdio``. A redirect is refused rather than
+    followed, so configured credentials never reach another host; a
+    server that wants an interactive sign-in answers 401 and is reported
+    as such.
+    """
+    parts = urllib.parse.urlsplit(url or "")
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ProbeError("no http(s) URL configured")
+    init_s = INIT_TIMEOUT_S if timeout_s is None else timeout_s
+    tools_s = TOOLS_TIMEOUT_S if timeout_s is None else timeout_s
+    session = _HttpSession(url, headers)
+    try:
+        result = _plain_result(session.call(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                        "clientInfo": {"name": "swe-mcp-probe", "version": "1"}}},
+            init_s, "initialize"), "initialize")
+        version = result.get("protocolVersion")
+        session.protocol = version if isinstance(version, str) else PROTOCOL_VERSION
+        session.notify({"jsonrpc": "2.0", "method": "notifications/initialized"},
+                       tools_s)
+
+        tools: list = []
+        cursor = None
+        for page in range(_MAX_TOOL_PAGES):
+            params = {"cursor": cursor} if cursor else {}
+            listed = _plain_result(session.call(
+                {"jsonrpc": "2.0", "id": 2 + page, "method": "tools/list",
+                 "params": params}, tools_s, "tools/list"), "tools/list")
+            page_tools = listed.get("tools")
+            for tool in page_tools if isinstance(page_tools, list) else []:
+                if isinstance(tool, dict):
+                    tools.append({
+                        "name": sanitize(str(tool.get("name") or "")),
+                        "description": sanitize(str(tool.get("description") or "")),
+                    })
+            cursor = listed.get("nextCursor")
+            if not isinstance(cursor, str) or not cursor:
+                break
+        server_info = result.get("serverInfo")
+        if isinstance(server_info, dict):
+            server_info = {k: sanitize(str(v)) for k, v in server_info.items()}
+        else:
+            server_info = None
+        return {"server": server_info,
+                "protocol_version": version if isinstance(version, str) else None,
+                "tools": tools}
+    finally:
+        session.close()
