@@ -489,7 +489,7 @@ struct SkillDetailContent: View {
 
     private func fileRow(_ node: SkillFileOutline.Node, depth: Int) -> some View {
         let trashable = editable && (files?.trashable.contains(node.path) ?? false)
-        return SkillFileRow(node: node, depth: depth,
+        return RailFileRow(node: node, depth: depth,
                             isSelected: !node.isFolder && selected == node.path,
                             isExpanded: expanded.contains(node.path),
                             isDirty: drafts.documents[node.path]?.isDirty == true,
@@ -626,8 +626,9 @@ struct SkillDetailContent: View {
 
 // MARK: - Rail rows
 
-/// A fold row inside a rail: a chevron that turns, the title, a hover fill.
-private struct RailDisclosure: View {
+/// A fold row inside a detail rail (skill and plugin): a chevron that turns,
+/// the title, a hover fill.
+struct RailDisclosure: View {
     var title: String
     var isOpen: Bool
     var help: (open: String, close: String)
@@ -659,11 +660,11 @@ private struct RailDisclosure: View {
     }
 }
 
-/// One row of the skill's file list: a folder that opens in place, or a
-/// file that opens in the editor, with the selected fill, a hover fill,
-/// an unsaved dot and, for a row the user may remove, a trash button
-/// that shows under the pointer or on the selected row.
-private struct SkillFileRow: View {
+/// One row of a detail rail's file list (skill and plugin): a folder that
+/// opens in place, or a file that opens in the editor, with the selected
+/// fill, a hover fill, an unsaved dot and, for a row the user may remove,
+/// a trash button that shows under the pointer or on the selected row.
+struct RailFileRow: View {
     var node: SkillFileOutline.Node
     var depth: Int
     var isSelected: Bool

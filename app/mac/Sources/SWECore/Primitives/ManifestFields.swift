@@ -97,7 +97,7 @@ public struct PluginManifestFields: Sendable, Equatable {
         return text
     }
 
-    private static func keywordList(_ keywords: String) -> [String] {
+    static func keywordList(_ keywords: String) -> [String] {
         keywords.components(separatedBy: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }

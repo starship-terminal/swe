@@ -14,18 +14,34 @@ public struct SkillFileOutline: Sendable, Equatable {
         public var isFolder: Bool
         public var children: [Node] = []
         public var id: String { path }
+
+        public init(name: String, path: String, isFolder: Bool, children: [Node] = []) {
+            self.name = name
+            self.path = path
+            self.isFolder = isFolder
+            self.children = children
+        }
     }
 
     public var nodes: [Node]
 
     public init(tree: PrimitiveTree, root: URL) {
-        let base = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        nodes = Self.nodes(for: tree.sections.flatMap(\.entries), under: root, skillFileDepth: 0)
+    }
+
+    /// `entries` nested the way they sit on disk under `folder`: folders
+    /// first, then files, each level in name order. A SKILL.md at
+    /// `skillFileDepth` folders down leads its level (0 for a skill's own
+    /// folder, 1 for a plugin's `skills/` folder, nil for none). The plugin
+    /// detail builds each of its sections with this too.
+    static func nodes(for entries: [PrimitiveTree.Entry], under folder: URL, skillFileDepth: Int?) -> [Node] {
+        let base = folder.path.hasSuffix("/") ? folder.path : folder.path + "/"
         func relative(_ path: String) -> [String]? {
             guard path.hasPrefix(base), path.count > base.count else { return nil }
             return path.dropFirst(base.count).split(separator: "/").map(String.init)
         }
         var items: [(parts: [String], isFolder: Bool)] = []
-        for entry in tree.sections.flatMap(\.entries) {
+        for entry in entries {
             if entry.isFolder {
                 // A skill folder shows even when it is empty.
                 if let parts = relative(entry.path) { items.append((parts, true)) }
@@ -34,11 +50,11 @@ public struct SkillFileOutline: Sendable, Equatable {
                 items.append((parts, false))
             }
         }
-        nodes = Self.build(items, base: base, prefix: "")
+        return build(items, base: base, prefix: "", depth: 0, skillFileDepth: skillFileDepth)
     }
 
     private static func build(_ items: [(parts: [String], isFolder: Bool)],
-                              base: String, prefix: String) -> [Node] {
+                              base: String, prefix: String, depth: Int, skillFileDepth: Int?) -> [Node] {
         var files: [Node] = []
         var folders: [String: [(parts: [String], isFolder: Bool)]] = [:]
         for item in items {
@@ -53,11 +69,12 @@ public struct SkillFileOutline: Sendable, Equatable {
         }
         let folderNodes = folders.keys.sorted().map { name in
             Node(name: name, path: base + prefix + name, isFolder: true,
-                 children: build(folders[name] ?? [], base: base, prefix: prefix + name + "/"))
+                 children: build(folders[name] ?? [], base: base, prefix: prefix + name + "/",
+                                 depth: depth + 1, skillFileDepth: skillFileDepth))
         }
         files.sort { $0.name < $1.name }
-        // The skill's own SKILL.md leads: it is the skill.
-        if prefix.isEmpty, let main = files.firstIndex(where: { $0.name == "SKILL.md" }) {
+        // A skill's own SKILL.md leads: it is the skill.
+        if depth == skillFileDepth, let main = files.firstIndex(where: { $0.name == "SKILL.md" }) {
             return [files.remove(at: main)] + folderNodes + files
         }
         return folderNodes + files
@@ -72,7 +89,7 @@ public struct SkillFileOutline: Sendable, Equatable {
     }
 }
 
-/// How the skill detail lays out its rail and file editor: side by side,
+/// How the skill and plugin details lay out their rail and file editor: side by side,
 /// the rail full width when the editor keeps `editorMinimum` beside it and
 /// narrow otherwise (both scaled by the text zoom, never more than 45% of
 /// the room); stacked, rail over editor, once even the narrow rail would
