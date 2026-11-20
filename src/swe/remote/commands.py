@@ -263,6 +263,9 @@ def _cmd_serve(flags: dict) -> int:
                   "no Tailscale address found; binding localhost only"),
                 file=sys.stderr,
             )
+    note = upgrade_service(HUB)
+    if note:
+        print(f"{_stamp()}  {note}", flush=True)
     state = HubState()
     # Timestamped and flushed: the log is often a file, and a hub killed
     # by a restart otherwise leaves no trace of when it ran.
@@ -468,6 +471,38 @@ def install_service(program: list[str], log_path: Path, home: Path | None = None
                      f"`systemctl --user disable --now {service.old_unit}`, then run "
                      f"--install again")
     return path, "; ".join(notes)
+
+
+def upgrade_service(service: Service = HUB, home: Path | None = None,
+                    environ=os.environ, popen=subprocess.Popen) -> str:
+    """Bring an installed service's file up to this swe, at start, so
+    an upgrade needs no ``--install``. Returns a line for the log, or
+    "" when nothing changed.
+
+    macOS: an agent installed before session keepers existed lacks
+    ``AbandonProcessGroup``. The plist is rewritten in place, and when
+    this process is that agent's job it is loaded again from the new
+    file (launchd reads a plist only at load). That reload ends this
+    process; launchd starts the hub again at once.
+
+    Linux: nothing in the unit file changed for keepers. A keeper is
+    put in a scope unit of its own when it is started
+    (``systemd.keeper_scope_argv``), so the new code is enough.
+    """
+    if sys.platform != "darwin":
+        return ""
+    try:
+        if not launchd.upgrade_plist(home, service.label):
+            return ""
+        path = launchd.plist_path(home, service.label)
+        if not launchd.running_as(service.label, environ):
+            return (f"updated {path} (AbandonProcessGroup); it takes effect "
+                    f"when the {service.name} service next loads")
+        launchd.reload_detached(home, service.label, popen=popen)
+    except OSError as exc:
+        return f"could not update the {service.name} LaunchAgent: {exc}"
+    return (f"updated {path} (AbandonProcessGroup) and reloading the "
+            f"{service.name} service so it takes effect")
 
 
 def _cmd_uninstall_service(service: Service) -> int:

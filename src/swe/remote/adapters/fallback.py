@@ -29,6 +29,14 @@ adapter then probes ``acp.ACP_FALLBACK``'s candidates through
 ``acp.command_for``.
 
 ``registry.adapter_for`` is the only reader.
+
+``SESSION_SEED`` is not a fallback: it is what the hub writes into
+harness.json, once, for a registered harness whose entry declares no
+``capabilities.session`` when ``remote.session_view`` is turned on
+(``runtime.SessionRuntime.seed_capabilities``). From then on the file
+is the authority and this table is never read for that harness again.
+A row lists exactly what a recorded fixture proves
+(docs/specs/G7-claude-stream-adapter.md, "Proven by fixture").
 """
 
 from __future__ import annotations
@@ -55,4 +63,22 @@ SESSION_FALLBACK = MappingProxyType({
     "gemini": MappingProxyType(dict(_ACP)),
     "qwen-code": MappingProxyType(dict(_ACP)),
     "kimi": MappingProxyType(dict(_ACP)),
+})
+
+# Written into harness.json once (see the module docstring), never read
+# as a fallback. Claude: the proven spawn line and the features the
+# 2.1.328 recordings prove; ``rollback`` and the ``effort`` option have
+# no wire form and stay off.
+SESSION_SEED = MappingProxyType({
+    "claude": MappingProxyType({
+        "adapter": "claude_stream",
+        "argv": ["claude", "--output-format", "stream-json", "--verbose",
+                 "--input-format", "stream-json",
+                 "--permission-prompt-tool", "stdio",
+                 "--include-partial-messages"],
+        "min_version": "2.0.0",
+        "steer": True, "plan_mode": True, "rollback": False,
+        "fork": True, "stop_task": True,
+        "options": ["model", "permission_mode"],
+    }),
 })

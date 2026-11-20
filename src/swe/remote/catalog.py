@@ -637,6 +637,88 @@ def session_to_row(
     return key, row
 
 
+# A session a keeper holds (remote/runtime.py): how its row says so.
+KEEPER_MODE = "keeper"
+
+
+def _own_row(row: dict, owned: dict) -> dict:
+    """``row`` as the list shows a session SWE drives through a keeper:
+    attached, with the keeper's own state in place of a status guessed
+    from the transcript."""
+    row = dict(row)
+    caps = owned.get("caps") or {}
+    row["key"] = owned["key"]
+    row["ownership"] = protocol.OWNERSHIP_ATTACHED
+    row["mode"] = KEEPER_MODE
+    row.pop("tmux", None)
+    row.pop("kept", None)
+    row["control"] = "full"
+    row["state"] = owned.get("state") or ""
+    row["status"] = owned.get("status") or None
+    row["adapter"] = owned.get("adapter") or ""
+    row["caps"] = caps
+    row["attachable"] = True
+    row["can_fork"] = bool(caps.get("fork"))
+    if owned.get("model") and not row.get("model"):
+        row["model"] = owned["model"]
+    modes = [m for m in row.get("model_modes") or [] if m != KEEPER_MODE]
+    if "model" in (caps.get("options") or []):
+        modes.append(KEEPER_MODE)
+    row["model_modes"] = modes
+    active = owned.get("active_at") or 0
+    if isinstance(active, (int, float)) and active > (
+            row.get("last_active_at") or 0):
+        row["last_active_at"] = active
+    return row
+
+
+def overlay_owned(
+    rows: list[tuple[str, Session | None, dict, str]],
+    owned: list[dict],
+    machine_id: str,
+) -> list[tuple[str, Session | None, dict, str]]:
+    """``rows`` with every keeper-held session in it once, under the
+    hub's key for it.
+
+    A session whose transcript the aggregator found is the same row
+    with the keeper's fields on top (matched by harness and the
+    harness's own session id, so it is one row even if the two keys
+    differ). One with no transcript yet (just launched) gets a row of
+    its own, first in the list.
+    """
+    if not owned:
+        return rows
+    by_ident = {(o["harness"], o["harness_session_id"]): o for o in owned}
+    seen: set[str] = set()
+    out: list[tuple[str, Session | None, dict, str]] = []
+    for key, session, row, status in rows:
+        o = by_ident.get((session.tool_name, session.session_id)) \
+            if session is not None else None
+        if o is None or o["key"] in seen:
+            if o is None:
+                out.append((key, session, row, status))
+            continue
+        seen.add(o["key"])
+        out.append((o["key"], session, _own_row(row, o),
+                    o.get("status") or ""))
+    fresh = []
+    for o in owned:
+        if o["key"] in seen:
+            continue
+        cwd = o.get("cwd") or ""
+        session = Session(
+            timestamp=int((o.get("active_at") or time.time()) * 1000),
+            agent=o["harness"], path=cwd,
+            title=o.get("title") or os.path.basename(cwd.rstrip("/"))
+            or o["harness"],
+            session_id=o["harness_session_id"], tool_name=o["harness"])
+        _key, row = session_to_row(session, o.get("status") or "",
+                                   machine_id, {})
+        fresh.append((o["key"], session, _own_row(row, o),
+                      o.get("status") or ""))
+    return fresh + out
+
+
 def _index_of(rows: list[tuple]) -> dict[str, int]:
     """key -> position of its first row, as a scan would find it."""
     index: dict[str, int] = {}
@@ -692,6 +774,11 @@ class Catalog:
         # per thread that newly turned unread.
         self.fetch_github = fetch_github
         self.on_github_alert: Callable[[dict], None] | None = None
+        # The sessions a keeper holds, set by the hub
+        # (``runtime.SessionRuntime.rows``); ``read_only_reason`` says
+        # why SWE let go of one it used to drive.
+        self.owned_rows: Callable[[], list[dict]] | None = None
+        self.read_only_reason: Callable[[str], str | None] | None = None
         self._github_rows: list[dict] = []
         # gh_thread_id → updated_at of the last-seen unread state; None
         # until the first successful poll, which is a silent baseline —
@@ -743,7 +830,18 @@ class Catalog:
             key, row = session_to_row(
                 session, status, self.machine_id, supervised, kept, model
             )
+            if self.read_only_reason is not None:
+                reason = self.read_only_reason(key)
+                if reason:
+                    row["control"] = "read_only"
+                    row["control_reason"] = reason
             rows.append((key, session, row, status))
+        if self.owned_rows is not None:
+            try:
+                rows = overlay_owned(rows, self.owned_rows(),
+                                     self.machine_id)
+            except Exception:
+                pass  # the list without keeper fields beats no list
         # Satellite sessions travel as row dicts (no Session object — the
         # satellite owns execution); remote entries stay out of tail_rows.
         for row in load_remote_rows(self.home):
@@ -789,6 +887,17 @@ class Catalog:
             if i is not None and rows[i][1] is not None:
                 k, session, row, _st = rows[i]
                 row["status"] = status or None
+                rows[i] = (k, session, row, status)
+
+    def patch(self, key: str, fields: dict, status: str) -> None:
+        """Set ``fields`` on ``key``'s row now (a keeper reported its
+        state): the next refresh builds the same values itself."""
+        with self._lock:
+            rows, index = self._table
+            i = index.get(key)
+            if i is not None:
+                k, session, row, _st = rows[i]
+                row.update(fields)
                 rows[i] = (k, session, row, status)
 
     def tail_snapshot(self) -> tuple[list[tuple[str, Session, str]], float]:

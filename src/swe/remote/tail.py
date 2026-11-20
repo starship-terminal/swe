@@ -1922,6 +1922,10 @@ class TailManager:
         self._files_lock = threading.Lock()
         # Set by the hub while nobody watches; see ``set_low_power``.
         self.low_power = False
+        # Keys this manager must not tail: a session a keeper holds has
+        # the keeper's log as its timeline, and the harness's own
+        # transcript of it would journal every message a second time.
+        self.skip: Callable[[str], bool] = lambda key: False
 
     def last_append_at(self, key: str) -> float | None:
         return self.last_append.get(key)
@@ -1999,7 +2003,7 @@ class TailManager:
         Background tailing stays capped at ``max_sessions``; a phone
         opening an older session gets history and live updates anyway.
         """
-        if key in self.tailers:
+        if key in self.tailers or self.skip(key):
             return
         source = make_source(session)
         if source is None:
@@ -2104,6 +2108,9 @@ class TailManager:
         older news, and taking it would flip the phone back. None means
         untimed (tests): the catalog's status always applies.
         """
+        # A keeper-held session is not tailed: leaving it out here also
+        # drops a tailer it had before SWE took it over.
+        rows = [row for row in rows if not self.skip(row[0])]
         by_key = {key: (s, st) for key, s, st in rows}
         wanted = rows[: self.max_sessions]
         wanted_keys = {key for key, _s, _st in wanted}
@@ -2147,6 +2154,43 @@ class TailManager:
             if self._may_have_moved(tailer, session):
                 self._reresolve(tailer, session)
             self._take_status(key, status, as_of, announce_first=False)
+
+    def drop(self, key: str) -> None:
+        """Stop tailing ``key`` now (a keeper took the session over),
+        without waiting for the next ``sync``."""
+        with self._status_lock:
+            self.tailers.pop(key, None)
+            self.statuses.pop(key, None)
+            self._status_at.pop(key, None)
+            self._forget(key)
+        self._probe_due.discard(key)
+        self._probed_at.pop(key, None)
+
+    def hand_back(self, key: str, mark: dict | None = None) -> None:
+        """Place ``key``'s cursor for the tailer that follows a keeper.
+
+        ``mark`` is the transcript ``{path, offset}`` up to which the
+        keeper's log already covers the session: the next tailer reads
+        on from there. Without one the cursor is removed, and a tailer
+        that finds a journal and no cursor starts at the transcript's
+        end, so nothing the keeper logged is journaled again.
+        """
+        path = _cursor_path(self.cursors_dir, key)
+        with self._files_lock:
+            try:
+                if mark and isinstance(mark.get("path"), str) \
+                        and isinstance(mark.get("offset"), int):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = path.with_suffix(".tmp")
+                    tmp.write_text(json.dumps({
+                        "source": "jsonl", "path": mark["path"],
+                        "offset": mark["offset"], "since": None,
+                    }), encoding="utf-8")
+                    os.replace(tmp, path)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def sweep_stale(
         self,

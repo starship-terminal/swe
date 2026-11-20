@@ -11,8 +11,10 @@ session itself, a keeper process holds the agent across hub restarts, and one
 web session view replaces the separate chats. Read the
 [spec](specs/G1-session-runtime-redesign.md), the
 [decision record](decisions/0001-session-runtime-redesign.md) and the
-[roadmap](roadmap/milestones.yaml). Until those milestones land, the rest of
-this doc is accurate.
+[roadmap](roadmap/milestones.yaml). The first part is in the hub behind a
+setting that is off by default: see
+[Sessions on keepers](#sessions-on-keepers--runtimepy). With it off, the
+rest of this doc is accurate as it stands.
 
 Watch and steer CLI coding sessions (Claude Code, Codex, opencode and the
 rest of the registry) from a phone. Read the chat, send prompts, see new
@@ -251,6 +253,11 @@ remote/
   fork.py        # fork a session: per-harness fork command lines, the route
   journal.py     # per-session seq-numbered event log (replay on reconnect)
   hub.py         # http.server ThreadingHTTPServer: REST + SSE, device auth
+  runtime.py     # the hub's side of session keepers (behind remote.session_view)
+  keeper/        # one process per kept session: agent, queue, event log, IPC
+  adapters/      # one structured channel per harness (claude_stream), v2 events
+  store.py       # remote.sqlite: sessions, keepers, launches, command receipts
+  protocol_compat.py  # v2 events as today's v1 frames
   peer.py        # is a loopback peer the Tailscale daemon? gates X-Forwarded-For
   files.py       # @-mention paths under a session's folder (/v1/sessions/{id}/files)
   preview.py     # one .html/.svg file from a session's folder (/v1/sessions/{id}/preview)
@@ -1646,6 +1653,42 @@ sign-in without `confirm_this_device: true` (a stray tap can't lock the
 phone out), and `500 ssh_key_left` when the device is out but its
 `authorized_keys` line stayed.
 
+## Sessions on keepers — `runtime.py`
+
+Behind `remote.session_view` (`swe config set remote.session_view true`,
+then restart the hub; off by default). Full rules:
+[G8-hub-on-keepers.md](specs/G8-hub-on-keepers.md).
+
+With the setting on, a session of a harness that has a session adapter
+(`capabilities.session` in harness.json; today Claude Code, through
+`claude_stream`) is run by a keeper: one detached process per session
+(`python -m swe.remote.keeper`) that holds the agent, the send queue
+and the session's event log, and keeps running when the hub restarts.
+Everything else on this page still applies to every other session, and
+to all of them when the setting is off.
+
+| What | With a keeper |
+|---|---|
+| `POST /v1/sessions` | the hub picks the session id, starts a keeper and sends the prompt. No pending marker, nothing to adopt. `yolo: true` still launches the old way |
+| Attach (`control {op: attach}`, no `mode`) | Continue in SWE: the session is resumed by its own id under a keeper. Refused (409) while it is mid-turn, its transcript moved in the last 5 seconds, or a harness process still has it open (`session_in_use`). An explicit `mode` still asks for that channel |
+| The row | `ownership: attached`, `mode: "keeper"`, `control: "full"`, `state` (the keeper's), `status`, `adapter`, `caps` |
+| `message`, `approval`, `control`, `queue` | stored under `command_id` (or `client_id`) in `remote.sqlite` before delivery. A retry answers the stored receipt (`duplicate: true`) and is not applied again. `message` answers 202 with `receipt` (`accepted` or `queued`) and `waiting` |
+| Two devices answer one approval | the first wins; the second gets 409 `approval_failed` |
+| The queue | lives in the keeper. `GET .../queue` lists it; `edit`, `cancel` and `steer` act on it |
+| The timeline | the keeper's log. The hub journals each event under the keeper's seq and does not tail the CLI's transcript for that session. Today's clients get the same v1 frames as before (`protocol_compat.to_v1`); a question with choices arrives as an approval card |
+| Hub restart | the hub reconnects to every keeper still running, replays from the journal's last seq, and the open approvals and the queue are as they were. A message the old hub accepted and never delivered is delivered |
+| Agent crash | status `error`; the next message restarts the agent in the same keeper |
+| Keeper killed | open approval cards are retired and status turns `error`; the next message starts a new keeper that resumes the harness session |
+| `detach`, `kill` | stop the keeper; the session is a terminal session again (`ownership: observed`) and can be continued later. `detach` with `mode: keep` answers 409 (there is no pane to keep) |
+| `compact`, `clear` | 409 `control_failed`: not available on a keeper yet |
+| `POST /v1/sessions/{key}/command {op, command_id?, ...}` | new, keeper-held sessions only (409 `not_kept` otherwise): `set_option` with `name` (`model`, `effort`, `permission_mode`, `plan_mode`) and `value`, `stop_task` with `task_id`, `interrupt` with an optional `clear_queue`, `park`. Answers `{ok, receipt, command_id}` |
+| Fork | a new keeper that forks by the harness's id, when the adapter can fork |
+| Parked, then resumed in a terminal | the hub lets go: `ownership: observed`, `control: "read_only"`, `control_reason` |
+
+A keeper parks its agent after 30 idle minutes and resumes it on the
+next message. `GET /v1/launches/<id>` answers from `remote.sqlite` when
+the hub that took the launch has restarted.
+
 ## Keeping the hub up — `launchd.py`, `systemd.py`
 
 A hub started from a shell dies with the login session, and nothing
@@ -1663,6 +1706,15 @@ new bundle. The agent gets the installing shell's `PATH` and logs to
 It runs `serve --tailnet`: with no Tailscale address yet (early in a
 login) the hub exits instead of binding localhost, and launchd retries.
 `--install` again restarts it; `--uninstall` stops and removes it.
+
+The LaunchAgent sets `AbandonProcessGroup`, so launchd leaves session
+keepers running when the hub's job ends. An agent installed before that
+key existed gets it without a reinstall: `swe remote serve` adds the key
+to the installed plist when it starts, and when it is running as that
+agent it reloads the job from the new file (`launchctl bootout` and
+`bootstrap`, from a shell outside the job, because the unload ends the
+hub). The hub is back a moment later. On Linux the unit needs nothing:
+each keeper is started in a systemd scope of its own.
 
 On Linux, `--install` writes the systemd user unit
 `~/.config/systemd/user/swe-remote-hub.service` (under

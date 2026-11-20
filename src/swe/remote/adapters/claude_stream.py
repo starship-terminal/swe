@@ -315,8 +315,12 @@ class ClaudeStreamAdapter:
         if spec.resume_id and not wire.is_session_id(spec.resume_id):
             raise AdapterError(f"{spec.resume_id!r} is not a Claude "
                                "session id", code="bad_request")
+        if spec.session_id and not wire.is_session_id(spec.session_id):
+            raise AdapterError(
+                f"not a Claude session id: {spec.session_id!r}",
+                code="bad_request")
         session_id = spec.resume_id if spec.resume_id and not spec.fork \
-            else wire.new_session_id()
+            else (spec.session_id or wire.new_session_id())
         base = spec.argv or self._argv or wire.DEFAULT_ARGV
         mode = "plan" if spec.plan_mode else spec.permission_mode
         argv = wire.spawn_argv(
