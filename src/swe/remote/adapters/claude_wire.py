@@ -14,7 +14,8 @@ What we write (one JSON object per line):
 
 - ``{"type": "user", "message": {"role": "user", "content": ...},
   "parent_tool_use_id": null}``: a turn. ``priority: "now"`` makes it a
-  steer (recorded, left off; see ``docs/specs/G7-claude-stream-adapter.md``).
+  steer: the CLI cuts the reply in progress and answers this message in
+  the same turn (see ``docs/specs/G7-claude-stream-adapter.md``).
 - ``{"type": "control_request", "request_id": R, "request": {"subtype":
   S, ...}}`` for ``initialize``, ``interrupt``, ``set_model``,
   ``set_permission_mode``, ``stop_task`` and ``rewind_files``; the CLI
@@ -86,20 +87,21 @@ RECORDED_VERSION = "2.1.328"
 
 # What the recordings prove, by feature. ``claude_stream`` never offers
 # more than this, whatever harness.json says (harness.json and the
-# handshake can only narrow it further). Steer is recorded but left off
-# for the owner to decide; conversation rollback has no wire form
-# (``rewind_files`` restores files only); effort has a spawn flag but no
-# mid-session control request.
-PROVEN = Caps(plan_mode=True, fork=True, stop_task=True,
+# handshake can only narrow it further). Steer is ``priority: "now"``
+# (the steer, steer_tool and steer_approval fixtures); conversation
+# rollback has no wire form (``rewind_files`` restores files only);
+# effort has a spawn flag but no mid-session control request.
+PROVEN = Caps(steer=True, plan_mode=True, fork=True, stop_task=True,
               options=frozenset({"model", "permission_mode"}))
 
 # A feature that needs a protocol capability string in the init
 # message's ``capabilities`` array: when the array lacks it (or the CLI
-# sends no array, as before 2.1.205), the feature narrows off. No string
-# in 2.1.328's array names a proven feature, so it is empty; steer would
-# go behind ``interrupt_send_now_v1`` (guessing: that string names the
-# "interrupt and send now" behaviour the steer fixture shows).
-REQUIRED_CAPABILITIES: dict[str, str] = {}
+# sends no array, as before 2.1.205), the feature narrows off. Steer
+# needs ``interrupt_send_now_v1``, the string 2.1.328's init lists beside
+# the "interrupt and send now" behaviour the steer fixtures record. The
+# initialize answer's own array never lists it, so steer is checked per
+# init message, not at the handshake.
+REQUIRED_CAPABILITIES: dict[str, str] = {"steer": "interrupt_send_now_v1"}
 
 _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -615,10 +617,11 @@ class StreamState:
     """One Claude session's protocol state, from the adapter's side.
 
     The adapter calls ``start_events`` after the handshake,
-    ``begin_turn`` per ``send_turn``, ``answer`` per ``respond``,
-    ``interrupt_sent`` per ``interrupt``, ``feed`` per line the CLI
-    prints, and ``exited`` or ``closed`` once at the end; each returns
-    the v2 events to emit, in order. Nothing is returned after the end.
+    ``begin_turn`` per ``send_turn``, ``steer`` per ``steer``,
+    ``answer`` per ``respond``, ``interrupt_sent`` per ``interrupt``,
+    ``feed`` per line the CLI prints, and ``exited`` or ``closed`` once
+    at the end; each returns the v2 events to emit, in order. Nothing is
+    returned after the end.
 
     Line by line (``feed``):
 
@@ -685,6 +688,12 @@ class StreamState:
         # api message id -> {kind: [block indexes in order]}
         self._order: dict[str, dict[str, list]] = {}
         self._completed: set = set()
+        # Tool calls whose approval was withdrawn (by a steer or the
+        # CLI's cancel): their error result is a cancellation.
+        self._cancelled_calls: set = set()
+        # Whether an init message has come: steer is only known to work
+        # once one listed its capability string.
+        self.init_seen = False
         self._state_events = False
         self._held: list[dict] = []
         self._n_turn = 0
@@ -729,6 +738,7 @@ class StreamState:
         self._blocks.clear()
         self._order.clear()
         self._completed.clear()
+        self._cancelled_calls.clear()
 
     def _open_turn(self, out: list, *, by: str = "", text: str = "",
                    command_id: str = "") -> _Turn:
@@ -782,6 +792,26 @@ class StreamState:
             attachments=[_redact_secrets(str(a)) for a in attachments] or None,
             turn_id=self.turn.turn_id, command_id=command_id or None,
             ts=self.clock())
+
+    def steer(self, text: str, *, attachments: Iterable[str] = (),
+              command_id: str = "", device: str = "") -> list:
+        """We sent a message with ``priority: "now"`` into the open turn:
+        the user's ``message.completed``, then any open request retired
+        ``superseded`` (the CLI withdraws it itself with a
+        ``control_cancel_request``, recorded in steer_approval, and the
+        call it asked about never runs). The reply in progress is cut by
+        the CLI: its partial ``assistant`` message (``aborted: true``)
+        completes the stream as usual, and the turn goes on until
+        ``idle``."""
+        assert self.turn is not None
+        out = [self.user_message(text, attachments=attachments,
+                                 command_id=command_id, device=device)]
+        if self.pending:
+            self._cancelled_calls.update(
+                p.call_id for p in self.pending.values() if p.call_id)
+            self._retire(out, "superseded")
+            self._state(out, "running")
+        return out
 
     def interrupt_sent(self) -> list:
         """We asked the CLI to stop the turn: its open requests are
@@ -939,7 +969,9 @@ class StreamState:
     def _on_control_cancel_request(self, msg: dict, fed: Fed) -> None:
         rid = msg.get("request_id")
         if isinstance(rid, str) and rid in self.pending:
-            del self.pending[rid]
+            withdrawn = self.pending.pop(rid)
+            if withdrawn.call_id:
+                self._cancelled_calls.add(withdrawn.call_id)
             self._out(fed.events, ev.approval_resolved(
                 self.key, rid, "harness", turn_id=self._tid(),
                 ts=self.clock()))
@@ -1001,6 +1033,7 @@ class StreamState:
         self._state(out, "idle")
 
     def _on_init(self, msg: dict, fed: Fed) -> None:
+        self.init_seen = True
         sid = msg.get("session_id")
         if is_session_id(sid):
             self.session_id = sid
@@ -1193,8 +1226,13 @@ class StreamState:
             if not call_id or call_id not in self._tools:
                 continue
             name = self._tools.pop(call_id)
-            interrupted = isinstance(structured, dict) and \
-                structured.get("interrupted") is True
+            # A command a steer or an interrupt cut says ``interrupted``;
+            # a call whose approval was withdrawn gets the CLI's
+            # "Tool permission request aborted" error and never ran.
+            interrupted = (isinstance(structured, dict) and
+                           structured.get("interrupted") is True) or (
+                call_id in self._cancelled_calls and block.get("is_error"))
+            self._cancelled_calls.discard(call_id)
             status = "cancelled" if interrupted else (
                 "error" if block.get("is_error") else "ok")
             output = _redact_secrets(_result_text(block.get("content")))
@@ -1206,9 +1244,32 @@ class StreamState:
                 self.key, call_id, status, name=name, output=output,
                 file_edits=edits, turn_id=self._tid(), ts=self.clock()))
 
+    def _close_streams(self, out: list) -> None:
+        """Complete every stream a client has seen deltas of but no
+        completion: a reply cut short (a steer, an interrupt) whose
+        block the CLI abandoned (``abandoned_blocks``) instead of sending
+        it as a partial ``assistant`` message. The text so far, redacted,
+        goes out as its last delta and its completion."""
+        for block in list(self._blocks.values()):
+            if block.seq == 0 or block.id in self._completed:
+                continue
+            final = _redact_secrets(block.raw)
+            self._show(out, block, final, done=True)
+            self._completed.add(block.id)
+            if block.kind == "thinking":
+                self._out(out, ev.thinking_completed(
+                    self.key, block.id, block.shown, turn_id=self._tid(),
+                    ts=self.clock()))
+            else:
+                self._out(out, ev.message_completed(
+                    self.key, block.id, "assistant", block.shown,
+                    turn_id=self._tid(), ts=self.clock()))
+
     def _on_result(self, msg: dict, fed: Fed) -> None:
         if self.turn is None:
             return
+        # A reply is over at its result: nothing may stay streaming.
+        self._close_streams(fed.events)
         usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
         counts: dict[str, Any] = {}
         for name, key in (("input_tokens", "input_tokens"),
@@ -1343,7 +1404,10 @@ def _replay_outgoing(state: StreamState, msg: dict, init_ids: dict,
         text = text if isinstance(text, str) else _result_text(text)
         if state.turn is None:
             return state.begin_turn(text)[1]
-        # A message sent mid-turn (the steer recording) joins the turn.
+        if msg.get("priority") == "now":
+            # A steer: what ``ClaudeStreamAdapter.steer`` emits.
+            return state.steer(text)
+        # Any other message sent mid-turn joins the turn as is.
         return [state.user_message(text)]
     if mtype == "control_request":
         req = msg.get("request") or {}

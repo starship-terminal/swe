@@ -15,6 +15,9 @@ locks and the bounded waits, under the contract in ``base.py``.
   passed with ``--session-id`` (a resume keeps the resumed id).
 - ``send_turn`` writes one user message and returns; the turn ends when
   the CLI reports ``session_state_changed: idle``.
+- ``steer`` writes one user message with ``priority: "now"`` into the
+  open turn: the CLI cuts the reply in progress (a running tool call is
+  killed, an open approval withdrawn) and answers it in the same turn.
 - ``interrupt``, ``set_option`` and ``stop_task`` send a control
   request and return once the CLI acknowledges it (``CALL_TIMEOUT_S``).
 - ``respond`` writes the ``control_response`` to an open
@@ -190,6 +193,9 @@ class ClaudeStreamAdapter:
         self._stderr: collections.deque = collections.deque(
             maxlen=_STDERR_LINES)
         self._mode_before_plan = ""
+        # Set once the CLI's first init message has come (or it exited):
+        # only that message says whether it takes steer.
+        self._init_seen = threading.Event()
         self.version = ""
         # Why lines were skipped (a bug, never the wire's fault): kept
         # for tests and logs, bounded.
@@ -405,12 +411,46 @@ class ClaudeStreamAdapter:
             self._emit(events)
             return turn_id
 
-    def steer(self, turn: TurnInput) -> None:
-        with self._lock:
-            self._live()
-        # Recorded but left off: see docs/specs/G7-claude-stream-adapter.md.
+    def _steerable(self) -> wire.StreamState:
+        state = self._live()
         self.capabilities.require("steer")
-        raise Unsupported("steer")  # pragma: no cover - PROVEN keeps it off
+        if state.turn is None:
+            raise AdapterError("no turn to steer", code="idle")
+        return state
+
+    def steer(self, turn: TurnInput) -> None:
+        """Send ``turn`` with ``priority: "now"``: the CLI stops the reply
+        in progress and answers this message inside the same turn (see
+        docs/specs/G7-claude-stream-adapter.md, "Steer"). Needs an open
+        turn (``idle`` otherwise, as the fake adapter). The CLI says
+        whether it takes this (``interrupt_send_now_v1``) only in the
+        turn's init message, so a steer sent before this process's first
+        one waits for it, bounded by ``call_timeout``."""
+        with self._lock:
+            ready = self._steerable().init_seen
+        if not ready and not self._init_seen.wait(self._call_timeout):
+            raise AdapterError("claude has not said whether it takes steer",
+                               code="timeout")
+        with self._lock:
+            # Checked again: that init may have narrowed steer off, or
+            # the turn may have ended meanwhile.
+            state = self._steerable()
+            try:
+                written = self._write(wire.user_message(
+                    turn.text, attachments=turn.attachments,
+                    priority="now"))
+            except AdapterError:
+                written = None
+            if not written:
+                # Nothing emitted: the message never reached the CLI.
+                if written is None:
+                    raise AdapterError("claude stopped reading its input",
+                                       code="timeout")
+                raise AdapterError("claude is not reachable",
+                                   code="agent_down")
+            self._emit(state.steer(turn.text, attachments=turn.attachments,
+                                   command_id=turn.command_id,
+                                   device=turn.device))
 
     def interrupt(self) -> None:
         message = wire.interrupt(self._rid("interrupt"))
@@ -588,6 +628,8 @@ class ClaudeStreamAdapter:
                 self._write(reply, wait=False)
             if not state.done and self._sink is not None:
                 self._emit(fed.events)
+            if state.init_seen:
+                self._init_seen.set()
             waiters = [(self._waiters.pop(a.request_id, None), a)
                        for a in fed.acks]
         for waiter, ack in waiters:
@@ -620,6 +662,8 @@ class ClaudeStreamAdapter:
                                                   and code else "")))
         for waiter in waiters:
             waiter.event.set()
+        # A steer waiting for the init wakes and finds the agent gone.
+        self._init_seen.set()
 
 
 def _close(stream: Any) -> None:

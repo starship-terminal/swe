@@ -7,7 +7,7 @@
   "ts": 1760000001.147,
   "data": {
    "caps": {
-    "steer": false,
+    "steer": true,
     "plan_mode": true,
     "rollback": false,
     "fork": true,
