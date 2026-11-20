@@ -597,6 +597,101 @@ def sc_steer(spawn, work, ctx):
     return [d]
 
 
+def _is_can_use(m) -> bool:
+    return m.get("type") == "control_request" and (
+        m.get("request") or {}).get("subtype") == "can_use_tool"
+
+
+def _results_then_idle(d: Driver, start: int, *, skip=(), timeout=90.0,
+                       answer=None) -> list:
+    """Every ``result`` since ``start`` until the CLI goes idle, allowing
+    (or ``answer``-ing) any new ``can_use_tool`` except the ids in
+    ``skip``; the results in order."""
+    deadline = time.monotonic() + timeout
+    handled = set(skip)
+    while True:
+        msg = d.wait(
+            lambda m: (m.get("type") == "system"
+                       and m.get("subtype") == "session_state_changed"
+                       and m.get("state") == "idle")
+            or (_is_can_use(m) and m.get("request_id") not in handled),
+            max(0.1, deadline - time.monotonic()), start, "idle")
+        if msg.get("type") == "system":
+            return [m for m in d.incoming(start) if m.get("type") == "result"]
+        handled.add(msg["request_id"])
+        req = msg.get("request") or {}
+        d.send(answer(msg["request_id"], req) if answer
+               else _allow(msg["request_id"], req))
+
+
+def sc_steer_tool(spawn, work, ctx):
+    """``priority: "now"`` sent while a slow Bash call runs: is the call
+    killed, what does its tool_result say, does the file it would write
+    appear, how does the turn end."""
+    d = spawn(permission_mode="default")
+    _handshake(d)
+    start = d.mark()
+    d.send(wire.user_message(
+        "Use the Bash tool, in the foreground (not in the background), to "
+        "run exactly this command and nothing else: sleep 20 && echo done "
+        "> slept.txt. Then reply only with: finished"))
+    asked = d.wait(_is_can_use, 90, start, "the Bash approval")
+    d.send(_allow(asked["request_id"], asked.get("request") or {}))
+    allowed_at = time.monotonic()
+    # Let the command get going: a tool_progress line if the CLI sends
+    # one, else three seconds.
+    try:
+        d.wait(lambda m: m.get("type") == "tool_progress", 3, start,
+               "tool progress")
+    except ScenarioError:
+        pass
+    time.sleep(max(0.0, 3.0 - (time.monotonic() - allowed_at)))
+    ctx["written_before_steer"] = Path(work, "slept.txt").exists()
+    d.send(wire.user_message("Stop what you are doing and reply only with: "
+                             "steered", priority="now"))
+    results = _results_then_idle(d, start, skip={asked["request_id"]})
+    ctx["idle_after_s"] = round(time.monotonic() - allowed_at, 1)
+    ctx["results"] = len(results)
+    ctx["written_at_idle"] = Path(work, "slept.txt").exists()
+    # A command left running would finish 20 s after it started.
+    time.sleep(max(0.0, 25.0 - (time.monotonic() - allowed_at)))
+    ctx["written_after_25s"] = Path(work, "slept.txt").exists()
+    return [d]
+
+
+def sc_steer_approval(spawn, work, ctx):
+    """``priority: "now"`` sent while a ``can_use_tool`` is open: is the
+    request cancelled, left open, or denied for us."""
+    d = spawn(permission_mode="default")
+    _handshake(d)
+    start = d.mark()
+    d.send(wire.user_message(
+        "Use the Bash tool to run exactly this command and nothing else: "
+        "touch approved.txt. Then reply only with: done"))
+    asked = d.wait(_is_can_use, 90, start, "the Bash approval")
+    rid = asked["request_id"]
+    after = d.mark()
+    d.send(wire.user_message("Do not run anything. Reply only with: steered",
+                             priority="now"))
+    # Unanswered on purpose: what does the CLI do with it?
+    cancelled = False
+    try:
+        d.wait(lambda m: m.get("type") == "control_cancel_request"
+               and m.get("request_id") == rid, 30, after, "a cancel")
+        cancelled = True
+    except ScenarioError:
+        pass
+    ctx["cancelled"] = cancelled
+    ctx["result_before_answer"] = any(
+        m.get("type") == "result" for m in d.incoming(after))
+    if not cancelled:
+        # Left open: deny it so the session can go on.
+        d.send(wire.permission_deny(rid, "The user steered instead."))
+    _results_then_idle(d, start, skip={rid}, answer=_deny)
+    ctx["file_written"] = Path(work, "approved.txt").exists()
+    return [d]
+
+
 def sc_resume(spawn, work, ctx):
     sid = wire.new_session_id()
     d1 = spawn(session_id=sid, persist=True)
@@ -646,6 +741,8 @@ SCENARIOS = {
     "subagent": sc_subagent,
     "stop_task": sc_stop_task,
     "steer": sc_steer,
+    "steer_tool": sc_steer_tool,
+    "steer_approval": sc_steer_approval,
     "resume": sc_resume,
     "rewind": sc_rewind,
 }

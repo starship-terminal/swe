@@ -6,11 +6,12 @@ import Foundation
 /// one entry that opens its SKILL.md.
 public struct PrimitiveTree: Sendable, Equatable {
     public enum Kind: String, Sendable, CaseIterable {
-        case main, skills, commands, agents, hooks, other
+        case main, manifests, skills, commands, agents, hooks, other
 
         public var title: String {
             switch self {
             case .main: "Main file"
+            case .manifests: "Manifests"
             case .skills: "Skills"
             case .commands: "Commands"
             case .agents: "Agents"
@@ -90,6 +91,44 @@ public struct PrimitiveTree: Sendable, Equatable {
         sections.append((.other, other))
         self.sections = sections.filter { !$0.1.isEmpty }
             .map { Section(kind: $0.0, entries: $0.1) }
+    }
+
+    /// A plugin's own config files, which `init(root:)` never lists
+    /// because they sit behind a dot: every file directly inside a
+    /// top-level `.<harness>-plugin` folder (`.claude-plugin/plugin.json`,
+    /// `.codex-plugin/plugin.json`), Claude's folder first, then the
+    /// top-level dot JSON files (`.mcp.json`). Each is named by its path
+    /// under `root`. A file reached a second time through a link (a
+    /// `.codex-plugin` that links to `.claude-plugin`) is listed once, so
+    /// it never opens as two documents. Reads the disk and resolves links,
+    /// so call it off the main actor.
+    public static func manifestEntries(root: URL,
+                                       resolve: (String) -> String = FolderOwners.realPath) -> [Entry] {
+        let fm = FileManager.default
+        func isFolder(_ url: URL) -> Bool {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+        func isFile(_ url: URL) -> Bool {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && !isDir.boolValue
+        }
+        let top = ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).filter { $0.hasPrefix(".") }.sorted()
+        let folders = top.filter { $0.hasSuffix("-plugin") && isFolder(root.appending(path: $0)) }
+        var names: [String] = []
+        // Claude's manifest leads: it is the one the detail's fields edit.
+        for folder in folders.filter({ $0 == ".claude-plugin" }) + folders.filter({ $0 != ".claude-plugin" }) {
+            let inside = ((try? fm.contentsOfDirectory(atPath: root.appending(path: folder).path)) ?? []).sorted()
+            names += inside.filter { !$0.hasPrefix(".") && isFile(root.appending(path: folder + "/" + $0)) }
+                .map { folder + "/" + $0 }
+        }
+        names += top.filter { $0.hasSuffix(".json") && isFile(root.appending(path: $0)) }
+        var seen: Set<String> = []
+        return names.compactMap { name in
+            let path = root.appending(path: name).path
+            guard seen.insert(resolve(path)).inserted else { return nil }
+            return Entry(name: name, path: path, isFolder: false, previewPath: path)
+        }
     }
 
     /// The SKILL.md files a skill stands on: the folder's own main file,

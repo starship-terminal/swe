@@ -85,6 +85,30 @@ extension PrimitiveTree {
         return paths.filter { PrimitiveOwnership.isInside($0, root: root.path, resolve: resolve) }
     }
 
+    /// The tree without the files `entries` already list under another
+    /// name: a `.mcp.json` that links to `config/mcp.json` is one file, and
+    /// two rows for it would open as two documents whose saves conflict.
+    /// The plugin detail drops them for its manifests, which keep their
+    /// row. A group left with no files goes too. Resolves each path on
+    /// disk, so call it off the main actor.
+    public func dropping(filesSharedWith entries: [Entry],
+                         resolve: (String) -> String = FolderOwners.realPath) -> PrimitiveTree {
+        let taken = Set(entries.map { resolve($0.path) })
+        guard !taken.isEmpty else { return self }
+        var tree = self
+        tree.sections = sections.compactMap { section in
+            var section = section
+            section.entries = section.entries.compactMap { entry in
+                guard entry.isFolder else { return taken.contains(resolve(entry.path)) ? nil : entry }
+                var entry = entry
+                entry.children.removeAll { taken.contains(resolve($0.path)) }
+                return entry
+            }
+            return section.entries.isEmpty ? nil : section
+        }
+        return tree
+    }
+
     /// The rows a detail page offers a trash button: the ones
     /// `pathsInside` keeps, less every `skillFilePaths` SKILL.md. Resolves
     /// each path on disk, so call it off the main actor.

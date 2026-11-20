@@ -239,6 +239,95 @@ class TestFixturesHoldNoPersonalData(unittest.TestCase):
                 self.assertNotIn('"slash_commands"', text)
 
 
+def _scenario(name: str) -> tuple:
+    path = FIXTURES / wire.RECORDED_VERSION / f"{name}.jsonl"
+    lines = _load(path)
+    return lines[0], lines[1:], wire.replay(lines)
+
+
+def _streams_close(test, evs) -> None:
+    """Every streamed block ends in a completion its deltas add up to."""
+    text: dict = {}
+    for event in evs:
+        data = event["data"]
+        if event["type"] == "message.delta":
+            test.assertEqual(data["offset"], len(text.get(data["id"], "")))
+            text[data["id"]] = text.get(data["id"], "") + data["text"]
+        elif event["type"] in ("message.completed", "thinking.completed") \
+                and data["id"] in text:
+            test.assertEqual(text.pop(data["id"]), data["text"])
+    test.assertEqual(text, {}, "a stream was left open")
+
+
+class TestSteerFixtures(unittest.TestCase):
+    """What the three steer recordings prove (Claude Code 2.1.328)."""
+
+    def test_steer_cuts_the_reply_inside_the_turn(self):
+        _h, lines, evs = _scenario("steer")
+        sent = [ln["msg"] for ln in lines if ln.get("dir") == "out"
+                and ln["msg"].get("type") == "user"]
+        self.assertEqual(sent[1]["priority"], "now")
+        cut = [ln["msg"] for ln in lines if ln.get("dir") == "in"
+               and ln["msg"].get("aborted")]
+        self.assertEqual(len(cut), 1, "the reply in progress arrives cut")
+        self.assertEqual(len([ln for ln in lines if ln.get("msg", {}).get(
+            "type") == "result"]), 2, "the cut reply has its own result")
+        types = [e["type"] for e in evs]
+        self.assertEqual(types.count("turn.started"), 1)
+        self.assertEqual(types.count("turn.ended"), 1)
+        texts = [(e["data"]["kind"], e["data"]["text"]) for e in evs
+                 if e["type"] == "message.completed"]
+        self.assertEqual(texts[1:], [
+            ("user", "Stop counting now and reply only with: steered"),
+            ("assistant", "1\n2\n3"), ("assistant", "steered")])
+        self.assertEqual([e["data"]["status"] for e in evs
+                          if e["type"] == "turn.ended"], ["completed"])
+        self.assertEqual([e for e in evs if e["type"] == "error"], [])
+        _streams_close(self, evs)
+        self.assertEqual(evs[0]["data"]["caps"]["steer"], True)
+
+    def test_steer_kills_a_running_tool(self):
+        header, _lines, evs = _scenario("steer_tool")
+        self.assertEqual(header["notes"], {
+            "written_before_steer": False, "idle_after_s": 4.5,
+            "results": 2, "written_at_idle": False,
+            "written_after_25s": False})
+        done = [e["data"] for e in evs if e["type"] == "tool.completed"]
+        self.assertEqual([(d["call_id"], d["status"]) for d in done],
+                         [("toolu_01", "cancelled")])
+        self.assertIn("aborted", done[0]["output"])
+        order = [e["type"] for e in evs]
+        steer_at = [i for i, e in enumerate(evs)
+                    if e["type"] == "message.completed"
+                    and e["data"]["kind"] == "user"][1]
+        self.assertLess(steer_at, order.index("tool.completed"))
+        self.assertEqual([e["data"]["status"] for e in evs
+                          if e["type"] == "turn.ended"], ["completed"])
+        _streams_close(self, evs)
+
+    def test_steer_withdraws_an_open_approval(self):
+        header, lines, evs = _scenario("steer_approval")
+        self.assertEqual(header["notes"], {"cancelled": True,
+                                           "result_before_answer": False,
+                                           "file_written": False})
+        self.assertTrue(any(ln.get("msg", {}).get("type")
+                            == "control_cancel_request" for ln in lines))
+        resolved = [e["data"] for e in evs if e["type"] == "approval.resolved"]
+        self.assertEqual([r["source"] for r in resolved], ["superseded"],
+                         "retired at the steer; the CLI's own cancel "
+                         "finds nothing open")
+        i = next(n for n, e in enumerate(evs)
+                 if e["type"] == "approval.resolved")
+        self.assertEqual((evs[i - 1]["type"], evs[i - 1]["data"]["kind"]),
+                         ("message.completed", "user"))
+        self.assertEqual(evs[i + 1]["data"], {"state": "running"})
+        self.assertEqual([e["data"]["status"] for e in evs
+                          if e["type"] == "tool.completed"], ["cancelled"])
+        self.assertEqual([e["data"]["status"] for e in evs
+                          if e["type"] == "turn.ended"], ["completed"])
+        _streams_close(self, evs)
+
+
 # ---------------------------------------------------------------------
 # The wire module
 
@@ -356,8 +445,9 @@ class TestHelpers(unittest.TestCase):
         self.assertFalse(bare.caps().plan_mode)
 
     def test_capability_requirements(self):
+        # Steer needs interrupt_send_now_v1: no array, no steer.
         self.assertEqual(wire.capability_caps(None), Caps(
-            steer=True, plan_mode=True, rollback=True, fork=True,
+            steer=False, plan_mode=True, rollback=True, fork=True,
             stop_task=True, options={"model", "effort", "permission_mode"}))
         with mock.patch.dict(wire.REQUIRED_CAPABILITIES,
                              {"stop_task": "stop_v1", "model": "model_v1"}):
@@ -945,6 +1035,159 @@ class TestStreamState(unittest.TestCase):
                                        "raw": "x"}]), [])
 
 
+class TestStreamStateSteer(unittest.TestCase):
+    KEY = "sk-ant-api03-" + "S" * 40
+
+    def state(self) -> wire.StreamState:
+        st = wire.StreamState("k", clock=fake.FakeClock(100.0), caps=ALL_CAPS)
+        st.start_events(ALL_CAPS, "sid")
+        return st
+
+    def feed(self, st, *msgs):
+        out = []
+        for msg in msgs:
+            out.extend(st.feed(msg).events)
+        return out
+
+    @staticmethod
+    def se(index, etype, **kw):
+        return {"type": "stream_event", "parent_tool_use_id": None,
+                "api_message_id": "m1",
+                "event": {"type": etype, "index": index, **kw}}
+
+    def running(self, st):
+        st.begin_turn("count")
+        return self.feed(st, {"type": "system", "subtype":
+                              "session_state_changed", "state": "running"},
+                         {"type": "system", "subtype": "init",
+                          "capabilities": ["interrupt_send_now_v1"]})
+
+    def test_the_cut_reply_and_the_steer_are_redacted(self):
+        st = self.state()
+        out = self.running(st)
+        self.assertTrue(st.init_seen)
+        partial = f"1\n2\nthe key is {self.KEY} and "
+        out += self.feed(st, self.se(0, "content_block_start",
+                                     content_block={"type": "text"}),
+                         self.se(0, "content_block_delta",
+                                 delta={"type": "text_delta",
+                                        "text": partial}))
+        steer = st.steer(f"stop, use {self.KEY}", device="mac",
+                         command_id="c2",
+                         attachments=[f"/w/{self.KEY}.png"])
+        self.assertEqual([e["type"] for e in steer], ["message.completed"])
+        self.assertEqual(steer[0]["data"]["by"], "mac")
+        self.assertEqual(steer[0]["command_id"], "c2")
+        self.assertTrue(steer[0]["data"]["id"].endswith(":user2"))
+        out += steer + self.feed(
+            st, {"type": "assistant", "aborted": True, "message": {
+                "id": "m1", "content": [{"type": "text", "text": partial}]}},
+            {"type": "result", "subtype": "success",
+             "terminal_reason": "aborted_streaming"})
+        self.assertIsNotNone(st.turn, "the intermediate result ends nothing")
+        out += self.feed(st, {"type": "system", "subtype":
+                              "session_state_changed", "state": "idle"})
+        self.assertNotIn(self.KEY, json.dumps(out))
+        _streams_close(self, out)
+        self.assertEqual([e["data"]["status"] for e in out
+                          if e["type"] == "turn.ended"], ["completed"])
+
+    def test_an_abandoned_block_closes_at_the_result(self):
+        st = self.state()
+        self.running(st)
+        out = self.feed(
+            st, self.se(0, "content_block_start",
+                        content_block={"type": "thinking"}),
+            self.se(0, "content_block_delta",
+                    delta={"type": "thinking_delta", "thinking": "hmm so "}),
+            self.se(1, "content_block_start", content_block={"type": "text"}),
+            self.se(1, "content_block_delta",
+                    delta={"type": "text_delta",
+                           "text": f"a b {self.KEY} c"}),
+            {"type": "stream_event", "parent_tool_use_id": None,
+             "api_message_id": "m1", "event": {"type": "message_stop"},
+             "abandoned_blocks": {"from_block_index": 0}},
+            {"type": "result", "subtype": "success",
+             "terminal_reason": "aborted_streaming"})
+        done = [(e["type"], e["data"]["text"]) for e in out
+                if e["type"] in ("message.completed", "thinking.completed")]
+        self.assertEqual(done, [("thinking.completed", "hmm so "),
+                                ("message.completed", "a b [REDACTED] c")])
+        self.assertNotIn(self.KEY, json.dumps(out))
+        _streams_close(self, out)
+        # Nothing is closed twice.
+        self.assertEqual(self.feed(st, {"type": "result"}), [])
+
+    def test_steer_with_an_open_approval(self):
+        st = self.state()
+        self.running(st)
+        self.feed(st, {"type": "control_request", "request_id": "p1",
+                       "request": {"subtype": "can_use_tool",
+                                   "tool_name": "Bash", "tool_use_id": "tu1",
+                                   "input": {"command": "touch a"}}})
+        self.assertTrue(st.waiting)
+        out = st.steer("never mind")
+        self.assertEqual([(e["type"], e["data"].get("source")
+                           or e["data"].get("state")) for e in out[1:]],
+                         [("approval.resolved", "superseded"),
+                          ("session.state", "running")])
+        with self.assertRaises(UnknownRequest):
+            st.answer("p1", Answer(decision="allow"))
+        out = self.feed(st, {"type": "control_cancel_request",
+                             "request_id": "p1"},
+                        {"type": "user", "message": {"content": [
+                            {"type": "tool_result", "tool_use_id": "tu1",
+                             "is_error": True,
+                             "content": "Tool permission request aborted"}]},
+                         "tool_use_result":
+                             "Error: Tool permission request aborted"})
+        # Already retired: the CLI's cancel adds nothing, and tu1 never
+        # started as a tool row here.
+        self.assertEqual(out, [])
+        self.assertIsNotNone(st.turn)
+        self.assertFalse(st.waiting)
+
+    def test_a_withdrawn_call_reads_cancelled(self):
+        st = self.state()
+        self.running(st)
+        self.feed(st, {"type": "assistant", "message": {"id": "m", "content": [
+            {"type": "tool_use", "id": "tu1", "name": "Bash",
+             "input": {"command": "touch a"}},
+            {"type": "tool_use", "id": "tu2", "name": "Bash",
+             "input": {"command": "false"}}]}},
+            {"type": "control_request", "request_id": "p1", "request": {
+                "subtype": "can_use_tool", "tool_name": "Bash",
+                "tool_use_id": "tu1", "input": {"command": "touch a"}}},
+            {"type": "control_cancel_request", "request_id": "p1"})
+
+        def result(call_id):
+            return {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": call_id,
+                 "is_error": True, "content": "no"}]}}
+
+        out = self.feed(st, result("tu1"), result("tu2"))
+        self.assertEqual([e["data"]["status"] for e in out],
+                         ["cancelled", "error"])
+
+    def test_the_capability_gate(self):
+        self.assertTrue(wire.capability_caps(["interrupt_send_now_v1"]).steer)
+        self.assertFalse(wire.capability_caps(["interrupt_receipt_v1"]).steer)
+        self.assertFalse(wire.capability_caps(None).steer)
+        self.assertFalse(wire.capability_caps("interrupt_send_now_v1").steer)
+        self.assertTrue(wire.PROVEN.steer)
+        for caps in (["interrupt_receipt_v1"], None):
+            with self.subTest(caps=caps):
+                st = self.state()
+                st.begin_turn("go")
+                msg = {"type": "system", "subtype": "init"}
+                if caps is not None:
+                    msg["capabilities"] = caps
+                out = self.feed(st, msg)
+                self.assertEqual([e["data"]["caps"]["steer"] for e in out],
+                                 [False])
+                self.assertTrue(st.init_seen)
+
+
 # ---------------------------------------------------------------------
 # The adapter over the fake CLI
 
@@ -980,7 +1223,7 @@ class TestAdapterStart(_FakeCase):
         self.assertEqual(self.sent()[1]["request"]["subtype"], "initialize")
         self.assertEqual(adapter.version, "2.1.328")
         caps = sink.of("session.caps")[0]["data"]["caps"]
-        self.assertEqual(caps, {"steer": False, "plan_mode": True,
+        self.assertEqual(caps, {"steer": True, "plan_mode": True,
                                 "rollback": False, "fork": True,
                                 "stop_task": True,
                                 "options": ["model", "permission_mode"]})
@@ -1324,10 +1567,10 @@ class TestAdapterOptions(_FakeCase):
             with self.assertRaises(Unsupported):
                 call()
         full, _sink, _sid = self.started()
-        self.assertFalse(full.capabilities.steer, "steer stays off")
+        self.assertTrue(full.capabilities.steer, "steer is proven")
         self.assertFalse(full.capabilities.rollback)
         with self.assertRaises(Unsupported):
-            full.steer(TurnInput("x"))
+            full.rollback("t1")
 
     def test_capabilities_array_narrows_caps(self):
         with mock.patch.dict(wire.REQUIRED_CAPABILITIES,
@@ -1443,6 +1686,194 @@ class TestAdapterOptions(_FakeCase):
         self.assertFalse(adapter._writer.thread.is_alive())
         self.assertTrue(adapter._proc.stdin.closed)
         self.assertEqual(adapter._proc.poll(), 0)
+
+
+class TestAdapterSteer(_FakeCase):
+    """``steer`` over the fake CLI, which answers ``priority: "now"`` the
+    way the steer recordings show."""
+
+    KEY = "sk-ant-api03-" + "K" * 40
+
+    def steers_sent(self) -> list:
+        return [m for m in self.sent() if m.get("type") == "user"
+                and m.get("priority") == "now"]
+
+    def mid_reply(self, **kw):
+        adapter, sink, _sid = self.started("slow", **kw)
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        return adapter, sink, turn_id
+
+    def test_steer_cuts_the_reply_and_answers_in_the_same_turn(self):
+        adapter, sink, turn_id = self.mid_reply()
+        adapter.steer(TurnInput("now this", attachments=["/w/a.png"],
+                                command_id="c2", device="mac"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        sent = self.steers_sent()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["message"]["content"], "@/w/a.png now this")
+        mine = [e for e in sink.events if e.get("turn_id") == turn_id]
+        self.assertEqual(mine[0]["type"], "turn.started")
+        self.assertEqual(mine[-1]["type"], "turn.ended")
+        users = [e for e in mine if e["type"] == "message.completed"
+                 and e["data"]["kind"] == "user"]
+        self.assertEqual(users[1]["data"], {
+            "id": f"{turn_id}:user2", "kind": "user", "text": "now this",
+            "by": "mac", "attachments": ["/w/a.png"]})
+        self.assertEqual(users[1]["command_id"], "c2")
+        replies = [e["data"]["text"] for e in mine
+                   if e["type"] == "message.completed"
+                   and e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["1\n2\n", "steered"])
+        self.assertEqual(sink.types().count("turn.ended"), 1)
+        self.assertEqual(sink.of("error"), [])
+        self.assertEqual(sink.events[-1]["data"]["state"], "idle")
+        _streams_close(self, sink.events)
+        for event in sink.events:
+            self.assertEqual(events.validate(event), [], event)
+
+    def test_steer_when_idle(self):
+        adapter, sink, _sid = self.started()
+        turn_id = adapter.send_turn(TurnInput("hi"))
+        self.wait_turn(sink, turn_id)
+        count = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.steer(TurnInput("late"))
+        self.assertEqual(ctx.exception.code, "idle")
+        self.assertEqual(len(sink.events), count)
+        self.assertEqual(self.steers_sent(), [])
+
+    def test_steer_with_caps_off(self):
+        adapter, sink, _turn = self.mid_reply(caps=Caps())
+        count = len(sink.events)
+        with self.assertRaises(Unsupported) as ctx:
+            adapter.steer(TurnInput("x"))
+        self.assertEqual(ctx.exception.feature, "steer")
+        self.assertEqual(len(sink.events), count)
+        self.assertEqual(self.steers_sent(), [])
+
+    def test_a_cli_without_the_capability_string(self):
+        for caps in ('["interrupt_receipt_v1", "msg_lifecycle_v1"]', "none"):
+            with self.subTest(caps=caps):
+                adapter, sink, _turn = self.mid_reply(
+                    env_extra={"FAKE_CLAUDE_CAPS": caps})
+                self.assertTrue(sink.of("session.caps")[0]["data"]["caps"]
+                                ["steer"], "the handshake cannot say")
+                narrowed = sink.of("session.caps")
+                self.assertEqual(len(narrowed), 2)
+                self.assertFalse(narrowed[-1]["data"]["caps"]["steer"])
+                self.assertFalse(adapter.capabilities.steer)
+                with self.assertRaises(Unsupported):
+                    adapter.steer(TurnInput("x"))
+                self.assertEqual(self.steers_sent(), [])
+
+    def test_steer_before_the_first_init_waits_for_it(self):
+        adapter, sink, _turn = self.mid_reply(
+            env_extra={"FAKE_CLAUDE_NO_INIT": "1"}, call_timeout=0.3)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.steer(TurnInput("x"))
+        self.assertEqual(ctx.exception.code, "timeout")
+        self.assertEqual(self.steers_sent(), [])
+        self.assertEqual(len(sink.of("message.completed")), 1)
+
+    def test_a_steer_the_init_arrives_for(self):
+        import threading
+
+        adapter, sink, turn_id = self.mid_reply()
+        # As if the init had not come yet: the steer waits for it.
+        adapter._state.init_seen = False
+        adapter._init_seen.clear()
+
+        def init_arrives():
+            with adapter._lock:
+                adapter._state.init_seen = True
+            adapter._init_seen.set()
+
+        timer = threading.Timer(0.05, init_arrives)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        adapter.steer(TurnInput("after the init"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(len(self.steers_sent()), 1)
+
+    def test_steer_with_an_open_approval(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.wait(sink, "approval.requested")["data"]
+        adapter.steer(TurnInput("never mind"))
+        resolved = sink.of("approval.resolved")
+        self.assertEqual([r["data"] for r in resolved],
+                         [{"request_id": asked["request_id"],
+                           "source": "superseded"}])
+        at = sink.events.index(resolved[0])
+        self.assertEqual(sink.events[at - 1]["data"]["text"], "never mind")
+        self.assertEqual(sink.events[at + 1]["data"], {"state": "running"})
+        with self.assertRaises(UnknownRequest):
+            adapter.respond(asked["request_id"], Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(len(sink.of("approval.resolved")), 1,
+                         "the CLI's cancel retires nothing twice")
+        self.assertEqual([e["data"]["status"] for e in
+                          sink.of("tool.completed")], ["cancelled"])
+        self.assertEqual(sink.of("message.completed")[-1]["data"]["text"],
+                         "steered")
+        self.assertEqual(sink.of("turn.ended")[0]["data"]["status"],
+                         "completed")
+        replies = [m for m in self.sent() if m.get("type") ==
+                   "control_response"]
+        self.assertEqual(replies, [], "the withdrawn request is not answered")
+
+    def test_steer_kills_a_running_tool(self):
+        adapter, sink, _sid = self.started("slow-tool")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.wait(sink, "approval.requested")["data"]
+        # The fake reads in order: the allow starts the call, which runs
+        # until the steer behind it cuts it.
+        adapter.respond(asked["request_id"], Answer(decision="allow"))
+        adapter.steer(TurnInput("stop that"))
+        self.assertEqual(self.wait_turn(sink, turn_id)["data"]["status"],
+                         "completed")
+        done = sink.of("tool.completed")[0]["data"]
+        self.assertEqual((done["call_id"], done["status"]),
+                         ("toolu_fake1", "cancelled"))
+        self.assertIn("aborted", done["output"])
+
+    def test_a_failed_write_emits_nothing(self):
+        adapter, sink, _turn = self.mid_reply()
+        count = len(sink.events)
+        with mock.patch.object(adapter._writer, "send",
+                               side_effect=claude_stream._Stalled()), \
+                mock.patch.object(adapter, "_kill"):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.steer(TurnInput("x"))
+        self.assertEqual(ctx.exception.code, "timeout")
+        self.assertEqual(len(sink.events), count)
+        dead, sink2, _turn = self.mid_reply()
+        dead._proc.stdin.close()
+        count = len(sink2.events)
+        with self.assertRaises(AdapterError) as ctx:
+            dead.steer(TurnInput("x"))
+        self.assertEqual(ctx.exception.code, "agent_down")
+        self.assertFalse([e for e in sink2.events[count:]
+                          if e["type"] == "message.completed"])
+
+    def test_no_secret_reaches_an_event(self):
+        key = self.KEY
+        adapter, sink, turn_id = self.mid_reply(env_extra={
+            "FAKE_CLAUDE_PARTIAL": f"1\nthe key is {key} and ",
+            "FAKE_CLAUDE_STEER_REPLY": f"ok, not using {key}"})
+        adapter.steer(TurnInput(f"stop, use {key}",
+                                attachments=[f"/w/{key}.txt"]))
+        self.wait_turn(sink, turn_id)
+        self.assertIn(key, json.dumps(self.steers_sent()),
+                      "the CLI itself gets the real text")
+        self.assertNotIn(key, json.dumps(sink.events))
+        texts = [e["data"]["text"] for e in sink.of("message.completed")]
+        self.assertEqual(texts[1:], ["stop, use [REDACTED]",
+                                     "1\nthe key is [REDACTED] and ",
+                                     "ok, not using [REDACTED]"])
+        _streams_close(self, sink.events)
 
 
 if __name__ == "__main__":

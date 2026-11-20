@@ -2,7 +2,7 @@
 
 Status: built (pure additions; nothing calls it yet). G8 wires it into
 the keeper and the hub. The fixtures are real recordings of Claude Code
-2.1.328 (12 scenarios), not hand-written.
+2.1.328 (14 scenarios), not hand-written.
 
 | File | What it holds |
 |---|---|
@@ -66,6 +66,7 @@ What we write:
 |---|---|
 | `start` | spawn, then `control_request` `initialize` |
 | `send_turn` | `{"type": "user", "message": {"role": "user", "content": "@/a.png text"}, "parent_tool_use_id": null}` (attachments as `@path` refs) |
+| `steer` | the same line with `"priority": "now"`, into the open turn (see "Steer") |
 | `respond` allow / always / deny | `control_response` success `{"behavior": "allow", "updatedInput": <input>}`, plus `updatedPermissions` for always (the CLI's `permission_suggestions` with every `destination` set to `session` and `setMode` ones dropped); `{"behavior": "deny", "message": <text>}` |
 | `interrupt` | `control_request` `interrupt`; answer `{"still_queued": []}` |
 | `set_option("model", m)` | `control_request` `set_model {model}` |
@@ -81,7 +82,7 @@ What the CLI prints:
 |---|---|
 | `control_response` | none; wakes the call waiting on that request id |
 | `control_request` `can_use_tool` | `approval.requested` (`kind` plan for ExitPlanMode, command for Bash, tool otherwise; `request_id` is the CLI's; options allow, always (only when a suggestion survives session scoping: a Write's lone `setMode` does not), deny), then `session.state` waiting |
-| `control_cancel_request` | `approval.resolved` `source: harness` |
+| `control_cancel_request` | `approval.resolved` `source: harness` (nothing when a steer already retired it) |
 | `system` `session_state_changed` `running` | `turn.started` + `session.state` running when no turn is open (a turn the CLI started itself) |
 | `system` `session_state_changed` `requires_action` | `session.state` waiting |
 | `system` `session_state_changed` `idle` | open requests retired (`turn_ended`), `turn.ended` (interrupted if we interrupted, failed if the result was an error, else completed), `session.state` idle |
@@ -95,14 +96,15 @@ What the CLI prints:
 | `assistant` text block | `message.completed` assistant, same id as its deltas |
 | `assistant` thinking block | `thinking.completed` (`duration_s` from `thinking_duration_ms`) |
 | `assistant` tool_use block | `tool.started` (`summary` like `Bash · ls`, `input` redacted key-aware, `task_id` when a subagent made it) |
-| `user` tool_result block | `tool.completed` (ok, error, or cancelled when `tool_use_result.interrupted`; `output` cut at 8000 chars; `file_edits` from a Write or Edit result's `structuredPatch`) |
-| `result` | `usage.updated` (tokens, `cost_usd`, and `context_window` from the `modelUsage` entry of the active model only: the init message's `model`, or the resolved id a `set_model` answer names; no entry, no window); `error` when `is_error` and we did not interrupt; ends the turn itself only for a CLI that sends no state frames |
+| `user` tool_result block | `tool.completed` (ok, error, or cancelled when `tool_use_result.interrupted` or when the call's approval was withdrawn; `output` cut at 8000 chars; `file_edits` from a Write or Edit result's `structuredPatch`) |
+| `result` | first, any stream a client has deltas of but no completion (a block the CLI abandoned) gets its last delta and its completion; then `usage.updated` (tokens, `cost_usd`, and `context_window` from the `modelUsage` entry of the active model only: the init message's `model`, or the resolved id a `set_model` answer names; no entry, no window); `error` when `is_error` and we did not interrupt; ends the turn itself only for a CLI that sends no state frames |
 | a subagent's lines (`parent_tool_use_id` set) | tool rows only, under the subagent's `task_id`; its text is not forwarded |
 | anything else (`rate_limit_event`, `command_lifecycle`, `background_tasks_changed`, unknown types, non-JSON) | nothing; counted in `StreamState.unknown` |
 
 The adapter emits `turn.started`, `session.state` running and the user's
-`message.completed` itself in `send_turn`, once the line is written, and
-`approval.resolved` (`source: user`) in `respond`.
+`message.completed` itself in `send_turn`, once the line is written; the
+user's `message.completed` (and the retirement of open approvals) in
+`steer`; and `approval.resolved` (`source: user`) in `respond`.
 
 Turn ids are `t-<run>-<n>`: `<run>` is 8 random hex digits per start of
 the adapter, so one session's log, which spans many starts (a resume
@@ -153,7 +155,8 @@ line. `close` cannot be held up by a stuck writer.
 Every scenario ran against the real `claude` 2.1.328 on the owner's
 account, model `haiku`, in a throwaway work folder, with a throwaway
 `CLAUDE_CONFIG_DIR`, `--safe-mode`, `--setting-sources=project` and an
-empty `--strict-mcp-config`.
+empty `--strict-mcp-config`. `steer_tool` and `steer_approval` were
+recorded on 2026-11-21, the rest on 2026-11-20.
 
 | Capability | Status | Fixture |
 |---|---|---|
@@ -167,42 +170,87 @@ empty `--strict-mcp-config`.
 | `stop_task` | proven | `stop_task` |
 | Resume by id, fork with `--fork-session --session-id` | proven | `resume` |
 | `rewind_files` restores files (with `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` and a user message `uuid`) | proven on the wire; no SessionAdapter method uses it | `rewind` |
-| Steer (`priority: "now"`) | recorded, left off | `steer` |
+| Steer (`priority: "now"`): the reply in progress is cut and the message answered in the same turn | proven; offered only when the init lists `interrupt_send_now_v1` | `steer` |
+| Steer while a tool call runs: the call is killed (its result says `interrupted`, exit code 145), the file it would write never appears (checked at idle and 25 s after the call began), one `idle` | proven | `steer_tool` |
+| Steer while a `can_use_tool` is open: the CLI withdraws it (`control_cancel_request`, 16 ms later), the call fails "Tool permission request aborted" and never runs | proven | `steer_approval` |
 | "Always allow": the CLI's suggestions sent back with every `destination` set to `session` (`setMode` ones dropped). The CLI took them, did not ask again for the same call in that session (its result says `reason_type: "rule"`), and wrote no settings file in the work folder or the throwaway `CLAUDE_CONFIG_DIR` (both checked before and after) | proven; offered only when a suggestion is left after scoping (an "always" answer otherwise counts as, and is recorded as, `allow`) | `always` |
 | `--effort` at start; effort mid-session | flag not recorded; no control request exists | |
 | AskUserQuestion answers | not recorded; it arrives as a plain tool approval | |
 | An interrupt while a `can_use_tool` is open | fake only | |
 | Conversation rollback | no wire form | |
 
-Caps the adapter can ever offer (`claude_wire.PROVEN`): `plan_mode`,
-`fork`, `stop_task`, options `model` and `permission_mode`. `steer`,
+Caps the adapter can ever offer (`claude_wire.PROVEN`): `steer`,
+`plan_mode`, `fork`, `stop_task`, options `model` and `permission_mode`.
 `rollback` and `effort` stay off whatever harness.json says. The caps in
 force are harness.json's met with `PROVEN`, then with the handshake
 (`models` present for `model`, `current_permission_mode` present for
 modes), then with each init message's `capabilities` array under
-`REQUIRED_CAPABILITIES` (empty today: no string in 2.1.328's array names
-a proven feature).
+`REQUIRED_CAPABILITIES` (`steer` needs `interrupt_send_now_v1`).
 
-### What the steer fixture shows
+## Steer
 
-A user message with `"priority": "now"` sent while the reply streams:
+The owner accepted Claude Code's "send now" as Claude's steer
+([decision 0001](../decisions/0001-session-runtime-redesign.md)).
+`steer(turn)` writes the user line with `"priority": "now"` into the
+open turn. What the CLI does with it, from the three recordings:
 
-1. the CLI aborts the reply in flight: its `assistant` message arrives
-   with `aborted: true` and the partial text (`1\n2`), and a `result`
-   with `subtype: success`, `terminal_reason: aborted_streaming`;
-2. without going idle, it prints a new `init` and answers the new
-   message (`steered`) with its own `result`;
-3. then one `session_state_changed: idle`.
+1. it stops what the turn is doing: a reply being streamed arrives as
+   an `assistant` message with `aborted: true` and the partial text
+   (`steer`); a running Bash call is killed, and its `tool_result` says
+   `is_error` with `tool_use_result.interrupted: true` (`steer_tool`);
+   an open `can_use_tool` is withdrawn with `control_cancel_request`,
+   and the call it asked about fails "Tool permission request aborted"
+   without running (`steer_approval`);
+2. it ends that stretch with a `result` (`subtype: success`,
+   `is_error: false`, `terminal_reason` `aborted_streaming` or
+   `aborted_tools`), without going idle;
+3. it prints a new `init` and answers the new message, with its own
+   `result`;
+4. then one `session_state_changed: idle`.
 
-So "now" interrupts the reply and runs the message at once inside the
-same running stretch; it does not slip the message into a reply that
-keeps going. `replay` maps it as one turn with two user messages. The
-init array has `interrupt_send_now_v1`, which plausibly names this
-behaviour (guessing). The owner decides whether this is the steer the
-session view wants; turning it on means `PROVEN.steer`,
-`REQUIRED_CAPABILITIES["steer"] = "interrupt_send_now_v1"`, and
-`steer()` writing `user_message(..., priority="now")` plus the user's
-`message.completed`.
+### What a client sees
+
+All in the one turn the steer joined (`turn_id` unchanged):
+
+| Order | Event | When |
+|---|---|---|
+| 1 | `message.completed` user, id `<turn id>:user2` (`:user3` for a second steer), `text`, `by`, `attachments`; envelope `command_id` | at once, from `steer` |
+| 2 | `approval.resolved` `source: superseded` per open approval, then `session.state` running | only when an approval was open; from `steer` |
+| 3 | the cut reply's last `message.delta` (`done: true`) and its `message.completed` with the partial text, redacted, the deltas adding up to it | when a reply was streaming |
+| 4 | `tool.completed` `status: cancelled` | for a running call (`<error>Command was aborted before completion</error>`) or the withdrawn approval's call |
+| 5 | `usage.updated` | the cut stretch's `result`; the turn does not end here |
+| 6 | `message.delta`s and `message.completed` assistant | the answer to the steer |
+| 7 | `usage.updated`, `turn.ended` `completed`, `session.state` idle | at `idle` |
+
+The user's message can land between the cut reply's deltas and that
+reply's completion (rows 1 and 3): the CLI's aborted message comes
+after our line. Clients key streams by `id`, so the open bubble still
+closes. No stream stays open: if the CLI abandons a block instead of
+sending it cut (`abandoned_blocks` on `message_stop`), the `result`
+closes it with the text so far.
+
+### The gate, and the edges
+
+- Steer is offered when harness.json says `steer`, `PROVEN` allows it,
+  and the turn's init lists `interrupt_send_now_v1`. The initialize
+  answer has its own, shorter array that never lists it, so the
+  handshake cannot tell: `session.caps` at start says `steer: true`,
+  and an init without the string (or with no array at all, as before
+  2.1.205) narrows it off with a second `session.caps`.
+- A steer sent before this process's first init waits for it (bounded
+  by `call_timeout`, `timeout` past it): only that message says whether
+  the CLI takes "now". It then checks again, so a CLI that narrowed
+  steer off gets `Unsupported`, not the line.
+- No turn open: `AdapterError(code="idle")`, as the fake adapter; the
+  keeper sends a normal turn instead.
+- A write that fails or times out emits nothing and raises
+  `agent_down` or `timeout`, as `send_turn`.
+- An approval open at the steer is retired at once (`superseded`), so
+  no device can answer it after the steer; the CLI's own cancel then
+  finds nothing open. `respond` to it raises `UnknownRequest`.
+- `replay` maps a recorded `priority: "now"` line through the same
+  `StreamState.steer` the adapter calls, so the goldens are what a live
+  session emits.
 
 ## Contract gaps
 
@@ -238,7 +286,11 @@ closest correct thing and nothing in G3 was bent.
 6. **The init message is per turn.** Feature narrowing from its
    `capabilities` array happens at the first turn, not at `start`; the
    adapter emits a second `session.caps` then.
-7. **`steer` semantics** (above): Claude's "now" aborts the reply.
+7. **`steer` stops the reply.** G3 says steer "adds a message to the
+   turn in flight". Claude's "now" does that inside the same turn, but
+   first cuts what the turn was doing: the reply stops mid-sentence, a
+   running tool call is killed, an open approval is withdrawn. The
+   Steer control must say so (G13).
 8. **AskUserQuestion** comes through `can_use_tool`; answering it needs
    `updatedInput` with the answers. It maps to a tool approval, not
    `input.requested`, until a fixture shows the shape.
@@ -250,6 +302,16 @@ closest correct thing and nothing in G3 was bent.
    `message.delta`, a line that mentions `token`, `secret`, `api_key`
    and the like streams only when it ends (see "Live text and
    redaction").
+11. **The cut reply interleaves with the steer.** The user's
+   `message.completed` from `steer` can come between a streaming
+   reply's deltas and that reply's (partial) completion. G3's ordering
+   rules hold (deltas before their own completion), but a client that
+   draws messages strictly in arrival order shows the user's bubble
+   before the end of the cut reply.
+12. **`session.caps` says steer before the CLI has.** The handshake
+   cannot report `interrupt_send_now_v1`, so steer is on from `start`
+   until the first init narrows it, and a steer in that window waits for
+   the init.
 
 ## Recording again for a new CLI version
 
@@ -283,9 +345,12 @@ its own folders).
 ## What G8 must know
 
 - harness.json must turn the proven features on for claude
-  (`plan_mode`, `fork`, `stop_task`, `options: ["model",
+  (`steer`, `plan_mode`, `fork`, `stop_task`, `options: ["model",
   "permission_mode"]`); with the fallback alone the adapter reports
-  every feature off.
+  every feature off. Whether the fallback seeds `steer` is G8's call.
+- `steer` raises `idle` with no turn open: route the message to
+  `send_turn`. On Claude it stops the reply in progress (see "Steer");
+  the G13 control must be labelled to match.
 - The adapter's events start with `session.caps`, `session.state idle`;
   the first turn's init may send a second `session.caps`.
 - The CLI still writes its own transcript under `~/.claude/projects/`,
