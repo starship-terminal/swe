@@ -64,9 +64,11 @@ data/remote/keepers/<slug>/log/        0700; <slug> is protocol.key_slug
   be higher, never lower. Names are zero-padded to 12 digits so a plain
   listing sorts by seq.
 - `meta.json` is replaced atomically (temp file, fsync, rename, folder
-  fsync): `{v: 1, first_seq, reserved, boot, truncated}`. `first_seq` is
-  where the log began, `reserved` the seq lease, `boot` the boot id that
-  wrote the lease, `truncated` the `log.truncated` marker or null.
+  fsync): `{v: 1, first_seq, floor, reserved, boot, truncated}`.
+  `first_seq` is where the log began, `floor` the lowest seq any later
+  open may hand out (it only rises), `reserved` the seq lease, `boot`
+  the boot id that wrote the lease, `truncated` the `log.truncated`
+  marker or null.
 
 ## Durability
 
@@ -103,10 +105,15 @@ as duplicates. So seqs are leased:
 1. Before any event with a seq past `reserved` is written, `reserved`
    moves to `seq - 1 + seq_lease` in `meta.json` (durably).
 2. `close()` shrinks `reserved` back to the last seq: a clean shutdown.
-3. On open, the next seq is `last_seq_on_disk + 1`, unless `reserved` is
-   past that and `meta.json`'s boot id differs from this boot's (or
+3. On open, the next seq is the highest of `last_seq_on_disk + 1`,
+   `first_seq`, `floor` and the marker's `before_seq`, unless `reserved`
+   is past that and `meta.json`'s boot id differs from this boot's (or
    either is unknown). Then it is `reserved + 1`, and
    `recovery.seq_gap` says how many seqs were skipped.
+4. Every `meta.json` write raises `floor` to the next seq. A crash gap
+   therefore survives a keeper that opens and exits without writing an
+   event, cleanly or not, and an eviction that left only an empty
+   segment cannot send numbering back to the disk's tail.
 
 A keeper killed on the same boot lost nothing it wrote, so it continues
 at `last_seq + 1` with no gap. Clients already tolerate gaps
@@ -132,7 +139,9 @@ The boot id is `/proc/sys/kernel/random/boot_id` on Linux and
 6. Read backward from the tail to the newest turn boundary
    (`turn.ended`, `turn.started`, or a `session.state` of idle,
    agent_down, parked or closed) to find `recovery.open_turn` and
-   `recovery.pending`.
+   `recovery.pending`. Only valid records count (below), each also below
+   the newer record already read, so a damaged boundary record cannot
+   end the scan early.
 
 A record is valid when it parses as a JSON object with a string `type`,
 an int `seq` of at least 1, at least the segment's name, and above the
@@ -186,15 +195,24 @@ mid-read stays readable through its open handle.
 | `truncated` | the caller asked for history before `oldest_seq` (`after_seq + 1 < oldest_seq`); the events from `oldest_seq` on are still returned |
 | `reason` | `evicted` (the cap dropped it; see `marker`) or `before_start` (it predates the log: a session continued from the hub journal) |
 | `more` | `limit` cut the read; page on with `after_seq` = the last event's seq |
-| `skipped` | corrupt lines passed over |
+| `skipped` | corrupt lines passed over, including a record numbered below its file's name |
 
 Seqs inside a crash gap are not truncation: nothing was ever kept
 there, and a replay from inside the gap simply starts at the next seq.
 
+Every record a replay returns passes the same check as recovery: valid,
+at least its file's name, and above the record before it.
+
 `read_log` is the same replay without the writer: no lock, no repair.
-It skips a torn tail rather than cutting it, ignores segments below the
-marker, and treats a segment that vanishes between its listing and its
-open (dropped by a live writer's cap) as evicted.
+It skips a torn tail rather than cutting it and ignores segments below
+the marker. It lists the folder before it reads `meta.json` (the writer
+records the marker before unlinking anything), and when a listed file
+is gone by the time it opens it (dropped by a live writer's cap), it
+lists and reads again once. If the second try also misses a file, the
+loss is reported as `truncated` (`evicted`): a file missing in the
+middle puts `oldest_seq` at the next file's name, and a missing newest
+file puts it past `after_seq`. A replay never answers "nothing, not
+truncated" for history it could not read.
 
 ## Validation
 

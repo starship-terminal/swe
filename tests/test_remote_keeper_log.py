@@ -933,6 +933,149 @@ class TestEdges(LogBase):
         self.make()  # the lock is free again
 
 
+class TestReviewRound1(LogBase):
+    """Numbering and replay holes found in review of the first cut."""
+
+    def test_a_crash_gap_is_never_undone_by_later_opens(self):
+        log = self.make(seq_lease=10)
+        log.emit(upd(1))
+        crash(log)
+        b = self.make(seq_lease=10, boot_id="boot-b")
+        self.assertEqual(b.recovery.next_seq, 11)
+        b.close()  # clean, nothing written
+        self.assertEqual(self.meta(b)["floor"], 11)
+        c = self.make(seq_lease=10, boot_id="boot-b")
+        self.assertEqual(c.recovery.next_seq, 11)
+        crash(c)  # unclean, nothing written
+        d = self.make(seq_lease=10, boot_id="boot-b")
+        self.assertEqual(d.recovery.next_seq, 11)
+        crash(d)
+        e = self.make(seq_lease=10, boot_id="boot-c")
+        self.assertGreaterEqual(e.recovery.next_seq, 11)
+        self.assertGreaterEqual(e.emit(upd(2))["seq"], 11)
+        e.close()
+        f = self.make(seq_lease=10, boot_id="boot-c")
+        self.assertGreater(f.emit(upd(3))["seq"], 11)
+
+    def test_evicting_every_sealed_segment_cannot_reset_numbering(self):
+        log = self.make(segment_bytes=400, cap_bytes=400,
+                        on_error=lambda exc, event: None)
+        log.emit(upd(1))
+        while True:
+            size = log.segments()[-1][2]
+            line = keeper_log._encode(dict(upd(1), seq=log.last_seq + 1))
+            if size + len(line) > 400:
+                break
+            log.emit(upd(1))
+        written = log.last_seq
+        real = keeper_log._write_all
+
+        def fail_events(fd, data):
+            if data.startswith(b'{"v":2'):
+                raise OSError(28, "ENOSPC")
+            real(fd, data)
+
+        # The append rotates (sealing and evicting every older file),
+        # then its write fails: only an empty segment is left.
+        with mock.patch.object(keeper_log, "_write_all",
+                               side_effect=fail_events):
+            self.assertIsNone(log.emit(upd(1)))
+        self.assertEqual(log.marker["before_seq"], written + 1)
+        self.assertEqual([s[2] for s in log.segments()], [0])
+        crash(log)
+        again = self.make(segment_bytes=400, cap_bytes=400)
+        self.assertEqual(again.segments(), [])
+        self.assertEqual(again.recovery.next_seq, written + 1)
+        self.assertEqual(again.emit(upd(1))["seq"], written + 1)
+
+    def evicting_reader(self, *, every_time: bool):
+        """A writer that rotates and evicts right after the reader lists
+        the folder: the first listing (or every one) is stale."""
+        log = self.make(segment_bytes=400, cap_bytes=1200)
+        for i in range(1, 31):
+            log.emit(upd(i))
+        real = keeper_log._list_segments
+        stale: list = []
+
+        def listing(d):
+            if stale and every_time:
+                return list(stale)
+            out = real(d)
+            if not stale:
+                stale.extend(out)
+                for i in range(31, 91):  # every listed file is evicted
+                    log.emit(upd(i))
+            return out
+
+        with mock.patch.object(keeper_log, "_list_segments",
+                               side_effect=listing):
+            rep = read_log(S, 0, home=self.home)
+        self.assertFalse(any(p.exists() for _, p in stale))
+        return log, rep
+
+    def test_read_log_relists_when_a_writer_evicts_under_it(self):
+        log, rep = self.evicting_reader(every_time=False)
+        self.assertTrue(rep.truncated)
+        self.assertEqual(rep.reason, "evicted")
+        self.assertEqual(rep.events[0]["seq"], log.marker["before_seq"])
+        self.assertEqual([e["seq"] for e in rep.events],
+                         list(range(log.marker["before_seq"], 91)))
+
+    def test_a_stale_listing_still_reports_the_loss(self):
+        _, rep = self.evicting_reader(every_time=True)
+        self.assertEqual(rep.events, [])
+        self.assertTrue(rep.truncated)
+        self.assertEqual(rep.reason, "evicted")
+
+    def test_losing_the_newest_listed_file_is_truncation(self):
+        log = self.make(segment_bytes=400, cap_bytes=1 << 20)
+        for i in range(1, 21):
+            log.emit(upd(i))
+        segs = [(s[0], s[1]) for s in log.segments()]
+        after = segs[-1][0] + 1  # a cursor inside the newest file
+        segs[-1][1].unlink()
+        handles, lost = keeper_log._open_segments(segs, after)
+        rep = keeper_log._replay(handles, after, None, None, first_seq=1,
+                                 marker=None, lost_before=lost)
+        self.assertEqual(handles, [])
+        self.assertTrue(rep.truncated)
+        self.assertGreater(rep.oldest_seq, after + 1)
+
+    def test_a_corrupt_record_cannot_close_the_recovered_turn(self):
+        log = self.make()
+        log.emit(ev.turn_started(S, "t1"))
+        log.emit(ev.approval_requested(S, "r1", "tool", "Run ls?"))
+        path = log.segments()[-1][1]
+        crash(log)
+        bogus = dict(ev.turn_ended(S, "t0", "completed"), seq=0)
+        with open(path, "ab") as fh:
+            fh.write(json.dumps(bogus).encode() + b"\n")
+            fh.write(json.dumps(dict(upd(3), seq=3)).encode() + b"\n")
+        again = self.make()
+        self.assertEqual(again.recovery.skipped_lines, 1)
+        self.assertEqual(again.recovery.open_turn, "t1")
+        self.assertEqual([p["data"]["request_id"]
+                          for p in again.recovery.pending], ["r1"])
+
+    def test_replay_rejects_a_record_below_its_files_name(self):
+        log = self.make(first_seq=100)
+        log.emit(upd(1))
+        path = log.segments()[-1][1]
+        log.close()
+        # Ahead of the valid record, so the order check alone passes it.
+        lines = path.read_bytes().splitlines()
+        lines.insert(0, json.dumps(dict(upd(0), seq=99)).encode())
+        path.write_bytes(b"\n".join(lines) + b"\n")
+        rep = read_log(S, 0, home=self.home)
+        self.assertEqual([e["seq"] for e in rep.events], [100])
+        self.assertEqual(rep.skipped, 1)
+        again = self.make()
+        self.assertEqual(again.recovery.skipped_lines, 1)
+        rep = again.replay(0)
+        self.assertEqual([e["seq"] for e in rep.events], [100])
+        self.assertEqual(rep.skipped, 1)
+
+
 class TestJournalHelper(unittest.TestCase):
     """``journal._records_backward``, which recovery reuses: pinned here
     so a change in journal.py fails a keeper-log test."""

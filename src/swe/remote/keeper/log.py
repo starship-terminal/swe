@@ -223,19 +223,24 @@ class Subscription:
 # On-disk helpers
 
 
-def _parse(raw: bytes) -> dict | None:
-    """One complete log line as a record (a dict with a positive int seq
-    and a string type), or None."""
+def _valid(rec: Any, floor: int = 1) -> bool:
+    """Whether ``rec`` is a record a segment named ``floor`` may hold: a
+    dict with a string type and an int seq of at least ``floor`` (and 1)."""
+    if not isinstance(rec, dict) or not isinstance(rec.get("type"), str):
+        return False
+    seq = rec.get("seq")
+    return isinstance(seq, int) and not isinstance(seq, bool) \
+        and seq >= max(1, floor)
+
+
+def _parse(raw: bytes, floor: int = 1) -> dict | None:
+    """One complete log line as a record :func:`_valid` accepts for a
+    segment named ``floor``, or None."""
     try:
         rec = json.loads(raw)
     except ValueError:
         return None
-    if not isinstance(rec, dict) or not isinstance(rec.get("type"), str):
-        return None
-    seq = rec.get("seq")
-    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
-        return None
-    return rec
+    return rec if _valid(rec, floor) else None
 
 
 def _list_segments(log_dir: Path) -> list[tuple[int, Path]]:
@@ -297,8 +302,8 @@ def _scan_segment(path: Path, floor: int) -> _Scan:
             offset += len(raw)
             if not raw.endswith(b"\n"):
                 break
-            rec = _parse(raw)
-            if rec is None or rec["seq"] < floor or (
+            rec = _parse(raw, floor)
+            if rec is None or (
                     last is not None and rec["seq"] <= last["seq"]):
                 bad_run += 1
                 continue
@@ -314,7 +319,10 @@ def _open_segments(segs: list[tuple[int, Path]], after_seq: int):
     named at or before ``after_seq + 1`` and every one after it. A file
     gone missing (dropped by the cap under a lock-free reader) takes the
     ones before it with it; returns the handles and the first seq past
-    the loss (0 for none)."""
+    the loss (0 for none). When the newest listed file is the one gone,
+    the writer has moved on to files this listing lacks, so the boundary
+    is put past ``after_seq``: the replay reports truncation rather than
+    an empty, complete answer."""
     start = 0
     for i, (first, _) in enumerate(segs):
         if first <= after_seq + 1:
@@ -331,7 +339,10 @@ def _open_segments(segs: list[tuple[int, Path]], after_seq: int):
             for _, fh in handles:
                 fh.close()
             handles = []
-            lost_before = segs[i + 1][0] if i + 1 < len(segs) else 0
+            if i + 1 < len(segs):
+                lost_before = segs[i + 1][0]
+            else:
+                lost_before = max(first + 1, after_seq + 2)
     return handles, lost_before
 
 
@@ -350,11 +361,11 @@ def _replay(handles, after_seq: int, until_seq: int | None,
     more = False
     prev = after_seq
     done = False
-    for _, fh in handles:
+    for first, fh in handles:
         for raw in fh:
             if not raw.endswith(b"\n"):
                 break  # a write in progress, or a torn tail
-            rec = _parse(raw)
+            rec = _parse(raw, first)  # below its file's name: rejected
             if rec is None:
                 skipped += 1
                 continue
@@ -387,15 +398,23 @@ def read_log(session_key: str | None = None, after_seq: int = 0, *,
         raise ValueError("read_log needs a session_key or a root")
     log_dir = Path(root) if root is not None else log_dir_for(
         session_key, home)
-    meta = _read_meta(log_dir)
-    marker = _marker_of(meta)
-    segs = _list_segments(log_dir)
-    before = _nat(marker.get("before_seq")) if marker else 0
-    # Segments an interrupted eviction left behind are already gone.
-    while len(segs) > 1 and segs[0][0] < before:
-        segs.pop(0)
-    first = _nat(meta.get("first_seq")) or (segs[0][0] if segs else 1)
-    handles, lost = _open_segments(segs, after_seq)
+    for attempt in (1, 2):
+        segs = _list_segments(log_dir)
+        # meta.json after the listing: the writer records the marker
+        # before it unlinks a file, so a listed file that is gone by the
+        # open is covered by this marker, and the retry lists afresh.
+        meta = _read_meta(log_dir)
+        marker = _marker_of(meta)
+        before = _nat(marker.get("before_seq")) if marker else 0
+        # Segments an interrupted eviction left behind are already gone.
+        while len(segs) > 1 and segs[0][0] < before:
+            segs.pop(0)
+        first = _nat(meta.get("first_seq")) or (segs[0][0] if segs else 1)
+        handles, lost = _open_segments(segs, after_seq)
+        if not lost or attempt == 2:
+            break
+        for _, fh in handles:
+            fh.close()
     try:
         return _replay(handles, after_seq, until_seq, limit, first_seq=first,
                        marker=marker, lost_before=lost)
@@ -503,6 +522,7 @@ class EventLog:
         self._next = first_seq
         self._reserved = 0
         self._first_seq = first_seq
+        self._floor = 0
         self._marker: dict | None = None
         self._live: dict[str, dict] = {}
         self._pending: dict[str, dict] = {}
@@ -576,7 +596,11 @@ class EventLog:
         last_on_disk = last["seq"] if last else 0
         meta_first = _nat(meta.get("first_seq"))
         self._first_seq = meta_first or (segs[0][0] if segs else first_seq)
-        nxt = max(last_on_disk + 1, self._first_seq)
+        # ``floor`` is the lowest seq any later open may hand out, and the
+        # marker's ``before_seq`` was handed out before its segment went:
+        # neither a crash gap nor an eviction can be undone by the disk.
+        nxt = max(last_on_disk + 1, self._first_seq,
+                  _nat(meta.get("floor")), before)
         gap = 0
         reserved = _nat(meta.get("reserved"))
         same_boot = bool(self._boot) and meta.get("boot") == self._boot
@@ -619,12 +643,19 @@ class EventLog:
     @staticmethod
     def _recover_state(segs) -> tuple[str | None, list[dict]]:
         """The open turn and open requests, read backward from the tail
-        to the newest turn boundary (requests live inside a turn)."""
+        to the newest turn boundary (requests live inside a turn). Only
+        records the forward scan would accept count: valid for their
+        segment, and below the newer record already read."""
         resolved: set = set()
         pending: list[dict] = []
-        for _, path in reversed(segs):
+        newer: int | None = None
+        for first, path in reversed(segs):
             with open(path, "rb") as fh:
                 for rec in _records_backward(fh):
+                    if not _valid(rec, first) or (
+                            newer is not None and rec["seq"] >= newer):
+                        continue
+                    newer = rec["seq"]
                     etype = rec.get("type")
                     data = rec.get("data")
                     data = data if isinstance(data, dict) else {}
@@ -805,9 +836,11 @@ class EventLog:
         self._sync_dir()
 
     def _write_meta(self) -> None:
+        # Only ever rises: the next seq this run would hand out.
+        self._floor = max(self._floor, self._next)
         meta = {"v": META_VERSION, "first_seq": self._first_seq,
-                "reserved": self._reserved, "boot": self._boot,
-                "truncated": self._marker}
+                "floor": self._floor, "reserved": self._reserved,
+                "boot": self._boot, "truncated": self._marker}
         body = (json.dumps(meta, sort_keys=True) + "\n").encode("utf-8")
         tmp = self.dir / (_META + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
