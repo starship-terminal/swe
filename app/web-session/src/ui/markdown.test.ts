@@ -26,6 +26,16 @@ describe("inline Markdown", () => {
     expect(parseInline("so **bol")).toEqual([{ t: "text", text: "so **bol" }]);
   });
 
+  it("closes a code span with a run of backticks as long as the one that opened it", () => {
+    expect(parseInline("a ``x ` y`` b")).toEqual([
+      { t: "text", text: "a " },
+      { t: "code", text: "x ` y" },
+      { t: "text", text: " b" },
+    ]);
+    expect(parseInline("`` `tick` ``")).toEqual([{ t: "code", text: "`tick`" }]);
+    expect(parseInline("a `` b")).toEqual([{ t: "text", text: "a `` b" }]);
+  });
+
   it("keeps snake_case words whole", () => {
     expect(parseInline("a snake_case_name here")).toEqual([{ t: "text", text: "a snake_case_name here" }]);
   });
@@ -62,6 +72,15 @@ describe("block Markdown", () => {
     expect(list.items[0]?.blocks[0]).toMatchObject({ t: "list", items: [{ children: [{ t: "text", text: "b" }] }] });
     const [ordered] = parseMarkdown("3. x\n4. y");
     expect(ordered).toMatchObject({ t: "list", ordered: true, start: 3 });
+  });
+
+  it("removes a list item's real indent from what it holds, so code keeps its own", () => {
+    const [list] = parseMarkdown("1. Run:\n\n   ```py\n   x = 1\n     y = 2\n   ```\n10. Next\n- Dash:\n\n  ```\n  z\n  ```");
+    if (list?.t !== "list") throw new Error("not a list");
+    expect(list.items[0]?.blocks[0]).toEqual({ t: "code", lang: "py", text: "x = 1\n  y = 2", open: false });
+    const [dash] = parseMarkdown("- Dash:\n\n  ```\n  z\n  ```");
+    if (dash?.t !== "list") throw new Error("not a list");
+    expect(dash.items[0]?.blocks[0]).toEqual({ t: "code", lang: "", text: "z", open: false });
   });
 
   it("reads quotes and tables", () => {

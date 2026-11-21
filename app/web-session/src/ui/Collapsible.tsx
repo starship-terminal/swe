@@ -31,7 +31,7 @@ export function Collapsible({ header, open, onToggle, children, className, butto
         aria-controls={id}
         aria-expanded={open}
         className={cx(
-          "group flex w-full min-w-0 items-center gap-2 rounded-control text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-interactive",
+          "group flex w-full min-w-0 items-center gap-2 rounded-control text-left motion-safe:transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-interactive",
           buttonClassName,
         )}
         onClick={() => onToggle(!open)}

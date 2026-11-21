@@ -35,7 +35,7 @@ export function safeHref(raw: string): string | null {
 }
 
 const INLINE_PATTERNS: { kind: "code" | "link" | "strong" | "em"; re: RegExp }[] = [
-  { kind: "code", re: /`([^`\n]+)`/ },
+  { kind: "code", re: /(?<!`)(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/ },
   { kind: "link", re: /\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/ },
   { kind: "strong", re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/ },
   { kind: "em", re: /\*([^*\s][^*\n]*?)\*|(?<![\w])_([^_\s][^_\n]*?)_(?![\w])/ },
@@ -64,7 +64,12 @@ export function parseInline(text: string): Inline[] {
     const { kind, match } = best;
     pushText(rest.slice(0, match.index));
     rest = rest.slice(match.index + match[0].length);
-    if (kind === "code") out.push({ t: "code", text: match[1] ?? "" });
+    if (kind === "code") {
+      // A run of backticks closes with a run as long, so a span can hold a single backtick; one space
+      // each side is the way to write that and is not part of the code.
+      const inner = match[2] ?? "";
+      out.push({ t: "code", text: /^ .*[^ ].* $|^ [^ ] $/.test(inner) ? inner.slice(1, -1) : inner });
+    }
     else if (kind === "link") {
       const href = safeHref(match[2] ?? "");
       // An address that is not safe leaves the words, not a dead link.
@@ -80,7 +85,7 @@ const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([\w+#.-]*)[^\n]*$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
-const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+const LIST = /^(\s*)([-*+]|\d{1,9}[.)])(\s+)(.*)$/;
 const TABLE_SEPARATOR = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
 function splitRow(line: string): string[] {
@@ -192,7 +197,9 @@ function parseLines(lines: string[]): Block[] {
         const current = lines[i] as string;
         const match = LIST.exec(current);
         if (match === null || (match[1] as string).length !== base || /\d/.test(match[2] as string) !== ordered) break;
-        const first = match[3] ?? "";
+        const first = match[4] ?? "";
+        // Where the item's own text starts: what its continuation lines are indented by (a marker and one to four spaces).
+        const content = base + (match[2] as string).length + Math.min((match[3] as string).length, 4);
         i++;
         // What belongs to the item: lines indented deeper than its marker, and blank lines between them.
         const inner: string[] = [];
@@ -208,7 +215,7 @@ function parseLines(lines: string[]): Block[] {
             break;
           }
           if (indentOf(following) <= base) break;
-          inner.push(following.slice(Math.min(indentOf(following), base + 2)));
+          inner.push(following.slice(Math.min(indentOf(following), content)));
           i++;
         }
         items.push({ children: parseInline(first), blocks: parseLines(inner) });

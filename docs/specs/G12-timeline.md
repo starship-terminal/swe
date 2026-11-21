@@ -37,7 +37,7 @@ are the two files outside `session/` and `ui/` that changed: G10 named
 | User message | `message` item, role `user` | a quiet bubble on the right, with attachments as file chips |
 | Reply | `message`, role `assistant` | prose, no bubble; Markdown through `ui/markdown.ts` |
 | Work group | consecutive `thinking`, `tool` and `checkpoint` items | one line, "Worked for 2m 29s · 3 tool calls, 1 thought", and "1 failed" when a tool failed. While the turn is open and nothing was written after it, "Working" with a spinner and its steps open |
-| Request | `request` item | the prompt and how it ended ("Allowed", "Denied", "Allowed automatically", "Expired before it was answered"...). One still open says "Waiting for your answer". The controls are the approvals dock's (G13) |
+| Request | `request` item | the prompt and how it ended ("Allowed", "Denied", "Allowed automatically", "Chose: dev" for a menu row, "Expired before it was answered"...). One still open says "Waiting for your answer". The controls are the approvals dock's (G13) |
 | Notice | `compacted`, `error` | a rule with "Context compacted from 120k tokens"; an alert box for an error |
 | Live text | `session.live` | after the last items of its own turn; assistant text as prose with a caret, thinking as a muted box, a tool call being typed as "Preparing a tool call" |
 | Working | none | a spinner row while a turn is open and the session is `running` but nothing is streaming and no group is open |
@@ -46,11 +46,12 @@ are the two files outside `session/` and `ui/` that changed: G10 named
 
 **Work groups.** A group is the run of steps between two other rows. It is
 closed once it is done and open while it runs, and a person's own toggle wins
-and stays (`useToggles`, keyed by the group's first `seq`): a group does not
-close under someone reading it. Closed, its steps are not made at all; opened
+and stays (`useToggles`, keyed by the row before the group, or the start of
+its turn, so the id survives a running group growing and an older page of history
+joining it at the front): a group does not close under someone reading it. Closed, its steps are not made at all; opened
 once, they stay so the close can animate. A tool opens for its input, its
-progress while it runs, each file edit as a coloured diff (the `+` and `-`
-lines counted) and its output, each cut at 6000 characters or 300 lines with a
+progress while it runs, each file edit as a coloured diff (`diffLines` reads hunk headers, so
+a changed line such as `++counter;` is not taken for a file header) and its output, each cut at 6000 characters or 300 lines with a
 note of how much is not shown. "Worked for" is the span from the group's first
 step to its last step's end (`completedAt`).
 
@@ -66,8 +67,9 @@ bubble with the selector's `reason` as its one sentence and a state arrow
 for failed, grey for in doubt and unconfirmed). Discard exists only when
 `canDiscard` is true and Retry only when `canRetry` is true, so while the outbox
 loads, or a post is out, neither is offered: the view reads the flags and
-decides nothing. Retry calls `retrySend` (a new send under a new id), Discard
-calls `discardSend`.
+decides nothing. Retry calls `retrySend` (a new send under a new id; if the store refuses it,
+because the session became read-only or is gone, the reason shows under that
+send), Discard calls `discardSend`.
 
 **A delivered message shows once.** The hub echoes the command id a send was
 posted under as the `command_id` of the user's `message.completed` (the keeper
@@ -96,15 +98,18 @@ no arbitrary values. The quiver state arrow's shape is inlined with
 colour a shade off the `state-<colour>.svg` files, which are fixed fills).
 Every transition and animation (the disclosure, the chevron, a new row, the
 spinner, the pulse, the caret, the banner) sits inside
-`@media (prefers-reduced-motion: no-preference)`; `motion.test.ts` fails on one
-outside it and on a rule not under `.swe-sv`. No ALL CAPS, and the mono font
+`@media (prefers-reduced-motion: no-preference)`, and the Tailwind ones are
+`motion-safe:`; `motion.test.ts` fails on one outside, in the stylesheet or in a
+`.tsx` class, and on a rule not under `.swe-sv`. No ALL CAPS, and the mono font
 only on `pre` and `code`.
 
 **Markdown.** `ui/markdown.ts` reads a reply into plain data (paragraphs,
 headings, lists with nesting, quotes, fenced code, tables, rules; code, bold,
 italic and links in a line) and `Prose` draws it with React elements, so reply
 text never becomes HTML. A link is an anchor only for `http`, `https` and
-`mailto` (`rel="noopener noreferrer"`); anything else leaves its words. An open
+`mailto` (`rel="noopener noreferrer"`); anything else leaves its words. A code span closes with
+a run of backticks as long as its opening one, and a list item's content is
+read with its real indent removed, so code under a numbered item keeps its own. An open
 code fence runs to the end, so a reply still being written draws sensibly.
 `react-markdown` (named in G1) was not added: nothing else needed its
 dependency tree.
@@ -193,7 +198,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (387 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (397 tests), `pnpm build` | pass |
 | `tests.test_webapp_session_view`, `tests.test_session_view_fixtures` | pass |
 | The built page, served as static files, with a real `fetch`: `/session/index.html?key=claude%3Anope` asks `GET /v1/sessions/claude%3Anope/events?v=2`, gets 404 and shows "Session gone" | pass |
 | 52 screenshots, each read: 13 scenes x desktop and phone x light and dark | read; findings fixed (bubble width, the caret on its own line, a connecting banner said three times, a detached arrow) |

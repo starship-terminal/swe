@@ -65,7 +65,18 @@ function arrowFor(send: SendView): ArrowColour {
  * decide whether a button exists at all: while the outbox loads, or while a post is out, neither
  * is offered.
  */
-export function SendBubble({ send, onDiscard, onRetry }: { send: SendView; onDiscard(id: string): void; onRetry(id: string): void }) {
+export function SendBubble({
+  send,
+  note,
+  onDiscard,
+  onRetry,
+}: {
+  send: SendView;
+  /** Why the last Retry did not go ahead, when the store refused it. */
+  note?: string | undefined;
+  onDiscard(id: string): void;
+  onRetry(id: string): void;
+}) {
   const failed = send.shown === "failed" || send.shown === "unconfirmed";
   return (
     <div className="flex flex-col gap-1" data-send={send.shown} data-command-id={send.commandId}>
@@ -75,6 +86,11 @@ export function SendBubble({ send, onDiscard, onRetry }: { send: SendView; onDis
           {send.shown === "sending" ? <Spinner className="mt-0.5" /> : <StateArrow className="mt-0.5" colour={arrowFor(send)} />}
           <span>{send.reason}</span>
         </p>
+        {note !== undefined ? (
+          <p className="text-danger-text" role="alert">
+            {note}
+          </p>
+        ) : null}
         {send.canRetry || send.canDiscard ? (
           <div className="flex gap-1.5">
             {send.canDiscard ? (

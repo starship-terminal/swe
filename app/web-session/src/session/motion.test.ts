@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,5 +44,25 @@ describe("reduced motion", () => {
     const rules = selectors.filter((s) => !s.startsWith("@") && !/^(from|to|\d+%|50%)$/.test(s));
     expect(rules.length).toBeGreaterThan(5);
     expect(rules.every((s) => s.startsWith(".swe-sv"))).toBe(true);
+  });
+});
+
+describe("reduced motion in utility classes", () => {
+  it("puts every Tailwind transition or animation behind motion-safe:", () => {
+    const dirs = [here, join(here, "../ui")];
+    const bad: string[] = [];
+    for (const dir of dirs) {
+      for (const name of readdirSync(dir)) {
+        if (!/\.tsx$/.test(name) || /\.test\./.test(name)) continue;
+        readFileSync(join(dir, name), "utf8")
+          .split("\n")
+          .forEach((line, index) => {
+            const code = line.trim();
+            if (code.startsWith("*") || code.startsWith("//") || code.startsWith("/*")) return;
+            if (/(?<![\w:-])(?:transition(?:-[a-z]+)?|animate-[a-z-]+|duration-\d+|ease-[a-z-]+)(?![\w-])/.test(code.replace(/motion-safe:[\w-]+/g, ""))) bad.push(`${name}:${index + 1}`);
+          });
+      }
+    }
+    expect(bad).toEqual([]);
   });
 });

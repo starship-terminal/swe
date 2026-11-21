@@ -11,7 +11,7 @@ export function Button({ tone = "plain", className, type = "button", ...rest }: 
   return (
     <button
       className={cx(
-        "inline-flex h-7 items-center gap-1.5 rounded-control border border-border px-2.5 text-xs font-medium transition-colors",
+        "inline-flex h-7 items-center gap-1.5 rounded-control border border-border px-2.5 text-xs font-medium motion-safe:transition-colors",
         "hover:bg-hover focus-visible:outline-2 focus-visible:outline-interactive disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
         tone === "danger" ? "text-danger-text" : "text-primary",
         className,

@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 
 import type { CheckpointItem, ThinkingItem, ToolItem } from "../core";
 import { Collapsible, cx, Icon, Spinner, type IconName } from "../ui";
-import { clip, diffStat, formatDuration, plural } from "./format";
+import { clip, diffLines, diffStat, formatDuration, plural } from "./format";
 import type { WorkEntry, WorkGroup } from "./model";
 import { toolTitle } from "./model";
 
@@ -49,7 +49,7 @@ function stringify(input: unknown): string {
 }
 
 function Diff({ diff }: { diff: string }) {
-  const lines = diff.split("\n");
+  const lines = diffLines(diff);
   const shown = lines.slice(0, SHOWN_DIFF_LINES);
   return (
     <>
@@ -60,12 +60,12 @@ function Diff({ diff }: { diff: string }) {
               key={index}
               className={cx(
                 "block px-2.5",
-                line.startsWith("+") && !line.startsWith("+++") && "text-success",
-                line.startsWith("-") && !line.startsWith("---") && "text-danger-text",
-                line.startsWith("@@") && "text-muted",
+                line.kind === "add" && "text-success",
+                line.kind === "remove" && "text-danger-text",
+                (line.kind === "hunk" || line.kind === "header") && "text-muted",
               )}
             >
-              {line === "" ? " " : line}
+              {line.text === "" ? " " : line.text}
             </span>
           ))}
         </code>

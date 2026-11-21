@@ -24,7 +24,11 @@ export type WorkEntry = ThinkingItem | ToolItem | CheckpointItem;
 export interface WorkGroup {
   kind: "work";
   key: string;
-  /** Stable for the group's life: the `seq` of its first entry. The open and closed state is kept by it. */
+  /**
+   * Stable while the group grows at either end: it names the row before the group (a message or a
+   * notice), or the start of the turn. A running group gains entries after it, and an older page of
+   * history adds them before it; neither may change the id, which keeps the person's open or closed choice.
+   */
   id: string;
   turnId: string | undefined;
   entries: WorkEntry[];
@@ -87,15 +91,14 @@ function endOf(entry: WorkEntry): number {
   return entry.kind === "tool" ? (entry.completedAt ?? entry.ts) : entry.ts;
 }
 
-function group(entries: WorkEntry[], turnId: string | undefined): WorkGroup {
-  const first = entries[0] as WorkEntry;
+function group(entries: WorkEntry[], turnId: string | undefined, id: string): WorkGroup {
   const tools = entries.filter((e) => e.kind === "tool");
   const start = Math.min(...entries.map((e) => e.ts));
   const end = Math.max(...entries.map(endOf));
   return {
     kind: "work",
-    key: `work-${first.seq}`,
-    id: `work-${first.seq}`,
+    key: id,
+    id,
     turnId,
     entries,
     running: false,
@@ -158,7 +161,9 @@ function segmentRows(segment: Segment): Row[] {
   const rows: Row[] = [];
   let run: WorkEntry[] = [];
   const close = () => {
-    if (run.length > 0) rows.push(group(run, segment.turnId));
+    if (run.length === 0) return;
+    const before = rows[rows.length - 1];
+    rows.push(group(run, segment.turnId, before === undefined ? `work-start-${segment.turnId ?? "_"}` : `work-after-${before.key}`));
     run = [];
   };
   for (const item of segment.items) {
@@ -194,10 +199,12 @@ export type TimelineInput = Pick<SessionState, "items" | "live" | "turns" | "sto
 export function buildRows(session: TimelineInput, sends: readonly SendView[]): Row[] {
   const turns = new Map(session.turns.map((turn) => [turn.id, turn]));
   const runs = segments(session.items);
-  // A live reply whose turn has no item yet still needs a place.
+  // A live reply whose turn has no item yet still needs a place: a run of its own turn, or, for text
+  // with no turn on it (the protocol allows that, and a legacy session's live text has none), the last run.
   for (const live of session.live) {
     if (live.turnId !== undefined && !runs.some((run) => run.turnId === live.turnId)) runs.push({ turnId: live.turnId, items: [] });
   }
+  if (runs.length === 0 && session.live.some((live) => live.turnId === undefined)) runs.push({ turnId: undefined, items: [] });
   const lastRunOf = new Map<string | undefined, number>();
   runs.forEach((run, index) => lastRunOf.set(run.turnId, index));
   const stopped = new Set(session.stopped);

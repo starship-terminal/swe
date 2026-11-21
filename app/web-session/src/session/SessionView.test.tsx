@@ -321,6 +321,18 @@ describe("sends from the outbox", () => {
     expect(all(t.el, "[data-send]").map((b) => b.getAttribute("data-send"))).toEqual(["sent"]);
   });
 
+  it("says why when a Retry is refused, under that send, and clears it on the next try", async () => {
+    const t = await ready();
+    answer(t, 409, { error: { code: "send_rejected", message: "no" } });
+    await settle(async () => void (await t.store.getState().send({ text: "run it" })));
+    const refusal = { ok: false as const, reason: "read_only" as const, message: "This session is read-only now." };
+    await settle(() => t.store.setState({ retrySend: async () => refusal }));
+    await click(button(q(t.el, '[data-send="failed"]') as HTMLElement, "Retry"));
+    const bubble = q(t.el, '[data-send="failed"]') as HTMLElement;
+    expect(text(q(bubble, '[role="alert"]'))).toBe("This session is read-only now.");
+    expect(button(bubble, "Retry")).toBeDefined();
+  });
+
   it("shows a send that may have reached the session as in doubt, and never posts it again by itself", async () => {
     const t = await ready();
     answer(t, 503, { error: { code: "keeper_failed", message: "keeper did not answer" } });
@@ -463,5 +475,54 @@ describe("reading history", () => {
     expect(button(t.el, "Loading")?.disabled).toBe(true);
     await settle(() => finish({ status: 200, body: { session: KEY, messages: [], has_more: false, next_before: null } }));
     expect(button(t.el, "Load earlier messages")).toBeUndefined();
+  });
+});
+
+describe("what a refactor of the rows must not change", () => {
+  it("keeps a person's open group open when older history joins it at the front", async () => {
+    const t = setup();
+    const body = loadFixture("default").snapshots[0]?.body as Fixture["snapshots"][number]["body"];
+    const tool = (seq: number, id: string): Frame[] =>
+      [
+        { v: 2, type: "tool.started", session: KEY, seq, ts: 1760000000 + seq, turn_id: "t1", data: { call_id: id, name: "Read", summary: `Read ${id}` } },
+        { v: 2, type: "tool.completed", session: KEY, seq: seq + 1, ts: 1760000000 + seq, turn_id: "t1", data: { call_id: id, status: "ok", name: "Read" } },
+      ] as unknown as Frame[];
+    const page = (seqs: number[]) => ({ ...body, messages: seqs.flatMap((seq) => tool(seq, `c${seq}`)) as never, has_more: seqs[0] !== 10, next_before: 10, state: "idle" as const, open_turn: null, head: 40 });
+    await settle(() => void t.transport.last.send(snapshotFrame(page([20, 22]))));
+    await click(button(t.el, "Worked"));
+    expect(button(t.el, "Worked")?.getAttribute("aria-expanded")).toBe("true");
+    t.transport.on("/messages", () => ({ status: 200, body: { session: KEY, messages: [...tool(10, "c10"), ...tool(12, "c12")], has_more: false, next_before: null } }));
+    await click(button(t.el, "Load earlier messages"));
+    // One group, now with four steps, still open.
+    expect(all(t.el, "button").filter((b) => text(b).startsWith("Worked"))).toHaveLength(1);
+    expect(button(t.el, "Worked")?.getAttribute("aria-expanded")).toBe("true");
+    expect(text(q(t.el, ".sv-collapse"))).toContain("Read c10");
+  });
+
+  it("draws a reply that is only live text, with no turn and nothing in the journal yet", async () => {
+    const t = setup();
+    const body = loadFixture("default").snapshots[0]?.body as Fixture["snapshots"][number]["body"];
+    await settle(() =>
+      void t.transport.last.send(
+        snapshotFrame({ ...body, messages: [], state: "running", open_turn: null }),
+        { v: 2, type: "session.state", session: KEY, seq: 0, ts: 1, data: { state: "running", live: [{ id: "a1", kind: "assistant", text: "Starting up" }], pending: [], head: body.head, epoch: body.epoch } } as unknown as Frame,
+      ),
+    );
+    expect(text(q(t.el, '[data-live="assistant"]'))).toBe("Starting up");
+  });
+
+  it("names the option a person chose for a question", async () => {
+    const t = setup();
+    const body = loadFixture("default").snapshots[0]?.body as Fixture["snapshots"][number]["body"];
+    const f = (type: string, seq: number, data: unknown): Frame => ({ v: 2, type, session: KEY, seq, ts: 1760000000 + seq, turn_id: "t1", data }) as unknown as Frame;
+    await settle(() =>
+      void t.transport.last.send(
+        snapshotFrame({ ...body, messages: [], head: 49, state: "running", open_turn: "t1" }),
+        { v: 2, type: "session.state", session: KEY, seq: 0, ts: 1, data: { state: "running", live: [], pending: [], head: 49, epoch: body.epoch } } as unknown as Frame,
+        f("approval.requested", 50, { request_id: "q1", kind: "question", prompt: "Which branch?", options: [{ id: "o1", label: "main" }, { id: "o2", label: "dev" }] }),
+        f("approval.resolved", 51, { request_id: "q1", source: "user", option_id: "o2" }),
+      ),
+    );
+    expect(text(q(t.el, '[data-request="closed"]'))).toContain("Chose: dev");
   });
 });

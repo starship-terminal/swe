@@ -20,11 +20,13 @@ function RowView({
   toggles,
   onDiscard,
   onRetry,
+  refused,
 }: {
   row: Row;
   toggles: Toggles;
   onDiscard(id: string): void;
   onRetry(id: string): void;
+  refused: Record<string, string>;
 }) {
   switch (row.kind) {
     case "user":
@@ -46,7 +48,7 @@ function RowView({
     case "footer":
       return <FooterRow footer={row} />;
     case "send":
-      return <SendBubble onDiscard={onDiscard} onRetry={onRetry} send={row.send} />;
+      return <SendBubble note={refused[row.send.commandId]} onDiscard={onDiscard} onRetry={onRetry} send={row.send} />;
   }
 }
 
@@ -85,7 +87,9 @@ export function Timeline({ store }: { store: SessionStore }) {
   const content = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const [atEnd, setAtEnd] = useState(true);
-  const anchor = useRef<{ height: number; top: number } | null>(null);
+  // Where the person was reading when older history was asked for, and the first item then: the position
+  // is kept only once a page arrives in front of that item (a reply growing meanwhile must not move it).
+  const anchor = useRef<{ height: number; top: number; first: number | undefined } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
   const toEnd = useCallback((smooth: boolean) => {
@@ -108,13 +112,13 @@ export function Timeline({ store }: { store: SessionStore }) {
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el === null) return;
-    if (anchor.current !== null) {
+    if (anchor.current !== null && items[0]?.seq !== anchor.current.first) {
       el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
       anchor.current = null;
-    } else if (stuck.current) {
+    } else if (stuck.current && anchor.current === null) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [rows]);
+  }, [rows, items]);
 
   // A group opening or closing changes the height with no new row: follow that too.
   useEffect(() => {
@@ -125,7 +129,7 @@ export function Timeline({ store }: { store: SessionStore }) {
     });
     watcher.observe(target);
     return () => watcher.disconnect();
-  }, [loaded]);
+  }, [rows.length > 0]);
 
   // Rows that appear after the first draw fade in; the first draw (a whole history) does not. A reply that
   // finishes keeps its place without a second entrance: its live row and its message share an identity.
@@ -137,10 +141,19 @@ export function Timeline({ store }: { store: SessionStore }) {
   }, [rows, loaded]);
 
   const discard = useCallback((id: string) => void store.getState().discardSend(id), [store]);
-  const retry = useCallback((id: string) => void store.getState().retrySend(id), [store]);
+  // A Retry the store refuses (the session became read-only, or is gone) says why, under that send.
+  const [refused, setRefused] = useState<Record<string, string>>({});
+  const retry = useCallback(
+    async (id: string) => {
+      setRefused(({ [id]: _gone, ...rest }) => rest);
+      const result = await store.getState().retrySend(id);
+      if (result !== undefined && !result.ok) setRefused((held) => ({ ...held, [id]: result.message }));
+    },
+    [store],
+  );
   const loadOlder = useCallback(async () => {
     const el = scroller.current;
-    if (el !== null) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
+    if (el !== null) anchor.current = { height: el.scrollHeight, top: el.scrollTop, first: items[0]?.seq };
     setLoadingOlder(true);
     try {
       await store.getState().loadOlder();
@@ -149,7 +162,7 @@ export function Timeline({ store }: { store: SessionStore }) {
       // Nothing was added: do not hold the anchor for the next unrelated render.
       window.setTimeout(() => (anchor.current = null), 0);
     }
-  }, [store]);
+  }, [store, items]);
 
   let body;
   if (!loaded && rows.length === 0) {
@@ -175,7 +188,7 @@ export function Timeline({ store }: { store: SessionStore }) {
         ) : null}
         {rows.map((row) => (
           <div key={row.key} className={cx(fresh !== null && !fresh.has(row.key) && !fresh.has(identity(row)) && "sv-enter")} data-row-kind={row.kind}>
-            <RowView onDiscard={discard} onRetry={retry} row={row} toggles={toggles} />
+            <RowView onDiscard={discard} onRetry={(id) => void retry(id)} refused={refused} row={row} toggles={toggles} />
           </div>
         ))}
       </div>

@@ -49,9 +49,14 @@ function answerText(item: RequestItem): { text: string; arrow: "green" | "grey" 
   if (resolution === undefined) return { text: "Waiting for your answer", arrow: "yellow" };
   const decision = resolution.decision === undefined ? undefined : DECISION[resolution.decision];
   switch (resolution.source) {
-    case "user":
+    case "user": {
+      // A menu row the person chose: say which, by the label the agent offered.
+      const chosen = resolution.optionId === undefined ? undefined : item.event.data.options?.find((option) => option.id === resolution.optionId);
+      if (chosen !== undefined) return { text: `Chose: ${chosen.label}`, arrow: "green" };
+      if (resolution.optionId !== undefined && decision === undefined && resolution.text === undefined) return { text: "Answered with an option", arrow: "green" };
       if (decision !== undefined) return { text: decision, arrow: resolution.decision === "deny" ? "grey" : "green" };
       return { text: resolution.text !== undefined && resolution.text !== "" ? `Answered: ${resolution.text}` : "Answered", arrow: "green" };
+    }
     case "autonomy":
       return { text: decision === undefined ? "Answered automatically" : `${decision} automatically`, arrow: "green" };
     case "dropped":
