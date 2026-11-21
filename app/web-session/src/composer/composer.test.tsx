@@ -581,3 +581,41 @@ describe("attachments", () => {
     expect(text(q(m.el, '[data-file="1-a-x.txt"]'))).toBe("x.txt");
   });
 });
+
+describe("keeping the timeline clear of the bar", () => {
+  it("measures again when the keyboard moves the bar without changing the stack's size", async () => {
+    const callbacks: (() => void)[] = [];
+    const watched: Element[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+        observe(el: Element) {
+          watched.push(el);
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const m = mount();
+      const host = q(m.el, "[data-composer-host]") as HTMLElement;
+      const stack = host.firstElementChild as HTMLElement;
+      // The host (what the keyboard's padding is on) is watched as well as the stack.
+      expect(watched).toContain(host);
+      expect(watched).toContain(stack);
+      // The view ends at 800; the stack's top moves from 700 to 464 when the keyboard opens, its size the same.
+      m.el.getBoundingClientRect = () => ({ bottom: 800 }) as DOMRect;
+      let top = 700;
+      stack.getBoundingClientRect = () => ({ top }) as DOMRect;
+      callbacks.forEach((notify) => notify());
+      expect(m.el.style.getPropertyValue("--sv-composer-h")).toBe("100px");
+      top = 464;
+      callbacks.forEach((notify) => notify());
+      expect(m.el.style.getPropertyValue("--sv-composer-h")).toBe("336px");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

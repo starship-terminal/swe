@@ -1,6 +1,6 @@
 {
   "hash_rule": "app/web-session/scripts/source-hash.mjs",
-  "source_hash": "9ddd2dcc17665a37d19db10e7677586a610a10b9f16f4c0bc4c4947b350ea034",
+  "source_hash": "b08afa4e257b7c43a2f26e0a19e80ac439aa198711502ecebe653a24ca019c5a",
   "sources": {
     "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
     "package.json": "cb9b7879ea6c06714a7ca2fe19e1d3de1eef288fab335122c39db4037073781d",
@@ -14,7 +14,7 @@
     "src/appearance.test.ts": "5e9a970a011ed8748a0be74d57a20be96e2dc3bee1903ec042fbf44b3a19b18d",
     "src/boot.ts": "f2042097b82da401222f49d9ac198d2d677cd3b1eea1cd5b4c16f1884d50eabd",
     "src/composer/AnswerButton.tsx": "6ad38b4c3766bd7e258f41218a06329b0d35065f5f5f01c7d03ee309c6a3ccd6",
-    "src/composer/Composer.tsx": "eb1fe4b93b168e4d93a9c3afd57b7707a4337afc58471fd9174b0aaf23a6d3cd",
+    "src/composer/Composer.tsx": "5e0f0546e5cb81492cced1e9c6b531766062572fbeb24b4a5414700f2e7c75cd",
     "src/composer/ErrorNote.tsx": "94a4175c4af78d50088c4d98a29871ba6b14f4c3cf52291e10b1d6857ac7cde1",
     "src/composer/Guard.tsx": "8984045b53d9a63b2cf6f230ecec5917e128b3304b7c080e42e931c49d64047d",
     "src/composer/Menu.tsx": "f8c084cd616a8e17451526a1ce91d9e04f8f0be6989f910bf5e8058326a54b1a",
@@ -22,7 +22,7 @@
     "src/composer/RequestDock.tsx": "237e6eae21c073c91f776dba26501f864fd4f4eaba07dddc91bc4de69e86cd44",
     "src/composer/answer.ts": "f1b88fbbae3c2046760606106812ecfe5dfbced19839c42c02e62e474c860731",
     "src/composer/composer.css": "eef5d3ee32b3bfe3ed1674fcf5393800ae9a87d84fe188bcf117bfa65b8373f4",
-    "src/composer/composer.test.tsx": "47ed2afb5af83d690f607018b7e6de042a70011c838f7c87660c970327fa1402",
+    "src/composer/composer.test.tsx": "1001262391967978aff3ce71e5b5a470a89de32928a832049d79371acb75babc",
     "src/composer/dock.test.tsx": "734f09bedad7b0ca1eb4ea2dba272cb65412753b1eda12b019b2b180bffb0ecc",
     "src/composer/draft.test.ts": "ed85846a4a21909b2ec5f41ee639f318713038ee191c8f7ca31849182d85b9d0",
     "src/composer/draft.ts": "f49914a6c7f2d8bcb54dcf2f4f39ead035109be74b19a67b33b96b81b610aa3d",

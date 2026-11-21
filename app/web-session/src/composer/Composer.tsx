@@ -70,8 +70,11 @@ function useFloating(): { host: RefObject<HTMLDivElement | null>; stack: RefObje
     const report = (): void => parent.style.setProperty("--sv-composer-h", `${Math.max(0, Math.ceil(parent.getBoundingClientRect().bottom - stackEl.getBoundingClientRect().top))}px`);
     report();
     if (typeof ResizeObserver === "undefined") return () => parent.style.removeProperty("--sv-composer-h");
+    // The stack changes size with its content; the host's content box changes when the keyboard or the home
+    // indicator changes the padding it rides on, with the stack the same size and in a new place.
     const watcher = new ResizeObserver(report);
     watcher.observe(stackEl);
+    if (host.current !== null) watcher.observe(host.current);
     return () => {
       watcher.disconnect();
       parent.style.removeProperty("--sv-composer-h");
