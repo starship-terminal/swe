@@ -145,11 +145,17 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const before = get().session;
       const { state, effects } = reduce(before, frame);
       set({ session: state });
+      // Every catch-up ends with this frame (a replay, a snapshot, an overflow recovery): a result may have
+      // been missed while the stream was away or behind, and the row now says whether a keeper holds the
+      // session, so this is when sends acknowledged earlier are asked about again.
+      if (frame.type === "session.state" && frame.data.live !== undefined) outbox?.recheckSent();
+      // The session's row is known now: sends that waited for that may go.
+      if (!before.loaded && state.loaded) outbox?.wake();
       if (snapshotBusy) {
         const still = new Set(state.live.map((entry) => entry.id));
         for (const entry of before.live) if (!still.has(entry.id)) endedMeanwhile.add(entry.id);
       }
-      if (frame.type === "command.result" && frame.command_id !== undefined) {
+      if (frame.type === "command.result" && frame.command_id !== undefined && frame.command_id !== "") {
         const result = { ok: frame.data.ok, ...(frame.data.note === undefined ? {} : { note: frame.data.note }) };
         outbox?.noteResult(frame.command_id, {
           ...result,
@@ -221,8 +227,6 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       set({ connection });
       const live = connection.state === "live";
       if (live && !wasLive) {
-        // Results the stream could not replay may have been missed while it was away.
-        outbox?.recheckSent();
         outbox?.wake();
       }
       wasLive = live;
@@ -271,6 +275,13 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           timers,
           random,
           newId,
+          ready: () => environment.online() && get().session.loaded,
+          route: () => {
+            // A keeper holds the session when its row says so and its capabilities are known (they are
+            // null for a session no keeper holds). Not yet loaded counts as not held.
+            const { row, caps } = get().session;
+            return row?.["mode"] === "keeper" && caps !== null ? "keeper" : "legacy";
+          },
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
           onChange: (view) => set({ outbox: view }),
         });

@@ -155,7 +155,7 @@ time by hand and nothing waits.
 | `live` | a frame has arrived on the open stream | silence, an end of the stream, offline |
 | `reconnecting` | the stream dropped or went silent; trying again | a frame: `live`; three failures in a row: `hub_down` |
 | `offline` | the device has no network; no timer runs | the `online` event |
-| `hub_down` | online, and three attempts in a row failed | a frame |
+| `hub_down` | online, and three attempts in a row failed to get any answer (a stream that opened and gave a frame found the hub up, so it stays `reconnecting` however soon it ended) | a frame |
 | `unauthorized` | 401 or 403; waits for `wake()` (a new credential) | `wake()` |
 | `gone` | 404 or 410: the session does not exist | `wake()` |
 | `outdated` | HTTP 426, or the first frame was not v2 (a hub that does not know `v=2` answers with today's frames) | `wake()` |
@@ -210,23 +210,46 @@ first attempt.
 | `sent` | the hub gave a receipt (accepted, queued, duplicate, held); waits for its `command.result` |
 | `failed` | the hub refused it (409, 422, 404 ...) or it expired; kept with `error` until the person dismisses it or sends it again as a new message |
 
-- **Retries are safe.** The hub answers a repeated `command_id` with the
-  stored receipt (`duplicate`), and with the stored result when there is
-  one. A lost response, a reload and a hub restart all end the same way:
-  the command was applied once. `outbox.test.ts` has a hub that applies a
-  command once and loses the first response.
+- **When a send is repeated, and when it never is.** The hub de-duplicates
+  on `command_id` only for a session a keeper holds (it stores a receipt and
+  a result and answers a repeat with them). For any other session
+  (`hub.py` `_send_message`) it reads only `client_id`, does not
+  de-duplicate, and files the result under an id it may leave empty, so a
+  repeat types the message into the session again. The outbox therefore
+  keeps two paths, told apart by the row and state the client holds at the
+  time (`row.mode` is `keeper` and `caps` is not null: `route()`):
+
+  | | Keeper-held session | Any other session |
+  |---|---|---|
+  | Body | `command_id` and `client_id`, the same id | the same |
+  | A 2xx answer | with a `receipt`: the entry becomes `sent`, `path: "keeper"`, and waits for its `command.result`. Without one it is settled like the other path | settles it: the entry is removed. It is never kept for a result |
+  | No answer (network error, timeout), 408, 500, 502, 504 | retried under the same id with backoff (safe: the hub answers `duplicate`) | **failed**, with "may or may not have been sent ... send it again if it did not arrive". Never retried |
+  | 429, 503, 425 | retried | retried |
+  | Asked again after a reconnect or a restart | yes, each `sent` entry with `path: "keeper"` | never |
+
+  A retry of a `pending` entry that is no longer on the keeper path (the
+  session was detached between attempts) fails the same way instead of
+  posting, and a `sent` keeper entry is not asked about again once the
+  session is no longer keeper-held. Nothing is posted before the session's
+  row has been seen and the device is online: before that `route()` would be
+  a guess, so an early send waits on disk. A send to a session whose row has
+  `control` other than `full` is refused (`read_only`, with
+  `control_reason`).
 - **On disk first.** `send()` resolves, and the entry becomes visible and
   deliverable, only after its first write. A page that closes after the hub
   took the message but before the write would lose the id a retry needs.
 - **A result ends it.** An ok result, or a cancelled one (taken out of the
   queue, or steered), removes the entry. Any other result marks it failed
   with the hub's note.
-- **After every reconnect**, and after a reload, every `sent` entry is
-  asked about again under its own id. A catch-up by snapshot or overflow
-  recovery carries no `command.result`, and a failed result the hub made
-  for the stream has `seq` 0 and is not replayed, so a result could have
-  been missed whatever the `boot_id` says. The hub answers a repeat with
-  the stored receipt and result. A `401` pauses the outbox until `wake()`.
+- **After every catch-up** (a replay, a snapshot, an overflow recovery: each
+  ends with the state frame that carries `live[]`), and after a reload,
+  every `sent` entry on the keeper path is asked about again under its own
+  id. A catch-up by snapshot carries no `command.result`, and a failed
+  result the hub made for the stream has `seq` 0 and is not replayed, so a
+  result could have been missed whatever the `boot_id` says. It is asked
+  after the catch-up, not at the first frame, because the catch-up is what
+  says whether a keeper still holds the session. A `401` pauses the outbox
+  until `wake()`. A `command.result` with an empty id changes nothing.
 - **24 hours.** A `pending` entry older than that fails ("Not sent"), and a
   `sent` one fails too ("No result from the hub in 24 hours: this message
   may not have been delivered"): the hub holds a message for a sleeping
@@ -264,7 +287,8 @@ A request that reaches the hub and is refused returns
 `{ok: false, reason: "refused", status, message}` with the hub's message
 ("that request is no longer open"); no answer returns `reason: "network"`.
 None of them is retried. `send` is refused only for `read_only`, `gone`
-and `outdated`: it never waits for a connection.
+and `outdated`: it is accepted at once, kept, and posted when the session
+has been seen and the device is online.
 
 ## The store
 
@@ -367,7 +391,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 222 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 236 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -389,6 +413,11 @@ changed here.
   events are timeline events), so a task that finished or a restore older
   than the newest 200 timeline events is not in a state built from a
   snapshot. That is the same window as the timeline.
+- **A session no keeper holds answers a send without a receipt, does not
+  de-duplicate, and reads `client_id`, not `command_id`.** The client sends
+  both, equal, never repeats such a send, and ends one that got no answer as
+  "may or may not have been sent". If the hub should store the id on that path
+  too, a client could repeat safely and settle on the result.
 - **Restore has no route.** `restore(checkpointId)` posts to
   `POST /v1/sessions/{key}/restore {checkpoint_id, command_id}`, which G19
   must provide (G15's notes: a command in `_KEPT_OPS`, not in `HELD_OPS`).
@@ -429,7 +458,7 @@ changed here.
   state frame stopped listing it. Any device can answer; the first answer
   wins; "Allowed on iPhone" is `resolution.by` (a device id: map it through
   the devices list).
-- **Composer.** `send()` never waits for a connection and keeps the message
+- **Composer.** `send()` is accepted at once and keeps the message
   through a reload: show it as pending from `outbox.entries` until its
   user message (same `commandId`) or its `queue[]` entry appears, and show
   `failed` ones with `error` and the dismiss and resend actions. Show

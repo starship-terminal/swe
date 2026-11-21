@@ -23,6 +23,12 @@ export interface OutboxEntry {
   status: "pending" | "sent" | "failed";
   /** Posts made so far. */
   attempts: number;
+  /**
+   * Which kind of path took it. `keeper`: a keeper-held session, whose hub stores a receipt and a result under
+   * the `command_id`, so asking again is safe. A send to a session no keeper holds is settled by its 2xx
+   * response and never has this entry, because the hub does not de-duplicate on that path.
+   */
+  path?: "keeper";
   /** The hub's receipt (accepted, queued, duplicate, held), once there is one. */
   receipt?: string;
   /** Why it failed. */

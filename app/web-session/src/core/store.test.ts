@@ -311,7 +311,8 @@ describe("sends", () => {
     await drain();
     t.transport.down = false;
     t.environment.goOnline();
-    t.transport.last.send({ v: 2, type: "ping", session: KEY, ts: 1, data: { ts: 1, head: 0 } });
+    expect(t.transport.posts("/message")).toEqual([]); // not before the session is known
+    t.transport.last.send(...frames(loadFixture("default"), 0, 0, 2));
     await drain();
     expect(t.transport.posts("/message").map((b) => b["command_id"])).toContain("id1");
     expect(t.state().outbox.entries[0]).toMatchObject({ status: "sent" });
@@ -385,10 +386,71 @@ describe("sends", () => {
     expect(t.state().outbox.entries[0]).toMatchObject({ status: "failed", error: "the session is not running" });
   });
 
+  it("to a session no keeper holds are posted once, with client_id, and not again after any reconnect", async () => {
+    const t = boot();
+    // What the hub's other path answers: 202, no receipt, no de-duplication.
+    t.transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true, client_id: "id1", waiting: false } }), "POST");
+    t.state().start();
+    const body = loadFixture("default").snapshots[0]?.body as Snapshot;
+    const plain: Snapshot = { ...body, caps: null, row: { key: KEY, control: "full" } };
+    const catchUp = (head: number) =>
+      t.transport.last.send(snapshotFrame({ ...plain, head }), { v: 2, type: "session.state", session: KEY, seq: 0, ts: 1, data: { state: "idle", live: [], pending: [], head, epoch: 0 } });
+    catchUp(5);
+    await drain();
+    await t.state().send({ text: "rm -rf build" });
+    await drain();
+    for (let i = 0; i < 3; i++) {
+      t.timers.advance(11_000);
+      t.transport.last.end({ kind: "closed" });
+      catchUp(5);
+      await drain();
+    }
+    expect(t.transport.posts("/message")).toEqual([
+      { text: "rm -rf build", mode: "queue", attachments: [], command_id: "id1", client_id: "id1" },
+    ]);
+    expect(t.state().outbox.entries).toEqual([]);
+  });
+
+  it("a send acknowledged by a keeper is not asked about again once the session is no longer keeper-held", async () => {
+    const t = boot();
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    t.state().start();
+    const body = loadFixture("default").snapshots[0]?.body as Snapshot;
+    const catchUp = (snap: Snapshot) =>
+      t.transport.last.send(snapshotFrame(snap), { v: 2, type: "session.state", session: KEY, seq: 0, ts: 1, data: { state: "idle", live: [], pending: [], head: snap.head, epoch: 0 } });
+    catchUp(body);
+    await drain();
+    await t.state().send({ text: "x" });
+    await drain();
+    expect(t.state().outbox.entries[0]).toMatchObject({ status: "sent", path: "keeper" });
+    // Detached: the next catch-up says no keeper holds it.
+    t.timers.advance(11_000);
+    t.transport.last.end({ kind: "closed" });
+    catchUp({ ...body, caps: null, row: { ...body.row, mode: "tmux" } as Snapshot["row"] });
+    await drain();
+    expect(t.transport.posts("/message")).toHaveLength(1);
+    expect(t.state().outbox.entries[0]?.status).toBe("sent");
+  });
+
+  it("an empty or unknown command id in a result changes nothing", async () => {
+    const t = boot();
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    t.state().start();
+    t.transport.last.send(...frames(loadFixture("default"), 0, 0, 2));
+    await t.state().send({ text: "x" });
+    await drain();
+    const result = (id: string) => ({ v: 2, type: "command.result", session: KEY, seq: 0, ts: 1, command_id: id, data: { op: "send", ok: true } });
+    t.transport.last.send(result(""), result("someone-else"), { ...result("x"), command_id: undefined });
+    await drain();
+    expect(t.state().outbox.entries).toHaveLength(1);
+    expect(t.state().session.commands[""]).toBeUndefined();
+  });
+
   it("a send followed at once by stop() is still delivered after start()", async () => {
     const t = boot({ memory: true });
     t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
     t.state().start();
+    t.transport.last.send(...frames(loadFixture("default"), 0, 0, 2));
     await drain();
     const sent = t.state().send({ text: "hello" });
     t.state().stop();
@@ -456,6 +518,7 @@ describe("sends", () => {
     transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
     const second = boot({ factory, transport });
     second.state().start();
+    transport.last.send(...frames(loadFixture("default"), 0, 0, 2));
     await drain();
     expect(transport.posts("/message").map((b) => [b["text"], b["command_id"]])).toContainEqual(["before the reload", "id1"]);
   });

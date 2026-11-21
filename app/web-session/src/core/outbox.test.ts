@@ -1,7 +1,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
-import { Outbox, OUTBOX_TTL_MS, type OutboxView } from "./outbox";
+import { MAYBE_SENT, Outbox, OUTBOX_TTL_MS, type OutboxView } from "./outbox";
 import {
   DeferredStorage,
   FallbackStorage,
@@ -51,6 +51,7 @@ class FakeHub {
 }
 
 function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; hub?: FakeHub; random?: () => number } = {}) {
+  const route = { now: "keeper" as "keeper" | "legacy" };
   const timers = new FakeTimers();
   const transport = new FakeTransport();
   const hub = over.hub ?? new FakeHub();
@@ -66,12 +67,13 @@ function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; hub?: Fake
       timers,
       random: over.random ?? (() => 0.5),
       newId: newId ?? (() => `c${++ids}`),
+      route: () => route.now,
       onChange: (view) => views.push(view),
     });
     await outbox.init();
     return outbox;
   };
-  return { timers, transport, hub, factory, views, make, view: () => views[views.length - 1] as OutboxView };
+  return { timers, transport, hub, factory, views, make, route, view: () => views[views.length - 1] as OutboxView };
 }
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -89,7 +91,7 @@ describe("sending", () => {
     const entry = await outbox.send({ text: "hello", attachments: ["a.png"], mode: "steer" });
     await drain(outbox);
     expect(t.transport.posts("/message")).toEqual([
-      { text: "hello", mode: "steer", attachments: ["a.png"], command_id: entry.commandId },
+      { text: "hello", mode: "steer", attachments: ["a.png"], command_id: entry.commandId, client_id: entry.commandId },
     ]);
     expect(t.transport.calls[0]?.path).toBe(MESSAGE);
     expect(t.view().entries).toMatchObject([{ commandId: entry.commandId, status: "sent", receipt: "accepted", attempts: 1 }]);
@@ -288,7 +290,7 @@ describe("surviving a reload", () => {
     await settle();
     await settle();
     expect(t.transport.posts("/message")).toEqual([
-      { text: "typed offline", mode: "queue", attachments: [], command_id: entry.commandId },
+      { text: "typed offline", mode: "queue", attachments: [], command_id: entry.commandId, client_id: entry.commandId },
     ]);
     expect(t.view().entries[0]).toMatchObject({ commandId: entry.commandId, status: "sent" });
     after.close();
@@ -485,7 +487,7 @@ describe("races the outbox must win", () => {
     await sending;
     const second = new Outbox({
       session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers,
-      random: () => 0.5, newId: () => "n", initial: carried, onChange: () => {},
+      random: () => 0.5, newId: () => "n", route: () => "keeper", initial: carried, onChange: () => {},
     });
     await second.init();
     await drain();
@@ -497,12 +499,129 @@ describe("races the outbox must win", () => {
     const t = setup({ storage: new MemoryStorage("none") });
     const carried: OutboxEntry = { commandId: "old", session: KEY, text: "kept", attachments: [], mode: "queue", createdAt: 1, status: "pending", attempts: 0 };
     const outbox = new Outbox({
-      session: KEY, storage: new MemoryStorage("none"), transport: t.transport, timers: t.timers, random: () => 0.5, newId: () => "n1",
+      session: KEY, storage: new MemoryStorage("none"), transport: t.transport, timers: t.timers, random: () => 0.5, newId: () => "n1", route: () => "keeper",
       initial: [carried], onChange: () => {},
     });
     await outbox.init();
     await drain();
     expect(t.hub.received).toEqual(["old"]);
+  });
+});
+
+describe("a session no keeper holds", () => {
+  /** What the hub's other path answers: 202 and no receipt; it reads only `client_id` and does not de-duplicate. */
+  const legacy = (t: ReturnType<typeof setup>) => {
+    t.route.now = "legacy";
+    t.transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true, client_id: "c1", waiting: false } }), "POST");
+  };
+
+  it("posts the id as command_id and as client_id, and is settled by the 2xx answer", async () => {
+    const t = setup();
+    legacy(t);
+    const outbox = await t.make();
+    await outbox.send({ text: "rm -rf build" });
+    await drain();
+    expect(t.transport.posts("/message")).toEqual([
+      { text: "rm -rf build", mode: "queue", attachments: [], command_id: "c1", client_id: "c1" },
+    ]);
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
+  });
+
+  it("is never posted again: not after a reconnect, a restart or a reload", async () => {
+    const t = setup();
+    legacy(t);
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    for (let i = 0; i < 3; i++) {
+      outbox.recheckSent();
+      await drain();
+    }
+    outbox.wake();
+    await drain();
+    expect(t.transport.posts("/message")).toHaveLength(1);
+  });
+
+  it("fails, saying it may or may not have been sent, when no answer comes, and is not retried", async () => {
+    const t = setup();
+    legacy(t);
+    t.transport.down = true;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+    expect(t.timers.pending).toBe(0);
+    t.transport.down = false;
+    t.timers.advance(60_000);
+    await drain();
+    expect(t.transport.calls).toHaveLength(1);
+  });
+
+  it("fails on an unsure server error, and retries one that says to wait", async () => {
+    for (const status of [408, 500, 502, 504]) {
+      const t = setup();
+      legacy(t);
+      t.hub.status = status;
+      t.transport.on("/message", (path, request) => t.hub.handler(path, request), "POST");
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await drain();
+      expect(t.view().entries[0], String(status)).toMatchObject({ status: "failed", error: MAYBE_SENT });
+    }
+    for (const status of [429, 503]) {
+      const t = setup();
+      legacy(t);
+      t.hub.status = status;
+      t.transport.on("/message", (path, request) => t.hub.handler(path, request), "POST");
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await drain();
+      expect(t.view().entries[0]?.status, String(status)).toBe("pending");
+      expect(t.timers.pending).toBe(1);
+    }
+  });
+
+  it("is not retried on that path once an earlier attempt may have reached a keeper", async () => {
+    const t = setup({ random: () => 0 });
+    t.transport.down = true;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" }); // keeper path: a retry is safe
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "pending", attempts: 1 });
+    t.route.now = "legacy"; // the session was detached meanwhile
+    t.transport.down = false;
+    t.timers.advance(500);
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+    expect(t.transport.calls).toHaveLength(1);
+  });
+
+  it("is settled, not kept for a result, when a keeper path answers with no receipt", async () => {
+    const t = setup();
+    t.transport.on("/message", () => ({ status: 202, body: { ok: true } }), "POST");
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries).toEqual([]);
+  });
+});
+
+describe("a keeper-held session", () => {
+  it("records the path that took the send and asks again only while a keeper still holds the session", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "accepted" });
+    outbox.recheckSent();
+    await drain();
+    expect(t.hub.received).toEqual(["c1", "c1"]);
+    t.route.now = "legacy"; // detached: no keeper holds it now
+    outbox.recheckSent();
+    await drain();
+    expect(t.hub.received).toEqual(["c1", "c1"]);
+    expect(t.view().entries[0]?.status).toBe("sent");
   });
 });
 

@@ -209,6 +209,22 @@ describe("a stream that speaks once and closes", () => {
     expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16_000, 30_000]);
     expect(Math.max(...waits)).toBe(30_000);
     expect(waits.slice(5).every((w) => w === 30_000)).toBe(true);
+    // The hub answered every time: it is not down, only unstable.
+    expect(t.supervisor.status.state).toBe("reconnecting");
+  });
+
+  it("is hub_down only when the hub did not answer", () => {
+    const t = setup({ random: () => 1 });
+    t.supervisor.start();
+    for (let i = 0; i < 4; i++) {
+      t.transport.last.send(ping()).end({ kind: "closed" });
+      t.timers.advance((t.supervisor.status.retryAt ?? 0) - t.timers.now());
+    }
+    expect(t.supervisor.status.state).toBe("reconnecting");
+    for (let i = 0; i < 3; i++) {
+      refuse(t);
+      t.timers.advance((t.supervisor.status.retryAt ?? 0) - t.timers.now());
+    }
     expect(t.supervisor.status.state).toBe("hub_down");
   });
 

@@ -752,6 +752,52 @@ describe("a frame seen twice", () => {
   });
 });
 
+describe("a turn that ends after a newer one has started", () => {
+  it("clears only the text of the turn that ended", () => {
+    const delta2 = env("message.delta", { id: "a2", kind: "assistant", text: "Hel", seq: 1, offset: 0 }, { turn_id: "t2" });
+    const delta1 = env("message.delta", { id: "a1", kind: "assistant", text: "old", seq: 1, offset: 0 }, { turn_id: "t1" });
+    let state = feed(
+      start(),
+      env("turn.started", {}, { seq: 1, turn_id: "t1" }),
+      delta1,
+      env("turn.started", {}, { seq: 4, turn_id: "t2" }),
+      delta2,
+    ).state;
+    state = reduce(state, env("turn.ended", { status: "completed" }, { seq: 5, turn_id: "t1" })).state;
+    expect(state.live.map((l) => [l.id, l.text])).toEqual([["a2", "Hel"]]);
+    expect(state.openTurn).toBe("t2");
+    state = reduce(state, env("turn.ended", { status: "completed" }, { seq: 6, turn_id: "t2" })).state;
+    expect(state.live).toEqual([]);
+    expect(state.openTurn).toBeNull();
+  });
+});
+
+describe("checkpoints older than a snapshot's messages", () => {
+  const made = (id: string, seq: number) => env("checkpoint.created", { checkpoint_id: id, files: 1 }, { seq, turn_id: "t1" });
+  it("come first, as they do when a stream gave them", () => {
+    const fromFrames = feed(start(), made("ck-old", 1), made("ck-new", 50), env("checkpoint.restored", { checkpoint_id: "ck-old" }, { seq: 51, turn_id: "t1" })).state;
+    // The snapshot's window starts after ck-old: it is in checkpoints[] only, and its restore is in messages[].
+    const body = snapshotBody({
+      head: 51,
+      checkpoints: [{ checkpoint_id: "ck-old", files: 1, seq: 1, ts: fromFrames.checkpoints[0]?.ts ?? 0, turn_id: "t1" }, { checkpoint_id: "ck-new", files: 1, seq: 50, ts: fromFrames.checkpoints[1]?.ts ?? 0, turn_id: "t1" }],
+      messages: [made("ck-new", 50), env("checkpoint.restored", { checkpoint_id: "ck-old" }, { seq: 51, turn_id: "t1" })] as never,
+    });
+    const fromSnapshot = reduce(emptySession(), snapshotFrame(body)).state;
+    expect(fromSnapshot.checkpoints.map((c) => [c.checkpoint_id, c.restoredSeq])).toEqual([
+      ["ck-old", 51],
+      ["ck-new", undefined],
+    ]);
+    expect(fromSnapshot.checkpoints.map((c) => c.checkpoint_id)).toEqual(fromFrames.checkpoints.map((c) => c.checkpoint_id));
+  });
+});
+
+describe("a command result with no id", () => {
+  it("is recorded nowhere", () => {
+    const state = reduce(start(), env("command.result", { op: "send", ok: true }, { seq: 0, command_id: "" })).state;
+    expect(state.commandOrder).toEqual([]);
+  });
+});
+
 describe("cost", () => {
   it("grows with the length of a session, not with its square", () => {
     // 16,000 tool calls took 35 s when the id index was copied on every insert.

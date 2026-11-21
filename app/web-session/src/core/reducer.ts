@@ -226,9 +226,12 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
         }),
       );
       if (live) {
-        if (s.openTurn === id) s.openTurn = null;
-        s.live = [];
-        s.stopped = [];
+        // Only the text of the turn that ended: a newer turn may already be writing. Text with no turn
+        // on it (a state frame's live[] may leave it out) goes with the open turn.
+        const open = s.openTurn === id;
+        s.live = s.live.filter((entry) => (entry.turnId === undefined ? !open : entry.turnId !== id));
+        s.stopped = s.stopped.filter((stopped) => s.live.some((entry) => entry.id === stopped));
+        if (open) s.openTurn = null;
       }
       return;
     }
@@ -577,6 +580,8 @@ function applySnapshot(prev: SessionState, snapshot: Snapshot): SessionState {
       s.checkpoints = [...s.checkpoints, { ...checkpoint }];
     }
   }
+  // In the order they were made, as a stream gives them: the snapshot's own list can hold checkpoints older than its messages.
+  s.checkpoints = [...s.checkpoints].sort((a, b) => a.seq - b.seq);
   // A restore the messages show, for a checkpoint made before them.
   for (const event of snapshot.messages) {
     if (event.type === "checkpoint.restored") applyCheckpoint(s, event, seqOf(event));
@@ -809,7 +814,7 @@ export function reduce(state: SessionState, frame: Frame): Reduced {
       applyTimeline(s, frame, true);
       break;
     case "command.receipt":
-      if (frame.command_id !== undefined) {
+      if (frame.command_id !== undefined && frame.command_id !== "") {
         recordCommand(s, frame.command_id, (record) => ({
           ...record,
           receipt: defined<NonNullable<CommandRecord["receipt"]>>({
@@ -822,7 +827,7 @@ export function reduce(state: SessionState, frame: Frame): Reduced {
       }
       break;
     case "command.result":
-      if (frame.command_id !== undefined) {
+      if (frame.command_id !== undefined && frame.command_id !== "") {
         recordCommand(s, frame.command_id, (record) => ({
           ...record,
           result: defined<NonNullable<CommandRecord["result"]>>({

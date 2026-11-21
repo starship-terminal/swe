@@ -19,6 +19,10 @@ import { sessionPath, type JsonResponse, type Transport } from "./transport";
 /** How long the hub holds a message for a sleeping machine, and so how long a send is worth retrying. */
 export const OUTBOX_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Why a send ended without an answer on a path that cannot say whether it arrived. */
+export const MAYBE_SENT =
+  "The connection dropped before the hub answered. This message may or may not have been sent: check the session, and send it again if it did not arrive.";
+
 export interface OutboxView {
   entries: OutboxEntry[];
   /** Whether sends survive a reload (IndexedDB is in use). */
@@ -35,6 +39,18 @@ export interface OutboxOptions {
   transport: Transport;
   timers: Timers;
   random: () => number;
+  /**
+   * Which path a send takes right now: `keeper` for a session a keeper holds (the hub stores a receipt and a
+   * result under the command id, and a repeat is answered with them), `legacy` for any other. On the legacy path
+   * the hub does not de-duplicate, so a send is never repeated: it settles on its 2xx response, and one that gets
+   * no answer fails, for the person to send again.
+   */
+  route(): "keeper" | "legacy";
+  /**
+   * Whether a send may be posted now: the device is online and the session's row has been seen, so `route()` is a
+   * fact and not a guess. Nothing is posted before that (the entry waits, on disk, until `wake()`).
+   */
+  ready?(): boolean;
   /** Makes a fresh command id: 1 to 64 characters of letters, digits, `_` and `-`. */
   newId: () => string;
   backoff?: BackoffOptions;
@@ -208,6 +224,7 @@ export class Outbox {
 
   private async pass(): Promise<void> {
     if (this.paused !== null) return;
+    if (this.options.ready !== undefined && !this.options.ready()) return;
     const now = this.options.timers.now();
     for (const entry of [...this.list]) {
       if (this.closed) return;
@@ -230,6 +247,8 @@ export class Outbox {
       const entry = this.list.find((e) => e.commandId === id);
       this.recheck.delete(id);
       if (entry === undefined || entry.status !== "sent") continue;
+      // Only what the hub has proven it stores under this id, on a session a keeper still holds.
+      if (entry.path !== "keeper" || this.options.route() !== "keeper") continue;
       const outcome = await this.post(entry);
       if (outcome === "retry") {
         this.recheck.add(id);
@@ -244,6 +263,13 @@ export class Outbox {
   }
 
   private async post(entry: OutboxEntry): Promise<Outcome> {
+    const route = this.options.route();
+    if (entry.status === "pending" && entry.attempts > 0 && route !== "keeper") {
+      // An earlier attempt may have reached the hub on a path that stores the id, and this one would not be
+      // recognised as the same message: never repeat a send there.
+      await this.fail(entry, MAYBE_SENT);
+      return "done";
+    }
     const attempt: OutboxEntry = { ...entry, attempts: entry.attempts + 1 };
     this.replace(attempt);
     let response: JsonResponse;
@@ -254,11 +280,17 @@ export class Outbox {
           text: entry.text,
           mode: entry.mode,
           attachments: entry.attachments,
+          // The same id both ways: a keeper-held session answers to `command_id`, and the path for any other
+          // session reads only `client_id`, which is also what its `command.result` is filed under.
           command_id: entry.commandId,
+          client_id: entry.commandId,
         },
       });
     } catch {
-      return "retry";
+      // No answer at all. Where the hub stores the id a repeat is safe; elsewhere it could type the message twice.
+      if (route === "keeper") return "retry";
+      await this.fail(attempt, MAYBE_SENT);
+      return "done";
     }
     if (this.closed || !this.list.some((e) => e.commandId === entry.commandId)) {
       // Closed, or the result came down the stream first and the entry is gone.
@@ -271,7 +303,6 @@ export class Outbox {
     const { status } = response;
     if (status >= 200 && status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: { ok?: unknown; cancelled?: unknown; note?: unknown } };
-      const receipt = typeof body.receipt === "string" ? body.receipt : "accepted";
       const result = body.result;
       if (result !== undefined && result !== null && typeof result === "object") {
         if (result.ok === true || result.cancelled === true) {
@@ -281,16 +312,28 @@ export class Outbox {
         }
         return "done";
       }
-      const sent: OutboxEntry = { ...attempt, status: "sent", receipt };
-      delete sent.error;
-      this.replace(sent);
-      await this.save(sent);
+      if (route === "keeper" && typeof body.receipt === "string") {
+        // The hub stored a receipt under this id: it will answer a repeat with it, so asking again is safe.
+        const sent: OutboxEntry = { ...attempt, status: "sent", receipt: body.receipt, path: "keeper" };
+        delete sent.error;
+        this.replace(sent);
+        await this.save(sent);
+        return "done";
+      }
+      // Any other path does not de-duplicate and files its result under the id it was given only when
+      // it is delivered: the answer is all there is, and the message is never sent again.
+      await this.drop(entry.commandId);
       return "done";
     }
     if (status === 401 || status === 403) {
       this.paused = "unauthorized";
       this.changed();
       return "paused";
+    }
+    const unsure = status === 408 || status === 500 || status === 502 || status === 504;
+    if (route !== "keeper" && unsure) {
+      await this.fail(attempt, MAYBE_SENT);
+      return "done";
     }
     if (status === 408 || status === 425 || status === 429 || status >= 500) {
       await this.save(this.list.find((e) => e.commandId === entry.commandId) ?? attempt);

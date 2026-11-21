@@ -333,8 +333,15 @@ export class Supervisor {
     if (!this.running) return;
     if (!this.options.environment.online()) return this.goOffline();
     const attempt = this.current.attempt + 1;
-    const state: ConnectionState =
-      attempt >= HUB_DOWN_AFTER ? "hub_down" : this.everLive ? "reconnecting" : "connecting";
+    // `hub_down` means the hub did not answer: an attempt whose stream opened and gave a frame
+    // found it up, however soon the stream ended.
+    const state: ConnectionState = this.gotFrame
+      ? "reconnecting"
+      : attempt >= HUB_DOWN_AFTER
+        ? "hub_down"
+        : this.everLive
+          ? "reconnecting"
+          : "connecting";
     const delay = backoffDelay(attempt, this.options.random, this.backoff);
     const retryAt = this.options.timers.now() + delay;
     this.set(state, { attempt, detail, retryAt });
