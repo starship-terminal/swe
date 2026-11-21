@@ -217,6 +217,7 @@ class _Tool:
     name: str = "tool"
     title: str = ""
     raw_input: Any = None
+    content: Any = None
     announced: bool = False
 
 
@@ -424,10 +425,14 @@ class AcpState(SessionCore):
         if tool.raw_input or status in ("in_progress", "completed",
                                         "failed"):
             self._announce(out, call_id, tool)
+        if isinstance(update.get("content"), list) and update["content"]:
+            # An update names only what changed: output that came
+            # before the call ended is still its result.
+            tool.content = update["content"]
         if status in _TOOL_STATUS and tool.announced:
             del self._tools[call_id]
             same_turn = bool(tool.turn_id) and tool.turn_id == self.tid()
-            content = update.get("content")
+            content = tool.content
             self.out(out, ev.tool_completed(
                 self.key, call_id, _TOOL_STATUS[status],
                 name=redact(tool.name),
@@ -451,17 +456,20 @@ class AcpState(SessionCore):
             turn_id=tool.turn_id if same_turn else None, ts=self.now()))
 
     def _on_plan(self, update: dict, out: list) -> None:
+        entries = update.get("entries")
+        if not isinstance(entries, list):
+            return
         items = []
-        for entry in update.get("entries") or ():
+        for entry in entries:
             if isinstance(entry, dict) and text_of(entry.get("content")):
                 status = entry.get("status")
                 items.append({
                     "text": redact(entry["content"]),
-                    "status": status if status in _PLAN_STATUSES
-                    else "pending"})
-        if items:
-            self.out(out, ev.plan_updated(self.key, items,
-                                          turn_id=self.tid(), ts=self.now()))
+                    "status": status if isinstance(status, str)
+                    and status in _PLAN_STATUSES else "pending"})
+        # An empty list too: it is how an agent clears its plan.
+        self.out(out, ev.plan_updated(self.key, items,
+                                      turn_id=self.tid(), ts=self.now()))
 
     def _on_usage(self, update: dict, out: list) -> None:
         usage = self._usage
@@ -938,11 +946,16 @@ class AcpAdapter:
         if spec.model and caps.can_set("model") \
                 and spec.model in state.models:
             self._set_model(spec.model, left())
+        mode = spec.permission_mode if caps.can_set("permission_mode") \
+            and spec.permission_mode in state.modes else ""
         if spec.plan_mode and caps.plan_mode:
             self._set_mode(PLAN_MODE, left(), plan=True)
-        elif spec.permission_mode and caps.can_set("permission_mode") \
-                and spec.permission_mode in state.modes:
-            self._set_mode(spec.permission_mode, left())
+            if mode and mode != PLAN_MODE:
+                # The mode to go back to is the one the launch (or the
+                # keeper's restart) asked for, not the agent's default.
+                self._mode_before = mode
+        elif mode:
+            self._set_mode(mode, left())
         with self._lock:
             if state.done:
                 raise AdapterError("the agent exited during the handshake",

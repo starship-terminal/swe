@@ -1739,6 +1739,24 @@ class TestAcpState(unittest.TestCase):
                              [] if update["update"].get("toolCallId") != "c2"
                              else ["tool.started"])
 
+    def test_output_sent_before_the_call_ends_is_its_result(self):
+        state = self.state()
+        state.begin("hi")
+        state.update(_acp_update(
+            "tool_call", toolCallId="c1", status="in_progress", kind="edit",
+            rawInput={"file_path": "/w/a.txt"}))
+        state.update(_acp_update("tool_call_update", toolCallId="c1", content=[
+            {"type": "content", "content": {"type": "text", "text": "wrote"}},
+            {"type": "diff", "path": "/w/a.txt", "oldText": None,
+             "newText": "yes"}]))
+        state.update(_acp_update("tool_call_update", toolCallId="c1",
+                                 content=[]))
+        out = state.update(_acp_update("tool_call_update", toolCallId="c1",
+                                       status="completed")).events
+        self.assertEqual(out[0]["data"]["output"], "wrote")
+        self.assertEqual(out[0]["data"]["file_edits"], [
+            {"path": "/w/a.txt", "kind": "add", "diff": "@@ -0,0 +1 @@\n+yes\n"}])
+
     def test_a_call_never_shown_is_forgotten_with_its_turn(self):
         state = self.state()
         state.begin("hi")
@@ -1769,8 +1787,16 @@ class TestAcpState(unittest.TestCase):
         self.assertEqual(out[0]["data"]["items"], [
             {"text": "look", "status": "completed"},
             {"text": "act", "status": "pending"}])
-        self.assertEqual(state.update(_acp_update("plan",
-                                                  entries=[])).events, [])
+        cleared = state.update(_acp_update("plan", entries=[])).events
+        self.assertEqual(cleared[0]["data"]["items"], [],
+                         "an empty plan clears the one before")
+        self.assertEqual(events.validate(cleared[0]), [])
+        for junk in ({}, {"entries": "x"},
+                     {"entries": [{"content": "a", "status": ["x"]}]}):
+            got = state.update(_acp_update("plan", **junk)).events
+            self.assertEqual([e["data"]["items"] for e in got],
+                             [[{"text": "a", "status": "pending"}]]
+                             if isinstance(junk.get("entries"), list) else [])
 
     def test_other_sessions_and_unknown_updates(self):
         state = self.state()
@@ -2103,6 +2129,15 @@ class TestAcpAdapter(_AcpAdapterCase):
         adapter, _sink, _sid = self.started(spec={"plan_mode": True})
         self.assertEqual(self.sent()[-1]["params"]["modeId"], "plan")
         self.assertEqual(adapter._mode_before, "default")
+
+    def test_plan_mode_at_start_goes_back_to_the_mode_asked_for(self):
+        # A keeper restart gives both: plan on, and the mode to return to.
+        adapter, _sink, _sid = self.started(spec={
+            "plan_mode": True, "permission_mode": "yolo"})
+        self.assertEqual([m["params"]["modeId"] for m in self.sent()
+                          if m.get("method") == "session/set_mode"], ["plan"])
+        adapter.set_option("plan_mode", False)
+        self.assertEqual(self.sent()[-1]["params"]["modeId"], "yolo")
 
     def test_resume_loads_and_shows_no_replay(self):
         _adapter, sink, sid = self.started(spec={"resume_id": "older-1"})
