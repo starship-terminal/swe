@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { emptySession, reduceAll, type Frame, type SendView, type SessionState, type TimelineItem, type TurnInfo } from "../core";
 import { loadFixture } from "../core/test-support";
+import { subject } from "./Timeline";
 import { buildRows, rowIdentity, rowLabels, rowsEqual, visibleSends, type Row, type TimelineInput } from "./model";
 
 function replay(name: string, upTo?: number): SessionState {
@@ -270,5 +271,18 @@ describe("a reply's identity", () => {
     expect(live.key).not.toBe(done.key);
     const other = buildRows(input([msg(6, "t1", "assistant")]), [])[0] as Row;
     expect(rowIdentity(other)).not.toBe(rowIdentity(live));
+  });
+});
+
+describe("the reset key of a row's boundary", () => {
+  it("changes when any step of a work group changes, not only the last one", () => {
+    const first = tool(3, "t1");
+    const middle = tool(4, "t1");
+    const last = tool(5, "t1");
+    const same = (items: TimelineItem[]) => groups(buildRows(input(items), []))[0] as Row;
+    const a = subject(same([first, middle, last]));
+    expect(subject(same([first, middle, last]))).toBe(a);
+    expect(subject(same([first, tool(4, "t1", { status: "error" }), last]))).not.toBe(a);
+    expect(subject(same([first, middle, last, tool(6, "t1")]))).not.toBe(a);
   });
 });

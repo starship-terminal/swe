@@ -19,7 +19,14 @@ export type Block =
   | { t: "list"; ordered: boolean; start: number; items: { children: Inline[]; blocks: Block[] }[] }
   | { t: "quote"; blocks: Block[] }
   | { t: "rule" }
-  | { t: "table"; head: Inline[][]; align: ("left" | "right" | "center" | null)[]; rows: Inline[][][] };
+  | {
+      t: "table";
+      head: Inline[][];
+      align: ("left" | "right" | "center" | null)[];
+      rows: Inline[][][];
+      /** What the caps left out: columns and rows not drawn, and the first of the left-out rows as plain text. */
+      cut: { cols: number; rows: number; text: string } | null;
+    };
 
 const SAFE_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
@@ -47,6 +54,15 @@ const INLINE_PATTERNS: { kind: "code" | "link" | "strong" | "em"; re: RegExp; ne
  * hostile run of marks would cost the square of its length; what is past this many characters stays text.
  */
 export const INLINE_READ_MAX = 6_000;
+/**
+ * A table is rows times columns cells, and a few bytes make a lot of them (`|a|a|...` with two thousand
+ * columns and a hundred empty rows is ten kilobytes and four hundred thousand cells). It is drawn with at most
+ * this many columns and rows; the rest is left out, and the table says so.
+ */
+export const TABLE_MAX_COLS = 50;
+export const TABLE_MAX_ROWS = 500;
+/** How much of the left-out rows is shown as plain text under a cut table. */
+export const TABLE_CUT_TEXT = 1000;
 /** How deep formatting inside formatting is read (bold in a link), and how deep quotes and lists nest. */
 export const MAX_DEPTH = 8;
 
@@ -187,19 +203,28 @@ function parseLines(lines: string[], depth: number): Block[] {
     }
     const next = lines[i + 1];
     if (line.includes("|") && next !== undefined && next.includes("|") && TABLE_SEPARATOR.test(next)) {
-      const head = splitRow(line);
-      const align = splitRow(next).map(alignOf);
+      const all = splitRow(line);
+      const head = all.slice(0, TABLE_MAX_COLS);
+      const align = splitRow(next).slice(0, TABLE_MAX_COLS).map(alignOf);
       const rows: string[][] = [];
+      let cutRows = 0;
+      let cutText = "";
       i += 2;
       while (i < lines.length && (lines[i] as string).includes("|") && (lines[i] as string).trim() !== "") {
-        rows.push(splitRow(lines[i] as string));
+        if (rows.length < TABLE_MAX_ROWS) rows.push(splitRow(lines[i] as string).slice(0, TABLE_MAX_COLS));
+        else {
+          cutRows++;
+          if (cutText.length < TABLE_CUT_TEXT) cutText += `${cutText === "" ? "" : "\n"}${(lines[i] as string).slice(0, TABLE_CUT_TEXT)}`;
+        }
         i++;
       }
+      const cutCols = all.length - head.length;
       blocks.push({
         t: "table",
         head: head.map((cell) => parseInline(cell)),
         align,
         rows: rows.map((row) => head.map((_, c) => parseInline(row[c] ?? ""))),
+        cut: cutCols > 0 || cutRows > 0 ? { cols: cutCols, rows: cutRows, text: cutText.slice(0, TABLE_CUT_TEXT) } : null,
       });
       continue;
     }

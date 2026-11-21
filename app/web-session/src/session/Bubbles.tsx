@@ -1,6 +1,9 @@
 import { MAYBE_SENT, type MessageItem, type SendView } from "../core";
 import { Button, cx, Icon, Prose, Spinner, StateArrow, type ArrowColour } from "../ui";
-import { baseName, sentence } from "./format";
+import { asArrived, baseName } from "./format";
+
+/** Attachment chips drawn under one message: the list comes from the hub, and each chip is a node. */
+const MAX_CHIPS = 50;
 
 /** A message the person wrote: a quiet bubble on the right. */
 export function UserBubble({ text, attachments, muted, tone }: { text: string; attachments?: readonly string[] | undefined; muted?: boolean; tone?: "danger" }) {
@@ -17,7 +20,7 @@ export function UserBubble({ text, attachments, muted, tone }: { text: string; a
         {text}
         {attachments !== undefined && attachments.length > 0 ? (
           <ul aria-label="Attachments" className="mt-1.5 flex flex-wrap gap-1.5 whitespace-normal">
-            {attachments.map((path) => (
+            {attachments.slice(0, MAX_CHIPS).map((path) => (
               <li key={path} className="inline-flex items-center gap-1 rounded-control border border-border bg-card px-1.5 py-0.5 text-xs text-secondary" title={path}>
                 <Icon className="size-3" name="file" />
                 {baseName(path)}
@@ -25,6 +28,7 @@ export function UserBubble({ text, attachments, muted, tone }: { text: string; a
             ))}
           </ul>
         ) : null}
+        {attachments !== undefined && attachments.length > MAX_CHIPS ? <p className="mt-1 text-xs whitespace-normal text-secondary">and {attachments.length - MAX_CHIPS} more attachments</p> : null}
       </div>
     </div>
   );
@@ -84,7 +88,7 @@ export function SendBubble({
       <div className="flex max-w-5/6 flex-col items-end gap-1.5 self-end text-xs text-secondary">
         <p className="flex items-start gap-1.5">
           {send.shown === "sending" ? <Spinner className="mt-0.5" /> : <StateArrow className="mt-0.5" colour={arrowFor(send)} />}
-          <span>{sentence(send.reason)}</span>
+          <span>{asArrived(send.reason)}</span>
         </p>
         {note !== undefined ? (
           <p className="text-danger-text" role="alert">

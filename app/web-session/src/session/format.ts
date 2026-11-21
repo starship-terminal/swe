@@ -108,10 +108,12 @@ export function clip(text: string, maxChars = SHOWN_CHARS, maxLines = SHOWN_LINE
   return { text: shown, hidden: text.length - shown.length };
 }
 
-/** A reason as a sentence: a capital to start, and a full stop to end (the hub's notes arrive as they were written). */
-export function sentence(text: string): string {
+/**
+ * Text that came from the hub or a tool, shown as it arrived: its letters are never changed ("npm ERR!" stays
+ * "npm ERR!", "src/x failed" stays lower case). It gets a closing full stop only when it ends in a letter or a
+ * digit, so a line of the view's own words around it reads as a sentence.
+ */
+export function asArrived(text: string): string {
   const trimmed = text.trim();
-  if (trimmed === "") return trimmed;
-  const cased = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-  return /[.!?]$/.test(cased) ? cased : `${cased}.`;
+  return /[\p{L}\p{N}]$/u.test(trimmed) ? `${trimmed}.` : trimmed;
 }

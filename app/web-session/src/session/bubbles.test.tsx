@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SendShown, SendView } from "../core";
 import { SendBubble } from "./Bubbles";
-import { sentence } from "./format";
+import { asArrived } from "./format";
 import { all, text } from "./test-harness";
 
 function view(shown: SendShown, over: Partial<SendView> = {}): SendView {
@@ -56,11 +56,31 @@ describe("a send's actions are the selector's flags, exactly", () => {
   });
 });
 
-describe("a reason as a sentence", () => {
-  it("starts with a capital and ends with a full stop, whatever the hub wrote", () => {
-    expect(sentence("the session cannot take a message now")).toBe("The session cannot take a message now.");
-    expect(sentence("  Already a sentence.  ")).toBe("Already a sentence.");
-    expect(sentence("Really?")).toBe("Really?");
-    expect(sentence("")).toBe("");
+describe("text from the hub, as it arrived", () => {
+  it("never changes a letter, and adds a full stop only after a letter or a digit", () => {
+    expect(asArrived("the session cannot take a message now")).toBe("the session cannot take a message now.");
+    expect(asArrived("npm ERR!")).toBe("npm ERR!");
+    expect(asArrived("src/x failed")).toBe("src/x failed.");
+    expect(asArrived("  Already a sentence.  ")).toBe("Already a sentence.");
+    expect(asArrived("exit code 1")).toBe("exit code 1.");
+    expect(asArrived("Really?")).toBe("Really?");
+    expect(asArrived("done)")).toBe("done)");
+    expect(asArrived("")).toBe("");
+  });
+
+  it("draws a hub note in a bubble with its letters untouched", async () => {
+    const { el, done } = await draw(view("failed", { canRetry: true, reason: "npm ERR! code E404" }));
+    expect(text(el.querySelector("p"))).toBe("npm ERR! code E404.");
+    await done();
+  });
+});
+
+describe("attachments", () => {
+  it("draws at most fifty chips, and says how many more there are", async () => {
+    const paths = Array.from({ length: 80 }, (_, i) => `/work/f${i}.txt`);
+    const { el, done } = await draw(view("sent", { attachments: paths }));
+    expect(el.querySelectorAll('ul[aria-label="Attachments"] li')).toHaveLength(50);
+    expect(text(el)).toContain("and 30 more attachments");
+    await done();
   });
 });

@@ -251,13 +251,23 @@ export function Timeline({ store }: { store: SessionStore }) {
   );
 }
 
+const objectIds = new WeakMap<object, number>();
+let nextObjectId = 1;
+/** A number for an object that stays with it, so a list of objects can be compared as a string. */
+function objectId(value: object): number {
+  let id = objectIds.get(value);
+  if (id === undefined) objectIds.set(value, (id = nextObjectId++));
+  return id;
+}
+
 /** What a row is made of, for telling a changed row from the same one made again. */
-function subject(row: Row): unknown {
+export function subject(row: Row): unknown {
   switch (row.kind) {
     case "live":
       return row.live;
     case "work":
-      return row.entries.at(-1);
+      // Any step changing is a change: a failed row is tried again when any of them is.
+      return row.entries.map(objectId).join(",");
     case "footer":
       return row.turn;
     case "send":

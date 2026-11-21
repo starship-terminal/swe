@@ -69,7 +69,9 @@ The reply's live row and its message share an identity, so a reply that
 finishes does not enter a second time.
 
 **Sends.** Each unfinished send is a `SendView` from `describeSends`, drawn as a
-bubble with the selector's `reason` as its one sentence and a state arrow
+bubble with the selector's `reason` as its one sentence (a note from the hub or
+a tool inside it is shown as it arrived, letters untouched, with a full stop only
+after a letter or digit) and a state arrow
 (AGENTS.md's mapping: yellow for waiting and sent, a spinner for sending, red
 for failed, grey for in doubt and unconfirmed). Discard exists only when
 `canDiscard` is true and Retry only when `canRetry` is true, so while the outbox
@@ -94,7 +96,7 @@ command id, so the cancelled entry leaves with its result.
 there, and the first version of this spec said it did. On that path the hub
 answers a send with 202 and no receipt, and the user's message reaches the
 journal later from the harness's transcript (`tail.py`), whose records carry no
-send id: `protocol.message_data` has no `client_id` field, and nothing in
+send id: `protocol.message` has no `client_id` field, and nothing in
 `hub.py` (`_send_message`, `_deliver`, `_send_result`) or `sendq.py` attaches
 one to a `message.appended` event. So `protocol_compat.to_v2` makes the user's
 `message.completed` as `{id: "j<seq>", kind: "user", text}`, with no
@@ -151,7 +153,14 @@ headings, lists with nesting, quotes, fenced code, tables, rules; code, bold,
 italic and links in a line) and `Prose` draws it with React elements, so reply
 text never becomes HTML. Nesting is capped at 8 levels (quotes, lists, bold in a
 link): what is deeper stays as text, so a reply of ten thousand `>` cannot
-overflow the stack that reads it. Formatting is read in the first 6000
+overflow the stack that reads it. A table is drawn with at most 50 columns and
+500 rows: it is rows times columns cells, and ten kilobytes of `|a|a|...` made
+400,000 of them, which froze the tab where no error boundary could help. The
+rest is left out and the table says "Table cut: 1950 more columns and 200 more
+rows not shown." with the start of the left-out rows as plain text. Every other
+construct is linear in the bytes of the reply (a list item, a quote line, a
+span is one to a few nodes for a few bytes), a diff or output is cut at 6000
+characters and 300 lines, and attachment chips at 50. Formatting is read in the first 6000
 characters of one run of text; the rest stays text, and a mark is searched for
 only when the text holds what would close it, so many marks that never close
 cost no more than a few that do. A link is an anchor only for `http`, `https` and
@@ -164,7 +173,7 @@ dependency tree.
 
 **One bad item.** Each row sits in its own error boundary: a row that throws
 while it is drawn shows "This item could not be shown." (and is tried again when
-the item changes) and the rest of the timeline stays. A second boundary around
+the item changes, for a work group when any of its steps does) and the rest of the timeline stays. A second boundary around
 the whole timeline shows one line in its place and leaves the header and the
 composer's place standing. Without them a render error unmounted the whole view,
 and since the item is in the journal, did so on every load of that session.
@@ -257,14 +266,16 @@ composer that does not work. G13 replaces the file.
     id onto the transcript's user message, which this milestone does not touch.
 11. **Formatting is read in the first 6000 characters of a run of text.** A
     paragraph longer than that shows the rest as plain text, marks and all.
-12. **A group's React key is `work-<first seq>`.** When older history joins a
+12. **A table is cut at 50 columns and 500 rows**, and the rows left out are
+    plain text, the first 1000 characters of them.
+13. **A group's React key is `work-<first seq>`.** When older history joins a
     group at the front its key changes, and the group is drawn again from
     scratch (the person's open or closed choice, and each step's, are kept by
     seq, so nothing they chose is lost).
 
 ## Dependencies
 
-None added. The bundle grew by the view: `session-view.js` 95.3 kB (29.1 kB
+None added. The bundle grew by the view: `session-view.js` 96.5 kB (29.5 kB
 gzip, from 2.8 kB, now with zustand), `session-view.css` 16.0 kB (3.9 kB gzip,
 from 5.1 kB).
 
@@ -290,7 +301,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (467 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (477 tests), `pnpm build` | pass |
 | `tests.test_webapp_session_view`, `tests.test_session_view_fixtures` | pass |
 | The built page, served as static files, with a real `fetch`: `/session/index.html?key=claude%3Anope` asks `GET /v1/sessions/claude%3Anope/events?v=2`, gets 404 and shows "Session gone" | pass |
 | 56 screenshots, 14 scenes x desktop and phone x light and dark, taken again after the review fixes | the changed ones read (tool-expanded, stopped-tool, loading, the outbox scenes, default); findings fixed along the way (bubble width, the caret on its own line, a connecting banner said three times, a detached arrow, a diff's blank last row, a skeleton invisible in dark) |

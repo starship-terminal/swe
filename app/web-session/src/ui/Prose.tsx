@@ -107,10 +107,21 @@ function blocks(list: Block[], tight = false): ReactNode {
                 ))}
               </tbody>
             </table>
+            {block.cut !== null ? <TableCut cut={block.cut} /> : null}
           </div>
         );
     }
   });
+}
+
+function TableCut({ cut }: { cut: { cols: number; rows: number; text: string } }) {
+  const parts = [cut.cols > 0 ? `${cut.cols} more ${cut.cols === 1 ? "column" : "columns"}` : "", cut.rows > 0 ? `${cut.rows} more ${cut.rows === 1 ? "row" : "rows"}` : ""].filter(Boolean);
+  return (
+    <div className="mt-1" data-table-cut>
+      <p className="text-xs text-muted">Table cut: {parts.join(" and ")} not shown.</p>
+      {cut.text !== "" ? <p className="mt-0.5 text-xs break-words whitespace-pre-wrap text-secondary">{cut.text}</p> : null}
+    </div>
+  );
 }
 
 function align(value: "left" | "right" | "center" | null | undefined) {

@@ -219,7 +219,7 @@ describe("sends from the outbox", () => {
     answer(t, 409, { error: { code: "send_rejected", message: "the session cannot take a message now" } });
     await settle(async () => void (await t.store.getState().send({ text: "run it" })));
     const bubble = q(t.el, '[data-send="failed"]') as HTMLElement;
-    expect(text(bubble)).toContain("The session cannot take a message now.");
+    expect(text(bubble)).toContain("the session cannot take a message now.");
     expect(q(bubble, '[data-arrow="red"]')).not.toBeNull();
     expect(button(bubble, "Discard")).toBeDefined();
     expect(t.transport.posts("/message")).toHaveLength(1);

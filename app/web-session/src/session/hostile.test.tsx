@@ -59,6 +59,29 @@ describe("a hostile reply", () => {
   });
 });
 
+describe("a table from a short reply", () => {
+  it("draws no more cells than the caps allow, says the table was cut, and keeps the rest of the timeline", async () => {
+    const t = setup();
+    const table = `|${"a|".repeat(2000)}\n|${"-|".repeat(2000)}\n${"|\n".repeat(100)}`;
+    await settle(() => void t.transport.last.send(...replies(["a", "before"], ["b", table], ["c", "after"])));
+    const log = q(t.el, '[role="log"]') as HTMLElement;
+    const cells = log.querySelectorAll("td, th").length;
+    // 50 columns, the header and 100 rows: not 400,000.
+    expect(cells).toBe(50 * 101);
+    expect(text(q(log, "[data-table-cut]"))).toContain("Table cut: 1950 more columns not shown.");
+    expect(text(log)).toContain("before");
+    expect(text(log)).toContain("after");
+  });
+
+  it("draws a tall table to the row cap", async () => {
+    const t = setup();
+    const rows = Array.from({ length: 2000 }, (_, i) => `| r${i} | x |`).join("\n");
+    await settle(() => void t.transport.last.send(...replies(["a", `| a | b |\n|---|---|\n${rows}`])));
+    expect((q(t.el, "tbody") as HTMLElement).querySelectorAll("tr")).toHaveLength(500);
+    expect(text(q(t.el, "[data-table-cut]"))).toContain("Table cut: 1500 more rows not shown.");
+  });
+});
+
 function Thrower({ fail }: { fail: boolean }) {
   if (fail) throw new Error("no");
   return <p>fine</p>;

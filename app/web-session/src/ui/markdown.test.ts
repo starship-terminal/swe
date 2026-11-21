@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { INLINE_READ_MAX, MAX_DEPTH, parseInline, parseMarkdown, safeHref, type Block } from "./markdown";
+import { INLINE_READ_MAX, MAX_DEPTH, TABLE_MAX_COLS, TABLE_MAX_ROWS, parseInline, parseMarkdown, safeHref, type Block } from "./markdown";
 
 describe("inline Markdown", () => {
   it("reads code, bold, italic and links, and keeps the words around them", () => {
@@ -151,5 +151,54 @@ describe("tables", () => {
     if (table?.t !== "table") throw new Error("not a table");
     expect(table.head).toHaveLength(12);
     for (const cell of table.head) expect(cell[0]?.t).toBe("strong");
+  });
+});
+
+describe("the read limit on one run of text", () => {
+  it("formats what is inside the limit and leaves what is past it as typed", () => {
+    const pad = "x".repeat(INLINE_READ_MAX);
+    const out = parseInline(`**in** ${pad} **past** and \`code\``);
+    expect(out[0]).toEqual({ t: "strong", children: [{ t: "text", text: "in" }] });
+    // Past the limit the marks are text, bold and code alike.
+    expect(out.map((n) => n.t)).toEqual(["strong", "text"]);
+    expect(JSON.stringify(out)).toContain("**past** and `code`");
+    expect(out.filter((n) => n.t === "code")).toHaveLength(0);
+  });
+
+  it("does not cut a run that fits", () => {
+    const out = parseInline("`a` ".repeat(INLINE_READ_MAX / 8));
+    expect(out.filter((n) => n.t === "code")).toHaveLength(INLINE_READ_MAX / 8);
+  });
+});
+
+describe("a table from a few bytes", () => {
+  const cellsOf = (table: Extract<Block, { t: "table" }>) => table.head.length + table.rows.reduce((sum, row) => sum + row.length, 0);
+
+  it("keeps at most the column and row caps, and says what it left out", () => {
+    const text = `|${"a|".repeat(2000)}\n|${"-|".repeat(2000)}\n${"|\n".repeat(100)}`;
+    expect(text.length).toBeLessThan(10_000);
+    const [table] = parseMarkdown(text);
+    if (table?.t !== "table") throw new Error("not a table");
+    expect(table.head).toHaveLength(TABLE_MAX_COLS);
+    expect(table.align).toHaveLength(TABLE_MAX_COLS);
+    expect(cellsOf(table)).toBeLessThanOrEqual(TABLE_MAX_COLS * (TABLE_MAX_ROWS + 1));
+    expect(cellsOf(table)).toBe(TABLE_MAX_COLS * 101);
+    expect(table.cut).toMatchObject({ cols: 1950, rows: 0 });
+  });
+
+  it("keeps the first rows of a tall table, counts the rest, and keeps the start of them as text", () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => `| r${i} | x |`).join("\n");
+    const [table] = parseMarkdown(`| a | b |\n|---|---|\n${rows}`);
+    if (table?.t !== "table") throw new Error("not a table");
+    expect(table.rows).toHaveLength(TABLE_MAX_ROWS);
+    expect(table.cut?.rows).toBe(1500);
+    expect(table.cut?.cols).toBe(0);
+    expect(table.cut?.text.startsWith(`| r${TABLE_MAX_ROWS} | x |`)).toBe(true);
+    expect(table.cut?.text.length).toBeLessThanOrEqual(1000);
+  });
+
+  it("does not cut a table inside the caps", () => {
+    const [table] = parseMarkdown("| a | b |\n|---|---|\n| 1 | 2 |");
+    expect(table).toMatchObject({ t: "table", cut: null });
   });
 });

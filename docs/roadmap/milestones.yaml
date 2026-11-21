@@ -298,6 +298,7 @@
   owns: ["src/swe/webapp/static/pages/chat.js", "FEATURES.md"]
   questions:
     - "A session a satellite tailed before G15 loses its older messages from the hub's view when it is continued (docs/specs/G15-satellite-keepers.md, Limits). Fix before the defaults flip, or accept?"
+    - "On a legacy session the new view shows a sent message beside its delivered copy, and if the result is missed it offers a Retry that would send it twice (docs/specs/G12-timeline.md, Limit 10). The hub's legacy transcript message carries no client id. Fix in the hub, or accept because G22 and G24 retire the legacy path?"
   verify: ["full suites", "screens: all"]
   tier: implement-standard
   est_runtime: 90m
