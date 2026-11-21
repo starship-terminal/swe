@@ -69,6 +69,8 @@ export class Outbox {
   private paused: OutboxView["paused"] = null;
   private closed = false;
   private writing: Promise<unknown> = Promise.resolve();
+  /** Sends whose first write has not finished: not deliverable yet, but not to be lost by a restart. */
+  private unwritten: OutboxEntry[] = [];
 
   constructor(options: OutboxOptions) {
     this.options = options;
@@ -93,10 +95,17 @@ export class Outbox {
     this.list = [...this.list, ...stored.filter((entry) => !known.has(entry.commandId))].sort(
       (a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId),
     );
+    // What an earlier outbox handed over is written again (once is enough for the storage, twice is harmless).
+    for (const entry of this.list) await this.options.storage.put(entry);
     // The hub may have lost what it owed us while this page was away: ask again.
     for (const entry of this.list) if (entry.status === "sent") this.recheck.add(entry.commandId);
     this.changed();
     void this.flush();
+  }
+
+  /** Everything not yet delivered, the sends still being written included: what a restarted outbox starts from. */
+  carry(): OutboxEntry[] {
+    return [...this.list, ...this.unwritten];
   }
 
   close(): void {
@@ -119,9 +128,12 @@ export class Outbox {
     };
     // Nothing is sent before it is on disk: a page that closes after the hub got the message
     // but before the write would lose the id a retry needs. Writes run in the order of the sends.
+    this.unwritten = [...this.unwritten, entry];
     const written = this.writing.then(() => this.options.storage.put(entry));
     this.writing = written.catch(() => {});
     await written;
+    this.unwritten = this.unwritten.filter((e) => e !== entry);
+    // Closed meanwhile: `carry()` handed the entry to the outbox that replaces this one.
     if (this.closed) return entry;
     this.list = [...this.list, entry];
     this.changed();

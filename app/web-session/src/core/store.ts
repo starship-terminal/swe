@@ -317,7 +317,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         generation++;
         supervisor?.stop();
         supervisor = null;
-        carried = outbox?.view.entries ?? carried;
+        carried = outbox?.carry() ?? carried;
         outbox?.close();
         outbox = null;
         if (snapshotTimer !== null) timers.clearTimeout(snapshotTimer);

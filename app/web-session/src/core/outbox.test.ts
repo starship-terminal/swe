@@ -463,6 +463,36 @@ describe("races the outbox must win", () => {
     expect(t.view()).toMatchObject({ persistent: false, note: expect.stringContaining("quota") });
   });
 
+  it("hands a send that is still being written to the outbox that replaces it", async () => {
+    const t = setup();
+    const inner = await openOutboxStorage(t.factory);
+    let finish: () => void = () => {};
+    const slow: OutboxStorage = {
+      get kind() { return inner.kind; },
+      get note() { return inner.note; },
+      load: (session) => inner.load(session),
+      put: (entry) => new Promise<void>((resolve) => { finish = () => void inner.put(entry).then(resolve); }),
+      remove: (id) => inner.remove(id),
+      close: () => {},
+    };
+    const first = await t.make(slow);
+    const sending = first.send({ text: "mid-write" });
+    await drain();
+    const carried = first.carry();
+    expect(carried.map((e) => e.text)).toEqual(["mid-write"]);
+    first.close();
+    finish();
+    await sending;
+    const second = new Outbox({
+      session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers,
+      random: () => 0.5, newId: () => "n", initial: carried, onChange: () => {},
+    });
+    await second.init();
+    await drain();
+    expect(t.hub.received).toEqual(["c1"]);
+    expect(second.view.entries.map((e) => [e.text, e.status])).toEqual([["mid-write", "sent"]]);
+  });
+
   it("starts from the entries it is given", async () => {
     const t = setup({ storage: new MemoryStorage("none") });
     const carried: OutboxEntry = { commandId: "old", session: KEY, text: "kept", attachments: [], mode: "queue", createdAt: 1, status: "pending", attempts: 0 };
