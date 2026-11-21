@@ -1,6 +1,7 @@
 // Helpers for the core's tests: a clock that moves only when told, a
 // transport that plays what a test scripts, an environment a test pokes, and
-// the recorded fixtures. Nothing here waits, and nothing opens a socket.
+// the recorded fixtures. Nothing opens a socket, and the only waiting is
+// `drain` and `until`, which wait on a condition (never a fixed count of ticks).
 //
 // Only tests import this file, so the bundle never carries it.
 import { readFileSync, readdirSync } from "node:fs";
@@ -17,6 +18,48 @@ import type {
   Transport,
 } from "./transport";
 import type { Frame, Snapshot } from "./types";
+
+// ---------------------------------------------------------------------
+// Waiting for work that finishes on its own
+
+const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** The most ticks `drain` and `until` wait before they fail the test. */
+export const WAIT_LIMIT = 2000;
+
+/**
+ * Work that will still run without the test doing anything. The code under test takes its timers
+ * from FakeTimers and its requests from FakeTransport, so the only such work is fake-indexeddb's:
+ * it runs each step of a transaction from `setImmediate`. Microtasks have all run by the time a
+ * tick's callback does.
+ */
+function queuedSteps(): number {
+  return process.getActiveResourcesInfo().filter((name) => name === "Immediate").length;
+}
+
+/**
+ * Waits until nothing is left that will finish on its own: every storage step done, and every
+ * request a handler answers at once answered. A request a test holds open stays open. Fails the
+ * test, saying what was still queued, if that takes more than `limit` ticks.
+ */
+export async function drain(limit = WAIT_LIMIT): Promise<void> {
+  let quiet = 0;
+  for (let i = 0; i < limit; i++) {
+    await tick();
+    quiet = queuedSteps() === 0 ? quiet + 1 : 0;
+    if (quiet >= 2) return;
+  }
+  throw new Error(`drain: still busy after ${limit} ticks, ${queuedSteps()} IndexedDB step(s) queued`);
+}
+
+/** Waits until `condition()` holds. Fails the test, naming `what`, if it does not within `limit` ticks. */
+export async function until(condition: () => boolean, what: string, limit = WAIT_LIMIT): Promise<void> {
+  for (let i = 0; i < limit; i++) {
+    if (condition()) return;
+    await tick();
+  }
+  if (!condition()) throw new Error(`until: ${what} did not happen within ${limit} ticks`);
+}
 
 // ---------------------------------------------------------------------
 // Time

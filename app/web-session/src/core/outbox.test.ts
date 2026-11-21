@@ -24,7 +24,7 @@ import {
   type OutboxEntry,
   type OutboxStorage,
 } from "./outbox-storage";
-import { FakeTimers, FakeTransport } from "./test-support";
+import { FakeTimers, FakeTransport, drain } from "./test-support";
 import type { JsonRequest, JsonResponse } from "./transport";
 
 const KEY = "claude:t1";
@@ -91,10 +91,6 @@ function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; random?: (
   return { timers, transport, hub, factory, world, views, make, view: () => views[views.length - 1] as OutboxView };
 }
 
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-async function drain() {
-  for (let i = 0; i < 5; i++) await settle();
-}
 const stored = async (factory: IDBFactory): Promise<OutboxEntry[]> => (await openOutboxStorage(factory)).load(KEY);
 const statuses = (t: ReturnType<typeof setup>) => t.view().entries.map((e) => e.status);
 
@@ -260,7 +256,7 @@ describe("results", () => {
       t.transport.on("/message", () => new Promise<JsonResponse>((r) => (answer = r)), "POST");
       const outbox = await t.make();
       const entry = await outbox.send({ text: "x" });
-      await settle();
+      await drain();
       outbox.noteResult(entry.commandId, result);
       await drain();
       answer({ status: 202, body: { receipt: "accepted" } });

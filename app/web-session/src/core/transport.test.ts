@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { drain, until } from "./test-support";
 import { fetchTransport, SseParser, sessionPath, type StreamEnd } from "./transport";
 
 const events = (...chunks: string[]) => {
@@ -52,8 +53,6 @@ function streamOf(chunks: string[], then: "end" | "hang" = "end"): Response {
   return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
 
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-
 function collect() {
   const seen: unknown[] = [];
   const ends: StreamEnd[] = [];
@@ -85,8 +84,7 @@ describe("fetchTransport.open", () => {
     });
     const c = collect();
     transport.open("/v1/sessions/a/events?v=2", c.handlers);
-    await settle();
-    await settle();
+    await until(() => c.ends.length > 0, "the stream to end");
     expect(requests[0]?.url).toBe("http://hub.local:8477/v1/sessions/a/events?v=2");
     expect(requests[0]?.init.headers).toEqual({ Authorization: "Bearer tok", Accept: "text/event-stream" });
     expect(c.opened).toBe(1);
@@ -101,7 +99,7 @@ describe("fetchTransport.open", () => {
     const transport = fetchTransport({ fetch: async () => new Response("no", { status: 401 }) });
     const c = collect();
     transport.open("/x", c.handlers);
-    await settle();
+    await until(() => c.ends.length > 0, "the stream to end");
     expect(c.opened).toBe(0);
     expect(c.ends).toEqual([{ kind: "http", status: 401 }]);
   });
@@ -114,7 +112,7 @@ describe("fetchTransport.open", () => {
     });
     const c = collect();
     transport.open("/x", c.handlers);
-    await settle();
+    await until(() => c.ends.length > 0, "the stream to end");
     expect(c.ends).toEqual([{ kind: "error", message: "Failed to fetch" }]);
   });
 
@@ -129,8 +127,7 @@ describe("fetchTransport.open", () => {
     const transport = fetchTransport({ fetch: async () => new Response(body) });
     const c = collect();
     transport.open("/x", c.handlers);
-    await settle();
-    await settle();
+    await until(() => c.ends.length > 0, "the stream to end");
     expect(c.ends).toEqual([{ kind: "error", message: "network error" }]);
   });
 
@@ -144,12 +141,11 @@ describe("fetchTransport.open", () => {
     });
     const c = collect();
     const handle = transport.open("/x", c.handlers);
-    await settle();
-    await settle();
+    await until(() => c.seen.length === 1, "the first frame");
     expect(c.seen).toHaveLength(1);
     handle.close();
     expect(signal?.aborted).toBe(true);
-    await settle();
+    await drain(); // whatever was due has run; nothing more is said
     expect(c.ends).toEqual([]);
   });
 });

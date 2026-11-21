@@ -5,16 +5,12 @@ import { createSessionStore, type SessionStore } from "./store";
 import { openOutboxStorage, MemoryStorage } from "./outbox-storage";
 import { MAYBE_SENT, NOT_SENT_IN_TIME, SESSION_GONE, TERMINAL_KEPT_MS } from "./outbox";
 import { CLAIM_STALE_MS } from "./outbox-storage";
-import { FakeEnvironment, FakeTimers, FakeTransport, loadFixture, snapshotFrame, type Fixture } from "./test-support";
+import { FakeEnvironment, FakeTimers, FakeTransport, drain, loadFixture, snapshotFrame, type Fixture } from "./test-support";
 import type { Frame, Snapshot } from "./types";
 
 const KEY = "claude:session-1";
 const BASE = "/v1/sessions/claude%3Asession-1";
 
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-const drain = async () => {
-  for (let i = 0; i < 5; i++) await settle();
-};
 
 function boot(
   over: { factory?: IDBFactory; online?: boolean; memory?: boolean; transport?: FakeTransport; timers?: FakeTimers } = {},
