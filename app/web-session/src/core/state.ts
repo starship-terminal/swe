@@ -10,6 +10,7 @@ import type {
   PlanUpdatedData,
   QueuedMessage,
   Row,
+  SessionOptions,
   SessionPhase,
   TaskUpdatedData,
   TurnEndedData,
@@ -214,6 +215,11 @@ export interface SessionState {
   phaseReason: string | null;
   harnessSessionId: string | null;
   caps: Caps | null;
+  /**
+   * What the session offers to change and the values in force (G32), from the last `session.options` or the
+   * snapshot. Null until either has said: a hub without the `session_options` feature never does.
+   */
+  options: SessionOptions | null;
   openTurn: string | null;
   turns: TurnInfo[];
   /** Timeline items in journal order, one per `seq`. */
@@ -257,6 +263,7 @@ export function emptySession(): SessionState {
     phaseReason: null,
     harnessSessionId: null,
     caps: null,
+    options: null,
     openTurn: null,
     turns: [],
     items: [],

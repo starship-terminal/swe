@@ -70,6 +70,14 @@ TASK_STATUSES = frozenset({"running", "completed", "failed", "stopped"})
 QUEUE_MODES = frozenset({"queue", "steer"})
 RECEIPT_STATUSES = frozenset({"accepted", "duplicate", "queued",
                               "rejected", "held"})
+# What a change of option does to a turn in progress (G32):
+# ``next_turn`` is proven to leave it alone (the adapter sends the change
+# with the next turn); ``unverified`` is sent to the agent at once, and
+# what the agent then does to the reply in progress is not recorded.
+MID_TURN = frozenset({"next_turn", "unverified"})
+# The options ``session.options`` can carry, and which take a flag.
+OPTION_NAMES = ("model", "effort", "permission_mode", "plan_mode")
+FLAG_OPTIONS = frozenset({"plan_mode"})
 
 # Every enum field, ``(event type, field) -> allowed values``, for
 # clients and the JSON schema G9 generates. Nested fields use a dotted
@@ -92,6 +100,10 @@ ENUMS: dict[tuple[str, str], frozenset] = {
     ("queue.updated", "items[].mode"): QUEUE_MODES,
     ("command.receipt", "status"): RECEIPT_STATUSES,
     ("notify", "kind"): NOTIFY_KINDS,
+    ("session.options", "options.model.mid_turn"): MID_TURN,
+    ("session.options", "options.effort.mid_turn"): MID_TURN,
+    ("session.options", "options.permission_mode.mid_turn"): MID_TURN,
+    ("session.options", "options.plan_mode.mid_turn"): MID_TURN,
 }
 
 
@@ -211,6 +223,19 @@ _CHANGED_FILE = _Obj({"path": STR, "kind": _Enum(FILE_EDIT_KINDS)},
                      {"added": INT, "removed": INT})
 _QUEUED = _Obj({"command_id": STR, "text": TEXT},
                {"by": STR, "mode": _Enum(QUEUE_MODES), "attachments": STRS})
+# One value a ``session.options`` entry offers: the agent's own id, and
+# its own name and description where it gives them.
+_CHOICE = _Obj({"id": STR}, {"label": TEXT, "description": TEXT})
+# An option whose value is a string. ``value`` is the one in force (""
+# when the agent has not said); ``choices`` is there only when the agent
+# listed them; ``reported`` is the agent's own spelling of ``value``
+# when it differs (Claude answers ``haiku`` with ``claude-haiku-5-5``).
+_STRING_OPTION = _Obj({"value": TEXT, "mid_turn": _Enum(MID_TURN)},
+                      {"choices": _List(_CHOICE), "reported": STR})
+_FLAG_OPTION = _Obj({"value": BOOL, "mid_turn": _Enum(MID_TURN)})
+_OPTIONS = _Obj({}, {name: (_FLAG_OPTION if name in FLAG_OPTIONS
+                            else _STRING_OPTION)
+                     for name in OPTION_NAMES})
 _CAPS = _Obj({"steer": BOOL, "plan_mode": BOOL, "rollback": BOOL,
               "fork": BOOL, "stop_task": BOOL, "options": STRS})
 
@@ -219,6 +244,7 @@ SCHEMAS: dict[str, _Obj] = {
     "session.state": _Obj({"state": _Enum(SESSION_STATES)},
                           {"reason": TEXT, "harness_session_id": STR}),
     "session.caps": _Obj({"caps": _CAPS}),
+    "session.options": _Obj({"options": _OPTIONS}),
     "turn.started": _Obj({}, {"by": STR, "text": TEXT}),
     "turn.ended": _Obj({"status": _Enum(TURN_STATUSES)},
                        {"reason": TEXT, "duration_s": NUM}),
@@ -396,6 +422,15 @@ def session_state(session: str, state: str, *, reason: str | None = None,
 def session_caps(session: str, caps: dict, *, ts: float | None = None) -> dict:
     """``caps`` is ``base.Caps.as_dict()``."""
     return make("session.caps", session, {"caps": caps}, ts=ts)
+
+
+def session_options(session: str, options: dict, *,
+                    ts: float | None = None) -> dict:
+    """The options a session offers now, each with the value in force:
+    ``{name: {value, mid_turn, choices?, reported?}}`` for the
+    ``set_option`` names its caps allow (G32). Emitted at start and
+    whenever one of them changes, never on a timer."""
+    return make("session.options", session, {"options": options}, ts=ts)
 
 
 def turn_started(session: str, turn_id: str, *, by: str | None = None,

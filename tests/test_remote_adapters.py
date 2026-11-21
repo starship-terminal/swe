@@ -1973,7 +1973,7 @@ class TestCodexThreadState(unittest.TestCase):
         state.thread_id = THREAD
         first = state.start_events(caps, STEM)
         self.assertEqual([e["type"] for e in first],
-                         ["session.caps", "session.state"])
+                         ["session.caps", "session.state", "session.options"])
         return state, clock
 
     def feed(self, state, *msgs):
@@ -2555,8 +2555,8 @@ class TestCodexThreadState(unittest.TestCase):
         self.assertEqual(fed.events, [])
         out = state.start_events(codex_wire.PROVEN, STEM)
         self.assertEqual([e["type"] for e in out], [
-            "session.caps", "session.state", "turn.started",
-            "session.state"])
+            "session.caps", "session.state", "session.options",
+            "turn.started", "session.state"])
 
     def test_exit_and_close_sequences(self):
         for finish, source, status, last in (
@@ -2611,7 +2611,8 @@ class TestCodexThreadState(unittest.TestCase):
              "msg": {"id": 1, "result": {"thread": {"id": THREAD}}}},
             {"proc": 0, "exit": 0}])
         self.assertEqual([e["type"] for e in got],
-                         ["session.caps", "session.state", "session.state"])
+                         ["session.caps", "session.state", "session.options",
+                          "session.state"])
         self.assertEqual(got[1]["data"]["harness_session_id"], THREAD)
 
 
@@ -2725,7 +2726,13 @@ class TestCodexAdapterStart(_CodexCase):
         self.assertEqual(sid, STEM, "the id SWE's session list uses")
         self.assertEqual(adapter.session_id, STEM)
         self.assertEqual(adapter.version, "0.170.0")
-        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.types(), ["session.caps", "session.state",
+                                        "session.options"])
+        # What the thread's answer says it runs with.
+        shown = sink.events[2]["data"]["options"]
+        self.assertEqual((shown["model"]["value"],
+                          shown["permission_mode"]["value"]),
+                         ("gpt-x", "on-request"))
         self.assertEqual(sink.events[0]["data"]["caps"],
                          codex_wire.PROVEN.as_dict())
         self.assertEqual(sink.events[1]["data"], {
@@ -4567,7 +4574,8 @@ class TestOpencodeServeState(unittest.TestCase):
             {"proc": 0, "junk": True},
             {"proc": 0, "exit": 0}])
         self.assertEqual([e["type"] for e in got],
-                         ["session.caps", "session.state", "session.state"])
+                         ["session.caps", "session.state", "session.options",
+                          "session.state"])
         self.assertEqual(got[1]["data"]["harness_session_id"], OC_SESSION)
 
 
@@ -4687,7 +4695,8 @@ class TestOpencodeAdapterStart(_OpencodeCase):
         self.assertEqual(sid, OC_SESSION)
         self.assertEqual(adapter.session_id, OC_SESSION)
         self.assertEqual(adapter.version, "2.3.2")
-        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.types(), ["session.caps", "session.state",
+                                        "session.options"])
         self.assertEqual(sink.events[0]["data"]["caps"],
                          opencode_wire.PROVEN.as_dict())
         self.assertEqual(sink.events[1]["data"], {
@@ -5279,7 +5288,13 @@ class TestOpencodeAdapterOptions(_OpencodeCase):
         adapter.set_option("model", "other/m2")
         self.assertEqual(self.sent()[-1]["body"], {"model": {
             "providerID": "other", "id": "m2", "variant": "high"}})
-        self.assertEqual(len(sink.events), before, "no event of its own")
+        # Each change is said once, with the value the server took.
+        said = [e["data"]["options"] for e in sink.events[before:]]
+        self.assertEqual([e["type"] for e in sink.events[before:]],
+                         ["session.options"] * 2)
+        self.assertEqual([(o["model"]["value"], o["effort"]["value"])
+                          for o in said],
+                         [("prov/m1", "high"), ("other/m2", "high")])
         with self.assertRaises(AdapterError) as ctx:
             adapter.set_option("model", "no-provider")
         self.assertEqual(ctx.exception.code, "bad_request")

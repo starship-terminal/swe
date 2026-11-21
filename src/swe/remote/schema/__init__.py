@@ -42,6 +42,10 @@ _SHARED = {
     "ChangedFile": ev._CHANGED_FILE,
     "QueuedMessage": ev._QUEUED,
     "Caps": ev._CAPS,
+    "OptionChoice": ev._CHOICE,
+    "StringOption": ev._STRING_OPTION,
+    "FlagOption": ev._FLAG_OPTION,
+    "SessionOptions": ev._OPTIONS,
 }
 _SHARED_NAME = {id(spec): name for name, spec in _SHARED.items()}
 
@@ -174,6 +178,7 @@ def _snapshot() -> dict:
         "state": {"type": "string", "enum": sorted(ev.SESSION_STATES)},
         "reason": {"type": "string"},
         "caps": _nullable(_ref("Caps")),
+        "options": _ref("SessionOptions"),
         "open_turn": _nullable({"type": "string", "minLength": 1}),
         "pending": {"type": "array", "items": {"oneOf": [
             _ref("ApprovalRequestedEvent"),
@@ -196,7 +201,10 @@ def _snapshot() -> dict:
                        "GET /v1/sessions/{id}/snapshot and the data of "
                        "a session.snapshot frame.",
         "type": "object", "properties": props,
-        "required": [name for name in props if name != "reason"],
+        # ``options`` is G32's: a hub that does not list the
+        # session_options feature sends none.
+        "required": [name for name in props
+                     if name not in ("reason", "options")],
         "additionalProperties": False,
     }
 

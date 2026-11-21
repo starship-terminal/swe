@@ -67,7 +67,8 @@ STATUS_FOR_STATE = {
 }
 
 DROPPED = frozenset({
-    "session.caps", "turn.started", "turn.ended", "tool.updated",
+    "session.caps", "session.options", "turn.started", "turn.ended",
+    "tool.updated",
     "input.requested", "plan.updated", "task.updated",
     "checkpoint.created", "checkpoint.restored", "changes.updated",
     "queue.updated", "command.receipt", "usage.updated",

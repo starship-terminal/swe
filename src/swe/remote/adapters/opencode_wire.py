@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, NamedTuple
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import Answer, Caps
 from swe.remote.adapters.claude_wire import parse_version, version_ok
 from swe.remote.adapters.core import (
@@ -555,7 +556,35 @@ class ServeState(SessionCore):
             self.note_unknown(etype)
             return fed
         handler(self, data, fed)
+        self.sync_options(fed.events)
         return fed
+
+    def options(self) -> dict:
+        """The model (``provider/model``), its variant as the effort,
+        and the ``plan`` agent as plan mode. Nothing recorded lists the
+        server's models or variants, so only the value in force is
+        sent. Each change is posted at once; what a prompt in progress
+        does with it is not recorded (``unverified``)."""
+        return {
+            "model": opts.string_option(model_name(self.model),
+                                        opts.UNVERIFIED),
+            "effort": opts.string_option(
+                text_of(self.model.get("variant")), opts.UNVERIFIED),
+            "plan_mode": opts.flag_option(self.agent == PLAN_AGENT,
+                                          opts.UNVERIFIED),
+        }
+
+    def model_selected(self, ref: Any) -> list:
+        """The server took ``POST .../model`` ``ref``."""
+        if isinstance(ref, dict):
+            self.model = dict(ref)
+        return self.options_events()
+
+    def agent_selected(self, agent: Any) -> list:
+        """The server took ``POST .../agent`` ``agent``."""
+        if text_of(agent):
+            self.agent = agent
+        return self.options_events()
 
     def _ensure_turn(self, out: list) -> None:
         """A turn the server runs whose prompt's answer is still on its
@@ -960,8 +989,16 @@ def _replay_answer(state: ServeState, request: dict, http: dict) -> list:
                     data.get("id")):
             if isinstance(data.get("model"), dict):
                 state.model = dict(data["model"])
+            if text_of(data.get("agent")):
+                state.agent = data["agent"]
             return state.start_events(ALL_CAPS.narrowed(PROVEN), data["id"])
         return []
+    sent = request.get("body") if isinstance(request.get("body"), dict) \
+        else {}
+    if ok and path.endswith("/model"):
+        return state.model_selected(sent.get("model"))
+    if ok and path.endswith("/agent"):
+        return state.agent_selected(sent.get("agent"))
     if _PROMPT_RE.search(path):
         if ok:
             return state.accepted(request.get("n"), data)

@@ -32,6 +32,87 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.823,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "unverified"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.933,
+  "data": {
+   "options": {
+    "model": {
+     "value": "sonnet",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-sonnet-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "unverified"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,
@@ -128,6 +209,47 @@
   "ts": 1760000006.738,
   "data": {
    "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.754,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-haiku-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "unverified"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
   }
  },
  {

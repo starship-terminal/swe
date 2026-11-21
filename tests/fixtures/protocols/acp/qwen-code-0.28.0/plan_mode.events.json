@@ -32,6 +32,118 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.624,
+  "data": {
+   "options": {
+    "model": {
+     "value": "$runtime|openai|gpt-4o-mini(openai)",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "$runtime|openai|gpt-4o-mini(openai)",
+       "label": "gpt-4o-mini"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "auto",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "plan",
+       "label": "Plan",
+       "description": "Analyze only, do not modify files or execute commands"
+      },
+      {
+       "id": "default",
+       "label": "Default",
+       "description": "Require approval for file edits or shell commands"
+      },
+      {
+       "id": "auto-edit",
+       "label": "Auto Edit",
+       "description": "Automatically approve file edits"
+      },
+      {
+       "id": "auto",
+       "label": "Auto",
+       "description": "LLM classifier auto-approves safe actions, blocks risky ones"
+      },
+      {
+       "id": "yolo",
+       "label": "YOLO",
+       "description": "Automatically approve all tools"
+      }
+     ]
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.835,
+  "data": {
+   "options": {
+    "model": {
+     "value": "$runtime|openai|gpt-4o-mini(openai)",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "$runtime|openai|gpt-4o-mini(openai)",
+       "label": "gpt-4o-mini"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "plan",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "plan",
+       "label": "Plan",
+       "description": "Analyze only, do not modify files or execute commands"
+      },
+      {
+       "id": "default",
+       "label": "Default",
+       "description": "Require approval for file edits or shell commands"
+      },
+      {
+       "id": "auto-edit",
+       "label": "Auto Edit",
+       "description": "Automatically approve file edits"
+      },
+      {
+       "id": "auto",
+       "label": "Auto",
+       "description": "LLM classifier auto-approves safe actions, blocks risky ones"
+      },
+      {
+       "id": "yolo",
+       "label": "YOLO",
+       "description": "Automatically approve all tools"
+      }
+     ]
+    },
+    "plan_mode": {
+     "value": true,
+     "mid_turn": "unverified"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,
@@ -127,6 +239,62 @@
   "ts": 1760000004.829,
   "data": {
    "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "data": {
+   "options": {
+    "model": {
+     "value": "$runtime|openai|gpt-4o-mini(openai)",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "$runtime|openai|gpt-4o-mini(openai)",
+       "label": "gpt-4o-mini"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "auto",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "plan",
+       "label": "Plan",
+       "description": "Analyze only, do not modify files or execute commands"
+      },
+      {
+       "id": "default",
+       "label": "Default",
+       "description": "Require approval for file edits or shell commands"
+      },
+      {
+       "id": "auto-edit",
+       "label": "Auto Edit",
+       "description": "Automatically approve file edits"
+      },
+      {
+       "id": "auto",
+       "label": "Auto",
+       "description": "LLM classifier auto-approves safe actions, blocks risky ones"
+      },
+      {
+       "id": "yolo",
+       "label": "YOLO",
+       "description": "Automatically approve all tools"
+      }
+     ]
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
   }
  },
  {

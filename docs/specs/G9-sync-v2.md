@@ -27,7 +27,7 @@ GET /v1/status
   {"ok": true, "v": 1, "protocols": [1, 2],
    "features": ["sync_v2", "snapshot", "live_resume", "delta_offset",
                 "ping", "command_id", "require_keeper", "command_lookup",
-                "session_runtime"],
+                "session_options", "session_runtime"],
    "boot_id": "9f2c41d07ab35e18"}
 ```
 
@@ -240,6 +240,7 @@ frame are the same body (`SyncHub.snapshot`), true at `head`:
 | `row` | the session's row, with `unread` for the calling device; null if the list no longer has it |
 | `state`, `reason?` | the session's state, as in the state frame |
 | `caps` | the adapter's capabilities, or null for a session no keeper holds |
+| `options?` | the last `session.options` (G32, [G32-session-options.md](G32-session-options.md)); sent by a hub that lists `session_options` |
 | `open_turn` | the id of the turn in flight, or null |
 | `pending[]` | each open `approval.requested` or `input.requested`, as its event |
 | `queue[]` | the messages waiting: `{command_id, text, by?, mode?, attachments?}` |

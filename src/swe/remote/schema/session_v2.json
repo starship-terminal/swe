@@ -19,6 +19,7 @@
       "command_id",
       "require_keeper",
       "command_lookup",
+      "session_options",
       "session_runtime"
     ]
   },
@@ -197,6 +198,94 @@
         "stop_task",
         "options"
       ],
+      "additionalProperties": false
+    },
+    "OptionChoice": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "StringOption": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "mid_turn": {
+          "type": "string",
+          "enum": [
+            "next_turn",
+            "unverified"
+          ]
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OptionChoice"
+          }
+        },
+        "reported": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "value",
+        "mid_turn"
+      ],
+      "additionalProperties": false
+    },
+    "FlagOption": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "boolean"
+        },
+        "mid_turn": {
+          "type": "string",
+          "enum": [
+            "next_turn",
+            "unverified"
+          ]
+        }
+      },
+      "required": [
+        "value",
+        "mid_turn"
+      ],
+      "additionalProperties": false
+    },
+    "SessionOptions": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/StringOption"
+        },
+        "effort": {
+          "$ref": "#/$defs/StringOption"
+        },
+        "permission_mode": {
+          "$ref": "#/$defs/StringOption"
+        },
+        "plan_mode": {
+          "$ref": "#/$defs/FlagOption"
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "LiveMessage": {
@@ -1332,6 +1421,61 @@
       ],
       "additionalProperties": false
     },
+    "SessionOptionsData": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "$ref": "#/$defs/SessionOptions"
+        }
+      },
+      "required": [
+        "options"
+      ],
+      "additionalProperties": false
+    },
+    "SessionOptionsEvent": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 2
+        },
+        "type": {
+          "const": "session.options"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ts": {
+          "type": "number",
+          "minimum": 0
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "#/$defs/SessionOptionsData"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "session",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "additionalProperties": false
+    },
     "SessionStateData": {
       "type": "object",
       "properties": {
@@ -2038,6 +2182,9 @@
           "$ref": "#/$defs/SessionCapsEvent"
         },
         {
+          "$ref": "#/$defs/SessionOptionsEvent"
+        },
+        {
           "$ref": "#/$defs/SessionStateEvent"
         },
         {
@@ -2169,6 +2316,9 @@
               "type": "null"
             }
           ]
+        },
+        "options": {
+          "$ref": "#/$defs/SessionOptions"
         },
         "open_turn": {
           "anyOf": [
@@ -2459,6 +2609,9 @@
         },
         {
           "$ref": "#/$defs/SessionCapsEvent"
+        },
+        {
+          "$ref": "#/$defs/SessionOptionsEvent"
         },
         {
           "$ref": "#/$defs/SessionStateEvent"

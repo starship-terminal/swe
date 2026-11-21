@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import Answer, Caps
 from swe.remote.adapters.core import (
     ALL_CAPS, FIXTURE_SESSION, FIXTURE_T0, Ack, Fed, SessionCore, clip,
@@ -479,10 +480,43 @@ class ThreadState(SessionCore):
     skipped.
     """
 
+    def options(self) -> dict:
+        """No request lists the models or efforts in what is recorded,
+        so only the value in force is sent; the approval policies are
+        the v2 API's enum, the only values ``set_option`` takes. Every
+        change waits for the next ``turn/start``: a turn in progress
+        runs on what it started with (``next_turn``)."""
+        get = self.settings.get
+        return {
+            "model": opts.string_option(get("model", ""), opts.NEXT_TURN),
+            "effort": opts.string_option(get("effort", ""), opts.NEXT_TURN),
+            "permission_mode": opts.string_option(
+                get("permission_mode", ""), opts.NEXT_TURN,
+                choices=[opts.choice(p) for p in APPROVAL_POLICIES]),
+        }
+
+    def thread_settings(self, answer: Any) -> None:
+        """What a ``thread/start``, ``resume`` or ``fork`` answer says
+        the thread runs with (``model``, ``reasoningEffort``,
+        ``approvalPolicy``)."""
+        answer = answer if isinstance(answer, dict) else {}
+        for name, field in (("model", "model"), ("effort", "reasoningEffort"),
+                            ("permission_mode", "approvalPolicy")):
+            self.settings[name] = text_of(answer.get(field))
+
+    def setting(self, name: str, value: str) -> list:
+        """``set_option`` kept ``value`` for the next turn."""
+        self.settings[name] = value
+        return self.options_events()
+
     def __init__(self, session: str, **kw: Any) -> None:
         super().__init__(session, **kw)
         self.thread_id = ""
         self.model = ""
+        # What ``session.options`` says (G32): the model, effort and
+        # approval policy the next turn runs with, as the thread's
+        # answer reported them and ``set_option`` changed them.
+        self.settings: dict[str, str] = {}
         # our turn id -> the server's, for ``thread/revert``
         self.native_turns: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -1142,6 +1176,7 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
                 thread = ack.body.get("thread")
                 state.thread_id = text_of(thread.get("id")) \
                     if isinstance(thread, dict) else ""
+                state.thread_settings(ack.body)
                 out.extend(state.start_events(ALL_CAPS.narrowed(PROVEN),
                                               session_ref(thread)))
             elif ack.ok and (proc, ack.request_id) in reverts:
@@ -1159,6 +1194,14 @@ def _replay_outgoing(state: ThreadState, msg: dict, thread_rpc: dict,
         thread_rpc[proc] = msg.get("id")
     elif method == "turn/start":
         state.expect_turn(msg.get("id"), _input_text(params))
+        # What ``set_option`` kept goes out with this turn.
+        events = []
+        for name, field in (("model", "model"), ("effort", "effort"),
+                            ("permission_mode", "approvalPolicy")):
+            if text_of(params.get(field)) \
+                    and params[field] != state.settings.get(name):
+                events.extend(state.setting(name, params[field]))
+        return events
     elif method == "turn/steer":
         state.expect_steer(msg.get("id"), _input_text(params))
     elif method == "turn/interrupt":

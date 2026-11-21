@@ -61,7 +61,8 @@ LIVE_PER_SESSION_MAX = 32
 # Durable events that are bookkeeping, not something a timeline draws:
 # the state they carry is in a snapshot's own fields.
 BOOKKEEPING_TYPES = frozenset({
-    "session.state", "session.caps", "queue.updated", "command.receipt",
+    "session.state", "session.caps", "session.options", "queue.updated",
+    "command.receipt",
     "command.result", "usage.updated", "changes.updated", "notify",
     "tool.updated",
 })
@@ -164,6 +165,7 @@ class Fold:
         self.state = ""
         self.reason: str | None = None
         self.caps: dict | None = None
+        self.options: dict | None = None
         self.open_turn: str | None = None
         self.pending: dict[str, dict] = {}
         self.plan: dict | None = None
@@ -185,6 +187,9 @@ class Fold:
         elif etype == "session.caps":
             if isinstance(data.get("caps"), dict):
                 self.caps = dict(data["caps"])
+        elif etype == "session.options":
+            if isinstance(data.get("options"), dict):
+                self.options = data["options"]
         elif etype == "turn.started":
             self.open_turn = event.get("turn_id") or None
         elif etype == "turn.ended":
@@ -224,6 +229,7 @@ class Fold:
             "head": self.head, "epoch": self.epoch, "state": self.state,
             "reason": self.reason,
             "caps": dict(self.caps) if self.caps is not None else None,
+            "options": self.options,
             "open_turn": self.open_turn, "pending": dict(self.pending),
             "plan": dict(self.plan) if self.plan is not None else None,
             "tasks": [dict(t) for t in self.tasks.values()],
@@ -709,6 +715,7 @@ class SyncHub:
             pending = [] if lost else list(owned.pending.values())
             queued = [] if lost else [dict(q) for q in owned.queue]
             caps = dict(owned.caps) if owned.caps else fold["caps"]
+            offered = owned.offered or fold["options"]
             open_turn = None if lost else fold["open_turn"]
             if not lost and fold["state"] == state:
                 reason = fold["reason"]
@@ -717,12 +724,14 @@ class SyncHub:
                        if rid in fold["pending"]]
             queued = [_queued(send) for send in hub.waiting.list(key)]
             caps = fold["caps"]
+            offered = fold["options"]
             open_turn = None
         page = self.messages_page(key, before=head + 1)
         body = {
             "session": key, "epoch": fold["epoch"], "head": head,
             "boot_id": hub.boot_id, "row": self._row(key, device_id),
-            "state": state, "caps": caps, "open_turn": open_turn,
+            "state": state, "caps": caps, "options": offered or {},
+            "open_turn": open_turn,
             "pending": [p for p in (served(e) for e in pending)
                         if p is not None],
             "queue": queued, "live": self.live(key),

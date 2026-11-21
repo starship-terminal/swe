@@ -374,6 +374,7 @@ class OpencodeServeAdapter:
                     self._ok(wire.select_model(self._session_id, ref),
                              "the model", self._init_timeout)
                     self._model, self._effort = model, effort
+                    state.model = dict(ref)
             if spec.plan_mode and self._caps.plan_mode:
                 self._plan(True, self._init_timeout)
             if state.done:
@@ -553,6 +554,7 @@ class OpencodeServeAdapter:
                     code="bad_request")
             self._ok(wire.select_model(self._session_id, ref), "the model")
             self._model, self._effort = model, effort
+            self._emit(self._state.model_selected(ref))
 
     def _plan(self, on: bool, timeout: float | None = None) -> None:
         """Switch to opencode's ``plan`` agent, or back to the agent the
@@ -568,7 +570,7 @@ class OpencodeServeAdapter:
         self._ok(wire.select_agent(self._session_id, agent), "the agent",
                  timeout)
         if state is not None:
-            state.agent = agent
+            self._emit(state.agent_selected(agent))
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

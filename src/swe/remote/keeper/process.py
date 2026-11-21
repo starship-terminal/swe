@@ -61,6 +61,7 @@ from typing import Any, Callable
 
 import swe
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as options_mod
 from swe.remote.adapters.base import (
     AdapterError, Answer, Caps, SessionAdapter, StartSpec, TurnInput,
     Unsupported, check_option,
@@ -131,6 +132,11 @@ class _Sink:
         stamped = self.keeper.log.emit(event)
         if stamped is None:
             return None
+        if etype == "session.options" and isinstance(data, dict) \
+                and isinstance(data.get("options"), dict):
+            # One reference swapped whole: welcomes read it from other
+            # threads.
+            self.keeper._shown_options = data["options"]
         if state is not None:
             self.keeper._note(self, state)
         elif etype == "turn.ended":
@@ -421,6 +427,9 @@ class Keeper:
         self._harness_id = ""
         self._caps = Caps()
         self._options: dict[str, Any] = {}
+        # The last ``session.options`` logged (G32): what a welcome and
+        # ``status`` say. Replaced whole, never changed in place.
+        self._shown_options: dict = {}
         self._transcript: dict | None = None
         self._log_errors = 0
         # Read by connection threads: the last session.state seen, and a
@@ -630,6 +639,7 @@ class Keeper:
             "open_turn": sub.open_turn,
             "state": self._state, "agent": public["agent"],
             "queue": public["queue"], "caps": public["caps"],
+            "options": self._shown_options,
             "harness_session_id": public["harness_session_id"],
         }
 
@@ -742,7 +752,10 @@ class Keeper:
         """Log one of the keeper's own events."""
         if event["type"] == "session.state":
             self._state = event["data"]["state"]
-        return self.log.emit(event)
+        stamped = self.log.emit(event)
+        if stamped is not None and event["type"] == "session.options":
+            self._shown_options = event["data"]["options"]
+        return stamped
 
     def _shown_queue(self) -> list[dict]:
         """The queue as events and clients see it: message text
@@ -765,6 +778,7 @@ class Keeper:
         """The queue, the recent command ids and the harness's session
         id, read back from the log."""
         queue_found = False
+        options_found = False
         harness_id = ""
         for rec in self.log.read_back(max_bytes=SCAN_BYTES):
             etype = rec.get("type")
@@ -786,7 +800,11 @@ class Keeper:
                 hid = data.get("harness_session_id")
                 if isinstance(hid, str) and hid:
                     harness_id = hid
-            if queue_found and harness_id \
+            elif etype == "session.options" and not options_found:
+                options_found = True
+                if isinstance(data.get("options"), dict):
+                    self._shown_options = data["options"]
+            if queue_found and harness_id and options_found \
                     and len(self._seen) >= RECENT_COMMANDS:
                 break
         # read_back is newest first; duplicates are answered oldest
@@ -871,9 +889,19 @@ class Keeper:
         if isinstance(harness_id, str) and harness_id:
             self._harness_id = harness_id
         self._caps = adapter.capabilities
+        self._drop_unoffered()
         self._publish()
         self._write_info(RUNNING)
         return True, ""
+
+    def _drop_unoffered(self) -> None:
+        """An agent started with narrower caps than the one before it
+        (an older CLI after a restart): options it cannot change are no
+        longer offered. The adapter says only what it offers, and says
+        nothing when that is nothing, so the keeper says the rest."""
+        shown = options_mod.allowed(self._shown_options, self._caps)
+        if shown != self._shown_options:
+            self._emit(ev.session_options(self.session_key, shown))
 
     def _wake_agent(self) -> tuple[bool, str]:
         """Bring the agent back for a send: a restart after a crash
@@ -1211,6 +1239,7 @@ class Keeper:
         if adapter is None:
             # No agent now: the next start carries it.
             self._remember(name, value)
+            self._show_remembered(name, value)
             self._result(cid, "set_option", True,
                          note="applies when the agent starts")
             return
@@ -1238,6 +1267,24 @@ class Keeper:
             discovery.update_spec(self.session_key, self.home, **changes)
         except OSError:
             logger.exception("could not record %s in spec.json", name)
+
+    def _show_remembered(self, name: str, value: Any) -> None:
+        """With no agent to ask, ``session.options`` says the value the
+        next start will use (the start then says what the agent made of
+        it). Choosing a permission mode leaves plan mode, as in
+        ``_remember``."""
+        shown = {k: dict(v) for k, v in self._shown_options.items()
+                 if isinstance(v, dict)}
+        if name not in shown:
+            return
+        changes = {name: value}
+        if name == "permission_mode" and "plan_mode" in shown:
+            changes["plan_mode"] = False
+        for key, new in changes.items():
+            shown[key]["value"] = new
+            shown[key].pop("reported", None)
+        if shown != self._shown_options:
+            self._emit(ev.session_options(self.session_key, shown))
 
     def _op_stop_task(self, conn: _Conn, rpc: Any, cid: str,
                       frame: dict) -> None:
@@ -1357,6 +1404,7 @@ class Keeper:
             "pending": [e["data"]["request_id"] for e in snap.pending],
             "queue": self._shown_queue(),
             "caps": self._caps.as_dict(),
+            "options": self._shown_options,
             "harness_session_id": self._harness_id,
             "clients": clients,
             "restarts_left": max(0, self.restart_tries - used),

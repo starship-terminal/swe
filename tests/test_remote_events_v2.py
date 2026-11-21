@@ -15,6 +15,10 @@ SAMPLES = {
     "session.caps": lambda: ev.session_caps(S, {
         "steer": False, "plan_mode": True, "rollback": False,
         "fork": False, "stop_task": True, "options": ["model"]}),
+    "session.options": lambda: ev.session_options(S, {
+        "model": {"value": "sonnet", "mid_turn": "unverified",
+                  "choices": [{"id": "sonnet"}, {"id": "haiku"}]},
+        "plan_mode": {"value": True, "mid_turn": "unverified"}}),
     "turn.started": lambda: ev.turn_started(S, "t1", by="phone", text="hi",
                                             command_id="c1"),
     "turn.ended": lambda: ev.turn_ended(S, "t1", "completed",
@@ -75,7 +79,7 @@ SAMPLES = {
 class TestCatalogue(unittest.TestCase):
     def test_every_type_has_a_sample_builder(self):
         self.assertEqual(set(SAMPLES), ev.EVENT_TYPES)
-        self.assertEqual(len(ev.EVENT_TYPES), 25)
+        self.assertEqual(len(ev.EVENT_TYPES), 26)
 
     def test_samples_validate(self):
         for etype, build in SAMPLES.items():
@@ -93,7 +97,7 @@ class TestCatalogue(unittest.TestCase):
         for (etype, field), values in ev.ENUMS.items():
             self.assertIn(etype, ev.SCHEMAS)
             schema = ev.SCHEMAS[etype]
-            head = field.split("[]")[0]
+            head = field.split("[]")[0].split(".")[0]
             spec = schema.required.get(head) or schema.optional.get(head)
             self.assertIsNotNone(spec, (etype, field))
             self.assertTrue(values)

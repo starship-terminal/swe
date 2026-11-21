@@ -23,6 +23,20 @@ import {
   type SendInput,
   type SendResultData,
 } from "./outbox";
+import {
+  capsAllow,
+  describeOptions,
+  FEATURE_SESSION_OPTIONS,
+  OPTION_NAMES,
+  optionsRefusal,
+  sameOptions,
+  type CannotChangeReason,
+  type OptionName,
+  type OptionsWork,
+  type OptionValue,
+  type OptionWork,
+  type SessionOptionsView,
+} from "./options";
 import { describeSends, type SendView } from "./sends";
 import { DeferredStorage, MemoryStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
@@ -63,6 +77,19 @@ export type ActionResult =
 
 export type SendResult = { ok: true; entry: OutboxEntry } | Refusal;
 
+/** Why `setOption` did not send a change, without touching the network. */
+export interface OptionRefusal {
+  ok: false;
+  reason: CannotChangeReason;
+  message: string;
+}
+
+/**
+ * What `setOption` answers: the post's outcome, or `deferred` when a change of the same option was still in
+ * flight (this value is sent once that one settles, unless another replaces it first).
+ */
+export type SetOptionResult = ActionResult | OptionRefusal | { ok: true; commandId: null; receipt: "deferred" };
+
 export interface SessionStoreState {
   /** What the frames add up to. */
   session: SessionState;
@@ -72,6 +99,8 @@ export interface SessionStoreState {
   outbox: OutboxView;
   /** What each unfinished send shows, with its reason: what a message bubble reads. */
   sends: SendView[];
+  /** The session's options, the value in force for each, and the changes in flight (G32): what a picker reads. */
+  sessionOptions: SessionOptionsView;
   /** `start` has run and not been stopped. */
   started: boolean;
 
@@ -90,6 +119,13 @@ export interface SessionStoreState {
   interrupt(): Promise<ActionResult>;
   /** Restore the files to a checkpoint. Needs a live connection. */
   restore(checkpointId: string): Promise<ActionResult>;
+  /**
+   * Change `model`, `effort`, `permission_mode` or `plan_mode` while the session runs (G32): `set_option` through
+   * `POST .../command` with a fresh command id. The shown value changes only when the hub says so; until then the
+   * change is `pending` in `sessionOptions`, and a refusal or failure is its `error`, in the hub's words. Asked
+   * again while a change of the same option is in flight, only the latest value is sent, after it.
+   */
+  setOption<N extends OptionName>(name: N, value: OptionValue<N>): Promise<SetOptionResult>;
   /** Edit, cancel, or send now (steer) a message in the queue. Needs a live connection. */
   queueAction(op: "edit" | "cancel" | "steer", commandId: string, text?: string): Promise<ActionResult>;
   /** Load the page of timeline before the oldest one held. */
@@ -166,6 +202,10 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   let featuresBoot = "";
   let liveStretch = 0;
   let statusTimer: unknown = null;
+  // G32: whether the hub lists `session_options` (null while not known), and the changes in flight per option.
+  let optionsSupported: boolean | null = null;
+  let optionWork: OptionsWork = {};
+  let optionInputs: unknown[] = [];
 
   const store = createStore<SessionStoreState>()((set, get) => {
     const setSession = (session: SessionState) => set({ session });
@@ -181,6 +221,100 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           online: environment.online(),
         }),
       });
+    };
+
+    /** `sessionOptions` again, when what it reads changed; the old object is kept when it says the same. */
+    const refreshOptions = (): void => {
+      const state = get();
+      const { session, connection } = state;
+      const inputs = [session.options, session.caps, session.openTurn, session.row, session.caughtUp, connection, optionsSupported, optionWork];
+      if (inputs.length === optionInputs.length && inputs.every((value, i) => value === optionInputs[i])) return;
+      optionInputs = inputs;
+      const next = describeOptions({ session, connection, supported: optionsSupported, work: optionWork });
+      if (!sameOptions(next, state.sessionOptions)) set({ sessionOptions: next });
+    };
+
+    const setWork = (name: OptionName, work: OptionWork): void => {
+      optionWork = { ...optionWork, [name]: work };
+      refreshOptions();
+    };
+
+    /** The hub settled the change sent as `commandId`: `failure` is its reason, or null when it took. */
+    const settleOption = (name: OptionName, commandId: string, failure: string | null): void => {
+      const work = optionWork[name];
+      if (work?.sending?.commandId !== commandId) return;
+      const sent = work.sending.value;
+      const next = work.next;
+      setWork(name, { sending: null, error: failure === null ? null : { value: sent, message: failure } });
+      // The latest value asked for goes now, unless it is the one that just took.
+      if (next !== undefined && !(failure === null && next === sent)) void sendOption(name, next);
+    };
+
+    /** A result or a refused receipt the stream (or a lookup) brought, for a change in flight. */
+    const optionCommandSettled = (commandId: string): void => {
+      const record = get().session.commands[commandId];
+      for (const name of OPTION_NAMES) {
+        if (optionWork[name]?.sending?.commandId !== commandId) continue;
+        if (record?.result !== undefined) {
+          settleOption(name, commandId, record.result.ok ? null : record.result.note || "The change did not take.");
+        } else if (record?.receipt?.status === "rejected") {
+          settleOption(name, commandId, record.receipt.reason || "The hub refused the change.");
+        }
+      }
+    };
+
+    /** After a catch-up, a change the hub took whose result this page has not seen is asked about (G31's lookup). */
+    const lookUpOptions = async (): Promise<void> => {
+      for (const name of OPTION_NAMES) {
+        const sending = optionWork[name]?.sending;
+        if (!sending?.posted || get().session.commands[sending.commandId]?.result !== undefined) continue;
+        const mine = generation;
+        let response: JsonResponse;
+        try {
+          response = await transport.json(sessionPath(key, `commands/${encodeURIComponent(sending.commandId)}`));
+        } catch {
+          continue; // asked again after the next catch-up
+        }
+        if (mine !== generation || response.status !== 200) continue;
+        const body = (response.body ?? {}) as { command_id?: unknown; receipt?: unknown; reason?: unknown; result?: unknown };
+        if (body.command_id !== sending.commandId) continue;
+        const result = body.result as { ok?: unknown; note?: unknown } | null | undefined;
+        if (result !== undefined && result !== null && typeof result === "object") {
+          const note = typeof result.note === "string" && result.note !== "" ? result.note : "The change did not take.";
+          settleOption(name, sending.commandId, result.ok === true ? null : note);
+        } else if (body.receipt === "rejected") {
+          settleOption(name, sending.commandId, typeof body.reason === "string" && body.reason !== "" ? body.reason : "The hub refused the change.");
+        }
+      }
+    };
+
+    const sendOption = async (name: OptionName, value: string | boolean): Promise<ActionResult> => {
+      const commandId = newId();
+      const mine = generation;
+      setWork(name, { sending: { commandId, value, posted: false }, error: optionWork[name]?.error ?? null });
+      let response: JsonResponse;
+      try {
+        response = await post("command", { op: "set_option", name, value, command_id: commandId });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "The hub could not be reached";
+        if (mine === generation) settleOption(name, commandId, message);
+        return { ok: false, reason: "network", message };
+      }
+      if (response.status >= 200 && response.status < 300) {
+        const body = (response.body ?? {}) as { receipt?: unknown; reason?: unknown };
+        const receipt = typeof body.receipt === "string" ? body.receipt : "accepted";
+        if (mine !== generation) return { ok: true, commandId, receipt };
+        const work = optionWork[name];
+        if (work?.sending?.commandId === commandId) setWork(name, { ...work, sending: { ...work.sending, posted: true } });
+        // A result that came down the stream before this answer has settled it already (`ingest`).
+        if (receipt === "rejected") {
+          settleOption(name, commandId, typeof body.reason === "string" && body.reason !== "" ? body.reason : "The hub refused the change.");
+        }
+        return { ok: true, commandId, receipt };
+      }
+      const refused = refusedFrom(response);
+      if (mine === generation && !refused.ok) settleOption(name, commandId, refused.message);
+      return refused;
     };
 
     const setOutbox = (view: OutboxView): void => {
@@ -210,6 +344,11 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       if (frame.type === "command.receipt" && frame.command_id !== undefined && frame.command_id !== "") {
         outbox?.noteReceipt(frame.command_id, frame.data.status, frame.data.reason);
       }
+      if ((frame.type === "command.result" || frame.type === "command.receipt") && frame.command_id) {
+        optionCommandSettled(frame.command_id);
+      }
+      if (!before.caughtUp && state.caughtUp) void lookUpOptions();
+      refreshOptions();
       for (const effect of effects) {
         if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);
       }
@@ -277,6 +416,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       statusTimer = null;
       features = null;
       featuresBoot = "";
+      optionsSupported = null;
+      refreshOptions();
     };
 
     const fetchFeatures = async (attempt: number): Promise<void> => {
@@ -297,6 +438,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       if (Array.isArray(listed)) {
         featuresBoot = boot;
         features = { requireKeeper: listed.includes(FEATURE_REQUIRE_KEEPER), lookup: listed.includes(FEATURE_COMMAND_LOOKUP) };
+        optionsSupported = listed.includes(FEATURE_SESSION_OPTIONS);
+        refreshOptions();
         outbox?.featuresChanged();
         return;
       }
@@ -341,6 +484,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const before = get().connection.state;
       set({ connection });
       refreshSends();
+      refreshOptions();
       const live = connection.state === "live";
       if (live && !wasLive) {
         forgetFeatures();
@@ -384,6 +528,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       connection: { state: "connecting", attempt: 0, since: timers.now(), retryAt: null, detail: "" },
       outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null, owner: "", loading: false, storageDown: false },
       sends: [],
+      sessionOptions: { known: false, turnOpen: false },
       started: false,
 
       start() {
@@ -468,6 +613,9 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         snapshotWanted = null;
         wasLive = false;
         forgetFeatures();
+        // A change in flight is not followed past a stop: the value the hub says is what shows.
+        optionWork = {};
+        refreshOptions();
         set({ started: false });
       },
 
@@ -489,6 +637,23 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         gated((commandId) => post("approval", { request_id: requestId, decision, command_id: commandId })),
 
       interrupt: () => gated((commandId) => post("control", { op: "interrupt", command_id: commandId })),
+
+      async setOption(name, value) {
+        const { session, connection } = get();
+        const refusal = optionsRefusal(session, connection, optionsSupported);
+        if (refusal !== null) return { ok: false, ...refusal };
+        if (!OPTION_NAMES.includes(name) || session.options?.[name] === undefined || !capsAllow(session, name)) {
+          return { ok: false, reason: "not_allowed", message: "This session cannot change that." };
+        }
+        const work = optionWork[name];
+        if (work?.sending) {
+          // One change of an option at a time, in order: the last one asked for is the one that goes next.
+          setWork(name, { ...work, next: value, error: null });
+          return { ok: true, commandId: null, receipt: "deferred" };
+        }
+        setWork(name, { sending: null, error: null });
+        return sendOption(name, value);
+      },
 
       restore: (checkpointId) =>
         gated((commandId) => post("restore", { checkpoint_id: checkpointId, command_id: commandId })),

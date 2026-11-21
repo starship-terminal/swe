@@ -31,6 +31,35 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.4,
+  "data": {
+   "options": {
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "default",
+       "label": "Default"
+      },
+      {
+       "id": "autoEdit",
+       "label": "Auto Edit"
+      },
+      {
+       "id": "yolo",
+       "label": "YOLO"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,

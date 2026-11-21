@@ -54,6 +54,7 @@ from typing import Any, Callable, Iterable
 
 from swe.remote import acp as wire
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters import registry
 from swe.remote.adapters.base import (
     AdapterError, Answer, Caps, EventSink, StartSpec, TranscriptPosition,
@@ -116,6 +117,32 @@ def mode_ids(info: Any) -> list[str]:
     listed = modes.get("availableModes") if isinstance(modes, dict) else None
     return [m["id"] for m in listed or () if isinstance(m, dict)
             and isinstance(m.get("id"), str) and m["id"]]
+
+
+def _listed(info: Any, field: str, items: str, key: str) -> list[dict]:
+    group = info.get(field) if isinstance(info, dict) else None
+    listed = group.get(items) if isinstance(group, dict) else None
+    return [opts.choice(m[key], m.get("name"), m.get("description"))
+            for m in listed or () if isinstance(m, dict)
+            and isinstance(m.get(key), str) and m[key]]
+
+
+def mode_choices(info: Any) -> list[dict]:
+    """The modes a session answer lists, as ``session.options``
+    choices: the agent's id, name and description."""
+    return _listed(info, "modes", "availableModes", "id")
+
+
+def model_choices(info: Any) -> list[dict]:
+    """The models a session answer lists, as ``session.options``
+    choices."""
+    return _listed(info, "models", "availableModels", "modelId")
+
+
+def current_model(info: Any) -> str:
+    models = info.get("models") if isinstance(info, dict) else None
+    return text_of(models.get("currentModelId")) \
+        if isinstance(models, dict) else ""
 
 
 def current_mode(info: Any) -> str:
@@ -248,7 +275,8 @@ class AcpState(SessionCore):
                                                 ``failed``
     ``plan``                                    ``plan.updated``
     ``usage_update``, a chunk's ``_meta.usage``  ``usage.updated``
-    ``current_mode_update``                     none (the mode is kept)
+    ``current_mode_update``                     ``session.options`` (the
+                                                mode is kept)
     ``session/request_permission``              ``approval.requested``,
                                                 ``session.state`` waiting
     the answer to ``session/prompt``            open streams completed,
@@ -264,6 +292,11 @@ class AcpState(SessionCore):
         self.mode = ""
         self.modes: list[str] = []
         self.models: dict[str, str] = {}
+        # What ``session.options`` says (G32): the agent's own lists and
+        # its current model id.
+        self.model = ""
+        self.mode_choices: list[dict] = []
+        self.model_choices: list[dict] = []
         # the kind streaming now -> its stream id, and the agent's
         # messageId for it
         self._cur: dict[str, str] = {}
@@ -281,6 +314,32 @@ class AcpState(SessionCore):
         self.modes = mode_ids(info)
         self.mode = current_mode(info)
         self.models = model_ids(info)
+        self.model = current_model(info)
+        self.mode_choices = mode_choices(info)
+        self.model_choices = model_choices(info)
+
+    def options(self) -> dict:
+        """The agent's models and modes, each sent at once with
+        ``session/set_model`` or ``session/set_mode``. What a prompt in
+        progress does with a change is not recorded: ``unverified``."""
+        return {
+            "model": opts.string_option(self.model, opts.UNVERIFIED,
+                                        choices=self.model_choices),
+            "permission_mode": opts.string_option(
+                self.mode, opts.UNVERIFIED, choices=self.mode_choices),
+            "plan_mode": opts.flag_option(self.mode == PLAN_MODE,
+                                          opts.UNVERIFIED),
+        }
+
+    def mode_set(self, mode: str) -> list:
+        """The agent took ``session/set_mode`` ``mode``."""
+        self.mode = mode
+        return self.options_events()
+
+    def model_set(self, model_id: str) -> list:
+        """The agent took ``session/set_model`` ``model_id``."""
+        self.model = model_id
+        return self.options_events()
 
     @property
     def busy(self) -> bool:
@@ -355,6 +414,7 @@ class AcpState(SessionCore):
             self.note_unknown(what or "?")
             return fed
         handler(self, update, fed.events)
+        self.sync_options(fed.events)
         return fed
 
     def _chunk(self, kind: str, update: dict, out: list) -> None:
@@ -687,6 +747,13 @@ def _replay_in(state: AcpState, proc: int, msg: dict, sent: dict,
     if asked == "session/prompt" and turns.get(proc) == msg["id"]:
         turns.pop(proc, None)
         return state.prompt_answered(msg)
+    params = request.get("params") or {}
+    if "error" not in msg and asked == "session/set_mode" \
+            and text_of(params.get("modeId")):
+        return state.mode_set(params["modeId"])
+    if "error" not in msg and asked == "session/set_model" \
+            and text_of(params.get("modelId")):
+        return state.model_set(params["modelId"])
     return []
 
 
@@ -1074,14 +1141,17 @@ class AcpAdapter:
         with self._lock:
             if plan and before and before != PLAN_MODE:
                 self._mode_before = before
-            state.mode = mode
+            self._emit(state.mode_set(mode))
 
     def _set_model(self, model: str, timeout: float | None = None) -> None:
         state = self._state
         assert state is not None
+        model_id = state.models[model]
         self._call("session/set_model", {
             "sessionId": self._agent.session_id,
-            "modelId": state.models[model]}, timeout)
+            "modelId": model_id}, timeout)
+        with self._lock:
+            self._emit(state.model_set(model_id))
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

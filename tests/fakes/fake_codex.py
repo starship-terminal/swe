@@ -399,7 +399,12 @@ def handle(msg):
         if MODE == "refuse-thread":
             refuse(rpc_id, "not logged in")
             return
-        answer(rpc_id, {"thread": thread(THREAD), "model": "gpt-test"})
+        # As the real server does (options.jsonl): the model and policy
+        # asked for, or its own default model.
+        answer(rpc_id, {"thread": thread(THREAD),
+                        "model": params.get("model") or "gpt-test",
+                        "approvalPolicy": params.get("approvalPolicy"),
+                        "reasoningEffort": None})
         out({"method": "thread/started", "params": {}})
     elif method == "thread/resume":
         if params.get("threadId") != THREAD:

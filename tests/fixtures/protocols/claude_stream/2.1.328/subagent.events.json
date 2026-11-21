@@ -32,6 +32,46 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.969,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "unverified"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,
@@ -62,6 +102,47 @@
    "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Use the Task tool with subagent_type general-purpose to read notes.txt in the current folder and report its first line. Then reply with that line only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.444,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-haiku-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "unverified"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
   }
  },
  {

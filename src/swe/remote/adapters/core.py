@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import Answer, Caps, UnknownRequest
 from swe.remote.adapters.claude_wire import (  # noqa: F401 - re-exported
     OUTPUT_LIMIT, REDACTED, redact, secret_key, stable_cut, tool_summary,
@@ -144,6 +145,7 @@ class SessionCore:
         self._n_turn = 0
         # Message kinds nothing maps, by name: for tests and logs.
         self.unknown: dict[str, int] = {}
+        self._options = opts.OptionsView()
 
     # -- helpers ---------------------------------------------------------
 
@@ -160,6 +162,29 @@ class SessionCore:
             self._held.append(event)
         else:
             out.append(event)
+
+    def options(self) -> dict:
+        """Every option this harness could offer now, as
+        ``session.options`` carries it (G32). A wire module overrides
+        it; :meth:`sync_options` keeps the ones the caps allow."""
+        return {}
+
+    def sync_options(self, out: list) -> None:
+        """Queue ``session.options`` when what :meth:`options` says
+        changed since the last one: call it after anything that may
+        change a value."""
+        if not self.started or self.done:
+            return
+        event = self._options.changed(self.key, self.options(), self.caps,
+                                      self.now())
+        if event is not None:
+            out.append(event)
+
+    def options_events(self) -> list:
+        """:meth:`sync_options` as a list, for the adapter to emit."""
+        out: list = []
+        self.sync_options(out)
+        return out
 
     def note_unknown(self, name: Any) -> None:
         key = str(name)[:60]
@@ -229,8 +254,9 @@ class SessionCore:
     # -- calls from the adapter ------------------------------------------
 
     def start_events(self, caps: Caps, session_id: str) -> list:
-        """``session.caps`` then ``session.state`` idle, then anything
-        the harness sent before the handshake finished."""
+        """``session.caps``, ``session.state`` idle and
+        ``session.options``, then anything the harness sent before the
+        handshake finished."""
         self.caps = caps
         self.session_id = session_id
         out = [ev.session_caps(self.key, caps.as_dict(), ts=self.now()),
@@ -238,6 +264,7 @@ class SessionCore:
                                 harness_session_id=session_id or None,
                                 ts=self.now())]
         self.started = True
+        self.sync_options(out)
         out.extend(self._held)
         self._held = []
         return out
@@ -250,6 +277,7 @@ class SessionCore:
             self.caps = caps
             self.out(out, ev.session_caps(self.key, caps.as_dict(),
                                           ts=self.now()))
+            self.sync_options(out)
 
     def begin_turn(self, text: str, *, attachments: Iterable[str] = (),
                    command_id: str = "", device: str = "") -> tuple[str, list]:

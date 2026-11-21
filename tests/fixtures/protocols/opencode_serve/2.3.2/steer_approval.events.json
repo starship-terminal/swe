@@ -32,6 +32,29 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.683,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "unverified"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "unverified"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "unverified"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,

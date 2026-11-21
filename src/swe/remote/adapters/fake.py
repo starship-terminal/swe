@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import (
     AdapterError, Answer, Caps, EventSink, StartSpec, TranscriptPosition,
     TurnInput, UnknownRequest, check_option,
@@ -224,6 +225,8 @@ class FakeAdapter:
         session_id: str = "fake-session",
         autoplay: bool = True,
         position: TranscriptPosition | None = None,
+        choices: dict | None = None,
+        refuse_options: dict | None = None,
     ) -> None:
         if caps is None:
             caps = getattr(resolved, "caps", None) or Caps()
@@ -236,6 +239,12 @@ class FakeAdapter:
         self.script = [list(t) for t in turns]
         self.calls: list[Call] = []
         self.options: dict[str, Any] = {}
+        # ``session.options`` (G32): the values listed per option name
+        # (``{name: [ids]}``), and options whose ``set_option`` the
+        # "agent" refuses with the given message.
+        self.choices = {k: list(v) for k, v in (choices or {}).items()}
+        self.refuse_options = dict(refuse_options or {})
+        self._shown = opts.OptionsView()
         self.spec: StartSpec | None = None
         self.sink: EventSink | None = None
         self.alive = False
@@ -328,7 +337,31 @@ class FakeAdapter:
             self._send(ev.session_state(
                 self.key, "idle", harness_session_id=self.session_id,
                 ts=self.clock()))
+            self._options_changed()
             return self.session_id
+
+    def _options_changed(self) -> None:
+        shown = {}
+        for name in ("model", "effort", "permission_mode"):
+            listed = self.choices.get(name)
+            shown[name] = opts.string_option(
+                self.options.get(name, ""), opts.UNVERIFIED,
+                choices=[opts.choice(c) for c in listed]
+                if listed is not None else None)
+        shown["plan_mode"] = opts.flag_option(
+            self.options.get("plan_mode", False), opts.UNVERIFIED)
+        event = self._shown.changed(self.key, shown, self._caps,
+                                    self.clock())
+        if event is not None:
+            self._send(event)
+
+    def agent_sets(self, name: str, value: Any) -> None:
+        """The "agent" changes an option by itself (a fallback model, a
+        plan mode it leaves): what a test of that path drives."""
+        with self._lock:
+            self.options[name] = value
+            if self.alive:
+                self._options_changed()
 
     def send_turn(self, turn: TurnInput) -> str:
         with self._lock:
@@ -401,7 +434,11 @@ class FakeAdapter:
             self._record("set_option", name, value)
             self._live()
             check_option(self._caps, name, value)
+            if name in self.refuse_options:
+                raise AdapterError(self.refuse_options[name],
+                                   code="refused")
             self.options[name] = value
+            self._options_changed()
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

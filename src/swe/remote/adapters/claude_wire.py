@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import Answer, Caps, UnknownRequest
 # The transcript redactor is the one the G3 contract names for adapter
 # events (base.py, "Redaction"); it is private to its module only by
@@ -332,18 +333,27 @@ class Handshake:
     models: tuple = ()
     capabilities: tuple = ()
     session_state: str = ""
+    # The models as ``session.options`` lists them: ``{id, label?,
+    # description?}`` from each entry's ``value``, ``displayName`` and
+    # ``description`` (2.1.328 sends ``value`` only).
+    model_choices: tuple = ()
 
     @classmethod
     def from_body(cls, body: Any) -> "Handshake":
         body = body if isinstance(body, dict) else {}
-        models = tuple(str(m.get("value")) for m in body.get("models") or ()
-                       if isinstance(m, dict) and m.get("value"))
+        listed = [m for m in body.get("models") or ()
+                  if isinstance(m, dict) and isinstance(m.get("value"), str)
+                  and m["value"]]
+        models = tuple(m["value"] for m in listed)
+        choices = tuple(opts.choice(m["value"], m.get("displayName"),
+                                    m.get("description")) for m in listed)
         caps = tuple(c for c in body.get("capabilities") or ()
                      if isinstance(c, str))
         return cls(version=_str(body.get("claude_code_version")),
                    permission_mode=_str(body.get("current_permission_mode")),
                    models=models, capabilities=caps,
-                   session_state=_str(body.get("session_state")))
+                   session_state=_str(body.get("session_state")),
+                   model_choices=choices)
 
     def caps(self) -> Caps:
         """The ceiling this CLI's handshake allows: a model list means
@@ -672,8 +682,21 @@ class StreamState:
         self.clock = clock
         self.caps = caps
         self.session_id = session_id
+        # The model as the CLI resolved it (init, a set_model answer).
         self.model = ""
         self.permission_mode = ""
+        # What ``session.options`` says (G32). ``model_choices`` is the
+        # handshake's list; ``asked_model`` the model the CLI was
+        # started with ("" for its default), until an init names it.
+        # The CLI answers an alias with the resolved id (``sonnet`` is
+        # ``claude-sonnet-5-5``), so ``_alias`` maps each resolved id
+        # back to the value that was asked for, and the listed one is
+        # the one shown. ``_asking`` holds set_model requests in flight.
+        self.model_choices: tuple = ()
+        self.asked_model = ""
+        self._alias: dict[str, str] = {}
+        self._asking: dict[str, str] = {}
+        self._options = opts.OptionsView()
         self.started = False
         self.done = False
         self.turn: _Turn | None = None
@@ -753,11 +776,58 @@ class StreamState:
         self._state(out, "running")
         return turn
 
+    # -- options (G32) ---------------------------------------------------
+
+    def options(self) -> dict:
+        """Every option this CLI could offer, as ``session.options``
+        carries it; :meth:`_sync_options` keeps the ones caps allow.
+        Each is sent to the CLI at once, and what a reply in progress
+        does with a change is not recorded: ``unverified``."""
+        if self.model:
+            value = self._alias.get(self.model) or self.model
+        else:
+            value = self.asked_model or self._default_choice()
+        return {
+            "model": opts.string_option(
+                value, opts.UNVERIFIED, choices=self.model_choices,
+                reported=self.model),
+            "permission_mode": opts.string_option(self.permission_mode,
+                                                  opts.UNVERIFIED),
+            "plan_mode": opts.flag_option(self.permission_mode == "plan",
+                                          opts.UNVERIFIED),
+        }
+
+    def _default_choice(self) -> str:
+        """``default`` when the CLI lists it: what a CLI started with no
+        ``--model`` runs."""
+        return "default" if any(c["id"] == "default"
+                                for c in self.model_choices) else ""
+
+    def _sync_options(self, out: list) -> None:
+        event = self._options.changed(self.key, self.options(), self.caps,
+                                      self.clock())
+        if event is not None:
+            self._out(out, event)
+
+    def model_asked(self, request_id: str, model: str) -> None:
+        """We sent ``set_model`` ``model`` as ``request_id``: its answer
+        names the id the CLI resolved it to."""
+        self._asking[request_id] = model
+
+    def sync_options(self) -> list:
+        """``session.options`` if what it says changed (after a call the
+        adapter made), else nothing."""
+        out: list = []
+        if self.started and not self.done:
+            self._sync_options(out)
+        return out
+
     # -- calls from the adapter ------------------------------------------
 
     def start_events(self, caps: Caps, session_id: str) -> list:
-        """``session.caps`` then ``session.state`` idle, then anything
-        the CLI printed before the handshake finished."""
+        """``session.caps``, ``session.state`` idle and
+        ``session.options``, then anything the CLI printed before the
+        handshake finished."""
         self.caps = caps
         self.session_id = session_id
         out = [ev.session_caps(self.key, caps.as_dict(), ts=self.clock()),
@@ -765,6 +835,7 @@ class StreamState:
                                 harness_session_id=session_id or None,
                                 ts=self.clock())]
         self.started = True
+        self._sync_options(out)
         out.extend(self._held)
         self._held = []
         return out
@@ -896,6 +967,8 @@ class StreamState:
             self.unknown[key] = self.unknown.get(key, 0) + 1
             return fed
         handler(msg, fed)
+        if self.started and not self.done:
+            self._sync_options(fed.events)
         return fed
 
     def _on_control_response(self, msg: dict, fed: Fed) -> None:
@@ -905,6 +978,7 @@ class StreamState:
         rid = resp.get("request_id")
         if not isinstance(rid, str):
             return
+        asked = self._asking.pop(rid, None)
         if resp.get("subtype") == "error":
             fed.acks.append(Ack(rid, False,
                                 error=_str(resp.get("error")) or "refused"))
@@ -916,6 +990,16 @@ class StreamState:
             # the init message use.
             if isinstance(body.get("model"), str) and body["model"]:
                 self.model = body["model"]
+                if asked:
+                    self._alias[self.model] = asked
+                    self.asked_model = ""
+            elif asked:
+                # No resolved id in the answer: the next init names it.
+                self.asked_model = asked
+                self.model = ""
+            # set_permission_mode answers with the mode now in force.
+            if isinstance(body.get("mode"), str) and body["mode"]:
+                self.permission_mode = body["mode"]
             fed.acks.append(Ack(rid, True, body=body))
 
     def _on_control_request(self, msg: dict, fed: Fed) -> None:
@@ -1037,7 +1121,17 @@ class StreamState:
         sid = msg.get("session_id")
         if is_session_id(sid):
             self.session_id = sid
-        self.model = _str(msg.get("model")) or self.model
+        model = _str(msg.get("model"))
+        if model and model != self.model and model not in self._alias \
+                and not self.model:
+            # The first model the CLI names is what the model it was
+            # started with (or set without a resolved answer) came to.
+            asked = self.asked_model or self._default_choice()
+            if asked:
+                self._alias[model] = asked
+        if model:
+            self.model = model
+            self.asked_model = ""
         self.permission_mode = _str(msg.get("permissionMode")) \
             or self.permission_mode
         narrowed = self.caps.narrowed(capability_caps(
@@ -1348,6 +1442,14 @@ def _argv_session(tail: list) -> str:
     return found.get("--session-id=") or found.get("--resume=", "")
 
 
+def _argv_flag(tail: list, flag: str) -> str:
+    """The value of ``flag`` (``--model=``) in a recorded spawn line."""
+    for tok in tail or ():
+        if isinstance(tok, str) and tok.startswith(flag):
+            return tok[len(flag):]
+    return ""
+
+
 def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
     """The v2 events a recorded fixture comes to, through the same
     :class:`StreamState` calls the adapter makes: each process of the
@@ -1390,6 +1492,9 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
                 hs = Handshake.from_body(ack.body)
                 caps = _ALL.narrowed(PROVEN).narrowed(hs.caps())
                 state.permission_mode = hs.permission_mode
+                state.model_choices = hs.model_choices
+                state.asked_model = _argv_flag(
+                    tails[proc] if proc < len(tails) else [], "--model=")
                 out.extend(state.start_events(caps, state.session_id))
         out.extend(fed.events)
     return out
@@ -1413,6 +1518,9 @@ def _replay_outgoing(state: StreamState, msg: dict, init_ids: dict,
         req = msg.get("request") or {}
         if req.get("subtype") == "initialize":
             init_ids[proc] = msg.get("request_id")
+        elif req.get("subtype") == "set_model" \
+                and isinstance(req.get("model"), str):
+            state.model_asked(str(msg.get("request_id")), req["model"])
         elif req.get("subtype") == "interrupt":
             return state.interrupt_sent()
         return []

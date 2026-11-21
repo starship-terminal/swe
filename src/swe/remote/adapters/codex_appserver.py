@@ -279,6 +279,10 @@ class CodexAppServerAdapter:
             state.thread_id = str(thread.get("id") or "")
             self._session_id = wire.session_ref(thread)
             self._rollout = str(thread.get("path") or "")
+            # An effort the launch asked for goes out with the first
+            # turn (the thread's start takes none).
+            for name, value in self._overrides.items():
+                state.settings[name] = value
             self._emit(state.start_events(self._caps, self._session_id))
         return self._session_id
 
@@ -299,7 +303,10 @@ class CodexAppServerAdapter:
             message = wire.thread_resume(self._rpc_id(), thread_id, **fields)
         else:
             message = wire.thread_start(self._rpc_id(), **fields)
-        thread = self._call(message, self._init_timeout).get("thread")
+        answer = self._call(message, self._init_timeout)
+        thread = answer.get("thread")
+        if isinstance(self._state, wire.ThreadState):
+            self._state.thread_settings(answer)
         if not isinstance(thread, dict) or not thread.get("id"):
             raise AdapterError("codex named no thread", code="refused")
         if not self.version:
@@ -459,6 +466,7 @@ class CodexAppServerAdapter:
                     code="bad_request")
             # plan_mode never gets here: PROVEN keeps it off.
             self._overrides[name] = value
+            self._emit(self._state.setting(name, value))
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

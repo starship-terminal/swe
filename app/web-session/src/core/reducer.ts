@@ -77,6 +77,7 @@ const ENDS_LIVE = new Set(["idle", "agent_down", "parked", "closed"]);
 const SINGLETONS = [
   "session.state",
   "session.caps",
+  "session.options",
   "plan.updated",
   "changes.updated",
   "queue.updated",
@@ -568,6 +569,8 @@ function applySnapshot(prev: SessionState, snapshot: Snapshot): SessionState {
   s.phase = snapshot.state;
   s.phaseReason = snapshot.reason ?? null;
   s.caps = snapshot.caps;
+  // A hub without the session_options feature sends no `options`: nothing is known then.
+  s.options = snapshot.options ?? null;
   s.openTurn = snapshot.open_turn;
   s.live = snapshot.live.map(toLive);
   s.queue = snapshot.queue;
@@ -788,6 +791,12 @@ export function reduce(state: SessionState, frame: Frame): Reduced {
       if (!stale(s, frame, "session.caps")) {
         s.caps = frame.data.caps;
         mark(s, frame, "session.caps");
+      }
+      break;
+    case "session.options":
+      if (!stale(s, frame, "session.options")) {
+        s.options = frame.data.options;
+        mark(s, frame, "session.options");
       }
       break;
     case "plan.updated":
