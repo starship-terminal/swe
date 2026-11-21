@@ -11,7 +11,6 @@ import type { Frame, Snapshot } from "./types";
 const KEY = "claude:session-1";
 const BASE = "/v1/sessions/claude%3Asession-1";
 
-
 function boot(
   over: { factory?: IDBFactory; online?: boolean; memory?: boolean; transport?: FakeTransport; timers?: FakeTimers } = {},
 ) {
@@ -857,6 +856,21 @@ describe("history", () => {
 });
 
 describe("start, stop and wake", () => {
+  it("a result the session took in before a restart settles a stored send the new outbox loads", async () => {
+    const t = playing("default");
+    t.transport.last.send(...frames(t.fixture));
+    await drain();
+    // Another tab's legacy send: this store has no entry for it, but its result comes down the stream.
+    t.transport.last.send({ v: 2, type: "command.result", session: KEY, seq: 0, ts: 1, command_id: "other-tab", data: { op: "send", ok: true } } as Frame);
+    t.state().stop();
+    const disk = await openOutboxStorage(t.factory);
+    await disk.put({ commandId: "other-tab", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 0, status: "sent", attempts: 1, path: "legacy", sentAt: 0 });
+    t.state().start();
+    await drain();
+    expect(t.state().outbox.entries).toEqual([]);
+    expect(await disk.load(KEY)).toEqual([]);
+  });
+
   it("stop() closes the stream and ignores what comes after; start() begins again", async () => {
     const t = playing("default");
     t.transport.last.send(...frames(t.fixture).slice(0, 2));

@@ -12,7 +12,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
 
 import { gate, gateSend, type Refusal } from "./gate";
-import { Outbox, randomOwner, SESSION_GONE, type OutboxView, type SendInput } from "./outbox";
+import { Outbox, randomOwner, SESSION_GONE, type OutboxView, type SendInput, type SendResultData } from "./outbox";
 import { describeSends, type SendView } from "./sends";
 import { DeferredStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
@@ -120,6 +120,15 @@ function refusedFrom(response: JsonResponse): ActionResult {
 
 const SNAPSHOT_TRIES = 5;
 
+/** What the outbox needs from a `command.result`. */
+function sendResult(data: { ok: boolean; note?: string; cancelled?: boolean }): SendResultData {
+  return {
+    ok: data.ok,
+    ...(data.note === undefined ? {} : { note: data.note }),
+    ...(data.cancelled === undefined ? {} : { cancelled: data.cancelled }),
+  };
+}
+
 export function createSessionStore(options: SessionStoreOptions): SessionStore {
   const timers = options.timers ?? realTimers;
   const random = options.random ?? Math.random;
@@ -181,11 +190,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         for (const entry of before.live) if (!still.has(entry.id)) endedMeanwhile.add(entry.id);
       }
       if (frame.type === "command.result" && frame.command_id !== undefined && frame.command_id !== "") {
-        const result = { ok: frame.data.ok, ...(frame.data.note === undefined ? {} : { note: frame.data.note }) };
-        outbox?.noteResult(frame.command_id, {
-          ...result,
-          ...(frame.data.cancelled === undefined ? {} : { cancelled: frame.data.cancelled }),
-        });
+        outbox?.noteResult(frame.command_id, sendResult(frame.data));
       }
       for (const effect of effects) {
         if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);
@@ -315,6 +320,11 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           owner,
           // A post that was out when the store stopped answers to the outbox that replaced it.
           onLate: (entry, settled) => outbox?.adoptLate(entry, settled),
+          // A result this store took in before the outbox loaded its stored sends (a stop() and start(), say).
+          knownResult: (commandId) => {
+            const result = get().session.commands[commandId]?.result;
+            return result === undefined ? undefined : sendResult(result);
+          },
           // A repeat is safe only where the hub de-duplicates by id: a session a keeper holds.
           keeperHeld: () => get().session.row?.["mode"] === "keeper",
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),

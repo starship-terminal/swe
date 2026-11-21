@@ -82,7 +82,7 @@ The rules:
 | journaled frames | applied once, whatever they change: a repeat of a frame already applied changes nothing anywhere (the timeline, turns, live text, tasks, checkpoints, requests, the state events below), and one that arrives out of order, below the cursor but not seen before, is applied in its place. `seq` gaps are fine. The cursor is the highest `seq` seen even for a frame it skipped. A `seq` of 0 never moves it. The rule is per event, not "at or below the cursor changes nothing", because the brief asks for out-of-order frames to be handled; `reducer.test.ts` applies every journaled frame of every recording a second time and requires the same state |
 | state events (`session.state`, `session.caps`, `plan.updated`, `queue.updated`, `usage.updated`, `changes.updated`) | one at or below the `seq` last applied for its type is ignored (a repeat, or an older one arriving late). A snapshot marks all of them as of its `head` |
 | `approval.requested`, `input.requested` | the same `seq` is the same request (it can arrive again after a snapshot). A different `seq` under a known id is a new request that reuses it: an agent that restarts counts again from `perm-1` (the fake agent does; see Verification) |
-| `approval.resolved` | closes the request with that id; the first answer stands. An answer that comes before its request is kept until the request shows up |
+| `approval.resolved` | closes the request it answers: the latest with that id at or before the answer's `seq`, so an old answer that arrives again never closes a newer request that reuses the id. The first answer stands. An answer that comes before its request is kept until the request shows up |
 | `tool.started` | the same `seq` is the same call; a start that arrives after its completion joins the completion's item; any other is a new call, even under a reused `call_id` |
 | `command.receipt`, `command.result` | recorded by `command_id` |
 | `turn.ended` | ends the turn and all live text |
@@ -298,8 +298,11 @@ Where a repeat is allowed: only where the hub de-duplicates by id. The
 entry's path is `keeper`, or it has no path yet and the row says `mode:
 keeper` (whatever `caps` says: a just-launched session has none yet), and
 in both cases the row still says so at the moment of the repeat. A legacy
-send is never posted twice. A `command.result` with an empty or unknown id
-changes nothing.
+send is never posted twice. A `command.result` with an empty id changes
+nothing. One with an id the outbox does not hold is kept until the stored
+sends are loaded (up to 200), then applied to them with the results the
+session already holds (`session.commands`), before anything is posted;
+after that, an unknown id changes nothing.
 
 When posting starts: the first post needs no guess about the path, but it
 waits until the device is online, the session's row has been seen (so a
@@ -316,6 +319,10 @@ Other rules:
   new outbox.
 - **Order.** Sends go oldest first, one at a time: one that cannot go holds
   back the ones behind it.
+- **No Discard while it is claimed.** An entry is `inFlight` (shown
+  `sending`, with no Discard or Retry) from the start of its claim until
+  its post is answered. A send discarded or ended anyway while its claim is
+  being written is never posted.
 - **The deadline timer never spins.** It is armed only for the next
   deadline strictly in the future. A deadline at or before now is one the
   pass could not act on (this page's own post still out), and is looked at
@@ -339,8 +346,8 @@ Other rules:
 
 `store.getState().sends` (`describeSends`) is one `SendView` per entry,
 oldest first: `{commandId, text, attachments, mode, createdAt, shown,
-reason, canRetry, canDiscard}`. `shown` is `waiting`, `sending` (its post is
-on its way), `sent`, `failed` or `unconfirmed`, and `reason` is always one
+reason, canRetry, canDiscard}`. `shown` is `waiting`, `sending` (being claimed, or its
+post is on its way), `sent`, `failed` or `unconfirmed`, and `reason` is always one
 sentence for the person ("Waiting: you are offline. It will be sent when you
 are back.", "Queued: it will be sent when the current turn ends.", the
 hub's note for a failure). A message bubble reads this, not
@@ -473,7 +480,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 267 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 275 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 

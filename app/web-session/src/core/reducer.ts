@@ -389,7 +389,16 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
     }
     case "approval.resolved": {
       const id = frame.data.request_id;
-      if (live) s.pending = s.pending.filter((p) => p.data.request_id !== id);
+      if (live) {
+        // Only the request this answers stops being open: the latest with its id at or before the answer, as
+        // `resolve` picks it. An answer that arrives again later must not close a newer request that reuses the id.
+        const at = seq > 0 ? seq : Infinity;
+        let answered: (typeof s.pending)[number] | undefined;
+        for (const p of s.pending) {
+          if (p.data.request_id === id && seqOf(p) <= at && (answered === undefined || seqOf(p) > seqOf(answered))) answered = p;
+        }
+        if (answered !== undefined) s.pending = s.pending.filter((p) => p !== answered);
+      }
       const resolution = defined<Resolution>({
         seq,
         source: frame.data.source,

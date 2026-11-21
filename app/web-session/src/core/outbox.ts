@@ -22,7 +22,7 @@
 //   send as failed, "may or may not have been sent".
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
-import { CLAIM_STALE_MS, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
 
 /** How long a send that the hub has not taken is worth trying: the time the hub holds a message for a sleeping machine. */
@@ -61,7 +61,7 @@ export interface OutboxView {
   note: string;
   /** Set while the hub refuses the credential: nothing is posted until `wake()`. */
   paused: "unauthorized" | null;
-  /** The entry whose post is on its way, if any. */
+  /** The entry being claimed for its post, or whose post is on its way, if any: it can be neither discarded nor retried. */
   inFlight: string | null;
   /** This page's claim owner: a claim with another owner is another tab's. */
   owner: string;
@@ -89,8 +89,13 @@ export interface OutboxOptions {
   owner?: string;
   /** The answer to a post that was out when this outbox closed: `settled` when it removed the entry. */
   onLate?(entry: OutboxEntry, settled: boolean): void;
+  /** The `command.result` the session already holds for an id, if any: applied to the sends storage loads. */
+  knownResult?(commandId: string): SendResultData | undefined;
   onChange(view: OutboxView): void;
 }
+
+/** How many results for ids it does not hold yet the outbox keeps until its stored sends are loaded. */
+export const EARLY_RESULTS_KEPT = 200;
 
 export interface SendInput {
   text: string;
@@ -145,6 +150,8 @@ export class Outbox {
   private failures = 0;
   private paused: OutboxView["paused"] = null;
   private inFlight: string | null = null;
+  /** A request is out (not just a claim being written): its answer is still written after `close()`. */
+  private posting = false;
   private closed = false;
   private writing: Promise<unknown> = Promise.resolve();
   /** Sends whose first write has not finished: not deliverable yet, but not to be lost by a restart. */
@@ -154,6 +161,9 @@ export class Outbox {
   private closeAfterLate = false;
   /** Set once the session is known not to exist (or the hub too old): entries loaded later end at once. */
   private gone: string | null = null;
+  /** Storage has been loaded: until then a result for an id not in the list may be for a stored send. */
+  private loaded = false;
+  private early = new Map<string, SendResultData>();
 
   constructor(options: OutboxOptions) {
     this.options = options;
@@ -183,6 +193,16 @@ export class Outbox {
     this.list = [...this.list, ...stored.filter((entry) => !known.has(entry.commandId)).map(normalize)].sort(
       (a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId),
     );
+    this.loaded = true;
+    // Results that came while storage was loading, and those the session held already, settle what was loaded,
+    // before anything is posted: a legacy send is never asked about again, so a result missed here would be lost.
+    const early = this.early;
+    this.early = new Map();
+    for (const entry of [...this.list]) {
+      const result = early.get(entry.commandId) ?? this.options.knownResult?.(entry.commandId);
+      if (result !== undefined) await this.settle(entry, result);
+      if (this.closed) return;
+    }
     // The hub may have lost what it owed us while this page was away: ask again where that is safe.
     for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
     // A 404 (or an outdated hub) that came before the stored entries were loaded applies to them too.
@@ -201,7 +221,7 @@ export class Outbox {
     this.clearRetry();
     this.clearAge();
     // A post on its way still gets its answer written (see `deliver`); the storage closes after that.
-    if (this.inFlight === null) this.options.storage.close();
+    if (!this.posting) this.options.storage.close();
     else this.closeAfterLate = true;
   }
 
@@ -254,12 +274,21 @@ export class Outbox {
     void this.flush();
   }
 
-  /** The `command.result` for a send came down the stream. An empty or unknown id changes nothing. */
+  /**
+   * The `command.result` for a send came down the stream. An empty id changes nothing; an unknown one is kept
+   * until storage is loaded (it may be a stored send's), and changes nothing after that.
+   */
   noteResult(commandId: string, result: SendResultData): void {
     if (commandId === "") return;
     const entry = this.list.find((e) => e.commandId === commandId);
-    if (entry === undefined) return;
-    void this.settle(entry, result);
+    if (entry !== undefined) {
+      void this.settle(entry, result);
+      return;
+    }
+    if (this.loaded) return;
+    this.early.delete(commandId);
+    if (this.early.size >= EARLY_RESULTS_KEPT) this.early.delete(this.early.keys().next().value as string);
+    this.early.set(commandId, result);
   }
 
   /** The session no longer exists: nothing still open can be sent. */
@@ -343,6 +372,7 @@ export class Outbox {
 
   private async post(entry: OutboxEntry): Promise<JsonResponse | null> {
     this.inFlight = entry.commandId;
+    this.posting = true;
     this.changed();
     try {
       return await this.options.transport.json(sessionPath(entry.session, "message"), {
@@ -361,8 +391,15 @@ export class Outbox {
       return null;
     } finally {
       this.inFlight = null;
+      this.posting = false;
       this.changed();
     }
+  }
+
+  /** The entry is not going to be posted after all: it can be discarded again. */
+  private notPosting(): void {
+    this.inFlight = null;
+    this.changed();
   }
 
   /** The entry, if it is still ours to update after an await: not closed, not settled or ended meanwhile. */
@@ -376,7 +413,17 @@ export class Outbox {
   private async deliver(entry: OutboxEntry): Promise<Outcome> {
     // Claim it first: the counted attempt and this page's claim are on disk before the request leaves, in one
     // transaction, so a reload or a second tab never makes a "first" post of something already posted.
-    const claim = await this.options.storage.claim(entry, this.owner, this.options.timers.now(), CLAIM_STALE_MS);
+    // It is in flight from here: the view offers no Discard while the claim is being written.
+    this.inFlight = entry.commandId;
+    this.changed();
+    let claim: Claim;
+    try {
+      claim = await this.options.storage.claim(entry, this.owner, this.options.timers.now(), CLAIM_STALE_MS);
+    } catch (error) {
+      this.notPosting();
+      throw error;
+    }
+    if (claim.kind !== "claimed" || this.closed) this.notPosting();
     if (this.closed) return "done";
     if (claim.kind === "missing") {
       this.list = this.list.filter((e) => e.commandId !== entry.commandId);
@@ -393,9 +440,16 @@ export class Outbox {
       this.scheduleAge();
       return "held";
     }
+    if (this.current(entry.commandId)?.status !== "waiting") {
+      // Discarded, or ended, while the claim was being written: never post it. A discard's removal and an
+      // end's write both come after the claim's transaction, so storage keeps no claim for it.
+      this.notPosting();
+      return "done";
+    }
     const attempted = claim.entry;
     this.adopt(attempted);
     if (attempted.ambiguous && !this.options.keeperHeld()) {
+      this.notPosting();
       // An earlier post may have been applied, and here a repeat would not be recognised as the same message.
       await this.fail(attempted, MAYBE_SENT);
       return "done";

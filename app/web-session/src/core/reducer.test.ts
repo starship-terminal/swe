@@ -579,6 +579,25 @@ describe("requests", () => {
     expect(itemsOf(state, "request")).toHaveLength(2);
   });
 
+  for (const type of ["approval.requested", "input.requested"] as const) {
+    it(`an old answer that arrives again does not close a newer request that reuses its id (${type})`, () => {
+      const request = (seq: number) =>
+        env(type, type === "approval.requested" ? { request_id: "perm-1", kind: "tool", prompt: "p" } : { request_id: "perm-1", prompt: "p", kind: "text" }, { seq, turn_id: "t1" });
+      // perm-1 at 1, answered at 2; the agent restarts and asks perm-1 again at 7; then the answer at 2 comes again.
+      let state = feed(start(), request(1), answer("perm-1", 2), request(7)).state;
+      expect(state.pending.map((p) => p.seq)).toEqual([7]);
+      state = reduce(state, answer("perm-1", 2)).state;
+      expect(state.pending.map((p) => p.seq)).toEqual([7]);
+      expect(itemsOf(state, "request").map((i) => [i.seq, (i as { resolution?: { seq: number } }).resolution?.seq])).toEqual([
+        [1, 2],
+        [7, undefined],
+      ]);
+      // Its own answer, later, closes it.
+      state = reduce(state, answer("perm-1", 9)).state;
+      expect(state.pending).toEqual([]);
+    });
+  }
+
   it("holds an input request like an approval", () => {
     const state = feed(
       start(),

@@ -24,6 +24,7 @@ import {
   type OutboxEntry,
   type OutboxStorage,
 } from "./outbox-storage";
+import { describeSends } from "./sends";
 import { FakeTimers, FakeTransport, drain } from "./test-support";
 import type { JsonRequest, JsonResponse } from "./transport";
 
@@ -72,23 +73,26 @@ function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; random?: (
   const world = { keeper: true, canPost: true };
   let ids = 0;
   const views: OutboxView[] = [];
-  const make = async (storage?: OutboxStorage, initial?: OutboxEntry[]) => {
-    const outbox = new Outbox({
+  /** An outbox whose `init()` the test runs itself. */
+  const build = (storage: OutboxStorage, more: Partial<ConstructorParameters<typeof Outbox>[0]> = {}) =>
+    new Outbox({
       session: KEY,
-      storage: storage ?? over.storage ?? (await openOutboxStorage(factory)),
+      storage,
       transport,
       timers,
       random: over.random ?? (() => 0.5),
       newId: () => `c${++ids}`,
       canPost: () => world.canPost,
       keeperHeld: () => world.keeper,
-      ...(initial ? { initial } : {}),
       onChange: (view) => views.push(view),
+      ...more,
     });
+  const make = async (storage?: OutboxStorage, initial?: OutboxEntry[]) => {
+    const outbox = build(storage ?? over.storage ?? (await openOutboxStorage(factory)), initial ? { initial } : {});
     await outbox.init();
     return outbox;
   };
-  return { timers, transport, hub, factory, world, views, make, view: () => views[views.length - 1] as OutboxView };
+  return { timers, transport, hub, factory, world, views, build, make, view: () => views[views.length - 1] as OutboxView };
 }
 
 const stored = async (factory: IDBFactory): Promise<OutboxEntry[]> => (await openOutboxStorage(factory)).load(KEY);
@@ -216,6 +220,52 @@ describe("results", () => {
     await drain();
     return { t, outbox, entry };
   };
+
+  /** A legacy send an earlier page left `sent` on disk, and an outbox whose storage has not opened yet. */
+  const leftSent = async (more: Partial<ConstructorParameters<typeof Outbox>[0]> = {}) => {
+    const t = setup();
+    legacy(t);
+    const left: OutboxEntry = {
+      commandId: "c-left",
+      session: KEY,
+      text: "x",
+      attachments: [],
+      mode: "queue",
+      createdAt: 0,
+      status: "sent",
+      attempts: 1,
+      path: "legacy",
+      sentAt: 0,
+    };
+    const disk = await openOutboxStorage(t.factory);
+    await disk.put(left);
+    let open: (s: OutboxStorage) => void = () => {};
+    const outbox = t.build(new DeferredStorage(new Promise<OutboxStorage>((resolve) => (open = resolve))), more);
+    const loading = outbox.init();
+    return { t, outbox, left, load: async () => (open(await openOutboxStorage(t.factory)), loading) };
+  };
+
+  it("a result that comes before the stored sends are loaded is applied once they are", async () => {
+    for (const result of [{ ok: true }, { ok: false, note: "session stayed busy for 30 min; message not sent" }]) {
+      const { t, outbox, left, load } = await leftSent();
+      outbox.noteResult(left.commandId, result);
+      await load();
+      await drain();
+      // At once: not after the 45 minutes a legacy send waits for its result.
+      if (result.ok) expect(t.view().entries).toEqual([]);
+      else expect(t.view().entries).toMatchObject([{ commandId: left.commandId, status: "failed", error: result.note }]);
+      expect(t.transport.calls).toEqual([]);
+      expect(await stored(t.factory)).toHaveLength(result.ok ? 0 : 1);
+    }
+  });
+
+  it("a result the session already holds is applied to the sends loaded later", async () => {
+    const { t, load } = await leftSent({ knownResult: (id) => (id === "c-left" ? { ok: true } : undefined) });
+    await load();
+    await drain();
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
+  });
 
   for (const path of ["keeper", "legacy"] as const) {
     it(`${path}: an ok result removes it, from memory and disk`, async () => {
@@ -986,5 +1036,75 @@ describe("the person's actions", () => {
     await outbox.discard(again?.commandId ?? "");
     expect(t.view().entries).toEqual([]);
     expect(await stored(t.factory)).toEqual([]);
+  });
+
+  /**
+   * A storage whose claims answer only when the test says. `eager`: the claim's transaction starts at once
+   * and only its answer waits (a discard lands during it). Otherwise the transaction starts on release (a
+   * discard lands just before it).
+   */
+  async function heldClaims(t: ReturnType<typeof setup>, eager: boolean) {
+    const inner = await openOutboxStorage(t.factory);
+    let release: () => void = () => {};
+    const storage: OutboxStorage = {
+      get kind() {
+        return inner.kind;
+      },
+      get note() {
+        return inner.note;
+      },
+      load: (session) => inner.load(session),
+      put: (entry) => inner.put(entry),
+      remove: (id) => inner.remove(id),
+      claim: (...args) => {
+        const started = eager ? inner.claim(...args) : null;
+        return new Promise((resolve) => (release = () => void (started ?? inner.claim(...args)).then(resolve)));
+      },
+      abandon: (...args) => inner.abandon(...args),
+      close: () => inner.close(),
+    };
+    return { storage, release: () => release() };
+  }
+
+  const shown = (view: OutboxView) =>
+    describeSends({
+      outbox: view,
+      connection: { state: "live", attempt: 0, since: 0, retryAt: null, detail: "" },
+      loaded: true,
+      online: true,
+    });
+
+  for (const eager of [true, false]) {
+    it(`a send being claimed offers no Discard, and one discarded anyway is never posted (discard ${eager ? "during" : "just before"} the claim)`, async () => {
+      const t = setup();
+      const held = await heldClaims(t, eager);
+      const outbox = await t.make(held.storage);
+      const entry = await outbox.send({ text: "never mind" });
+      await drain();
+      expect(t.view().inFlight).toBe(entry.commandId);
+      expect(shown(t.view())).toMatchObject([{ shown: "sending", canDiscard: false, canRetry: false }]);
+      await outbox.discard(entry.commandId); // a caller that does not read `canDiscard`
+      held.release();
+      await drain();
+      expect(t.hub.received).toEqual([]);
+      expect(t.view().entries).toEqual([]);
+      expect(t.view().inFlight).toBeNull();
+      expect(await stored(t.factory)).toEqual([]);
+    });
+  }
+
+  it("a send that ends while it is being claimed is never posted", async () => {
+    const t = setup();
+    const held = await heldClaims(t, true);
+    const outbox = await t.make(held.storage);
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    outbox.sessionGone();
+    await drain();
+    held.release();
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ commandId: entry.commandId, status: "failed", error: SESSION_GONE }]);
+    expect((await stored(t.factory))[0]).not.toHaveProperty("claim");
   });
 });
