@@ -97,7 +97,7 @@ export interface OutboxOptions {
   /** The `command.result` the session already holds for an id, if any: applied to the sends storage loads. */
   knownResult?(commandId: string): SendResultData | undefined;
   /** The `command.receipt` the session already holds for an id, if any: evidence that the hub took the send. */
-  knownReceipt?(commandId: string): string | undefined;
+  knownReceipt?(commandId: string): { status: string; reason?: string } | undefined;
   onChange(view: OutboxView): void;
 }
 
@@ -137,6 +137,12 @@ export function randomOwner(): string {
   if (crypto?.getRandomValues) crypto.getRandomValues(bytes);
   else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
   return `p-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** A definite refusal: a 4xx that is not "not now" (408, 425, 429) or a credential to fix (401, 403). */
+function refuses(response: JsonResponse | null): boolean {
+  if (response === null || response.status < 400 || response.status >= 500) return false;
+  return ![401, 403, 408, 425, 429].includes(response.status);
 }
 
 /** A 2xx answer that carries the stored result: it settles the send on its own. */
@@ -189,7 +195,7 @@ export class Outbox {
    */
   private ready = false;
   private early = new Map<string, SendResultData>();
-  private earlyReceipts = new Map<string, string>();
+  private earlyReceipts = new Map<string, { receipt: string; reason?: string }>();
   /** A receipt that came for the send this page is claiming or posting: the post's end settles against it. */
   private receiptInFlight: { commandId: string; receipt: string; reason?: string } | null = null;
   private lateWhileLoading = new Map<string, { entry: OutboxEntry; settled: boolean }>();
@@ -284,8 +290,10 @@ export class Outbox {
     for (const entry of [...this.list]) {
       const result = this.options.knownResult?.(entry.commandId);
       if (result !== undefined && !this.early.has(entry.commandId)) this.early.set(entry.commandId, result);
-      const receipt = this.options.knownReceipt?.(entry.commandId);
-      if (receipt !== undefined && !this.earlyReceipts.has(entry.commandId)) this.earlyReceipts.set(entry.commandId, receipt);
+      const known = this.options.knownReceipt?.(entry.commandId);
+      if (known !== undefined && !this.earlyReceipts.has(entry.commandId)) {
+        this.earlyReceipts.set(entry.commandId, { receipt: known.status, ...(known.reason === undefined ? {} : { reason: known.reason }) });
+      }
     }
     while (this.lateWhileLoading.size > 0 || this.earlyReceipts.size > 0 || this.early.size > 0) {
       for (const [id, { entry, settled }] of this.takeAll(this.lateWhileLoading)) {
@@ -294,7 +302,7 @@ export class Outbox {
         else this.replace(entry);
       }
       // Receipts before results: a result then settles what a receipt made `sent`.
-      for (const [id, receipt] of this.takeAll(this.earlyReceipts)) await this.received(id, receipt);
+      for (const [id, held] of this.takeAll(this.earlyReceipts)) await this.received(id, held.receipt, held.reason);
       for (const [id, result] of this.takeAll(this.early)) {
         const entry = this.list.find((e) => e.commandId === id);
         if (entry !== undefined) await this.settle(entry, result);
@@ -387,21 +395,25 @@ export class Outbox {
     if (!this.ready) {
       this.earlyReceipts.delete(commandId);
       if (this.earlyReceipts.size >= EARLY_RESULTS_KEPT) this.earlyReceipts.delete(this.earlyReceipts.keys().next().value as string);
-      this.earlyReceipts.set(commandId, receipt);
+      this.earlyReceipts.set(commandId, { receipt, ...(reason === undefined ? {} : { reason }) });
       return;
     }
-    void this.received(commandId, receipt);
+    void this.received(commandId, receipt, reason);
   }
 
-  private async received(commandId: string, receipt: string): Promise<void> {
-    if (receipt === "rejected") return; // not taken: the post's own answer, or a result, says why
+  private async received(commandId: string, receipt: string, reason?: string): Promise<void> {
     const entry = this.list.find((e) => e.commandId === commandId);
     if (entry === undefined || this.inFlight === commandId) return; // held by `noteReceipt`, applied when the post ends
     const doubt = entry.status === "failed" && entry.ambiguous === true;
+    if (receipt === "rejected") {
+      // The hub refused it, even after taking it (a keeper whose log write failed: `accepted`, then `not_recorded`).
+      if (entry.status === "waiting" || doubt || entry.status === "sent") await this.byReceipt(entry, { receipt, ...(reason === undefined ? {} : { reason }) });
+      return;
+    }
     if (entry.status !== "waiting" && !doubt) return;
-    const { error: _error, endedAt: _ended, lastError: _last, ambiguous: _ambiguous, ...rest } = entry;
-    await this.save({ ...rest, status: "sent", path: "keeper", receipt, sentAt: this.options.timers.now() });
+    await this.byReceipt(entry, { receipt });
   }
+
 
   /** The session no longer exists: nothing still open can be sent. */
   sessionGone(reason: string = SESSION_GONE): void {
@@ -530,6 +542,8 @@ export class Outbox {
       this.notPosting();
       throw error;
     }
+    // Another page saw it through: a receipt held for it describes a send storage no longer keeps, so it is dropped.
+    if (claim.kind === "missing") this.takeReceipt(entry.commandId);
     if (claim.kind !== "claimed" || this.closed) this.notPosting();
     if (this.closed) return "done";
     if (claim.kind === "missing") {
@@ -585,9 +599,10 @@ export class Outbox {
     }
     const now = this.current(entry.commandId);
     if (now === undefined) return "done"; // a result came first
-    if (receipt !== null && !carriesResult(response)) {
-      // The stream said the hub took it (or refused it) while the post was out: that settles it, however the
-      // HTTP answer went (lost, 5xx, a timeout).
+    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response))) {
+      // The stream said the hub took it (or refused it) while the post was out: that settles it when the HTTP
+      // answer leaves the outcome open (lost, 408, a 5xx), says "not now" (425, 429, 401, 403), or is a 2xx.
+      // A definite refusal (another 4xx) keeps its own outcome below.
       await this.byReceipt(now, receipt);
       return "done";
     }
@@ -651,7 +666,7 @@ export class Outbox {
   ): Promise<void> {
     const { claim: _released, ...entry } = attempted;
     let outcome: OutboxEntry | null = { ...entry, ambiguous: true };
-    if (receipt !== null && !carriesResult(response)) {
+    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response))) {
       outcome = receiptOutcome(entry, receipt, this.options.timers.now());
     } else if (response !== null && response.status >= 200 && response.status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData };

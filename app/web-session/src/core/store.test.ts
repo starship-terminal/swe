@@ -1242,6 +1242,26 @@ describe("review 12", () => {
     expect(view?.reason).toBe(KEEPER_UNCONFIRMED);
   });
 
+  it("review 13: `accepted` on the stream, a 409 send_rejected answer, then `rejected` on the stream: failed", async () => {
+    const factory = new IDBFactory();
+    let a: ReturnType<typeof page> | undefined;
+    a = page(factory, async () => {
+      a!.transport.last.send(env("command.receipt", { status: "accepted", op: "send" }, { command_id: "id1", seq: 6 }));
+      await drain();
+      return { status: 409, body: { error: { code: "send_rejected", message: "not_recorded" } } };
+    });
+    a.store.getState().start();
+    catchUp(a.transport, { mode: "keeper" });
+    await drain();
+    await a.store.getState().send({ text: "deploy" });
+    await until(() => a!.posts.length === 1, "the post's answer");
+    await drain();
+    a.transport.last.send(env("command.receipt", { status: "rejected", op: "send", reason: "not_recorded" }, { command_id: "id1", seq: 7 }));
+    await drain();
+    expect(a.posts).toEqual(["id1:409"]);
+    expect(a.store.getState().sends).toMatchObject([{ shown: "failed", reason: "not_recorded" }]);
+  });
+
   it("a receipt that arrives while the post is out, then the answer is lost (504): sent", async () => {
     const factory = new IDBFactory();
     let a: ReturnType<typeof page> | undefined;

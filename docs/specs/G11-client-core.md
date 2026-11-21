@@ -326,14 +326,22 @@ it on: its `command.result` ok or cancelled removes it as delivered; a
 failed result replaces the doubt with the hub's note (a definite
 `failed`, which then stands); its `command.receipt`, live or held in
 `session.commands` when the outbox starts (`knownReceipt`), makes it
-`sent` on the keeper path. A `rejected` receipt moves nothing.
+`sent` on the keeper path. A `rejected` receipt fails a send that is
+waiting, in doubt or `sent` with the hub's reason: a keeper can take a
+send and then refuse it (its log write failed: `accepted`, then
+`rejected` with `not_recorded`).
 Evidence that comes while the send's claim is being written or its post
-is out is kept, and settles the send however the post ends (a 2xx, a
-4xx or 5xx, no answer, the abort at `stop()`): a receipt makes it `sent`
-(not posted at all if it came during the claim), a `rejected` receipt
-fails it with the hub's reason, and a result means what it says (a
-result in the 2xx answer itself still wins). So an accepted send never
-ends in doubt, or offers Retry, because its HTTP answer was lost. This fits
+is out is kept. A result means what it says (a result in the 2xx answer
+itself still wins). A `rejected` receipt fails the send with the hub's
+reason however the post ends. Any other receipt settles it as `sent`
+(not posted at all if it came during the claim) when the HTTP answer
+leaves the outcome open (no answer, 408, a 5xx, the abort at `stop()`),
+says "not now" (425, 429, 401, 403), or is a 2xx; a definite refusal
+(any other 4xx, such as 409 `send_rejected`) keeps its own outcome. A
+receipt held while the claim finds the send gone from storage (another
+page saw it through) is dropped, and nothing is written. An accepted send
+whose receipt reaches this page does not end in doubt because its HTTP
+answer was lost. This fits
 the order as its own stage: in doubt is below `sent` and below a definite
 end, so a receipt's `sent` and a result's `failed` both move forward, and
 the two copies of a definite `failed` and an `unconfirmed` entry still
@@ -646,7 +654,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 321 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 326 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 

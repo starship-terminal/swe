@@ -1606,23 +1606,34 @@ describe("evidence after a send ended as may or may not have been sent", () => {
     const again = await inDoubt();
     again.outbox.close();
     const restarted = again.t.build(await openOutboxStorage(again.t.factory), {
-      knownReceipt: (id) => (id === again.entry.commandId ? "queued" : undefined),
+      knownReceipt: (id) => (id === again.entry.commandId ? { status: "queued" } : undefined),
     });
     await restarted.init();
     await drain();
     expect(again.t.view().entries).toMatchObject([{ status: "sent", receipt: "queued" }]);
   });
 
-  it("a receipt saying it was refused moves nothing; a definite failure is not reopened by a receipt", async () => {
+  it("a receipt saying it was refused fails it with the hub's reason; a definite failure is not reopened by a receipt", async () => {
     const { t, outbox, entry } = await inDoubt();
-    outbox.noteReceipt(entry.commandId, "rejected");
+    outbox.noteReceipt(entry.commandId, "rejected", "not_recorded");
     await drain();
-    expect(t.view().entries).toMatchObject([{ status: "failed", error: MAYBE_SENT }]);
-    outbox.noteResult(entry.commandId, { ok: false, note: "no" });
-    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "not_recorded" }]);
+    expect(t.view().entries[0]?.ambiguous).toBeUndefined();
     outbox.noteReceipt(entry.commandId, "accepted");
     await drain();
-    expect(t.view().entries).toMatchObject([{ status: "failed", error: "no" }]);
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "not_recorded" }]);
+  });
+
+  it("a `rejected` receipt for a send already `sent` (accepted, then not recorded, its answer lost): failed with the reason", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "keeper" }]);
+    outbox.noteReceipt(entry.commandId, "rejected", "not_recorded");
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "not_recorded" }]);
+    expect(await stored(t.factory)).toMatchObject([{ status: "failed", error: "not_recorded" }]);
   });
 
   it("the order: in doubt is between waiting and sent, below a definite end", () => {
@@ -1737,6 +1748,63 @@ describe("evidence that comes while the post is out", () => {
     await drain();
     expect(t.hub.received).toEqual([]);
     expect(t.view().entries).toMatchObject([{ status: "sent", receipt: "accepted" }]);
+  });
+
+  it("an `accepted` receipt, then a definite 409 refusal: the refusal stands, and a later `rejected` receipt keeps it failed", async () => {
+    // keeper/process.py: the keeper stamps `accepted`, its log write fails, it answers rejected (409 send_rejected)
+    // and then sends a second receipt, `rejected` with `not_recorded`.
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "accepted");
+    p.answer({ status: 409, body: { error: { code: "send_rejected", message: "not_recorded" } } });
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "failed", error: "not_recorded" }]);
+    p.outbox.noteReceipt(p.entry.commandId, "rejected", "not_recorded");
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "failed", error: "not_recorded" }]);
+    expect(p.shown()).toMatchObject([{ shown: "failed" }]);
+  });
+
+  it("an `accepted` receipt, then a 429: sent, and never posted again", async () => {
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "accepted");
+    p.answer({ status: 429, body: { error: { code: "backlog_full", message: "too many" } } });
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "sent", receipt: "accepted" }]);
+    p.t.timers.advance(600_000);
+    await drain();
+    expect(p.t.transport.posts("/message")).toHaveLength(1);
+  });
+
+  it("a receipt held while the claim finds the send gone (another page saw it through): nothing is written", async () => {
+    const t = setup();
+    const inner = await openOutboxStorage(t.factory);
+    let release: () => void = () => {};
+    const lazy: OutboxStorage = {
+      get kind() {
+        return inner.kind;
+      },
+      get note() {
+        return inner.note;
+      },
+      load: (session) => inner.load(session),
+      put: (entry) => inner.put(entry),
+      remove: (id) => inner.remove(id),
+      // The claim's transaction starts only on release, after the other page's removal.
+      claim: (...args) => new Promise((resolve) => (release = () => void inner.claim(...args).then(resolve))),
+      abandon: (...args) => inner.abandon(...args),
+      reconcile: (entry) => inner.reconcile(entry),
+      close: () => inner.close(),
+    };
+    const outbox = await t.make(lazy);
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    await (await openOutboxStorage(t.factory)).remove(entry.commandId); // the other page's result removed it
+    outbox.noteReceipt(entry.commandId, "accepted");
+    release();
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
   });
 
   it("a stored result in the answer still wins over a receipt", async () => {

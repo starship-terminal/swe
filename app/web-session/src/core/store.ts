@@ -329,7 +329,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
             outbox?.adoptLate(entry, settled);
           },
           // A result this store took in before the outbox loaded its stored sends (a stop() and start(), say).
-          knownReceipt: (commandId) => get().session.commands[commandId]?.receipt?.status,
+          knownReceipt: (commandId) => get().session.commands[commandId]?.receipt,
           knownResult: (commandId) => {
             const result = get().session.commands[commandId]?.result;
             return result === undefined ? undefined : sendResult(result);

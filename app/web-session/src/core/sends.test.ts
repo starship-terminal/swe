@@ -41,9 +41,9 @@ describe("describeSends", () => {
     expect(one({ entries: [entry({ status: "unconfirmed", error: "maybe" })] })).toMatchObject({ shown: "unconfirmed", reason: "maybe", canRetry: true });
   });
 
-  it("a waiting send whose earlier post may have arrived says it is being checked, never that it will be sent", () => {
+  it("a waiting send whose earlier post may have arrived says it may or may not have been sent, never that it will be sent", () => {
     for (const online of [true, false]) {
-      expect(one({ entries: [entry({ ambiguous: true, attempts: 1 })], online })?.reason).toBe("Checking whether this was sent.");
+      expect(one({ entries: [entry({ ambiguous: true, attempts: 1 })], online })?.reason).toBe("This may or may not have been sent. It will not be sent again.");
     }
   });
 

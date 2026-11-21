@@ -42,7 +42,7 @@ export interface SendContext {
 
 function waitingReason(entry: OutboxEntry, context: SendContext): string {
   // An earlier post may have reached the hub: it is never posted again, so "it will be sent" would be untrue.
-  if (entry.ambiguous === true) return "Checking whether this was sent.";
+  if (entry.ambiguous === true) return "This may or may not have been sent. It will not be sent again.";
   if (context.outbox.paused === "unauthorized" || context.connection.state === "unauthorized") {
     return "Waiting: this device is not signed in to the hub. It will be sent once it is.";
   }
