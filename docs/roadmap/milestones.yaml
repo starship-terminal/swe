@@ -154,7 +154,7 @@
 
 - id: G12
   title: Timeline
-  status: todo
+  status: done
   depends_on: [G11]
   owns: ["app/web-session/src/session/**", "app/web-session/src/ui/**"]
   questions: []
