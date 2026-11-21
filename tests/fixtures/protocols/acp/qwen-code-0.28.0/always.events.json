@@ -1,0 +1,405 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.623,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": false,
+    "stop_task": false,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.623,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch one.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch one.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.989,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 12830,
+   "output_tokens": 33,
+   "cache_read_tokens": 0,
+   "context_tokens": 12830,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.007,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "name": "execute",
+   "summary": "touch one.txt (Create a new empty file named one.txt in the current directory.)",
+   "input": {
+    "command": "touch one.txt",
+    "description": "Create a new empty file named one.txt in the current directory."
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.007,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-p1",
+   "kind": "command",
+   "prompt": "touch one.txt (Create a new empty file named one.txt in the current directory.)",
+   "options": [
+    {
+     "id": "o1",
+     "label": "Always Allow in project: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o2",
+     "label": "Always Allow for user: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o3",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "o4",
+     "label": "Reject",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.007,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.007,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-p1",
+   "source": "user",
+   "decision": "always",
+   "option_id": "o1"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.007,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.049,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "execute",
+   "output": "Command: touch one.txt\nDirectory: (root)\nOutput: (empty)\nError: (none)\nExit Code: 0\nSignal: (none)\nProcess Group PGID: 61515\n\nIf this command created or rewrote a deliverable file (csv, html, sql, py, md, json, notebook, image, pdf, or an office document), call record_artifact for each one. workspacePath is relative to the current execution directory, and title is required. Do not call it for files already recorded by write_file, edit, or notebook_edit."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.922,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 12989,
+   "output_tokens": 2,
+   "cache_read_tokens": 12800,
+   "context_tokens": 12989,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.974,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.974,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.974,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 3.136
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.974,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.974,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Run the shell command `touch two.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.974,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.974,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Run the shell command `touch two.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.158,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 13013,
+   "output_tokens": 33,
+   "cache_read_tokens": 12928,
+   "context_tokens": 13013,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.16,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_02",
+   "name": "execute",
+   "summary": "Shell: touch two.txt (Create a new empty file named two.txt in the current directory.)",
+   "input": {
+    "command": "touch two.txt",
+    "description": "Create a new empty file named two.txt in the current directory."
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.188,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_02",
+   "status": "ok",
+   "name": "execute",
+   "output": "Command: touch two.txt\nDirectory: (root)\nOutput: (empty)\nError: (none)\nExit Code: 0\nSignal: (none)\nProcess Group PGID: 61615\n\nIf this command created or rewrote a deliverable file (csv, html, sql, py, md, json, notebook, image, pdf, or an office document), call record_artifact for each one. workspacePath is relative to the current execution directory, and title is required. Do not call it for files already recorded by write_file, edit, or notebook_edit."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.008,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 13172,
+   "output_tokens": 2,
+   "cache_read_tokens": 12928,
+   "context_tokens": 13172,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.03,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:m2",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:m2",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.056
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.03,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

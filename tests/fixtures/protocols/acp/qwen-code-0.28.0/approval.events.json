@@ -1,0 +1,652 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.622,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": false,
+    "stop_task": false,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.622,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch allowed.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch allowed.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.632,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 12855,
+   "output_tokens": 32,
+   "cache_read_tokens": 0,
+   "context_tokens": 12855,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.651,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "name": "execute",
+   "summary": "touch allowed.txt (Create an empty file named allowed.txt in the current directory.)",
+   "input": {
+    "command": "touch allowed.txt",
+    "description": "Create an empty file named allowed.txt in the current directory."
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.651,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-p1",
+   "kind": "command",
+   "prompt": "touch allowed.txt (Create an empty file named allowed.txt in the current directory.)",
+   "options": [
+    {
+     "id": "o1",
+     "label": "Always Allow in project: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o2",
+     "label": "Always Allow for user: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o3",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "o4",
+     "label": "Reject",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.651,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.651,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-p1",
+   "source": "user",
+   "decision": "allow",
+   "option_id": "o3"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.651,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.711,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "execute",
+   "output": "Command: touch allowed.txt\nDirectory: (root)\nOutput: (empty)\nError: (none)\nExit Code: 0\nSignal: (none)\nProcess Group PGID: 61379\n\nIf this command created or rewrote a deliverable file (csv, html, sql, py, md, json, notebook, image, pdf, or an office document), call record_artifact for each one. workspacePath is relative to the current execution directory, and title is required. Do not call it for files already recorded by write_file, edit, or notebook_edit."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.345,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 13013,
+   "output_tokens": 2,
+   "cache_read_tokens": 12800,
+   "context_tokens": 13013,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.412,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.412,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.412,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.574
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.412,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.412,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Run the shell command `touch denied.txt`. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.412,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.412,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Run the shell command `touch denied.txt`. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.614,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 13042,
+   "output_tokens": 34,
+   "cache_read_tokens": 12928,
+   "context_tokens": 13042,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.618,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_02",
+   "name": "execute",
+   "summary": "touch denied.txt (Attempt to create an empty file named denied.txt in the current directory.)",
+   "input": {
+    "command": "touch denied.txt",
+    "description": "Attempt to create an empty file named denied.txt in the current directory."
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.618,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "00000001-p2",
+   "kind": "command",
+   "prompt": "touch denied.txt (Attempt to create an empty file named denied.txt in the current directory.)",
+   "options": [
+    {
+     "id": "o1",
+     "label": "Always Allow in project: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o2",
+     "label": "Always Allow for user: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o3",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "o4",
+     "label": "Reject",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_02"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.618,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.618,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "00000001-p2",
+   "source": "user",
+   "decision": "deny",
+   "option_id": "o4"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.618,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.621,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_02",
+   "status": "error",
+   "name": "execute",
+   "output": "Tool \"run_shell_command\" was canceled by the user."
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.658,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.246
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.658,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.658,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "text": "Create a file named written.txt containing the single word yes, using your file writing tool. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.658,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.658,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:user",
+   "kind": "user",
+   "text": "Create a file named written.txt containing the single word yes, using your file writing tool. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.271,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 13125,
+   "output_tokens": 69,
+   "cache_read_tokens": 13056,
+   "context_tokens": 13125,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.274,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "call_03",
+   "name": "edit",
+   "summary": "Writing to written.txt",
+   "input": {
+    "file_path": "/work/written.txt",
+    "content": "yes",
+    "record_as_artifact": true
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.274,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "request_id": "00000001-p3",
+   "kind": "tool",
+   "prompt": "Writing to written.txt\n\n`/work/written.txt`",
+   "options": [
+    {
+     "id": "o1",
+     "label": "Allow All Edits",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o2",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "o3",
+     "label": "Reject",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_03"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.274,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.274,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "request_id": "00000001-p3",
+   "source": "user",
+   "decision": "allow",
+   "option_id": "o2"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.274,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.29,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "call_03",
+   "status": "ok",
+   "name": "edit",
+   "file_edits": [
+    {
+     "path": "/work/written.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1 @@\n+yes\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.251,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 13255,
+   "output_tokens": 2,
+   "cache_read_tokens": 13056,
+   "context_tokens": 13255,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.278,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:m2",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.278,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:m2",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.278,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.62
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.278,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.278,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

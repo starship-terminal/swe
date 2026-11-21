@@ -21,7 +21,10 @@ This module owns that wire and nothing about supervision:
   events, and answers every agent request it does not implement with a
   JSON-RPC error so the agent never waits on us.
 
-``inject.AcpInjector`` and ``supervise.attach`` are the callers.
+``inject.AcpInjector`` and ``supervise.attach`` are the callers of the
+pre-keeper channel. The session adapter (``adapters/acp.py``, G16)
+drives the same ``Connection`` under a keeper: it subclasses it to read
+every update itself, and emits v2 events instead of binding the hub's.
 """
 
 from __future__ import annotations
@@ -68,13 +71,13 @@ ACP_FALLBACK: dict[str, list[list[str]]] = {
     "gemini": [["gemini", "--acp"], ["gemini", "--experimental-acp"]],
     "qwen-code": [["qwen", "--acp"], ["qwen", "--experimental-acp"]],
     "kimi": [["kimi", "acp"], ["kimi", "--acp"]],
-    # An adapter, not claude itself: only an explicit --mode=acp uses it.
+    # An adapter, not claude itself: only an explicit --mode=acp uses
+    # it, because claude's session adapter is another (``auto_eligible``).
     "claude": [["claude-agent-acp"], ["claude-code-acp"]],
 }
 
-# Harnesses whose ACP channel is opt-in only: ``auto`` keeps their
-# existing channel (claude's tmux TUI already answers its menus).
-EXPLICIT_ONLY = frozenset({"claude"})
+# The session adapter id that makes ACP a harness's own channel.
+ACP_ADAPTER = "acp"
 
 # The harness's own CLI per fallback key, to tell a subcommand probe
 # from an adapter binary.
@@ -159,8 +162,16 @@ def command_for(name: str, reg: dict | None = None) -> list[str] | None:
 
 
 def auto_eligible(name: str, reg: dict | None = None) -> bool:
-    """Whether ``attach(mode="auto")`` should pick ACP for ``name``."""
-    return name not in EXPLICIT_ONLY and command_for(name, reg) is not None
+    """Whether ``attach(mode="auto")`` should pick ACP for ``name``:
+    ACP is the harness's session adapter (``capabilities.session`` in
+    harness.json over the fallback table) and its ACP command runs
+    here. A harness driven another way (claude: its stream adapter)
+    takes ACP only when asked for by name."""
+    from swe.remote.adapters import registry as adapters
+
+    resolved = adapters.adapter_for(name, reg, which=None)
+    return getattr(resolved, "adapter", "") == ACP_ADAPTER \
+        and command_for(name, reg) is not None
 
 
 # ---------------------------------------------------------------------
@@ -237,6 +248,9 @@ class Connection:
         self.resumed = False
         self.agent_caps: dict = {}
         self.agent_name = ""
+        self.agent_version = ""
+        # What session/new or session/load answered (its modes, models).
+        self.session_info: dict = {}
         # True while session/load replays history: those updates are
         # the past, not live text.
         self.replaying = False
@@ -440,11 +454,13 @@ class Connection:
         info = hello.get("agentInfo")
         if isinstance(info, dict) and info.get("name"):
             self.agent_name = str(info["name"])[:64]
+        if isinstance(info, dict) and isinstance(info.get("version"), str):
+            self.agent_version = info["version"][:32]
         cwd = os.path.realpath(self.cwd or ".")
         if self.agent_caps.get("loadSession") and session_ref:
             self.replaying = True
             try:
-                self.call("session/load", {
+                self.session_info = self.call("session/load", {
                     "sessionId": session_ref, "cwd": cwd,
                     "mcpServers": [],
                 }, timeout=within(LOAD_TIMEOUT_S))
@@ -464,6 +480,7 @@ class Connection:
         sid = made.get("sessionId")
         if not isinstance(sid, str) or not sid:
             raise AcpError("session/new returned no sessionId")
+        self.session_info = made
         self.session_id = sid
         self.resumed = False
         return (f"{self.label} can't load sessions over ACP, so this is "
@@ -473,9 +490,12 @@ class Connection:
 
     # -- turns -----------------------------------------------------------
 
-    def prompt(self, text: str) -> queue.Queue:
+    def prompt(self, text: str,
+               blocks: list | None = None) -> queue.Queue:
         """Start a turn; the queue gets the session/prompt response (or
-        None if the agent dies). Raises AcpError when one is running."""
+        None if the agent dies). ``blocks`` are more content blocks
+        after the text (attached files as ``resource_link``). Raises
+        AcpError when one is running."""
         with self.lock:
             if self.turn_rpc is not None or not self.idle.is_set():
                 raise AcpError("a turn is already running")
@@ -484,7 +504,7 @@ class Connection:
         try:
             _rpc_id, q = self.request("session/prompt", {
                 "sessionId": self.session_id,
-                "prompt": [{"type": "text", "text": text}],
+                "prompt": [{"type": "text", "text": text}, *(blocks or ())],
             }, turn=True)
         except AcpError:
             self.idle.set()

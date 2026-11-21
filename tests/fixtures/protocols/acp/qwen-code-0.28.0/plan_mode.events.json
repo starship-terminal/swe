@@ -1,0 +1,293 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.624,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": false,
+    "stop_task": false,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.624,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Create a file named planned.txt containing the word no. If you cannot because you are only planning, reply only with: planning"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.838,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Create a file named planned.txt containing the word no. If you cannot because you are only planning, reply only with: planning"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.77,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 13591,
+   "output_tokens": 2,
+   "cache_read_tokens": 0,
+   "context_tokens": 13591,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.829,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "planning",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "planning"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.991
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Create a file named built.txt containing the word yes, then reply only with: built"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.829,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Create a file named built.txt containing the word yes, then reply only with: built"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.033,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 13690,
+   "output_tokens": 59,
+   "cache_read_tokens": 13568,
+   "context_tokens": 13690,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.046,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_01",
+   "name": "edit",
+   "summary": "WriteFile: Writing to built.txt",
+   "input": {
+    "file_path": "/work/built.txt",
+    "content": "yes"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.067,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "edit",
+   "file_edits": [
+    {
+     "path": "/work/built.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1 @@\n+yes\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.732,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 13807,
+   "output_tokens": 2,
+   "cache_read_tokens": 13696,
+   "context_tokens": 13807,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.755,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:m2",
+   "kind": "assistant",
+   "text": "built",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.755,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:m2",
+   "kind": "assistant",
+   "text": "built"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.755,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.926
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.755,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.802,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

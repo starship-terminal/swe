@@ -18,9 +18,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 from swe.remote import acp, inject, supervise
+from swe.remote.adapters import acp as acp_adapter
+from swe.remote.adapters import base as acp_adapter_base
+from swe.remote.adapters import events, registry
+from swe.remote.adapters import fake as adapters_fake
+from swe.remote.adapters.base import (
+    AdapterError, Answer, Caps, StartSpec, TurnInput, Unsupported,
+)
 from swe.sessions.models import Session
 
 from tests._tempdir import temp_dir
+from tests.test_remote_adapter_base import ALL_CAPS, AdapterContract
+from tests.test_remote_adapters import (
+    _contract_order, _load_fixture, _of, _streams_close,
+)
 
 FAKE_AGENT = r'''
 import json, os, sys
@@ -1313,6 +1324,1156 @@ class TestDetection(unittest.TestCase):
         # A malformed declaration falls through to the fallback table.
         reg = {"devin": {"capabilities": {"acp": {"argv": [3]}}}}
         self.assertEqual(acp.command_for("devin", reg=reg), ["devin", "acp"])
+
+
+# =====================================================================
+# G16: the ACP session adapter (remote/adapters/acp.py).
+#
+# Three layers, as for the other adapters: every fixture under
+# tests/fixtures/protocols/acp/ replays to its golden events (real
+# recordings of qwen, and hand-written ones, marked synthetic, for
+# agents that were not installed); ``AcpState`` message by message; the
+# adapter over tests/fakes/fake_acp.py, including the shared
+# AdapterContract. No test runs a real agent.
+
+ACP_FAKE = Path(__file__).resolve().parent / "fakes" / "fake_acp.py"
+ACP_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "protocols" \
+    / "acp"
+ACP_REAL = ACP_FIXTURES / "-".join(acp_adapter.RECORDED)
+ACP_SESSION = "11111111-2222-4333-8444-555555555555"
+ACP_KEY = "sk-ant-api03-" + "d" * 40
+ACP_TIMEOUT = 10.0
+
+
+class TestAcpFixtures(unittest.TestCase):
+    def fixtures(self):
+        found = sorted(ACP_FIXTURES.rglob("*.jsonl"))
+        self.assertTrue(found, "no fixtures")
+        return found
+
+    def scenario(self, name, folder=ACP_REAL):
+        lines = _load_fixture(folder / f"{name}.jsonl")
+        return lines[0], lines[1:], acp_adapter.replay(lines)
+
+    @staticmethod
+    def replies(got):
+        return [e["data"]["text"] for e in _of(got, "message.completed")
+                if e["data"]["kind"] == "assistant"]
+
+    def test_every_fixture_replays_to_its_golden_events(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=f"{path.parent.name}/{path.name}"):
+                golden = path.with_name(path.name[:-6] + ".events.json")
+                self.assertTrue(golden.exists(), f"{golden.name} missing")
+                got = acp_adapter.replay(_load_fixture(path))
+                self.assertEqual(got, json.loads(golden.read_text()))
+                for event in got:
+                    self.assertEqual(events.validate(event), [], event)
+                self.assertEqual([e["type"] for e in got[:2]],
+                                 ["session.caps", "session.state"])
+                self.assertEqual(got[-1]["data"]["state"], "closed")
+                _streams_close(self, got)
+                starts = [i for i, e in enumerate(got)
+                          if e["type"] == "session.caps"] + [len(got)]
+                for a, b in zip(starts, starts[1:]):
+                    _contract_order(self, got[a:b])
+
+    def test_headers_say_which_agent_and_whether_it_was_recorded(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=f"{path.parent.name}/{path.name}"):
+                header = _load_fixture(path)[0]
+                self.assertEqual(header["adapter"], "acp")
+                self.assertEqual(header["version"], path.parent.name)
+                self.assertIsNone(header["error"])
+                synthetic = path.parent.name.endswith("-synthetic")
+                self.assertIs(header["synthetic"], synthetic)
+                if synthetic:
+                    self.assertIn("not installed",
+                                  header["notes"]["why_synthetic"])
+                else:
+                    self.assertEqual(header["agent"],
+                                     acp_adapter.RECORDED[0])
+                    self.assertEqual(header["argv_tails"][0], ["--acp"])
+        self.assertTrue(any(p.parent == ACP_REAL for p in self.fixtures()))
+
+    def test_what_is_proven_was_recorded_not_written(self):
+        # Every cap in PROVEN rests on a real recording.
+        header, _lines, got = self.scenario("hello")
+        self.assertIs(header["synthetic"], False)
+        self.assertEqual(got[0]["data"]["caps"],
+                         acp_adapter.PROVEN.as_dict())
+
+    def test_hello(self):
+        header, lines, got = self.scenario("hello")
+        self.assertEqual(header["notes"]["modes"],
+                         ["plan", "default", "auto-edit", "auto", "yolo"])
+        self.assertEqual(self.replies(got), ["hello there"])
+        usage = _of(got, "usage.updated")[0]["data"]
+        self.assertGreater(usage["input_tokens"], 0)
+        self.assertEqual(usage["context_window"], 128000)
+        self.assertEqual(_of(got, "turn.ended")[0]["data"]["status"],
+                         "completed")
+        self.assertEqual(lines[-1], {"proc": 0, "exit": 0},
+                         "the agent exits when its stdin closes")
+
+    def test_approval_allow_deny_and_an_edit(self):
+        header, lines, got = self.scenario("approval")
+        asked = _of(got, "approval.requested")
+        self.assertEqual([e["data"]["kind"] for e in asked],
+                         ["command", "command", "tool"])
+        self.assertTrue(asked[0]["data"]["prompt"].startswith(
+            "touch allowed.txt"))
+        first = asked[0]["data"]["options"]
+        self.assertEqual([o["kind"] for o in first],
+                         ["always", "always", "allow", "deny"])
+        self.assertEqual([o.get("standing") for o in first],
+                         [True, True, None, None])
+        self.assertEqual(first[0]["label"],
+                         "Always Allow in project: touch *")
+        self.assertEqual([e["data"]["decision"] for e in
+                          _of(got, "approval.resolved")],
+                         ["allow", "deny", "allow"])
+        done = _of(got, "tool.completed")
+        self.assertEqual([e["data"]["status"] for e in done],
+                         ["ok", "error", "ok"])
+        self.assertEqual(done[2]["data"]["file_edits"], [
+            {"path": "/work/written.txt", "kind": "add",
+             "diff": "@@ -0,0 +1 @@\n+yes\n"}])
+        # The tool card waits for the call's input.
+        started = _of(got, "tool.started")
+        self.assertEqual(started[0]["data"]["input"]["command"],
+                         "touch allowed.txt")
+        # A deny lets the turn go on.
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")], ["completed"] * 3)
+        self.assertEqual(header["notes"]["files"], [
+            "allowed.txt", "hello.py", "notes.txt", "written.txt"])
+
+    def test_allow_always_is_a_standing_rule(self):
+        # Why a bare "always" is sent as a one-time allow.
+        header, _lines, _got = self.scenario("always")
+        notes = header["notes"]
+        self.assertEqual((notes["approvals_first_turn"],
+                          notes["approvals_second_turn"]), (1, 0))
+        self.assertIn(".qwen", notes["files"],
+                      "the rule was written into the project")
+
+    def test_interrupt(self):
+        header, lines, got = self.scenario("interrupt")
+        self.assertEqual(header["notes"]["stop"], "cancelled")
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")], ["interrupted"])
+        self.assertEqual(len(self.replies(got)), 1,
+                         "the cut reply is completed")
+
+    def test_cancel_with_a_request_open(self):
+        header, lines, got = self.scenario("cancel_approval")
+        self.assertIs(header["notes"]["asked_file_exists"], False)
+        self.assertEqual(_of(got, "approval.resolved")[0]["data"]["source"],
+                         "turn_ended")
+        answers = [ln["msg"]["result"] for ln in lines
+                   if ln.get("dir") == "out" and "result" in ln.get("msg", {})]
+        self.assertEqual(answers, [{"outcome": {"outcome": "cancelled"}}])
+        self.assertEqual(_of(got, "turn.ended")[0]["data"]["status"],
+                         "interrupted")
+
+    def test_resume_loads_the_session_and_drops_the_replay(self):
+        header, lines, got = self.scenario("resume")
+        self.assertGreater(header["notes"]["replayed_updates"], 0)
+        sids = [e["data"]["harness_session_id"]
+                for e in _of(got, "session.state")
+                if e["data"].get("harness_session_id")]
+        self.assertEqual(len(sids), 2)
+        self.assertEqual(sids[0], sids[1], "a load keeps the id")
+        self.assertEqual([r.lower() for r in self.replies(got)],
+                         ["ok", "papaya"])
+        ids = [e["turn_id"] for e in _of(got, "turn.started")]
+        self.assertEqual(len(set(ids)), 2)
+
+    def test_plan_mode_writes_nothing(self):
+        header, lines, _got = self.scenario("plan_mode")
+        notes = header["notes"]
+        self.assertEqual((notes["set_plan"], notes["file_while_planning"],
+                          notes["set_back"], notes["file_after"],
+                          notes["bad_mode_refused"]),
+                         (True, False, True, True, True))
+        modes = [ln["msg"]["params"]["modeId"] for ln in lines
+                 if ln.get("msg", {}).get("method") == "session/set_mode"]
+        self.assertEqual(modes, ["plan", "auto", "no-such-mode"])
+
+    def test_set_model_takes_a_listed_model_only(self):
+        header, _lines, _got = self.scenario("model")
+        notes = header["notes"]
+        self.assertIs(notes["listed_model_accepted"], True)
+        self.assertIs(notes["unlisted_model_refused"], True)
+
+    def test_a_resource_link_is_read(self):
+        _header, lines, got = self.scenario("attach")
+        prompt = next(ln["msg"]["params"]["prompt"] for ln in lines
+                      if ln.get("msg", {}).get("method") == "session/prompt")
+        self.assertEqual(prompt[1], {
+            "type": "resource_link", "uri": "file:///work/notes.txt",
+            "name": "notes.txt"})
+        user = [e for e in _of(got, "message.completed")
+                if e["data"]["kind"] == "user"][0]
+        self.assertEqual(user["data"]["attachments"], ["/work/notes.txt"])
+        self.assertEqual(self.replies(got), ["first line of the notes"])
+
+    def test_a_failed_turn(self):
+        _header, _lines, got = self.scenario("error")
+        ended = _of(got, "turn.ended")[0]["data"]
+        self.assertEqual(ended["status"], "failed")
+        self.assertIn("no-such-model", ended["reason"])
+        self.assertEqual(_of(got, "error")[0]["data"]["code"], "agent_error")
+
+    def test_an_agent_with_no_plan_mode_is_offered_none(self):
+        _header, _lines, got = self.scenario(
+            "hello", ACP_FIXTURES / "gemini-synthetic")
+        self.assertEqual(got[0]["data"]["caps"], Caps(
+            options={"permission_mode"}).as_dict())
+        _header, _lines, got = self.scenario(
+            "approval", ACP_FIXTURES / "kimi-synthetic")
+        self.assertEqual(got[0]["data"]["caps"], Caps().as_dict())
+
+    def test_no_personal_data(self):
+        for path in sorted(ACP_FIXTURES.rglob("*")):
+            if not path.is_file():
+                continue
+            text = path.read_text()
+            with self.subTest(file=path.name):
+                self.assertNotIn("/Users/", text)
+                self.assertNotIn("/var/folders/", text)
+                self.assertNotRegex(text, r"[A-Za-z0-9._%+-]+@(?!example\.com)"
+                                          r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+                self.assertNotRegex(text, r"\bsk-[A-Za-z0-9_-]{8,}")
+                for key in ('"_meta": {"e', '"authMethods"', "executionId",
+                            ".local"):
+                    self.assertNotIn(key, text)
+
+
+def _acp_update(what, **body):
+    return {"sessionId": ACP_SESSION,
+            "update": {"sessionUpdate": what, **body}}
+
+
+def _acp_chunk(text, what="agent_message_chunk", **body):
+    return _acp_update(what, content={"type": "text", "text": text}, **body)
+
+
+class TestAcpState(unittest.TestCase):
+    def state(self, info=None):
+        clock = iter(range(1000, 100000))
+        state = acp_adapter.AcpState(
+            "acp:test", clock=lambda: float(next(clock)), caps=ALL_CAPS,
+            run_id="r1")
+        state.session_info(info or {})
+        state.start_events(ALL_CAPS.narrowed(acp_adapter.PROVEN),
+                           ACP_SESSION)
+        return state
+
+    def types(self, evs):
+        return [e["type"] for e in evs]
+
+    def test_helpers(self):
+        info = {"modes": {"currentModeId": "auto", "availableModes": [
+            {"id": "plan"}, {"id": "auto"}, {"name": "no id"}, "junk"]},
+            "models": {"availableModels": [
+                {"modelId": "p|m1", "name": "m1"}, {"modelId": "p|m2"},
+                {"name": "no id"}, "junk"]}}
+        self.assertEqual(acp_adapter.mode_ids(info), ["plan", "auto"])
+        self.assertEqual(acp_adapter.current_mode(info), "auto")
+        self.assertEqual(acp_adapter.model_ids(info), {
+            "p|m1": "p|m1", "m1": "p|m1", "p|m2": "p|m2"})
+        self.assertEqual(acp_adapter.advertised(info), Caps(
+            plan_mode=True, options={"model", "permission_mode"}))
+        for empty in ({}, None, {"modes": "x", "models": []}):
+            self.assertEqual(acp_adapter.mode_ids(empty), [])
+            self.assertEqual(acp_adapter.current_mode(empty), "")
+            self.assertEqual(acp_adapter.model_ids(empty), {})
+            self.assertEqual(acp_adapter.advertised(empty), Caps())
+        self.assertEqual(acp_adapter.resource_links(["/w/a b.txt"]), [{
+            "type": "resource_link", "uri": "file:///w/a%20b.txt",
+            "name": "a b.txt"}])
+        self.assertEqual(acp_adapter.error_text({
+            "code": -32603, "message": "Internal error",
+            "data": {"details": "404 no model"}}),
+            "Internal error: 404 no model")
+        self.assertEqual(acp_adapter.error_text({"code": -1, "data": "why"}),
+                         "-1: why")
+        self.assertEqual(acp_adapter.error_text("boom"), "boom")
+        self.assertEqual(acp_adapter.error_text(None), "error")
+        self.assertNotIn("sk-ant", acp_adapter.error_text(
+            {"message": f"bad key {ACP_KEY}"}))
+
+    def test_file_edits(self):
+        edits = acp_adapter.file_edits([
+            {"type": "diff", "path": "/w/new.txt", "oldText": None,
+             "newText": "a\nb"},
+            {"type": "diff", "path": "/w/mod.txt", "oldText": "a\nb\n",
+             "newText": "a\nc\n"},
+            {"type": "diff", "path": "/w/gone.txt", "oldText": "x",
+             "newText": ""},
+            {"type": "diff", "oldText": "no path"},
+            {"type": "content", "content": {"type": "text", "text": "x"}},
+            "junk"])
+        self.assertEqual([(e["path"], e["kind"]) for e in edits], [
+            ("/w/new.txt", "add"), ("/w/mod.txt", "modify"),
+            ("/w/gone.txt", "delete")])
+        self.assertEqual(edits[0]["diff"], "@@ -0,0 +1,2 @@\n+a\n+b\n")
+        self.assertIn("-b\n+c\n", edits[1]["diff"])
+        self.assertIsNone(acp_adapter.file_edits(None))
+        self.assertIsNone(acp_adapter.file_edits([]))
+        secret = acp_adapter.file_edits([{
+            "type": "diff", "path": ".env", "oldText": "",
+            "newText": "API_KEY=" + ACP_KEY}])
+        self.assertNotIn("sk-ant", json.dumps(secret))
+        # A key block is redacted whole before the diff cuts it: a hunk
+        # from its middle holds neither its first line nor its last.
+        body = "\n".join("QUJD" * 12 + f"{n:02d}" for n in range(30))
+        pem = ("-----BEGIN RSA PRIVATE KEY-----\n" + body
+               + "\n-----END RSA PRIVATE KEY-----\n")
+        inside = acp_adapter.file_edits([{
+            "type": "diff", "path": "id_rsa", "oldText": pem,
+            "newText": pem.replace("QUJD" * 12 + "15", "WFla" * 12 + "15")}])
+        self.assertNotIn("QUJDQUJD", json.dumps(inside))
+        self.assertNotIn("WFlaWFla", json.dumps(inside))
+
+    def test_a_turn_with_text(self):
+        state = self.state()
+        turn_id, out = state.begin("hi", command_id="c1", device="phone",
+                                   attachments=["/w/a.txt"])
+        self.assertEqual(self.types(out), [
+            "turn.started", "session.state", "message.completed"])
+        self.assertEqual(turn_id, "t-r1-1")
+        self.assertTrue(state.busy)
+        out = state.update(_acp_chunk("")).events
+        self.assertEqual(out, [], "an empty chunk says nothing")
+        out = state.update(_acp_chunk("hello there, ")).events
+        out += state.update(_acp_chunk("friend", _meta={"usage": {
+            "inputTokens": 9, "outputTokens": 2,
+            "cachedReadTokens": 4}})).events
+        out += state.update(_acp_update("usage_update", used=11,
+                                        size=100)).events
+        self.assertEqual(out[-1]["data"], {
+            "input_tokens": 9, "output_tokens": 2, "cache_read_tokens": 4,
+            "context_tokens": 11, "context_window": 100})
+        out += state.prompt_answered({"id": 3, "result": {
+            "stopReason": "end_turn"}})
+        self.assertEqual(self.types(out)[-3:], [
+            "message.completed", "turn.ended", "session.state"])
+        self.assertEqual(out[-3]["data"]["text"], "hello there, friend")
+        self.assertEqual(out[-2]["data"]["status"], "completed")
+        self.assertEqual(out[-2]["command_id"], "c1")
+        _streams_close(self, out)
+        self.assertFalse(state.busy)
+        # Nothing of a turn that is over.
+        self.assertEqual(state.update(_acp_chunk("late")).events, [])
+        self.assertEqual(state.prompt_answered({"id": 3, "result": {}}), [])
+
+    def test_a_usage_update_with_nothing_to_say(self):
+        state = self.state()
+        self.assertEqual(state.update(_acp_update(
+            "usage_update", used=-1, size="big")).events, [])
+
+    def test_thoughts_and_messages_end_each_other(self):
+        state = self.state()
+        turn_id, _out = state.begin("hi")
+        out = state.update(_acp_chunk("thinking it over",
+                                      "agent_thought_chunk")).events
+        out += state.update(_acp_chunk("the answer ", messageId="m1")).events
+        out += state.update(_acp_chunk("goes on ", messageId="m1")).events
+        out += state.update(_acp_chunk("another message",
+                                       messageId="m2")).events
+        out += state.prompt_answered({"id": 1, "result": {
+            "stopReason": "end_turn"}})
+        done = [(e["type"], e["data"]["id"], e["data"]["text"]) for e in out
+                if e["type"] in ("thinking.completed", "message.completed")]
+        self.assertEqual(done, [
+            ("thinking.completed", f"{turn_id}:r1", "thinking it over"),
+            ("message.completed", f"{turn_id}:m2", "the answer goes on "),
+            ("message.completed", f"{turn_id}:m3", "another message")])
+        _streams_close(self, out)
+
+    def test_a_tool_call_is_shown_once_it_has_its_input(self):
+        state = self.state()
+        turn_id, _out = state.begin("hi")
+        state.update(_acp_chunk("let me look "))
+        out = state.update(_acp_update(
+            "tool_call", toolCallId="c1", status="pending", title="Shell",
+            kind="execute", rawInput={})).events
+        self.assertEqual(out, [], "no card for a call with no input yet")
+        out = state.update(_acp_update(
+            "tool_call_update", toolCallId="c1", status="in_progress",
+            title="Shell: ls -la", rawInput={"command": "ls -la"})).events
+        self.assertEqual(self.types(out), [
+            "message.completed", "tool.started"],
+            "the message before the call is completed first")
+        self.assertEqual(out[-1]["data"], {
+            "call_id": "c1", "name": "execute", "summary": "Shell: ls -la",
+            "input": {"command": "ls -la"}})
+        self.assertEqual(state.update(_acp_update(
+            "tool_call_update", toolCallId="c1")).events, [])
+        out = state.update(_acp_update(
+            "tool_call_update", toolCallId="c1", status="completed",
+            content=[{"type": "content", "content": {
+                "type": "text", "text": "a.txt"}}, {"type": "content"},
+                "junk"])).events
+        self.assertEqual(out[0]["data"], {
+            "call_id": "c1", "status": "ok", "name": "execute",
+            "output": "a.txt"})
+        self.assertEqual(out[0]["turn_id"], turn_id)
+        # A call that starts running at once, and one that fails.
+        out = state.update(_acp_update(
+            "tool_call", toolCallId="c2", status="in_progress",
+            title="Read", kind="read")).events
+        self.assertEqual(self.types(out), ["tool.started"])
+        out = state.update(_acp_update(
+            "tool_call_update", toolCallId="c2", status="failed")).events
+        self.assertEqual(out[0]["data"]["status"], "error")
+        # Noise: no id, an update for a call never seen, a second end.
+        for update in (_acp_update("tool_call"),
+                       _acp_update("tool_call_update", toolCallId="zz"),
+                       _acp_update("tool_call_update", toolCallId="c2",
+                                   status="completed")):
+            self.assertEqual(self.types(state.update(update).events)[:1],
+                             [] if update["update"].get("toolCallId") != "c2"
+                             else ["tool.started"])
+
+    def test_a_call_never_shown_is_forgotten_with_its_turn(self):
+        state = self.state()
+        state.begin("hi")
+        state.update(_acp_update("tool_call", toolCallId="c1",
+                                 status="pending", rawInput={}))
+        state.prompt_answered({"id": 1, "result": {"stopReason": "end_turn"}})
+        self.assertEqual(state._tools, {})
+
+    def test_a_tool_that_outlives_its_turn(self):
+        state = self.state()
+        state.begin("hi")
+        state.update(_acp_update("tool_call", toolCallId="c1",
+                                 status="in_progress", kind="execute"))
+        state.prompt_answered({"id": 1, "result": {"stopReason": "cancelled"}})
+        state.begin("next")
+        out = state.update(_acp_update("tool_call_update", toolCallId="c1",
+                                       status="completed")).events
+        self.assertEqual(out[0]["type"], "tool.completed")
+        self.assertNotIn("turn_id", out[0])
+
+    def test_a_plan(self):
+        state = self.state()
+        state.begin("hi")
+        out = state.update(_acp_update("plan", entries=[
+            {"content": "look", "status": "completed"},
+            {"content": "act", "status": "someday"}, {"status": "pending"},
+            "junk"])).events
+        self.assertEqual(out[0]["data"]["items"], [
+            {"text": "look", "status": "completed"},
+            {"text": "act", "status": "pending"}])
+        self.assertEqual(state.update(_acp_update("plan",
+                                                  entries=[])).events, [])
+
+    def test_other_sessions_and_unknown_updates(self):
+        state = self.state()
+        state.begin("hi")
+        other = _acp_chunk("not ours")
+        other["sessionId"] = "someone-else"
+        for params in (other, _acp_update("available_commands_update"),
+                       {"sessionId": ACP_SESSION, "update": "junk"},
+                       {"sessionId": ACP_SESSION}, "junk", None):
+            self.assertEqual(state.update(params).events, [])
+        self.assertEqual(state.unknown, {
+            "other-session": 1, "available_commands_update": 1, "?": 2})
+        state.update(_acp_update("current_mode_update",
+                                 currentModeId="yolo"))
+        self.assertEqual(state.mode, "yolo")
+
+    def ask(self, state, rpc_id=7, **call):
+        return state.permission(rpc_id, {
+            "sessionId": ACP_SESSION,
+            "toolCall": {"toolCallId": "c1", **call},
+            "options": [
+                {"optionId": "always_project", "kind": "allow_always",
+                 "name": f"Always in project {ACP_KEY}"},
+                {"optionId": "once", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "cancel", "name": "Reject",
+                 "kind": "reject_once"},
+                {"optionId": "odd", "kind": "something_new"},
+                {"name": "no id"}, "junk"]})
+
+    def test_a_permission_request(self):
+        state = self.state()
+        turn_id, _out = state.begin("hi")
+        state.update(_acp_update("tool_call", toolCallId="c1",
+                                 status="pending", title="Shell",
+                                 kind="execute", rawInput={}))
+        fed = self.ask(state, title="touch a.txt",
+                       rawInput={"command": "touch a.txt"})
+        self.assertEqual(fed.replies, [])
+        self.assertEqual(self.types(fed.events), [
+            "tool.started", "approval.requested", "session.state"],
+            "the card of the call it asks about comes first")
+        self.assertEqual(fed.events[0]["data"]["input"],
+                         {"command": "touch a.txt"})
+        asked = fed.events[1]["data"]
+        self.assertEqual((asked["request_id"], asked["kind"],
+                          asked["prompt"], asked["call_id"]),
+                         ("r1-p1", "command", "touch a.txt", "c1"))
+        self.assertEqual(asked["options"][1:], [
+            {"id": "o2", "label": "Allow", "kind": "allow"},
+            {"id": "o3", "label": "Reject", "kind": "deny"},
+            {"id": "o4", "label": "odd"}])
+        self.assertEqual((asked["options"][0]["kind"],
+                          asked["options"][0]["standing"]), ("always", True))
+        self.assertNotIn("sk-ant", json.dumps(fed.events),
+                         "a label the agent wrote is redacted")
+        (rpc_id, result), out = state.answer("r1-p1",
+                                             Answer(decision="allow"))
+        self.assertEqual((rpc_id, result), (7, {"outcome": {
+            "outcome": "selected", "optionId": "once"}}))
+        self.assertEqual(self.types(out),
+                         ["approval.resolved", "session.state"])
+        self.assertEqual(out[0]["data"], {
+            "request_id": "r1-p1", "source": "user", "decision": "allow"})
+        self.assertEqual(out[0]["turn_id"], turn_id)
+        with self.assertRaises(acp_adapter_base.UnknownRequest):
+            state.answer("r1-p1", Answer(decision="allow"))
+
+    def test_permission_answers(self):
+        for answer, option, decision in (
+                (Answer(decision="deny"), "cancel", "deny"),
+                # A standing rule is only written when it is named.
+                (Answer(decision="always"), "once", "allow"),
+                (Answer(option_id="allow"), "once", "allow"),
+                (Answer(option_id="o1"), "always_project", "always"),
+                (Answer(option_id="o4"), "odd", None),
+                (Answer(text="use another file"), "cancel", "deny")):
+            with self.subTest(answer=answer):
+                state = self.state()
+                state.begin("hi")
+                self.ask(state, title="x")
+                (_rpc, result), out = state.answer("r1-p1", answer)
+                self.assertEqual(result["outcome"]["optionId"], option)
+                self.assertEqual(out[0]["data"].get("decision"), decision)
+
+    def test_answers_the_request_does_not_offer(self):
+        state = self.state()
+        state.begin("hi")
+        state.permission(7, {"options": [
+            {"optionId": "always", "kind": "allow_always"}]})
+        # Only a standing allow on offer: a bare allow does not take it.
+        for answer in (Answer(option_id="o9"), Answer(decision="deny"),
+                       Answer(decision="allow"), Answer(decision="always")):
+            with self.assertRaises(AdapterError) as ctx:
+                state.answer("r1-p1", answer)
+            self.assertEqual(ctx.exception.code, "bad_request")
+            self.assertIn("r1-p1", state.pending, "still open")
+        (_rpc, result), _out = state.answer("r1-p1", Answer(option_id="o1"))
+        self.assertEqual(result["outcome"]["optionId"], "always")
+        # The same for a standing refusal: a bare deny (or a text-only
+        # answer) must not write a permanent rule.
+        state = self.state()
+        state.begin("hi")
+        state.permission(8, {"options": [
+            {"optionId": "once", "kind": "allow_once"},
+            {"optionId": "never", "kind": "reject_always"}]})
+        for answer in (Answer(decision="deny"), Answer(text="no")):
+            with self.assertRaises(AdapterError) as ctx:
+                state.answer("r1-p1", answer)
+            self.assertEqual(ctx.exception.code, "bad_request")
+        (_rpc, result), _out = state.answer("r1-p1", Answer(option_id="o2"))
+        self.assertEqual(result["outcome"]["optionId"], "never")
+
+    def test_kinds_and_statuses_that_are_not_strings(self):
+        state = self.state()
+        state.begin("hi")
+        fed = state.permission(7, {"options": [
+            {"optionId": "a", "kind": ["allow_once"]},
+            {"optionId": "b", "kind": "reject_once"}]})
+        self.assertEqual(fed.replies, [])
+        self.assertEqual(fed.events[0]["data"]["options"], [
+            {"id": "o1", "label": "a"},
+            {"id": "o2", "label": "b", "kind": "deny"}])
+        out = state.update(_acp_update(
+            "tool_call", toolCallId="c1", status=["completed"],
+            rawInput={"command": "ls"})).events
+        self.assertEqual(self.types(out), ["tool.started"])
+
+    def test_requests_that_cannot_be_shown_are_cancelled(self):
+        cancelled = [(7, {"outcome": {"outcome": "cancelled"}})]
+        state = self.state()
+        state.begin("hi")
+        for params in ({"options": []}, {"options": "x"}, None,
+                       {"sessionId": "someone-else", "options": [
+                           {"optionId": "a", "kind": "allow_once"}]}):
+            fed = state.permission(7, params)
+            self.assertEqual((fed.events, fed.replies), ([], cancelled))
+        self.assertEqual(state.pending, {})
+
+    def test_a_cancel_answers_what_is_open_and_refuses_what_comes_after(self):
+        state = self.state()
+        self.assertEqual(state.cancel_sent(), ([], []), "no turn: nothing")
+        state.begin("hi")
+        self.ask(state, title="x")
+        replies, out = state.cancel_sent()
+        self.assertEqual(replies, [(7, {"outcome": {"outcome": "cancelled"}})])
+        self.assertEqual(self.types(out),
+                         ["approval.resolved", "session.state"])
+        self.assertEqual(out[0]["data"]["source"], "turn_ended")
+        late = self.ask(state, rpc_id=8, title="y")
+        self.assertEqual((late.events, late.replies),
+                         ([], [(8, {"outcome": {"outcome": "cancelled"}})]))
+        out = state.prompt_answered({"id": 1, "result": {
+            "stopReason": "cancelled"}})
+        self.assertEqual(out[0]["data"]["status"], "interrupted")
+        # The next turn asks again as usual.
+        state.begin("again")
+        self.assertEqual(self.ask(state, rpc_id=9, title="z").replies, [])
+
+    def test_how_a_turn_ends(self):
+        for msg, status, reason in (
+                ({"result": {"stopReason": "end_turn"}}, "completed", None),
+                ({"result": {"stopReason": "cancelled"}}, "interrupted",
+                 None),
+                ({"result": {"stopReason": "max_tokens"}}, "completed",
+                 "max_tokens"),
+                ({"result": {}}, "completed", None),
+                ({"error": {"message": "Internal error",
+                            "data": {"details": "404"}}}, "failed",
+                 "Internal error: 404")):
+            with self.subTest(msg=msg):
+                state = self.state()
+                state.begin("hi")
+                state.update(_acp_chunk("partial text "))
+                out = state.prompt_answered({"id": 1, **msg})
+                ended = [e for e in out if e["type"] == "turn.ended"][0]
+                self.assertEqual(ended["data"]["status"], status)
+                self.assertEqual(ended["data"].get("reason"), reason)
+                self.assertEqual("error" in self.types(out),
+                                 status == "failed")
+                _streams_close(self, out)
+
+    def test_a_turn_that_ends_with_a_request_open(self):
+        state = self.state()
+        state.begin("hi")
+        self.ask(state, title="x")
+        out = state.prompt_answered({"id": 1, "result": {
+            "stopReason": "end_turn"}})
+        self.assertEqual(self.types(out), [
+            "approval.resolved", "turn.ended", "session.state"])
+        self.assertEqual(state.pending, {})
+
+    def test_replay_skips_what_it_does_not_know(self):
+        got = acp_adapter.replay([
+            {"proc": 0, "dir": "out", "t": 0.1, "msg": {
+                "id": 1, "method": "session/new", "params": {}}},
+            {"proc": 0, "dir": "in", "t": 0.2, "msg": {
+                "id": 1, "result": {"sessionId": ACP_SESSION}}},
+            {"proc": 0, "dir": "in", "t": 0.3, "msg": {"method": "x/notify"}},
+            {"proc": 0, "dir": "in", "t": 0.3, "msg": {
+                "id": 99, "result": {}}},
+            {"proc": 0, "dir": "out", "t": 0.3, "msg": {
+                "id": 5, "result": {"outcome": {"outcome": "cancelled"}}}},
+            {"proc": 0, "raw": "junk"},
+            {"proc": 0, "exit": 0}])
+        self.assertEqual([e["type"] for e in got],
+                         ["session.caps", "session.state", "session.state"])
+
+
+def _acp_resolved(caps: Caps = ALL_CAPS, min_version: str = "",
+                  harness: str = "qwen-code") -> registry.Resolved:
+    return registry.Resolved(harness, "acp", (sys.executable, str(ACP_FAKE)),
+                             caps, min_version=min_version)
+
+
+class _AcpAdapterCase(unittest.TestCase):
+    """An adapter over the fake agent, cleaned up after the test."""
+
+    def adapter(self, mode: str = "ok", *, caps: Caps = ALL_CAPS,
+                reply: str = "hello", min_version: str = "", **kw):
+        self.agent_log = temp_dir(self) / "fake.log"
+        env = dict(os.environ, FAKE_ACP_MODE=mode, FAKE_ACP_REPLY=reply,
+                   FAKE_ACP_LOG=str(self.agent_log))
+        adapter = acp_adapter.AcpAdapter(
+            _acp_resolved(caps, min_version), env=env, **kw)
+        self.addCleanup(adapter.close, 0.5)
+        return adapter
+
+    def spec(self, **kw) -> StartSpec:
+        return StartSpec(session_key="acp:test", cwd=str(temp_dir(self)),
+                         **kw)
+
+    def started(self, mode: str = "ok", **kw):
+        spec_kw = kw.pop("spec", {})
+        adapter = self.adapter(mode, **kw)
+        sink = adapters_fake.ListSink()
+        sid = adapter.start(self.spec(**spec_kw), sink)
+        return adapter, sink, sid
+
+    def sent(self) -> list:
+        return [json.loads(line) for line in
+                self.agent_log.read_text().splitlines()][1:] \
+            if self.agent_log.exists() else []
+
+    def sent_methods(self) -> list:
+        return [m.get("method") for m in self.sent()]
+
+    def wait(self, sink, match, what="the event"):
+        found = sink.wait_for(match, ACP_TIMEOUT)
+        self.assertIsNotNone(found, f"timed out waiting for {what}")
+        return found
+
+    def wait_turn(self, sink, turn_id):
+        def ended_at():
+            return next((i for i, e in enumerate(sink.events)
+                         if e["type"] == "turn.ended"
+                         and e.get("turn_id") == turn_id), None)
+
+        def idle_after(event):
+            at = ended_at()
+            return at is not None and event["type"] == "session.state" \
+                and any(e is event for e in sink.events[at + 1:])
+
+        self.wait(sink, idle_after, "the turn to end")
+        return sink.events[ended_at()]
+
+    def wait_state(self, sink, state):
+        return self.wait(sink, lambda e: e["type"] == "session.state"
+                         and e["data"]["state"] == state, state)
+
+
+class TestAcpContract(AdapterContract, _AcpAdapterCase):
+    def make_adapter(self, *, caps, reply):
+        return self.adapter(caps=caps, reply=reply)
+
+
+class TestAcpAdapter(_AcpAdapterCase):
+    def test_registered_and_resolved_for_every_acp_harness(self):
+        self.assertIn("acp", registry.registered())
+        self.assertIn("acp", registry.BUILTIN_MODULES)
+        for harness in ("gemini", "qwen-code", "kimi", "devin"):
+            resolved = registry.adapter_for(harness, {}, which=lambda b: b)
+            self.assertTrue(resolved.ok, harness)
+            self.assertEqual(resolved.adapter, "acp")
+            self.assertEqual(resolved.caps, Caps(),
+                             "the fallback keeps every feature off")
+            self.assertIsInstance(registry.create(resolved),
+                                  acp_adapter.AcpAdapter)
+
+    def test_caps_are_the_ceiling_met_with_proof_and_the_agents_own(self):
+        adapter = self.adapter()
+        self.assertEqual(adapter.capabilities, acp_adapter.PROVEN)
+        for off in ("steer", "rollback", "fork", "stop_task"):
+            self.assertFalse(adapter.capabilities.supports(off))
+        self.assertFalse(adapter.capabilities.can_set("effort"))
+        bare, sink, _sid = self.started("bare")
+        self.assertEqual(bare.capabilities, Caps(),
+                         "an agent that lists no modes and no models")
+        self.assertEqual(sink.events[0]["data"]["caps"], Caps().as_dict())
+        with self.assertRaises(Unsupported):
+            bare.set_option("plan_mode", True)
+
+    def test_start_is_a_launch_through_session_new(self):
+        adapter, sink, sid = self.started(spec={
+            "session_id": "the-hubs-pick", "model": "model-2",
+            "permission_mode": "yolo", "env": {"FAKE_ACP_EXTRA": "1"}})
+        self.assertEqual(sid, ACP_SESSION)
+        self.assertEqual((adapter.session_id, adapter.version,
+                          adapter.agent_name),
+                         (ACP_SESSION, "9.9.9", "fake-agent"))
+        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.events[1]["data"], {
+            "state": "idle", "harness_session_id": ACP_SESSION})
+        self.assertEqual(self.sent_methods(), [
+            "initialize", "session/new", "session/set_model",
+            "session/set_mode"])
+        sent = self.sent()
+        self.assertEqual(sent[0]["params"]["clientInfo"]["name"], "swe")
+        self.assertEqual(sent[1]["params"], {
+            "cwd": os.path.realpath(adapter._spec.cwd), "mcpServers": []})
+        self.assertEqual(sent[2]["params"]["modelId"], "prov|model-2")
+        self.assertEqual(sent[3]["params"]["modeId"], "yolo")
+        self.assertIsNone(adapter.transcript_position())
+
+    def test_start_options_this_agent_does_not_have_are_left_out(self):
+        self.started(spec={"model": "gpt-other", "permission_mode":
+                           "acceptEdits", "effort": "high"})
+        self.assertEqual(self.sent_methods(), ["initialize", "session/new"])
+
+    def test_plan_mode_at_start(self):
+        adapter, _sink, _sid = self.started(spec={"plan_mode": True})
+        self.assertEqual(self.sent()[-1]["params"]["modeId"], "plan")
+        self.assertEqual(adapter._mode_before, "default")
+
+    def test_resume_loads_and_shows_no_replay(self):
+        _adapter, sink, sid = self.started(spec={"resume_id": "older-1"})
+        self.assertEqual(sid, "older-1")
+        self.assertEqual(self.sent_methods(), ["initialize", "session/load"])
+        self.assertEqual(sink.types(), ["session.caps", "session.state"],
+                         "the replayed history is not live text")
+
+    def test_start_refusals(self):
+        for mode, spec, code, said in (
+                ("no-load", {"resume_id": "older-1"}, "bad_request",
+                 "can't load sessions"),
+                ("ok", {"resume_id": "missing"}, "refused",
+                 "Session not found"),
+                ("refuse-new", {}, "refused", "Authentication required"),
+                ("exit-at-init", {}, "agent_down", ""),
+                ("silent-init", {}, "timeout", ""),
+                ("old", {}, "unsupported_version", "older than 1.0.0")):
+            with self.subTest(mode=mode):
+                adapter = self.adapter(mode, init_timeout=1.0,
+                                       min_version="1.0.0")
+                sink = adapters_fake.ListSink()
+                with self.assertRaises(AdapterError) as ctx:
+                    adapter.start(self.spec(**spec), sink)
+                self.assertEqual(ctx.exception.code, code)
+                self.assertIn(said, str(ctx.exception))
+                self.assertEqual(sink.events, [])
+                self.assertIsNotNone(adapter._agent.proc.wait(ACP_TIMEOUT),
+                                     "the child is gone")
+                with self.assertRaises(AdapterError):
+                    adapter.start(self.spec(), sink)
+                adapter.close(0.5)
+                self.assertEqual(sink.events, [])
+
+    def test_no_command_for_the_harness(self):
+        adapter = acp_adapter.AcpAdapter(registry.Resolved(
+            "no-such-harness", "acp", None, ALL_CAPS))
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(self.spec(), adapters_fake.ListSink())
+        self.assertEqual(ctx.exception.code, "agent_down")
+        self.assertIn("no-such-harness has no ACP command",
+                      str(ctx.exception))
+        missing = acp_adapter.AcpAdapter(registry.Resolved(
+            "x", "acp", ("/nonexistent/agent",), ALL_CAPS))
+        with self.assertRaises(AdapterError) as ctx:
+            missing.start(self.spec(), adapters_fake.ListSink())
+        self.assertEqual(ctx.exception.code, "agent_down")
+
+    def test_the_command_comes_from_the_wire_modules_probe(self):
+        adapter = acp_adapter.AcpAdapter(
+            registry.Resolved("qwen-code", "acp", None, ALL_CAPS),
+            env=dict(os.environ))
+        self.addCleanup(adapter.close, 0.5)
+        with patch.object(acp, "command_for", return_value=[
+                sys.executable, str(ACP_FAKE)]) as probe:
+            sid = adapter.start(self.spec(), adapters_fake.ListSink())
+        probe.assert_called_once_with("qwen-code")
+        self.assertEqual(sid, ACP_SESSION)
+
+    def test_a_turn_streams_and_ends(self):
+        adapter, sink, _sid = self.started(reply="hello there, friend")
+        turn_id = adapter.send_turn(TurnInput(
+            "hi", command_id="c1", device="phone",
+            attachments=["/w/a.txt"]))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertEqual(ended["command_id"], "c1")
+        mine = [e for e in sink.events if e.get("turn_id") == turn_id]
+        self.assertEqual([e["type"] for e in mine][:2],
+                         ["turn.started", "message.completed"])
+        self.assertEqual(mine[1]["data"]["attachments"], ["/w/a.txt"])
+        self.assertIn("usage.updated", [e["type"] for e in mine])
+        _streams_close(self, sink.events)
+        prompt = self.sent()[-1]["params"]["prompt"]
+        self.assertEqual(prompt, [
+            {"type": "text", "text": "hi"},
+            {"type": "resource_link", "uri": "file:///w/a.txt",
+             "name": "a.txt"}])
+        second = adapter.send_turn(TurnInput("again"))
+        self.assertNotEqual(second, turn_id)
+        self.wait_turn(sink, second)
+        self.assertRegex(turn_id, r"^t-[0-9a-f]{8}-1$")
+
+    def test_busy_then_interrupt(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("another"))
+        self.assertEqual(ctx.exception.code, "busy")
+        self.wait(sink, "message.delta")
+        adapter.interrupt()
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        partial = [e for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(partial[0]["data"]["text"], "1\n2\n")
+        self.assertEqual(self.sent_methods()[-1], "session/cancel")
+        _streams_close(self, sink.events)
+        before = len(sink.events)
+        adapter.interrupt()
+        self.assertEqual(len(sink.events), before)
+        self.assertEqual(self.sent_methods().count("session/cancel"), 1)
+
+    def test_thoughts_plans_and_tools(self):
+        adapter, sink, _sid = self.started("rich")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        types = sink.types()
+        for wanted in ("thinking.completed", "plan.updated", "tool.started",
+                       "tool.completed", "message.completed"):
+            self.assertIn(wanted, types)
+        self.assertEqual(sink.of("tool.started")[0]["data"]["input"],
+                         {"file_path": "/w/notes.txt"})
+        self.assertEqual(adapter._state.mode, "yolo",
+                         "a mode the agent changed itself is followed")
+        _contract_order(self, sink.events[2:])
+        _streams_close(self, sink.events)
+
+    def test_approval_allow(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.wait(sink, "approval.requested")
+        self.assertEqual((asked["data"]["kind"], asked["data"]["prompt"]),
+                         ("command", "touch probe.txt"))
+        self.wait_state(sink, "waiting")
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="always"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        answer = self.sent()[-1]
+        self.assertEqual(answer["result"], {"outcome": {
+            "outcome": "selected", "optionId": "once"}},
+            "a bare always is a one-time allow")
+        types = sink.types()
+        self.assertLess(types.index("approval.resolved"),
+                        types.index("tool.completed"))
+        with self.assertRaises(acp_adapter_base.UnknownRequest):
+            adapter.respond(asked["data"]["request_id"],
+                            Answer(decision="allow"))
+        _contract_order(self, sink.events[2:])
+
+    def test_a_named_standing_option_is_sent_as_it_is(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.wait(sink, "approval.requested")
+        adapter.respond(asked["data"]["request_id"], Answer(option_id="o1"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(self.sent()[-1]["result"]["outcome"]["optionId"],
+                         "always_project")
+        self.assertEqual(sink.of("approval.resolved")[0]["data"]["decision"],
+                         "always")
+
+    def test_approval_deny_and_an_edit(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.wait(sink, "approval.requested")
+        adapter.respond(asked["data"]["request_id"], Answer(decision="deny"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(sink.of("tool.completed")[0]["data"]["status"],
+                         "error")
+        turn_id = adapter.send_turn(TurnInput("mode:edit write it"))
+        asked = self.wait(sink, lambda e: e["type"] == "approval.requested"
+                          and e.get("turn_id") == turn_id)
+        self.assertEqual(asked["data"]["kind"], "tool")
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(sink.of("tool.completed")[-1]["data"]["file_edits"],
+                         [{"path": "/w/probe.txt", "kind": "add",
+                           "diff": "@@ -0,0 +1 @@\n+yes\n"}])
+
+    def test_an_interrupt_answers_the_open_request_cancelled(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.wait(sink, "approval.requested")
+        adapter.interrupt()
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        self.assertEqual(sink.of("approval.resolved")[0]["data"], {
+            "request_id": asked["data"]["request_id"],
+            "source": "turn_ended"})
+        tail = self.sent()[-2:]
+        self.assertEqual(tail[0]["method"], "session/cancel")
+        self.assertEqual(tail[1]["result"],
+                         {"outcome": {"outcome": "cancelled"}})
+
+    def test_a_request_after_the_cancel_is_refused_unseen(self):
+        adapter, sink, _sid = self.started("late-ask")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        adapter.interrupt()
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        self.assertEqual(sink.of("approval.requested"), [])
+
+    def test_an_answer_that_cannot_be_written_reopens_the_request(self):
+        adapter, sink, _sid = self.started("approval")
+        adapter.send_turn(TurnInput("touch it"))
+        asked = self.wait(sink, "approval.requested")
+        request_id = asked["data"]["request_id"]
+        with patch.object(adapter._agent, "_respond", return_value=False):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.respond(request_id, Answer(decision="allow"))
+        self.assertEqual(ctx.exception.code, "agent_down")
+        self.assertIn(request_id, adapter._state.pending)
+        self.assertTrue(adapter._state.waiting)
+        self.assertEqual(sink.of("approval.resolved"), [])
+        adapter.respond(request_id, Answer(decision="allow"))
+        self.wait(sink, "turn.ended")
+
+    def test_a_failed_turn_and_one_that_stops_short(self):
+        adapter, sink, _sid = self.started()
+        turn_id = adapter.send_turn(TurnInput("mode:fail go"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "failed")
+        self.assertIn("404 The model does not exist",
+                      ended["data"]["reason"])
+        turn_id = adapter.send_turn(TurnInput("mode:stopped go"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual((ended["data"]["status"], ended["data"]["reason"]),
+                         ("completed", "max_tokens"))
+
+    def test_noise_changes_nothing(self):
+        adapter, sink, _sid = self.started("noise", reply="fine")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["fine"])
+        self.assertEqual(adapter._state.unknown["other-session"], 1)
+        adapter.close(2.0)
+        answered = [m for m in self.sent() if m.get("id") == 7000]
+        self.assertEqual(answered[0]["error"]["code"], -32601,
+                         "a request nothing serves gets an error answer")
+
+    def test_secrets_are_masked_live(self):
+        adapter, sink, _sid = self.started("secret")
+        turn_id = adapter.send_turn(TurnInput("leak it"))
+        asked = self.wait(sink, "approval.requested")
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        self.assertNotIn("sk-ant", json.dumps(sink.events))
+        self.assertIn("the key is", json.dumps(sink.events))
+
+    def test_options(self):
+        adapter, sink, _sid = self.started()
+        before = len(sink.events)
+        adapter.set_option("model", "model-2")
+        self.assertEqual(self.sent()[-1]["params"]["modelId"],
+                         "prov|model-2")
+        adapter.set_option("permission_mode", "yolo")
+        self.assertEqual(self.sent()[-1]["params"]["modeId"], "yolo")
+        adapter.set_option("plan_mode", True)
+        adapter.set_option("plan_mode", True)
+        self.assertEqual(self.sent_methods().count("session/set_mode"), 3,
+                         "sent again: an agent can leave plan mode itself")
+        turn_id = adapter.send_turn(TurnInput("do it"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(sink.of("message.completed")[-1]["data"]["text"],
+                         "planning")
+        adapter.set_option("plan_mode", False)
+        self.assertEqual(self.sent()[-1]["params"]["modeId"], "yolo",
+                         "back to the mode it was in")
+        adapter.set_option("plan_mode", False)
+        self.assertEqual(self.sent_methods().count("session/set_mode"), 4,
+                         "not planning: nothing to undo")
+        self.assertEqual(len([e for e in sink.events[before:]
+                              if e["type"] == "session.caps"]), 0)
+        for name, value, code in (("model", "no-such", "bad_request"),
+                                  ("permission_mode", "no-such",
+                                   "bad_request")):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.set_option(name, value)
+            self.assertEqual(ctx.exception.code, code)
+        with self.assertRaises(Unsupported):
+            adapter.set_option("effort", "high")
+
+    def test_a_refused_mode_changes_nothing(self):
+        adapter, _sink, _sid = self.started("refuse-mode")
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.set_option("plan_mode", True)
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertEqual(adapter._state.mode, "default")
+
+    def test_what_acp_cannot_do_is_unsupported(self):
+        adapter, sink, _sid = self.started("slow")
+        adapter.send_turn(TurnInput("count"))
+        for call in (lambda: adapter.steer(TurnInput("more")),
+                     lambda: adapter.rollback("t-1"),
+                     lambda: adapter.stop_task("task-1")):
+            with self.assertRaises(Unsupported):
+                call()
+        forker = self.adapter()
+        with self.assertRaises(Unsupported):
+            forker.start(self.spec(resume_id="s", fork=True),
+                         adapters_fake.ListSink())
+
+    def test_the_agent_dies_mid_turn(self):
+        adapter, sink, _sid = self.started("crash")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        down = self.wait_state(sink, "agent_down")
+        self.assertEqual(sink.types()[-2:], ["turn.ended", "session.state"])
+        ended = sink.of("turn.ended")[0]
+        self.assertEqual((ended["turn_id"], ended["data"]["status"]),
+                         (turn_id, "failed"))
+        self.assertIn("fake-agent exited with code 3",
+                      down["data"]["reason"])
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("again"))
+        self.assertEqual(ctx.exception.code, "agent_down")
+        count = len(sink.events)
+        adapter.close(0.5)
+        self.assertEqual(len(sink.events), count)
+
+    def test_close_mid_turn_and_an_agent_that_lingers(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        adapter.close(1.0)
+        self.assertEqual(sink.types()[-2:], ["turn.ended", "session.state"])
+        self.assertEqual(sink.of("turn.ended")[0]["turn_id"], turn_id)
+        self.assertEqual(adapter._agent.proc.poll(), 0,
+                         "it exits when its stdin closes")
+        lingerer, sink, _sid = self.started("linger")
+        lingerer.close(0.3)
+        self.assertEqual(lingerer._agent.proc.poll(), 143, "terminated")
+        self.assertEqual(sink.events[-1]["data"]["state"], "closed")
+
+    def test_an_agent_that_stops_reading_is_killed(self):
+        adapter, sink, _sid = self.started("deaf", write_timeout=0.3)
+        big = "x" * (4 * 1024 * 1024)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput(big))
+        self.assertEqual(ctx.exception.code, "agent_down")
+        self.wait_state(sink, "agent_down")
+        self.assertIsNotNone(adapter._agent.proc.wait(ACP_TIMEOUT))
+
+    def test_calls_before_start(self):
+        adapter = self.adapter()
+        for call in (adapter.interrupt,
+                     lambda: adapter.respond("r", Answer(decision="allow")),
+                     lambda: adapter.set_option("model", "m"),
+                     lambda: adapter.steer(TurnInput("x")),
+                     lambda: adapter.stop_task("t"),
+                     lambda: adapter.rollback("t")):
+            with self.assertRaises(AdapterError) as ctx:
+                call()
+            self.assertEqual(ctx.exception.code, "not_started")
+
+
+class TestAcpIsACapability(unittest.TestCase):
+    """``auto`` picks ACP where it is the harness's session adapter."""
+
+    def test_the_session_adapter_decides(self):
+        with patch.object(acp, "command_for", return_value=["x"]):
+            self.assertTrue(acp.auto_eligible("qwen-code", reg={}))
+            self.assertFalse(acp.auto_eligible("claude", reg={}),
+                             "claude's session adapter is its stream")
+            self.assertFalse(acp.auto_eligible("codex", reg={}))
+            self.assertFalse(acp.auto_eligible("nobody", reg={}))
+            # harness.json can say otherwise, either way.
+            opted = {"claude": {"capabilities": {"session": {
+                "adapter": "acp"}}}}
+            self.assertTrue(acp.auto_eligible("claude", reg=opted))
+            out = {"qwen-code": {"capabilities": {"session": {
+                "supported": False}}}}
+            self.assertFalse(acp.auto_eligible("qwen-code", reg=out))
+        with patch.object(acp, "command_for", return_value=None):
+            self.assertFalse(acp.auto_eligible("qwen-code", reg={}))
+        self.assertFalse(hasattr(acp, "EXPLICIT_ONLY"))
 
 
 if __name__ == "__main__":

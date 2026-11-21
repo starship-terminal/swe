@@ -19,8 +19,8 @@ compares against).
 
 ``--adapter=claude_stream`` is recorded here; the other adapters'
 scenarios live beside this file (``OTHER_ADAPTERS``: ``record_codex.py``
-for ``codex_appserver``, ``record_opencode.py`` for ``opencode_serve``)
-and share ``Redactor`` (and ``Driver``, where the wire is lines on
+for ``codex_appserver``, ``record_opencode.py`` for ``opencode_serve``,
+``record_acp.py`` for ``acp``) and share ``Redactor`` (and ``Driver``, where the wire is lines on
 stdio).
 
 Every scenario runs in a fresh ``mktemp -d`` folder holding two dummy
@@ -911,7 +911,8 @@ def record(adapter: str, scenario: str, version: str, raw_dir: Path | None,
 
 # Adapters recorded by a module beside this one: adapter id -> module.
 OTHER_ADAPTERS = {"codex_appserver": "record_codex",
-                  "opencode_serve": "record_opencode"}
+                  "opencode_serve": "record_opencode",
+                  "acp": "record_acp"}
 
 
 def _other(adapter: str):

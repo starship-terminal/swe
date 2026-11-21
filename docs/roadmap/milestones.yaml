@@ -195,7 +195,7 @@
 
 - id: G16
   title: Codex, opencode, ACP adapters on keepers (three PRs)
-  status: todo
+  status: done
   depends_on: [G8]
   owns:
     - "src/swe/remote/adapters/codex*.py"

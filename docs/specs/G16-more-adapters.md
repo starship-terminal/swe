@@ -1,16 +1,14 @@
 # G16: Codex, opencode and ACP adapters on keepers
 
-Status: the Codex adapter (PR 1 of 3) and the opencode adapter (PR 2)
-are built. The ACP adapter follows in its own PR and adds its section
-here. The milestone's entry in
-[milestones.yaml](../roadmap/milestones.yaml) is marked done by the
-third.
+Status: done. The Codex adapter (PR 1 of 3), the opencode adapter
+(PR 2) and the ACP adapter (PR 3) are built, and the milestone's entry
+in [milestones.yaml](../roadmap/milestones.yaml) is marked done.
 
 | Adapter id | Harness | Status | Fixtures |
 |---|---|---|---|
 | `codex_appserver` | Codex | built | 12 recordings of `codex` 0.170.0 |
 | `opencode_serve` | opencode | built | 17 recordings of `opencode` 2.3.2 |
-| `acp` | Gemini, Qwen, Kimi and the other ACP harnesses | not built yet | |
+| `acp` | Gemini, Qwen, Kimi and the other ACP harnesses | built | 10 recordings of `qwen` 0.28.0; 2 hand-written, marked synthetic, for `gemini` and `kimi` (not installed) |
 
 Read [G3-adapter-protocol.md](G3-adapter-protocol.md) for the contract
 and [G7-claude-stream-adapter.md](G7-claude-stream-adapter.md) for the
@@ -575,6 +573,203 @@ the stream (`{"dir": "in", "sse": {...}}`). Before committing, do the
 four checks in G7's "Recording again". All seventeen scenarios cost a few
 US cents and run in parallel in about a minute.
 
+## ACP (`acp`)
+
+One adapter for every harness that speaks the Agent Client Protocol:
+Gemini, Qwen, Kimi, Devin, Cursor, Copilot. A launch goes through
+`session/new`, so these harnesses are started and held by a keeper like
+Claude, Codex and opencode, with no tmux pane.
+
+| File | What it holds |
+|---|---|
+| [`src/swe/remote/acp.py`](../../src/swe/remote/acp.py) | the wire, as before: `Connection` (the agent process, JSON-RPC plumbing, the handshake, the reader thread) and `command_for` (which argv starts a harness's ACP mode here) |
+| [`src/swe/remote/adapters/acp.py`](../../src/swe/remote/adapters/acp.py) | `AcpState` (pure: agent messages to v2 events, `replay`) and `AcpAdapter`, which drives a `Connection` subclass that hands every message to the state machine instead of the hub's v1 sinks, with bounded writes |
+| [`scripts/record_acp.py`](../../scripts/record_acp.py) | the recorder's ACP scenarios |
+| [`tests/fixtures/protocols/acp/`](../../tests/fixtures/protocols/acp/) | `<agent>-<version>/` for recordings, `<agent>-synthetic/` for hand-written fixtures |
+| [`tests/fakes/fake_acp.py`](../../tests/fakes/fake_acp.py) | a stdlib fake agent speaking the recorded protocol |
+| [`tests/test_remote_acp.py`](../../tests/test_remote_acp.py) | from the "G16" banner: fixture replay, `AcpState`, the adapter over the fake. The pre-keeper channel's tests above it are unchanged |
+
+### The proven spawn line
+
+```
+qwen --acp
+```
+
+for the one agent recorded. The argv is harness.json's
+`capabilities.session.argv` when it names one; otherwise the adapter
+asks `acp.command_for(<harness>)`, which probes the candidates of
+`acp.ACP_FALLBACK` against the installed CLI as it always has
+(`gemini --acp`, `kimi acp`, `devin acp`...). The protocol is JSON-RPC
+2.0, one object per line on stdio:
+
+1. `initialize {protocolVersion: 1, clientCapabilities, clientInfo}`.
+   Its answer's `agentInfo` names the agent and its version, checked
+   against `min_version` when harness.json gives one (no floor by
+   default: each agent has its own versions), and `agentCapabilities`
+   says whether it can load sessions.
+2. `session/new {cwd, mcpServers: []}` for a launch, or
+   `session/load {sessionId, cwd, mcpServers: []}` for a resume. The
+   answer lists the agent's `modes` and `models`. An agent that does
+   not advertise `loadSession` cannot be resumed (`bad_request`). The
+   history `session/load` replays is not emitted.
+
+The agent exits 0 when its stdin closes (every recording); `close`
+terminates and then kills one that lingers.
+
+### Session ids
+
+The agent assigns the session id (a UUID for qwen), so
+`StartSpec.session_id` is not used; `start` returns the agent's id. A
+load keeps it. `transcript_position` is None: each agent stores
+sessions its own way.
+
+### Mapping, wire to v2
+
+| SessionAdapter call | Wire line |
+|---|---|
+| `start` | spawn, `initialize`, then `session/new` or `session/load`; then `session/set_model`, `session/set_mode` for what the `StartSpec` asks and this agent lists |
+| `send_turn` | `session/prompt {sessionId, prompt: [text, resource_link...]}`; attached files are `resource_link` blocks with a `file://` URI. The turn opens when the request is written |
+| `interrupt` | the `session/cancel` notification, and every open permission request answered `{outcome: cancelled}`, as the protocol requires. A request that arrives after the cancel is answered `cancelled` and never shown |
+| `respond` | the JSON-RPC answer `{outcome: {outcome: "selected", optionId}}` |
+| `set_option(permission_mode)` | `session/set_mode {modeId}` with one of the modes the agent listed |
+| `set_option(plan_mode)` | `session/set_mode` to `plan` (sent even when we believe it is already planning: an agent can leave the mode by itself), and back to the mode it was in |
+| `set_option(model)` | `session/set_model {modelId}` with one of the models the agent listed (by its id or its name) |
+| `close` | stdin EOF through the writer thread, then terminate, then kill |
+| (a request from the agent nothing serves) | a JSON-RPC "method not found" answer |
+
+| Agent message | v2 events |
+|---|---|
+| `agent_message_chunk` | `message.delta`; `message.completed` when a chunk of another kind, a tool call or the turn's end follows. An empty chunk (agents send them to carry `_meta`) says nothing |
+| `agent_thought_chunk` | `message.delta` kind thinking, then `thinking.completed` |
+| `tool_call`, `tool_call_update` | `tool.started` once the call has its input or is past `pending` (agents send the call first and what it runs in a later update); `name` the call's `kind` (`execute`, `edit`, `read`...), `summary` its title. `tool.completed` at `completed` (ok) or `failed` (error), with the text of its `content` and `file_edits` from its `diff` blocks |
+| `plan` | `plan.updated` |
+| `usage_update`, a chunk's `_meta.usage` | `usage.updated` (`context_tokens`, `context_window`, and the last model call's tokens) |
+| `current_mode_update` | none; the mode is kept for plan mode's way back |
+| `session/request_permission` (a request) | `approval.requested` (kind command when the call's kind is `execute`, else tool; the prompt is the call's title and command or path; options are the agent's own, ids `o1`, `o2`..., labels redacted, `kind` allow, always or deny, `standing` on the ones that outlive the request), then `session.state` waiting |
+| the answer to `session/prompt` | open streams completed, open requests retired (`turn_ended`), `turn.ended` (`end_turn` completed, `cancelled` interrupted, an error answer failed with an `error` event; `max_tokens`, `max_turn_requests` and `refusal` completed with that as the reason), `session.state` idle |
+| an update naming another session, any other update or notification | nothing; counted in `AcpState.unknown` |
+
+### Proven by fixture, and unverified
+
+Ten scenarios ran against the real `qwen` 0.28.0 on 2026-11-21, in a
+throwaway work folder with a throwaway `HOME`, with `OPENAI_API_KEY`
+from the environment, `OPENAI_BASE_URL` and `OPENAI_MODEL=gpt-4o-mini`
+(qwen sends `max_tokens`, which the newer models refuse). Before a
+fixture is written, an update the adapter does not read is cut to its
+name, other notifications to their method, `_meta` is dropped except a
+chunk's `usage`, and the handshake answers to the fields the adapter
+reads.
+
+`gemini` and `kimi` are not installed on the recording machine. Each
+has one fixture written by hand from the ACP v1 schema, marked
+`"synthetic": true` with the reason in its header
+(`gemini-synthetic/hello`, `kimi-synthetic/approval`). They exercise
+the mapping for an agent with no `plan` mode and for one that lists no
+modes or models at all. They prove nothing about what those CLIs
+really send, and no capability rests on them.
+
+Caps the adapter can ever offer (`PROVEN`): `plan_mode`, options
+`model` and `permission_mode`. `steer`, `rollback`, `fork` and
+`stop_task` have no request in ACP v1 and stay off whatever
+harness.json says; `effort` has no wire form. The caps in force are
+harness.json's, met with `PROVEN`, met with what this agent's session
+answer lists: no `plan` mode listed, no plan mode; no modes, no
+`permission_mode`; no models, no `model`.
+
+| Capability | Status | Fixture |
+|---|---|---|
+| Handshake, `session/new`, streaming chunks, usage, turn end, exit on EOF | proven | `hello` |
+| Command permission: allow runs it, reject does not and the turn goes on | proven | `approval` |
+| Edit permission and `file_edits` from a `diff` block | proven | `approval` |
+| `allow_always` | recorded: the next such command is not asked, and a rule is written into the project (`.qwen/`). A bare "always" answer is therefore sent as a one-time allow; the standing options are sent only when named by `option_id` | `always` |
+| `session/cancel` mid-reply (`stopReason: cancelled`); the cut reply is completed | proven | `interrupt` |
+| `session/cancel` with a permission open, answered `cancelled` | proven: the command does not run | `cancel_approval` |
+| `session/load` in a new process (same id; the replay is dropped) | proven | `resume` |
+| `session/set_mode` to `plan` and back; an unknown mode is refused | proven: no file written while planning | `plan_mode` |
+| `session/set_model` | proven for the request: a listed model is accepted, an unlisted one refused. The throwaway setup lists one model, so a change of model was not observed | `model` |
+| A file attached as a `resource_link` | proven | `attach` |
+| A failed turn (the prompt's answer is an error) | proven | `error` |
+| Thought chunks, `plan` updates | fake and synthetic only; the recorded model sent none | |
+| Any agent but qwen | unverified; see the synthetic fixtures above | |
+| Fork (`session/fork`), steer | not in ACP v1; off | |
+
+### Verification
+
+Run on 2026-11-21, macOS 27.3, Python 3.15.2 and 3.12 (the suite).
+
+| Check | Result |
+|---|---|
+| The ACP adapter tests in `tests.test_remote_acp` (75 new; the pre-keeper channel's tests unchanged) | pass, 16 runs side by side, with no agent needed |
+| Full suite against a throwaway HOME | pass (see the PR) |
+| G1 Verification step 2, against an installed `swe`, a temp HOME, and harness.json pointing `capabilities.session.argv` for `qwen-code` at `tests/fakes/fake_acp.py`: launch (a retried launch answered as a duplicate), a turn sent with a client on the stream (deltas that add up to the completed text), a turn that asks a command permission, `kill -9` the hub with the request open, restart it, the request still in `/v1/inbox`, answer it (a second answer gets 409), the turn finishes with its tool card and result, the journal equals the keeper's log, detach ends the keeper and the fake agent | pass, 23 checks |
+| One manual run with the real `qwen` 0.28.0 through `AcpAdapter` (throwaway folders): start in 1.9 s with `permission_mode: default`, a command permission answered "always" from another device (sent as a one-time allow: the file appears, no `.qwen/` rule is written), an interrupt, plan mode (no file written) and back, a model set, steer and rollback refused as unsupported, close (exit 0 in 0.05 s), a resume in a new process (it recalls the first command, and no replayed history is emitted) | pass |
+
+### Contract gaps
+
+1. **The agent assigns the session id**, as on Codex and opencode.
+2. **No steer, rollback, fork or stop-task** in ACP v1. A message sent
+   mid-turn has to wait for the turn or interrupt it; that choice is
+   the keeper's.
+3. **A resume needs `loadSession`.** An agent without it can only
+   start new sessions; `start` with a `resume_id` raises
+   `bad_request` rather than quietly starting a new conversation (the
+   pre-keeper channel's "this is a new session" note is not an option
+   for a session a client believes it resumed).
+4. **Options are the agent's own lists.** `permission_mode` values and
+   model names differ per agent and are only known after the
+   handshake; a value the agent did not list is `bad_request`. A
+   `StartSpec` value this agent does not list is left out, so a default
+   meant for another harness never breaks a start.
+5. **"Always" writes a rule outside the session.** qwen's two
+   `allow_always` options save a rule for the project or for the user.
+   They are shown with the agent's labels and `standing: true`, and
+   sent only when chosen by `option_id`. `Answer(decision="always")`
+   is a one-time allow. A bare allow or deny never takes a standing
+   option: a request that offers only `allow_always`, or only
+   `reject_always`, for it is answered `bad_request`, and the caller
+   names the option instead.
+6. **A turn has no acknowledgement.** `session/prompt` is answered only
+   when the turn ends, so the turn is opened when the request is
+   written; an agent that refuses it shows as a turn that fails at
+   once.
+7. **Text has no end marker.** A message is completed when something
+   else follows it, so its `message.completed` can come later than its
+   last delta.
+8. **Tool cards wait for their input.** See the mapping. A call that
+   never gets one and never runs is dropped at the turn's end.
+9. **`max_tokens` and `refusal` are a completed turn** with the stop
+   reason as `reason`: G3 has no status for "stopped short".
+10. **Autonomy.** `Connection.auto_allow` (a launch's `yolo` on the
+    pre-keeper channel) is not used: the adapter has no such field in
+    `StartSpec`. An agent's own mode (`yolo`, `auto`) does that job,
+    through `permission_mode`.
+
+### `acp.EXPLICIT_ONLY` is gone
+
+The set named the harnesses whose ACP channel `attach(mode="auto")`
+must not pick (claude). `acp.auto_eligible` now asks the capability
+instead: ACP is picked where it is the harness's session adapter
+(`capabilities.session.adapter` in harness.json over
+`SESSION_FALLBACK`) and its command runs here. Claude's session
+adapter is `claude_stream`, so it is still opt-in, and harness.json can
+change that either way without a code change.
+
+### Recording again, or another agent
+
+```bash
+OPENAI_API_KEY=... python3 scripts/record_protocol.py record \
+    --adapter=acp --scenario=hello --cli="$(which qwen)" \
+    --raw-dir=/some/scratch/dir          # outside the repo
+python3 scripts/record_protocol.py golden
+```
+
+`record` names the folder `<agentInfo.name>-<version>`. To record
+another agent, install it, add its ACP argv tail to
+`record_acp.ACP_ARGS`, give the recorder whatever credential it reads
+from the environment, run the scenarios, and delete that agent's
+`-synthetic` folder. Before committing, do the four checks in G7's
+"Recording again".
+
 ## What G20 and G22 must know
 
 - **harness.json must turn the proven features on for codex.** The
@@ -650,6 +845,36 @@ US cents and run in parallel in about a minute.
   answers with 405. Until G22, an opencode 2.x session started in a
   terminal cannot be written to; only sessions started through the
   adapter can.
+- **harness.json for an ACP harness**: the fallback row resolves the
+  adapter with every feature off, so launch, turns, approvals and
+  interrupt work and plan mode and the options are refused. To turn
+  them on (qwen shown; `argv` may be left out, the adapter then probes
+  `acp.ACP_FALLBACK`):
+
+  ```json
+  "capabilities": {"session": {
+      "adapter": "acp", "argv": ["qwen", "--acp"],
+      "steer": false, "plan_mode": true, "rollback": false,
+      "fork": false, "stop_task": false,
+      "options": ["model", "permission_mode"]
+  }}
+  ```
+
+  What a given agent then offers is narrowed by what it lists at the
+  handshake (`session.caps`). Only qwen was recorded: for Gemini, Kimi,
+  Devin, Cursor and Copilot the mapping is the protocol's, unverified
+  against the real CLI.
+- **No steer on ACP.** A message sent mid-turn must be queued for the
+  turn's end or sent after an interrupt (G13).
+- **Pickers for an ACP session** take their values from the agent:
+  `session/new` lists the modes and models, and they differ per agent.
+  The adapter keeps them (`AcpState.modes`, `.models`) but no v2 event
+  carries the lists yet; G20 needs one, or a field on `session.caps`.
+- **Standing permission options** carry `standing: true`; never put
+  one behind a one-tap button (contract gap 5 of the ACP list).
+- **G22**: `inject.AcpInjector`, `supervise`'s ACP launch and
+  `Connection.bind` (the v1 sinks) go with the tmux paths; `Connection`
+  itself stays, as the adapter's wire.
 - **Steer wording** (G13): see Codex contract gap 6 and "opencode
   steer". On neither harness does a steer stop a running command, and
   on opencode it does not even cut the reply being written.
@@ -678,8 +903,17 @@ Not edited while wave 5 PRs are open; each PR body lists what it owes.
   SWE (beta, behind the setting), with `tests/test_remote_adapters.py`.
 - `ARCHITECTURE.md` and `docs/backend-architecture.md`: `adapters/core.py`
   and the Codex and opencode modules in the package map.
-- `docs/testing.md`: `tests/fakes/fake_codex.py` and
-  `tests/fakes/fake_opencode.py` beside `fake_claude.py`, and
-  `record_codex.py`, `record_opencode.py`.
+- `docs/testing.md`: `tests/fakes/fake_codex.py`,
+  `tests/fakes/fake_opencode.py` and `tests/fakes/fake_acp.py` beside
+  `fake_claude.py`, and `record_codex.py`, `record_opencode.py`,
+  `record_acp.py`.
+- `CHANGELOG.md`, `FEATURES.md`: Gemini, Qwen, Kimi and the other ACP
+  harnesses started and continued in SWE through the ACP session
+  adapter (beta, behind the setting).
+- `ARCHITECTURE.md`, `docs/backend-architecture.md`: `adapters/acp.py`;
+  `acp.EXPLICIT_ONLY` replaced by the capability check in
+  `acp.auto_eligible`.
+- `docs/specs/G1-session-runtime-redesign.md`: its list of harness-name
+  checks to remove can tick `acp.EXPLICIT_ONLY`.
 - `docs/specs/G3-adapter-protocol.md`: "true of every id until G7 and
   G16" and the registry table.
