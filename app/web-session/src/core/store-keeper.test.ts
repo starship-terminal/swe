@@ -189,6 +189,9 @@ describe("the hub's features", () => {
     t.hub.features = OLD; // an older version, the stream not dropped yet
     await t.state().send({ text: "hi" });
     await drain();
+    expect(t.hub.posts).toEqual([]);
+    t.timers.advance(60_000); // the send goes again on the outbox's backoff
+    await drain();
     // Asked before the post: another process. The features are read again (it no longer lists require_keeper),
     // and the send goes plain, as merged.
     expect(t.hub.statusCalls).toBeGreaterThanOrEqual(3);

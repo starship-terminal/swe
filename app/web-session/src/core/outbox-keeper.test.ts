@@ -761,9 +761,12 @@ describe("review findings (G31)", () => {
     expect(t.entry(sent.commandId)).toMatchObject({ status: "waiting", attempts: 1 });
     expect((await t.disk())[0]?.claim).toBeUndefined();
     expect(t.view().inFlight).toBeNull();
-    confirm = true;
+    // Not asked again before the backoff runs out, however often the features are read meanwhile.
     outbox.featuresChanged();
     await drain();
+    expect(asked).toBe(1);
+    confirm = true;
+    await t.later();
     expect(t.hub.posts).toEqual([expect.objectContaining({ require_keeper: true })]);
     // A plain post is never held for it.
     t.world.keeperRow = false;
@@ -773,6 +776,29 @@ describe("review findings (G31)", () => {
     await drain();
     expect(t.hub.posts).toHaveLength(2);
     expect(t.hub.posts[1]).not.toHaveProperty("require_keeper");
+  });
+
+  it("close() while a keeper-only post is being confirmed releases its claim: the next outbox posts it at once", async () => {
+    const t = setup();
+    let answer: (ok: boolean) => void = () => {};
+    let next: Outbox | null = null;
+    const first = await t.make({
+      confirmKeeperOnly: () => new Promise((resolve) => (answer = resolve)),
+      onLate: (entry, settled) => next?.adoptLate(entry, settled),
+    });
+    const sent = await first.send({ text: "hi" });
+    await drain();
+    first.close();
+    answer(true);
+    await drain();
+    expect(t.hub.posts).toEqual([]);
+    const [left] = await t.disk();
+    expect(left?.claim).toBeUndefined();
+    expect(left?.ambiguous).toBeUndefined();
+    next = await t.make();
+    await drain();
+    expect(t.hub.posts).toEqual([expect.objectContaining({ command_id: sent.commandId, require_keeper: true })]);
+    expect(t.entry(sent.commandId)?.status).toBe("sent");
   });
 
   for (const answer of [429, 401, 409]) {

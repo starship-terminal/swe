@@ -496,7 +496,8 @@ export class Outbox {
 
   /** The hub's features became known, or changed: a send waiting on them may go, and lookups may run. */
   featuresChanged(): void {
-    void this.flush();
+    // A send waiting on its backoff (a keeper-only post the hub did not confirm, say) goes when that runs out.
+    if (this.retryTimer === null) void this.flush();
     void this.recheck();
   }
 
@@ -733,17 +734,31 @@ export class Outbox {
       // A hub that restarted as an older version would ignore the field and could take the legacy route: the
       // hub that answers now is asked first. Its claim is released if it does not confirm, and the send waits.
       let confirmed = false;
+      this.posting = true; // a close() meanwhile leaves the storage open for the release below
       try {
         confirmed = await this.options.confirmKeeperOnly();
       } catch {
         confirmed = false;
+      } finally {
+        this.posting = false;
       }
-      if (this.closed) return "done";
+      if (this.closed) {
+        // Nothing was posted: the claim is released, so the next outbox does not wait it out and find it in doubt.
+        const { claim: _unposted, ...released } = attempted;
+        try {
+          await this.options.storage.reconcile(released);
+        } finally {
+          if (this.closeAfterLate) this.options.storage.close();
+          this.options.onLate?.(released, false);
+        }
+        return "done";
+      }
       if (!confirmed || this.current(entry.commandId)?.status !== "waiting") {
         this.notPosting();
         const still = this.current(entry.commandId);
         if (still?.status === "waiting") await this.save(still);
-        return "held";
+        // On the backoff: a hub whose status flaps must not be asked at round-trip speed.
+        return "retry";
       }
     }
     const response = await this.post(attempted);

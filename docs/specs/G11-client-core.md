@@ -460,7 +460,10 @@ its next post, so **every keeper-only post is confirmed first**: the
 store reads `/v1/status` again right before it, and the post goes only
 when that answer still lists `require_keeper` under the `boot_id` the
 features were read with. Otherwise the claim is released, the features
-are read again, and the send waits for them. `F+` below means the
+are read again, and the send goes again on the outbox's backoff (so a
+hub whose status flaps is not asked at round-trip speed). A store
+stopped while the confirm is out releases the claim too: nothing was
+posted, and the next outbox posts the send at once. `F+` below means the
 feature is listed, `F?` that it is not known (not live, or not read
 yet), `F-` that `/v1/status` answered without it.
 
