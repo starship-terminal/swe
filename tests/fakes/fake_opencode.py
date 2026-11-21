@@ -34,8 +34,8 @@ FAKE_OPENCODE_MODE
     revert, refuses its commit), ``refuse-agent``, ``deaf-interrupt``
     (answers an interrupt with ``interrupted: false`` and goes on),
     ``empty-end`` (ends its streamed reply with no text), ``child``
-    (starts a child process that inherits its stdout, as an npm-style
-    launcher does).
+    (starts a child process that inherits its stdout and ignores
+    SIGTERM, as an npm-style launcher whose server is slow to stop).
 
     A prompt that starts with ``mode:<name> `` runs that turn in mode
     ``<name>``, whatever the environment says.
@@ -609,8 +609,11 @@ def main():
         threading.Event().wait(WAIT_S)
         return 0
     if MODE == "child":
-        subprocess.Popen([sys.executable, "-c",
-                          "import time; time.sleep(60)"])
+        # It ignores SIGTERM, as a server slow to stop would.
+        subprocess.Popen([sys.executable, "-c", (
+            "import signal, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "time.sleep(60)")])
     port = int(argv[argv.index("--port") + 1]) if "--port" in argv else 0
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True

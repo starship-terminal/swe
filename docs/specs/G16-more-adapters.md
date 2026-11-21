@@ -346,13 +346,15 @@ The handshake:
    `GET /api/session/<id>` (resume) or `POST /api/session/<id>/fork`.
    The answer's `data.id` is the session id. A resumed or forked
    session keeps its model; a `model` or `effort` in the `StartSpec`
-   is then sent with `POST .../model`.
+   is then sent with `POST .../model`. So is an `effort` given with no
+   model for a new session, over the model the server reports.
 
 The server has no "quit" request: `close` sends SIGTERM (the real CLI
 exits at once, code 143), and kills it if it lingers. The server runs
 in its own process group and the signals go to the group, so a
 launcher script that keeps the real server as its child cannot leave
-it behind.
+it behind: once the child we started is gone, whatever is left of the
+group is killed.
 
 The session's start pair (`session.caps`, `session.state` idle) is
 emitted last, after the model and agent requests of a resume or a
@@ -408,7 +410,7 @@ is skipped):
 | `form.created` with one text field | `input.requested` (choice when it has options: ids `o1`, `o2`..., labels redacted; the value as the model wrote it is kept for the answer only) |
 | `form.created` with anything else | none; the form is cancelled |
 | `form.replied`, `form.cancelled` | `approval.resolved` `source: harness` when still open |
-| `session.step.ended` | none; its `tokens` are kept for the next usage |
+| `session.step.ended`, `session.step.failed` | none for the tokens; they are kept for the next usage |
 | `session.usage.updated` | `usage.updated`: the last step's tokens, `cost_usd` the session's running cost |
 | `session.compaction.ended` | `context.compacted` |
 | `session.step.failed` (not `aborted`), `session.execution.failed` | one `error` per turn (`code` the error's `type`) |

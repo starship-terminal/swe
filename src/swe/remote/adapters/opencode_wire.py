@@ -641,6 +641,9 @@ class ServeState(SessionCore):
             self._step = data["tokens"]
 
     def _on_step_failed(self, data: dict, fed: Fed) -> None:
+        if isinstance(data.get("tokens"), dict):
+            # A step that failed (or was cut) still used tokens.
+            self._step = data["tokens"]
         failure = data.get("error")
         if isinstance(failure, dict) and failure.get("type") != "aborted":
             self._fail(fed.events, failure, "the step failed")

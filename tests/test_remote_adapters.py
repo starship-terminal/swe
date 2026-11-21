@@ -4027,6 +4027,13 @@ class TestOpencodeServeState(unittest.TestCase):
         self.assertEqual(self.types(out)[-1], "message.completed")
         self.assertEqual(out[-1]["data"]["id"], "msg_a1:0")
         _streams_close(self, out)
+        state.feed(_oc("session.step.failed", assistantMessageID="msg_a0",
+                       error={"type": "aborted", "message": "cut"},
+                       tokens={"input": 1, "output": 1}))
+        cut = state.feed(_oc("session.usage.updated", cost=0.25)).events
+        self.assertEqual(cut[0]["data"], {
+            "input_tokens": 1, "output_tokens": 1, "cost_usd": 0.25},
+            "a step that failed still used tokens")
         state.feed(_oc("session.step.ended", assistantMessageID="msg_a1",
                        tokens={"input": 9, "output": 2, "cache": {
                            "read": 4, "write": 1}}))
@@ -4722,6 +4729,14 @@ class TestOpencodeAdapterStart(_OpencodeCase):
         self.assertNotIn(adapter._password, json.dumps(sink.events))
         _streams_close(self, sink.events)
 
+    def test_an_effort_with_no_model_goes_on_the_servers_model(self):
+        _adapter, _sink, _sid = self.started(spec={"effort": "high"})
+        self.assertEqual(self.sent_paths(), [
+            ("POST", "/api/session"), ("POST", "/model")])
+        self.assertEqual(self.sent()[-1]["body"], {"model": {
+            "providerID": "fake", "id": "model-1", "variant": "high"}})
+        self.assertNotIn("model", self.sent()[0]["body"])
+
     def test_a_session_id_that_is_already_opencodes_is_kept(self):
         _adapter, _sink, sid = self.started(spec={
             "session_id": "ses_chosen0000000000000001"})
@@ -4813,10 +4828,12 @@ class TestOpencodeAdapterStart(_OpencodeCase):
 
     def test_close_ends_what_the_server_started_too(self):
         # An npm-style launcher keeps the real server as its child; here
-        # the child holds the server's stdout, so the reader only ends
-        # when the child is gone as well.
+        # the launcher exits on SIGTERM and the child ignores it. The
+        # child holds the server's stdout, so the reader only ends when
+        # the child is gone as well.
         adapter, _sink, _sid = self.started("child")
         adapter.close(0.5)
+        self.assertEqual(adapter._proc.poll(), 143)
         adapter._out_reader.join(TIMEOUT)
         self.assertFalse(adapter._out_reader.is_alive())
 

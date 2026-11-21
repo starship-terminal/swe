@@ -183,12 +183,12 @@ class OpencodeServeAdapter:
         launcher keeps the real server as its child."""
         proc = self._proc
         try:
-            if proc.poll() is None:
-                os.killpg(proc.pid,
-                          signal.SIGKILL if hard else signal.SIGTERM)
-                return
+            # The group, whether or not its leader still runs: a
+            # launcher can exit and leave the server it started.
+            os.killpg(proc.pid, signal.SIGKILL if hard else signal.SIGTERM)
+            return
         except (OSError, AttributeError):
-            pass
+            pass  # no such group (or no groups here): the child alone
         try:
             (proc.kill if hard else proc.terminate)()
         except (OSError, AttributeError):
@@ -359,8 +359,14 @@ class OpencodeServeAdapter:
             self._model = wire.model_name(state.model)
             self._effort = str(state.model.get("variant") or "")
             state.agent = str(session.get("agent") or "")
-            if spec.resume_id and (spec.model or spec.effort):
-                # A resumed or forked session keeps its model: change it.
+            if spec.resume_id:
+                wanted = bool(spec.model or spec.effort)
+            else:
+                wanted = bool(spec.effort) and not spec.model
+            if wanted:
+                # A resumed or forked session keeps its model, and a new
+                # one made with no model named took no effort: say them
+                # now, over the model the server reports.
                 model = spec.model or self._model
                 effort = spec.effort or self._effort
                 ref = wire.model_ref(model, effort)
@@ -632,6 +638,9 @@ class OpencodeServeAdapter:
                 pass
         except OSError:
             pass
+        # The child we started is gone; anything it left in its group
+        # had the same SIGTERM and the same grace.
+        self._signal(hard=True)
         stream = self._stream
         if stream is not None:
             # Unblocks a reader the server's exit did not.

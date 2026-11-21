@@ -173,6 +173,10 @@
   "ts": 1760000003.144,
   "turn_id": "t-00000001-1",
   "data": {
+   "input_tokens": 647,
+   "output_tokens": 66,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
    "cost_usd": 0.00037414
   }
  },
