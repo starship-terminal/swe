@@ -1,0 +1,351 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.729,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.729,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-48-33-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.778,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.778,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.778,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "error",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.862,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "code": "modelNotFound",
+   "message": "The model `no-such-model-for-the-recorder` does not exist or you do not have access to it."
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.886,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "failed",
+   "reason": "The model `no-such-model-for-the-recorder` does not exist or you do not have access to it.",
+   "duration_s": 1.108
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.886,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.889,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.889,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.889,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "error",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.128,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "code": "modelNotFound",
+   "message": "The model `no-such-model-for-the-recorder` does not exist or you do not have access to it."
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.136,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "failed",
+   "reason": "The model `no-such-model-for-the-recorder` does not exist or you do not have access to it.",
+   "duration_s": 5.247
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.136,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.144,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.144,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.144,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:user",
+   "kind": "user",
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "error",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.33,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "code": "other",
+   "message": "{\n  \"error\": {\n    \"message\": \"Invalid value: 'no-such-effort'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"reasoning.effort\",\n    \"code\": \"invalid_value\"\n  }\n}"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.333,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "status": "failed",
+   "reason": "{\n  \"error\": {\n    \"message\": \"Invalid value: 'no-such-effort'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"reasoning.effort\",\n    \"code\": \"invalid_value\"\n  }\n}",
+   "duration_s": 0.189
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.333,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.336,
+  "turn_id": "t-00000001-4",
+  "data": {
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.336,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.336,
+  "turn_id": "t-00000001-4",
+  "data": {
+   "id": "t-00000001-4:user",
+   "kind": "user",
+   "text": "Reply with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.233,
+  "turn_id": "t-00000001-4",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "ok",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.233,
+  "turn_id": "t-00000001-4",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.246,
+  "turn_id": "t-00000001-4",
+  "data": {
+   "input_tokens": 17541,
+   "output_tokens": 5,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 17538,
+   "context_tokens": 17546,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.266,
+  "turn_id": "t-00000001-4",
+  "data": {
+   "status": "completed",
+   "duration_s": 0.93
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.266,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.266,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

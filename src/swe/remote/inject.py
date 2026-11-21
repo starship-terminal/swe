@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from swe.remote import attachments, supervise
+from swe.remote.adapters import codex_wire
 from swe.remote.launch_model import provider_split
 from swe.reports import transcripts as _tr
 from swe.sessions.models import Session
@@ -1057,9 +1058,9 @@ class OpencodeServeInjector:
 # matching response.
 
 _APPSERVER_CALL_S = 60.0
-_CODEX_DECISIONS = {
-    "allow": "accept", "always": "acceptForSession", "deny": "decline",
-}
+# The wire format lives in ``adapters/codex_wire.py``; this channel only
+# holds the process and its bookkeeping.
+_CODEX_DECISIONS = codex_wire.DECISIONS
 
 
 class _AppServer:
@@ -1084,7 +1085,7 @@ class _AppServer:
 
 def _rpc_line(proc: subprocess.Popen, payload: dict) -> bool:
     try:
-        proc.stdin.write(json.dumps(payload).encode() + b"\n")
+        proc.stdin.write(codex_wire.encode(payload))
         proc.stdin.flush()
         return True
     except (BrokenPipeError, OSError):
@@ -1093,26 +1094,19 @@ def _rpc_line(proc: subprocess.Popen, payload: dict) -> bool:
 
 def _appserver_live(method: str, params: dict, key: str, machine: str,
                     deltas) -> None:
-    """Agent-message text into ``message.delta``.
-
-    ``item/agentMessage/delta`` (``{itemId, delta}``) grows the item's
-    text; ``item/completed`` for that item, or the turn ending,
-    finishes it. Reasoning deltas are left out: a reasoning item often
-    never reaches the rollout as text, so its bubble would never be
-    replaced.
-    """
+    """Agent-message text into ``message.delta``: what each
+    notification means is ``codex_wire.live_text``'s to say."""
     if deltas is None:
         return
-    if method == "item/agentMessage/delta":
-        item_id = str(params.get("itemId") or "")
-        delta = params.get("delta")
-        if item_id and isinstance(delta, str) and delta:
-            deltas.push(key, machine, item_id, "assistant", delta)
-    elif method == "item/completed":
-        item = params.get("item")
-        if isinstance(item, dict) and item.get("id"):
-            deltas.finish(key, str(item["id"]))
-    elif method in ("turn/completed", "turn/failed", "codex/turnCompleted"):
+    live = codex_wire.live_text(method, params)
+    if live is None:
+        return
+    what, item_id, text = live
+    if what == "delta":
+        deltas.push(key, machine, item_id, "assistant", text)
+    elif what == "done":
+        deltas.finish(key, item_id)
+    else:
         deltas.finish_all(key)
 
 
@@ -1125,11 +1119,8 @@ def _appserver_read_loop(server: _AppServer, key: str, emit, machine: str,
     try:
         assert proc.stdout is not None
         for raw in proc.stdout:
-            try:
-                msg = json.loads(raw.decode("utf-8"))
-            except (ValueError, UnicodeDecodeError):
-                continue
-            if not isinstance(msg, dict):
+            msg = codex_wire.decode(raw)
+            if msg is None:
                 continue
             try:
                 _appserver_message(server, msg, key, emit, machine, deltas)
@@ -1158,30 +1149,22 @@ def _appserver_message(server: _AppServer, msg: dict, key: str, emit,
             params = {}
         else:
             _appserver_live(method, params, key, machine, deltas)
-        if "requestApproval" in method or "Approval" in method:
+        if codex_wire.is_approval_request(method):
             req_id = msg.get("id")
             if req_id is not None:
                 request_id = str(req_id)
                 server.approvals[request_id] = req_id
-                prompt = str(
-                    params.get("reason")
-                    or params.get("command")
-                    or params.get("itemId")
-                    or method
-                )
+                prompt = codex_wire.approval_prompt(method, params)
                 if emit is not None:
                     emit(key, protocol.event(
                         "approval.requested", key, machine,
                         {"request_id": request_id,
                          "prompt": _tr._redact_secrets(prompt)},
                     ))
-        elif method in ("turn/started", "codex/turnStarted"):
-            turn = params.get("turn") or {}
-            if isinstance(turn, dict) and turn.get("id"):
-                server.turn_id = str(turn["id"])
-        elif method in ("turn/completed", "turn/failed",
-                        "codex/turnCompleted"):
-            server.turn_id = ""
+        else:
+            turn_id = codex_wire.started_turn_id(method, params)
+            if turn_id is not None:
+                server.turn_id = turn_id
         return
     if "id" in msg:
         q = server.replies.pop(msg["id"], None)
@@ -1267,12 +1250,12 @@ class CodexAppServerInjector:
         from swe import __version__
 
         try:
-            hello = self._call(server, "initialize", {
-                "clientInfo": {"name": "swe", "version": __version__},
-            })
+            hello = self._call(
+                server, "initialize",
+                codex_wire.initialize(0, __version__)["params"])
             if hello is None or "error" in hello:
                 return None
-            _rpc_line(proc, {"jsonrpc": "2.0", "method": "initialized"})
+            _rpc_line(proc, codex_wire.initialized())
             resumed = self._call(server, "thread/resume",
                                  {"threadId": server.thread_id})
             if resumed is None or "error" in resumed:
@@ -1305,10 +1288,8 @@ class CodexAppServerInjector:
             rpc_id = server.next_id
             server.next_id += 1
             server.replies[rpc_id] = q
-            if not _rpc_line(server.proc, {
-                "jsonrpc": "2.0", "id": rpc_id,
-                "method": method, "params": params,
-            }):
+            if not _rpc_line(server.proc,
+                             codex_wire.request(rpc_id, method, params)):
                 server.replies.pop(rpc_id, None)
                 return None
         try:
@@ -1346,17 +1327,12 @@ class CodexAppServerInjector:
         server = self._server_for(session)
         if server is None:
             return InjectResult(False, "codex app-server failed to start")
-        params: dict = {
-            "threadId": server.thread_id,
-            "input": [{"type": "text", "text": text}],
-        }
         # turn/start's own overrides carry the attach-time pick (each
         # holds for the turn and the ones after, matching headless's
         # per-call --model).
-        for field in ("model", "effort"):
-            value = str(meta.get(field) or "")
-            if value:
-                params[field] = value
+        params = codex_wire.plain_turn_params(
+            server.thread_id, text, model=str(meta.get("model") or ""),
+            effort=str(meta.get("effort") or ""))
         resp = self._call(server, "turn/start", params)
         if resp is None:
             return InjectResult(False, "codex app-server timed out")
@@ -1382,10 +1358,8 @@ class CodexAppServerInjector:
             return InjectResult(
                 False, "unknown or already-answered approval request"
             )
-        ok = _rpc_line(server.proc, {
-            "jsonrpc": "2.0", "id": rpc_id,
-            "result": {"decision": mapped},
-        })
+        ok = _rpc_line(server.proc,
+                       codex_wire.approval_reply(rpc_id, mapped))
         if not ok:
             server.approvals[request_id] = rpc_id  # don't lose it
             return InjectResult(False, "codex app-server is unreachable")
@@ -1398,10 +1372,9 @@ class CodexAppServerInjector:
             server = self._servers.get(self.key)
             if server is None or server.proc.poll() is not None:
                 return InjectResult(False, "codex app-server is not running")
-            params = {"threadId": server.thread_id}
-            if server.turn_id:
-                params["turnId"] = server.turn_id
-            resp = self._call(server, "turn/interrupt", params)
+            resp = self._call(
+                server, "turn/interrupt", codex_wire.interrupt_params(
+                    server.thread_id, server.turn_id))
             if resp is None or "error" in resp:
                 return InjectResult(False, "interrupt failed")
             return InjectResult(True, "interrupted")

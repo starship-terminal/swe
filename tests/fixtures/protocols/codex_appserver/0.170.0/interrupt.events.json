@@ -1,0 +1,263 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.752,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.752,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.788,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.788,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.788,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.582,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "1. ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.582,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "One ",
+   "seq": 2,
+   "offset": 3,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.582,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "is ",
+   "seq": 3,
+   "offset": 7,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.741,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 4,
+   "offset": 10,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.741,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "beginning.  \n",
+   "seq": 5,
+   "offset": 14,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.742,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "2. ",
+   "seq": 6,
+   "offset": 27,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.742,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "Two ",
+   "seq": 7,
+   "offset": 30,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.742,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "makes ",
+   "seq": 8,
+   "offset": 34,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.742,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 9,
+   "offset": 40,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.742,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "pair.  \n",
+   "seq": 10,
+   "offset": 42,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.749,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "1. One is the beginning.  \n2. Two makes a pair.  \n"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.749,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "interrupted",
+   "duration_s": 1.961
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.749,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.75,
+  "data": {
+   "state": "closed"
+  }
+ }
+]
