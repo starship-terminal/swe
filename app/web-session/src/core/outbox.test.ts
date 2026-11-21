@@ -375,12 +375,12 @@ describe("results", () => {
     expect(await stored(t.factory)).toEqual([]);
   });
 
-  it("asks again about every acknowledged send when the hub restarts, under the same ids", async () => {
+  it("asks again about every acknowledged send, under the same ids", async () => {
     const { t, outbox, entry } = await sent();
     const second = await outbox.send({ text: "y" });
     await drain(outbox);
     t.hub.received.length = 0;
-    outbox.hubRestarted();
+    outbox.recheckSent();
     await settle();
     await settle();
     expect(t.hub.received).toEqual([entry.commandId, second.commandId]);
@@ -541,7 +541,7 @@ describe("a send the hub never took", () => {
     expect(t.view().entries[0]).toMatchObject({ status: "failed", error: expect.stringContaining("24 hours") });
   });
 
-  it("forgets an acknowledged send whose result never came, after 24 hours", async () => {
+  it("ends an acknowledged send whose result never came, after 24 hours, as failed with a reason", async () => {
     const t = setup();
     const outbox = await t.make();
     await outbox.send({ text: "old" });
@@ -550,7 +550,8 @@ describe("a send the hub never took", () => {
     outbox.wake();
     await settle();
     await settle();
-    expect(t.view().entries).toEqual([]);
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: expect.stringContaining("24 hours") });
+    expect(await stored(t.factory)).toMatchObject([{ status: "failed" }]);
   });
 });
 

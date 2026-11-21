@@ -13,7 +13,9 @@
 //
 // A stream that sends nothing for 25 s (the hub pings every 10 s) is dead
 // and is closed. A new connection asks with `last=<cursor>&epoch=<epoch>`.
-// Retries back off with jitter; a stream that stays open resets the count.
+// Retries back off with jitter. A stream that speaks once and then closes does not
+// reset the count: only one that has stayed open for a ping interval (10 s) does, so a
+// hub or proxy that ends every stream after its first frames is not met by a retry storm.
 //
 // Nothing here reads the clock, the random source or the network itself:
 // timers, randomness, the transport and the environment (visibility, network
@@ -124,11 +126,17 @@ export interface SupervisorOptions {
   onStatus(status: ConnectionStatus): void;
   backoff?: BackoffOptions;
   silenceMs?: number;
+  /** How long a stream must stay open before it counts as working and resets the retry count. */
+  stableMs?: number;
 }
 
 export class Supervisor {
   private readonly options: SupervisorOptions;
   private readonly silenceMs: number;
+  private readonly stableMs: number;
+  private stable = false;
+  private firstFrameAt = 0;
+  private stableTimer: unknown = null;
   private readonly backoff: BackoffOptions;
   private current: ConnectionStatus;
   private stream: StreamHandle | null = null;
@@ -144,6 +152,7 @@ export class Supervisor {
   constructor(options: SupervisorOptions) {
     this.options = options;
     this.silenceMs = options.silenceMs ?? PROTOCOL.silence_s * 1000;
+    this.stableMs = options.stableMs ?? PROTOCOL.ping_s * 1000;
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
     this.current = { state: "connecting", attempt: 0, since: options.timers.now(), retryAt: null, detail: "" };
   }
@@ -175,6 +184,7 @@ export class Supervisor {
     this.closeStream();
     this.clearRetry();
     this.clearSilence();
+    this.clearStable();
     this.unsubscribe?.();
     this.unsubscribe = null;
   }
@@ -220,6 +230,7 @@ export class Supervisor {
     this.closeStream();
     this.clearRetry();
     this.clearSilence();
+    this.clearStable();
     if (this.current.state !== "offline") this.set("offline", { attempt: 0, detail: "no network" });
   }
 
@@ -231,6 +242,8 @@ export class Supervisor {
     const query = ["v=2"];
     if (last > 0 && epoch !== null) query.push(`last=${last}`, `epoch=${epoch}`);
     this.gotFrame = false;
+    this.stable = false;
+    this.clearStable();
     this.lastFrameAt = this.options.timers.now();
     // What to show while the attempt runs: a hub already counted as down stays so until it answers.
     const showing = this.current.state;
@@ -271,8 +284,11 @@ export class Supervisor {
     }
     if (!this.gotFrame) {
       this.gotFrame = true;
+      this.firstFrameAt = this.options.timers.now();
       this.everLive = true;
-      this.set("live", { attempt: 0, retryAt: null, detail: "" });
+      // Live at once (frames are flowing), but the retry count only resets once the stream has stayed open.
+      this.set("live", { retryAt: null, detail: "" });
+      this.armStable(generation);
     }
     this.options.onFrame(value);
   }
@@ -280,6 +296,7 @@ export class Supervisor {
   private ended(end: StreamEnd): void {
     this.stream = null;
     this.clearSilence();
+    this.clearStable();
     if (end.kind === "http") {
       if (end.status === 401 || end.status === 403) return this.terminal("unauthorized", `HTTP ${end.status}`);
       if (end.status === 404 || end.status === 410) return this.terminal("gone", `HTTP ${end.status}`);
@@ -287,8 +304,10 @@ export class Supervisor {
       return this.failed(`HTTP ${end.status}`);
     }
     if (end.kind === "error") return this.failed(end.message);
-    // A stream that ends cleanly after frames is a drop; one that never said anything is a failure.
-    if (this.gotFrame) return this.dropped("stream closed");
+    // A stream that ends cleanly after it had stayed open is a drop; one that never said anything,
+    // or that did not last, is a failure and goes through the backoff.
+    if (this.stayedOpen()) return this.dropped("stream closed");
+    if (this.gotFrame) return this.failed("stream closed soon after it opened");
     return this.failed("stream closed before any frame");
   }
 
@@ -296,7 +315,8 @@ export class Supervisor {
     this.generation++;
     this.closeStream();
     this.clearSilence();
-    if (this.gotFrame) this.dropped("no frame for 25 s");
+    this.clearStable();
+    if (this.stayedOpen()) this.dropped("no frame for 25 s");
     else this.failed("no frame for 25 s");
   }
 
@@ -329,6 +349,7 @@ export class Supervisor {
     this.generation++;
     this.closeStream();
     this.clearSilence();
+    this.clearStable();
     this.clearRetry();
     this.set(state, { attempt: 0, retryAt: null, detail });
   }
@@ -341,6 +362,27 @@ export class Supervisor {
       this.silenceTimer = null;
       if (generation === this.generation && this.running) this.silent();
     }, this.silenceMs);
+  }
+
+  /** Whether the stream that just ended had been open and speaking for a ping interval or more. */
+  private stayedOpen(): boolean {
+    return this.gotFrame && this.options.timers.now() - this.firstFrameAt >= this.stableMs;
+  }
+
+  private armStable(generation: number): void {
+    this.clearStable();
+    this.stable = false;
+    this.stableTimer = this.options.timers.setTimeout(() => {
+      this.stableTimer = null;
+      if (generation !== this.generation || !this.running) return;
+      this.stable = true;
+      this.set(this.current.state, { attempt: 0 });
+    }, this.stableMs);
+  }
+
+  private clearStable(): void {
+    if (this.stableTimer !== null) this.options.timers.clearTimeout(this.stableTimer);
+    this.stableTimer = null;
   }
 
   private clearSilence(): void {

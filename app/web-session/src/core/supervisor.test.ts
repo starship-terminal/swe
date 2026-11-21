@@ -166,6 +166,8 @@ describe("a dropped stream", () => {
     const t = setup();
     t.supervisor.start();
     t.transport.last.send(ping());
+    t.timers.advance(10_000); // it stayed open for a ping interval
+    t.transport.last.send(ping());
     t.transport.streams[0]?.end({ kind: "closed" });
     expect(t.supervisor.status).toMatchObject({ state: "reconnecting", attempt: 0, detail: "stream closed" });
     expect(t.transport.streams).toHaveLength(2);
@@ -182,6 +184,45 @@ describe("a dropped stream", () => {
     old.end({ kind: "closed" });
     expect(t.frames).toHaveLength(1);
     expect(t.transport.streams).toHaveLength(2);
+  });
+});
+
+describe("a stream that speaks once and closes", () => {
+  it("goes through the backoff every time: growing, capped waits, never two opens without a timer between", () => {
+    const t = setup({ random: () => 1 });
+    t.supervisor.start();
+    const waits: number[] = [];
+    for (let i = 0; i < 50; i++) {
+      const opened = t.transport.streams.length;
+      t.transport.last.send(ping()).end({ kind: "closed" });
+      // No stream was opened by the end itself: a timer waits.
+      expect(t.transport.streams).toHaveLength(opened);
+      const wait = (t.supervisor.status.retryAt ?? 0) - t.timers.now();
+      expect(t.supervisor.status.attempt).toBe(i + 1);
+      expect(wait).toBeGreaterThan(0);
+      waits.push(wait);
+      t.timers.advance(wait - 1);
+      expect(t.transport.streams).toHaveLength(opened);
+      t.timers.advance(1);
+      expect(t.transport.streams).toHaveLength(opened + 1);
+    }
+    expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16_000, 30_000]);
+    expect(Math.max(...waits)).toBe(30_000);
+    expect(waits.slice(5).every((w) => w === 30_000)).toBe(true);
+    expect(t.supervisor.status.state).toBe("hub_down");
+  });
+
+  it("is forgiven once a stream has stayed open for a ping interval", () => {
+    const t = setup({ random: () => 1 });
+    t.supervisor.start();
+    for (let i = 0; i < 3; i++) {
+      t.transport.last.send(ping()).end({ kind: "closed" });
+      t.timers.advance((t.supervisor.status.retryAt ?? 0) - t.timers.now());
+    }
+    expect(t.supervisor.status.attempt).toBe(3);
+    t.transport.last.send(ping());
+    t.timers.advance(10_000);
+    expect(t.supervisor.status).toMatchObject({ state: "live", attempt: 0 });
   });
 });
 
@@ -228,6 +269,10 @@ describe("failing to connect", () => {
     refuse(t);
     refuse2(t);
     t.transport.last.send(ping());
+    // Live at once, but the count only resets once the stream has stayed open.
+    expect(t.supervisor.status).toMatchObject({ state: "live", attempt: 2, retryAt: null });
+    t.timers.advance(10_000);
+    t.transport.last.send(ping());
     expect(t.supervisor.status).toMatchObject({ state: "live", attempt: 0, retryAt: null });
     expect(t.timers.pending).toBe(1); // only the silence timer
   });
@@ -236,7 +281,8 @@ describe("failing to connect", () => {
     const t = setup({ random: () => 0 });
     t.supervisor.start();
     t.transport.last.send(ping());
-    t.transport.last.end({ kind: "closed" }); // dropped: immediate retry
+    t.timers.advance(10_000);
+    t.transport.last.end({ kind: "closed" }); // dropped after a stable stream: immediate retry
     refuse(t);
     expect(t.supervisor.status).toMatchObject({ state: "reconnecting", attempt: 1 });
     t.timers.advance(500);

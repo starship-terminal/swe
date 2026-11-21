@@ -16,6 +16,36 @@ import type {
   UsageUpdatedData,
 } from "./types";
 
+/**
+ * An id to `seq` map that can be updated without copying all of it: the ids are spread over 256
+ * buckets and only the bucket touched, and the list of buckets, are copied. A plain object copied
+ * for every tool call made a long session cost the square of its length.
+ */
+export type IdIndex = readonly (Readonly<Record<string, number>> | undefined)[];
+
+const BUCKETS = 256;
+
+export function emptyIndex(): IdIndex {
+  return new Array<undefined>(BUCKETS).fill(undefined);
+}
+
+function bucketOf(key: string): number {
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) + hash + key.charCodeAt(i)) | 0;
+  return (hash >>> 0) % BUCKETS;
+}
+
+export function indexGet(index: IdIndex, key: string): number | undefined {
+  return index[bucketOf(key)]?.[key];
+}
+
+export function indexSet(index: IdIndex, key: string, value: number): IdIndex {
+  const at = bucketOf(key);
+  const next = index.slice();
+  next[at] = { ...index[at], [key]: value };
+  return next;
+}
+
 /** The reply, thinking or tool text still being written, as far as this client holds it. */
 export interface LiveText {
   id: string;
@@ -188,7 +218,7 @@ export interface SessionState {
   turns: TurnInfo[];
   /** Timeline items in journal order, one per `seq`. */
   items: TimelineItem[];
-  index: { tool: Record<string, number>; request: Record<string, number> };
+  index: { tool: IdIndex; request: IdIndex };
   /** Messages in progress. */
   live: LiveText[];
   /** Messages a hole in the deltas stopped: appends are ignored until `live[]` replaces the text. */
@@ -230,7 +260,7 @@ export function emptySession(): SessionState {
     openTurn: null,
     turns: [],
     items: [],
-    index: { tool: {}, request: {} },
+    index: { tool: emptyIndex(), request: emptyIndex() },
     live: [],
     stopped: [],
     pending: [],

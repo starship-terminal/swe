@@ -79,8 +79,8 @@ The rules:
 | `session.row` | replaces the row |
 | `ping` | raises the cursor to `head` |
 | `message.delta` | the delta rule below |
-| journaled frames | applied once and in place: a `seq` already held is skipped, a lower one than the highest is inserted where it belongs, and `seq` gaps are fine. The cursor is the highest `seq` seen even for a frame it skipped. A `seq` of 0 never moves it |
-| state events (`session.state`, `session.caps`, `plan.updated`, `queue.updated`, `usage.updated`, `changes.updated`) | an older one arriving after a newer one is ignored. A snapshot marks all of them as of its `head` |
+| journaled frames | applied once, whatever they change: a repeat of a frame already applied changes nothing anywhere (the timeline, turns, live text, tasks, checkpoints, requests, the state events below), and one that arrives out of order, below the cursor but not seen before, is applied in its place. `seq` gaps are fine. The cursor is the highest `seq` seen even for a frame it skipped. A `seq` of 0 never moves it. The rule is per event, not "at or below the cursor changes nothing", because the brief asks for out-of-order frames to be handled; `reducer.test.ts` applies every journaled frame of every recording a second time and requires the same state |
+| state events (`session.state`, `session.caps`, `plan.updated`, `queue.updated`, `usage.updated`, `changes.updated`) | one at or below the `seq` last applied for its type is ignored (a repeat, or an older one arriving late). A snapshot marks all of them as of its `head` |
 | `approval.requested`, `input.requested` | the same `seq` is the same request (it can arrive again after a snapshot). A different `seq` under a known id is a new request that reuses it: an agent that restarts counts again from `perm-1` (the fake agent does; see Verification) |
 | `approval.resolved` | closes the request with that id; the first answer stands. An answer that comes before its request is kept until the request shows up |
 | `tool.started` | the same `seq` is the same call; a start that arrives after its completion joins the completion's item; any other is a new call, even under a reused `call_id` |
@@ -128,8 +128,13 @@ The reducer tests replay the hub's own output
 (`tests/fixtures/session-view/`, below) and check that the frames add up
 to what the hub says: for every recording, the state built from its
 frames equals the state built from the snapshot the hub took at the end
-(cursor, epoch, phase, caps, plan, tasks, checkpoints, changes, usage,
-queue, pending, live, timeline items, turns). Then each recording has its
+(cursor, epoch, phase, caps, plan, changes, usage, queue, pending, live,
+timeline items, turns, tasks and checkpoints, `restoredSeq` included).
+Tasks and checkpoints match because a snapshot's `messages[]` carry their
+events too (G9: tasks, plans and checkpoints are timeline events), and the
+reducer reads them from there as it does from a stream; the snapshot's own
+`tasks[]` (the running ones) and `checkpoints[]` add only what is older than
+those messages. Then each recording has its
 own test: the approval pending then answered, a second device taking the
 pending request from its snapshot, a queued message and a steer, a
 reconnect mid-reply, an overflow recovery, a snapshot on a new epoch.
@@ -165,7 +170,10 @@ time by hand and nothing waits.
   never spoke is a failure and backs off.
 - **Backoff.** The wait before retry `n` is `min(30 s, 1 s * 2^(n-1))`,
   half of it fixed and half random (`backoffDelay`). The count goes back
-  to 0 when a stream speaks. `status.retryAt` says when the next attempt
+  to 0 only when a stream has stayed open for a ping interval (10 s): one
+  that speaks once and closes does not reset it, so a hub or proxy that ends
+  every stream after its first frames is met by growing, capped waits, never
+  by a retry per close. A drop after a stream that did last is retried at once. `status.retryAt` says when the next attempt
   starts, for a countdown.
 - **Wake** (`wake()`, the page becoming visible, the `online` event, a
   native shell's call). Whatever waits on a timer, or in a state nothing
@@ -213,14 +221,17 @@ first attempt.
 - **A result ends it.** An ok result, or a cancelled one (taken out of the
   queue, or steered), removes the entry. Any other result marks it failed
   with the hub's note.
-- **After a restart** (a changed `boot_id`, in a snapshot or in
-  `GET /v1/status` after a reconnect), and after a reload, every `sent`
-  entry is asked about again under its own id: the hub may have lost a
-  result it owed (a failed result has `seq` 0 and is not replayed). A `401`
-  pauses the outbox until `wake()`.
+- **After every reconnect**, and after a reload, every `sent` entry is
+  asked about again under its own id. A catch-up by snapshot or overflow
+  recovery carries no `command.result`, and a failed result the hub made
+  for the stream has `seq` 0 and is not replayed, so a result could have
+  been missed whatever the `boot_id` says. The hub answers a repeat with
+  the stored receipt and result. A `401` pauses the outbox until `wake()`.
 - **24 hours.** A `pending` entry older than that fails ("Not sent"), and a
-  `sent` one is forgotten: the hub holds a message for a sleeping machine
-  for the same time.
+  `sent` one fails too ("No result from the hub in 24 hours: this message
+  may not have been delivered"): the hub holds a message for a sleeping
+  machine for the same time. Nothing is dropped without a reason a view
+  can show.
 - **No IndexedDB.** It can be missing, or throw (a private window, blocked
   site data, a sandboxed frame), when it opens or later. The outbox always
   keeps its entries in memory and treats the database as a write-through
@@ -287,11 +298,11 @@ const items = useSessionStore(store, (s) => s.session.items);
 
 Every action that reaches the hub carries a fresh `command_id` in its
 body. What the store does on its own: a hole in the deltas fetches
-`GET .../snapshot` and replaces the live text with its `live[]` (retried
+`GET .../snapshot` and takes its `live[]` text for the messages the hole stopped (retried
 with backoff, five tries, since the next catch-up's state frame restores
 it anyway); an epoch the client does not hold fetches the snapshot and
 replaces everything; a `command.result` reaches the outbox; going live
-wakes the outbox and checks `GET /v1/status` for a changed `boot_id`.
+wakes the outbox and asks again about every `sent` entry.
 
 ## Fixtures
 
@@ -356,7 +367,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 200 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 222 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -372,6 +383,12 @@ changed here.
   and in `session.row` (ownership, title, pin changes); neither says the
   session started or stopped running. Draw the phase from
   `session.phase`, never from the row.
+- **A snapshot's `tasks[]` holds only the running tasks**, and its
+  `checkpoints[]` only the checkpoints made, with no restore mark. The
+  client reads the rest from the snapshot's `messages[]` (task and checkpoint
+  events are timeline events), so a task that finished or a restore older
+  than the newest 200 timeline events is not in a state built from a
+  snapshot. That is the same window as the timeline.
 - **Restore has no route.** `restore(checkpointId)` posts to
   `POST /v1/sessions/{key}/restore {checkpoint_id, command_id}`, which G19
   must provide (G15's notes: a command in `_KEPT_OPS`, not in `HELD_OPS`).

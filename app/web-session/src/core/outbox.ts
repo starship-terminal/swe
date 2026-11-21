@@ -150,8 +150,13 @@ export class Outbox {
     void this.flush();
   }
 
-  /** The hub restarted: it may have lost a result it owed. Ask again about every send it acknowledged. */
-  hubRestarted(): void {
+  /**
+   * Ask again about every send the hub acknowledged, under the same ids. The hub answers a repeat with the
+   * stored receipt and result. Called after a restart, and after every reconnect: a catch-up by snapshot or
+   * overflow recovery carries no `command.result`, and a failed one the hub made for the stream has `seq` 0
+   * and is not replayed, so a result could have been missed.
+   */
+  recheckSent(): void {
     for (const entry of this.list) if (entry.status === "sent") this.recheck.add(entry.commandId);
     void this.flush();
   }
@@ -208,7 +213,9 @@ export class Outbox {
       if (this.closed) return;
       if (now - entry.createdAt > OUTBOX_TTL_MS) {
         if (entry.status === "pending") await this.fail(entry, "Not sent: the hub did not answer for 24 hours");
-        else if (entry.status === "sent") await this.drop(entry.commandId);
+        else if (entry.status === "sent") {
+          await this.fail(entry, "No result from the hub in 24 hours: this message may not have been delivered");
+        }
       }
     }
     // Sends go in the order they were typed: one that cannot go holds the ones behind it.

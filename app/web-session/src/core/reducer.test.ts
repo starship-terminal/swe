@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { applyHistory, beginConnection, reduce, reduceAll, type Effect } from "./reducer";
-import { emptySession, type SessionState, type TimelineItem, type ToolItem } from "./state";
+import { emptyIndex, emptySession, indexGet, indexSet, type SessionState, type TimelineItem, type ToolItem } from "./state";
 import { fixtureNames, loadFixture, snapshotFrame, type Fixture } from "./test-support";
-import type { Frame, Snapshot } from "./types";
+import { seqOf, type Frame, type Snapshot } from "./types";
 
 // ---------------------------------------------------------------------
 // Frames made by hand, for the rules the recordings do not reach. Every
@@ -120,9 +120,11 @@ describe("a recorded stream adds up to the snapshot the hub holds at its end", (
       expect(live.live.map(({ length: _l, ...m }) => m)).toEqual(
         body.live.map((m) => ({ ...m })),
       );
-      expect(
-        live.tasks.filter((t) => t.status === "running").map(({ seq: _s, ...t }) => t),
-      ).toEqual(body.tasks);
+      // Tasks and checkpoints are the same whether built from the frames or from the snapshot, restores included.
+      expect(live.tasks).toEqual(reference.tasks);
+      expect(live.checkpoints).toEqual(reference.checkpoints);
+      // And the snapshot's own lists say the same: its tasks are the running ones, its checkpoints the made ones.
+      expect(live.tasks.filter((t) => t.status === "running").map(({ seq: _s, ...t }) => t)).toEqual(body.tasks);
       expect(live.checkpoints.map(({ restoredSeq: _r, ...c }) => c)).toEqual(body.checkpoints);
       expect(strip(live.items)).toEqual(strip(reference.items));
       expect(live.turns).toEqual(reference.turns);
@@ -706,6 +708,73 @@ describe("older history with reused ids", () => {
     // And the newest instance is still the one later events find.
     state = reduce(state, call("tool.completed", 120, { output: "newest" })).state;
     expect((state.items.find((i) => i.seq === 100) as ToolItem).output).toBe("newest");
+  });
+});
+
+describe("a frame seen twice", () => {
+  const started = (id: string, seq: number) => env("turn.started", { by: "d" }, { seq, turn_id: id });
+  const ended = (id: string, seq: number) => env("turn.ended", { status: "completed" }, { seq, turn_id: id });
+
+  it("does not wipe the next turn's live text or reopen an ended turn", () => {
+    let state = feed(start(), started("t1", 1), ended("t1", 2), started("t2", 3), delta("a2", "Hel", 0)).state;
+    expect(state.live.map((l) => l.text)).toEqual(["Hel"]);
+    state = reduce(state, ended("t1", 2)).state;
+    expect([state.cursor, state.live.map((l) => l.text), state.openTurn]).toEqual([3, ["Hel"], "t2"]);
+    state = reduce(state, started("t1", 1)).state;
+    expect(state.openTurn).toBe("t2");
+    expect(state.turns.map((t) => [t.id, t.endedSeq])).toEqual([["t1", 2], ["t2", undefined]]);
+  });
+
+  it("does not end live text again, drop a task's newer state, or move a checkpoint", () => {
+    const msg = env("message.completed", { id: "a", kind: "assistant", text: "x" }, { seq: 1, turn_id: "t1" });
+    const task = (status: "running" | "completed", seq: number) => env("task.updated", { task_id: "k", kind: "subagent", status }, { seq });
+    let state = feed(start(), msg, delta("a", "next", 0), task("running", 4), task("completed", 5)).state;
+    state = feed(state, msg, task("running", 4), task("completed", 5)).state;
+    expect(state.live.map((l) => l.text)).toEqual(["next"]);
+    expect(state.tasks.map((t) => [t.task_id, t.status, t.seq])).toEqual([["k", "completed", 5]]);
+    const created = env("checkpoint.created", { checkpoint_id: "ck", files: 1 }, { seq: 6, turn_id: "t1" });
+    state = feed(state, created, env("checkpoint.restored", { checkpoint_id: "ck" }, { seq: 7, turn_id: "t1" }), created).state;
+    expect(state.checkpoints).toMatchObject([{ checkpoint_id: "ck", seq: 6, restoredSeq: 7 }]);
+  });
+
+  it("changes nothing when every journaled frame of every recording is applied a second time", () => {
+    for (const name of fixtureNames()) {
+      const fixture = loadFixture(name);
+      const journaled = fixture.connections.flatMap((c) => c.frames).filter((f) => seqOf(f) > 0);
+      // From a snapshot, so nothing needs an earlier frame; then the journaled frames, twice.
+      const base = reduce(emptySession(), snapshotFrame(fixture.snapshots[0]?.body as Snapshot)).state;
+      const once = reduceAll(base, journaled).state;
+      const twice = reduceAll(once, journaled).state;
+      const { applied: _a, ...a } = once;
+      const { applied: _b, ...b } = twice;
+      expect(b, name).toEqual(a);
+    }
+  });
+});
+
+describe("cost", () => {
+  it("grows with the length of a session, not with its square", () => {
+    // 16,000 tool calls took 35 s when the id index was copied on every insert.
+    let state = start();
+    const t0 = performance.now();
+    for (let n = 1; n <= 16_000; n++) {
+      state = reduce(state, env("tool.started", { call_id: `toolu_${n}`, name: "Bash" }, { seq: 2 * n - 1, turn_id: "t1" })).state;
+      state = reduce(state, env("tool.completed", { call_id: `toolu_${n}`, status: "ok" }, { seq: 2 * n, turn_id: "t1" })).state;
+    }
+    const elapsed = performance.now() - t0;
+    expect(state.items).toHaveLength(16_000);
+    expect(state.items.every((i) => (i as ToolItem).status === "ok")).toBe(true);
+    expect(elapsed).toBeLessThan(5000);
+  });
+
+  it("the id index finds every id it was given and the newest instance of a reused one", () => {
+    let index = emptyIndex();
+    for (let n = 0; n < 2000; n++) index = indexSet(index, `id-${n}`, n);
+    for (let n = 0; n < 2000; n += 97) expect(indexGet(index, `id-${n}`)).toBe(n);
+    expect(indexGet(index, "nope")).toBeUndefined();
+    const before = index;
+    index = indexSet(index, "id-5", 99);
+    expect([indexGet(before, "id-5"), indexGet(index, "id-5")]).toEqual([5, 99]);
   });
 });
 

@@ -27,7 +27,7 @@ import {
   type Timers,
 } from "./supervisor";
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
-import type { Frame, MessagesPage, Snapshot, Status } from "./types";
+import type { Frame, MessagesPage, Snapshot } from "./types";
 
 export interface SessionStoreOptions {
   sessionKey: string;
@@ -131,7 +131,6 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   // even when there is no database to read them back from.
   let carried: OutboxEntry[] = [];
   let generation = 0;
-  let knownBoot: string | null = null;
   let wasLive = false;
   let snapshotBusy = false;
   let snapshotWanted: { reason: "hole" | "epoch" } | null = null;
@@ -150,9 +149,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         const still = new Set(state.live.map((entry) => entry.id));
         for (const entry of before.live) if (!still.has(entry.id)) endedMeanwhile.add(entry.id);
       }
-      if (frame.type === "session.snapshot") {
-        noteBoot(frame.data.boot_id);
-      } else if (frame.type === "command.result" && frame.command_id !== undefined) {
+      if (frame.type === "command.result" && frame.command_id !== undefined) {
         const result = { ok: frame.data.ok, ...(frame.data.note === undefined ? {} : { note: frame.data.note }) };
         outbox?.noteResult(frame.command_id, {
           ...result,
@@ -162,11 +159,6 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       for (const effect of effects) {
         if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);
       }
-    };
-
-    const noteBoot = (boot: string): void => {
-      if (knownBoot !== null && knownBoot !== boot) outbox?.hubRestarted();
-      knownBoot = boot;
     };
 
     // -- the snapshot a hole or an epoch change asks for -----------------
@@ -229,18 +221,9 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       set({ connection });
       const live = connection.state === "live";
       if (live && !wasLive) {
+        // Results the stream could not replay may have been missed while it was away.
+        outbox?.recheckSent();
         outbox?.wake();
-        // A hub that restarted may not have the results of commands it acknowledged. The status
-        // route says which boot it is on without a credential.
-        void (async () => {
-          try {
-            const response = await transport.json("/v1/status");
-            const boot = (response.body as Partial<Status> | undefined)?.boot_id;
-            if (typeof boot === "string") noteBoot(boot);
-          } catch {
-            // Not worth surfacing: the snapshot carries it too.
-          }
-        })();
       }
       wasLive = live;
     };

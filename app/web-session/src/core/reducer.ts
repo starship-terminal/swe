@@ -22,6 +22,8 @@ import {
   COMMANDS_KEPT,
   EARLY_ANSWERS_KEPT,
   emptySession,
+  indexGet,
+  indexSet,
   type CheckpointInfo,
   type CheckpointItem,
   type CommandRecord,
@@ -111,18 +113,18 @@ function insertItem(s: SessionState, item: TimelineItem): void {
   const items = s.items;
   const last = items[items.length - 1];
   if (last === undefined || item.seq > last.seq) {
-    s.items = [...items, item];
+    s.items = items.concat(item);
   } else {
     const at = findSeq(items, item.seq);
     if ((items[at] as TimelineItem).seq === item.seq) return;
     s.items = [...items.slice(0, at), item, ...items.slice(at)];
   }
   // The index points at the latest instance of an id: an older one (a page of history) never takes it over.
-  if (item.kind === "tool" && item.seq > (s.index.tool[item.callId] ?? -1)) {
-    s.index = { ...s.index, tool: { ...s.index.tool, [item.callId]: item.seq } };
+  if (item.kind === "tool" && item.seq > (indexGet(s.index.tool, item.callId) ?? -1)) {
+    s.index = { ...s.index, tool: indexSet(s.index.tool, item.callId, item.seq) };
   }
-  if (item.kind === "request" && item.seq > (s.index.request[item.requestId] ?? -1)) {
-    s.index = { ...s.index, request: { ...s.index.request, [item.requestId]: item.seq } };
+  if (item.kind === "request" && item.seq > (indexGet(s.index.request, item.requestId) ?? -1)) {
+    s.index = { ...s.index, request: indexSet(s.index.request, item.requestId, item.seq) };
   }
 }
 
@@ -132,7 +134,9 @@ function replaceItem(s: SessionState, seq: number, update: (item: TimelineItem) 
   if (item === undefined || item.seq !== seq) return;
   const next = update(item);
   if (next === item) return;
-  s.items = [...s.items.slice(0, at), next, ...s.items.slice(at + 1)];
+  const copy = s.items.slice();
+  copy[at] = next;
+  s.items = copy;
 }
 
 /**
@@ -151,6 +155,8 @@ function instance<T extends TimelineItem>(
     const item = s.items[findSeq(s.items, latest)];
     return item !== undefined && item.seq === latest && item.kind === kind ? (item as T) : undefined;
   }
+  // An id the index has never seen has no instance: only an older one than the latest needs a search.
+  if (latest === undefined) return undefined;
   for (let at = findSeq(s.items, atOrBefore + 1) - 1; at >= 0; at--) {
     const item = s.items[at] as TimelineItem;
     if (item.kind === kind && matches(item as T)) return item as T;
@@ -158,8 +164,13 @@ function instance<T extends TimelineItem>(
   return undefined;
 }
 
+function hasItemAt(s: SessionState, seq: number): boolean {
+  const at = findSeq(s.items, seq);
+  return s.items[at]?.seq === seq;
+}
+
 function toolItem(s: SessionState, callId: string, atOrBefore = Infinity): ToolItem | undefined {
-  return instance<ToolItem>(s, "tool", s.index.tool[callId], (item) => item.callId === callId, atOrBefore);
+  return instance<ToolItem>(s, "tool", indexGet(s.index.tool, callId), (item) => item.callId === callId, atOrBefore);
 }
 
 function upsertTurn(s: SessionState, id: string, patch: Partial<TurnInfo>): void {
@@ -187,17 +198,21 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
     case "turn.started": {
       const id = frame.turn_id;
       if (id === undefined) return;
+      const known = s.turns.find((turn) => turn.id === id);
+      if (seq > 0 && known?.startedSeq === seq) return; // the same event again
       upsertTurn(
         s,
         id,
         defined<TurnInfo>({ id, startedSeq: seq || undefined, startedAt: frame.ts, by: frame.data.by, text: frame.data.text }),
       );
-      if (live) s.openTurn = id;
+      // A start that arrives after its turn's end (out of order) does not reopen it.
+      if (live && known?.endedSeq === undefined) s.openTurn = id;
       return;
     }
     case "turn.ended": {
       const id = frame.turn_id;
       if (id === undefined) return;
+      if (seq > 0 && s.turns.find((turn) => turn.id === id)?.endedSeq === seq) return; // the same event again
       upsertTurn(
         s,
         id,
@@ -218,6 +233,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
       return;
     }
     case "message.completed": {
+      if (seq > 0 && hasItemAt(s, seq)) return; // the same event again
       if (live) dropLive(s, frame.data.id);
       if (seq <= 0) return;
       insertItem(
@@ -238,6 +254,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
       return;
     }
     case "thinking.completed": {
+      if (seq > 0 && hasItemAt(s, seq)) return;
       if (live) dropLive(s, frame.data.id);
       if (seq <= 0) return;
       insertItem(
@@ -255,6 +272,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
       return;
     }
     case "tool.started": {
+      if (seq > 0 && hasItemAt(s, seq)) return;
       if (live) dropLive(s, frame.data.call_id);
       const known = toolItem(s, frame.data.call_id);
       if (known !== undefined && known.seq === seq) return; // the same event again
@@ -447,7 +465,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
 }
 
 function requestItem(s: SessionState, id: string, atOrBefore = Infinity): RequestItem | undefined {
-  return instance<RequestItem>(s, "request", s.index.request[id], (item) => item.requestId === id, atOrBefore);
+  return instance<RequestItem>(s, "request", indexGet(s.index.request, id), (item) => item.requestId === id, atOrBefore);
 }
 
 function resolutionOf(s: SessionState, id: string): Resolution | undefined {
@@ -474,9 +492,49 @@ function resolve(s: SessionState, id: string, resolution: Resolution, atOrBefore
 // ---------------------------------------------------------------------
 // Snapshot
 
-/** The snapshot's seq-ordered `messages`, as history. */
+/** A task's latest update. An older one (or the same one again) arriving later changes nothing. */
+function applyTask(s: SessionState, frame: FrameOf<"task.updated">, seq: number): void {
+  const known = s.tasks.find((t) => t.task_id === frame.data.task_id);
+  if (known !== undefined && seq > 0 && known.seq >= seq) return;
+  const task: TaskInfo = { ...frame.data, seq };
+  s.tasks = upsertBy(s.tasks, (t) => t.task_id === task.task_id, task);
+}
+
+/** A checkpoint made, or restored. A repeat keeps what the checkpoint already says. */
+function applyCheckpoint(s: SessionState, frame: FrameOf<"checkpoint.created"> | FrameOf<"checkpoint.restored">, seq: number): void {
+  if (frame.type === "checkpoint.created") {
+    const known = s.checkpoints.find((c) => c.checkpoint_id === frame.data.checkpoint_id);
+    const info: CheckpointInfo = defined<CheckpointInfo>({
+      checkpoint_id: frame.data.checkpoint_id,
+      files: frame.data.files,
+      note: frame.data.note,
+      seq,
+      ts: frame.ts,
+      turn_id: frame.turn_id,
+      restoredSeq: known?.restoredSeq,
+    });
+    s.checkpoints = upsertBy(s.checkpoints, (c) => c.checkpoint_id === info.checkpoint_id, info);
+  } else {
+    s.checkpoints = s.checkpoints.map((c) =>
+      c.checkpoint_id === frame.data.checkpoint_id && (c.restoredSeq ?? -1) < seq ? { ...c, restoredSeq: seq } : c,
+    );
+  }
+}
+
+/**
+ * The snapshot's seq-ordered `messages`, as history. Tasks and checkpoints are timeline events too
+ * (G9: "Turn boundaries, requests and their answers, tasks, plans and checkpoints are in"), so they
+ * are read from here, as they are from a stream, and a state built from a snapshot matches one built
+ * from the frames.
+ */
 function applyMessages(s: SessionState, messages: readonly Frame[]): void {
-  for (const event of messages) applyTimeline(s, event, false);
+  for (const event of messages) {
+    applyTimeline(s, event, false);
+    if (event.type === "task.updated") applyTask(s, event, seqOf(event));
+    else if (event.type === "checkpoint.created" || event.type === "checkpoint.restored") {
+      applyCheckpoint(s, event, seqOf(event));
+    }
+  }
 }
 
 /** A `session.snapshot` replaces everything the client holds about the session. */
@@ -504,13 +562,25 @@ function applySnapshot(prev: SessionState, snapshot: Snapshot): SessionState {
   s.plan = snapshot.plan;
   s.changes = snapshot.changes;
   s.usage = snapshot.usage;
-  s.tasks = snapshot.tasks.map((task) => ({ ...task, seq: snapshot.head }));
-  s.checkpoints = snapshot.checkpoints.map((c) => ({ ...c }));
   s.hasMore = snapshot.has_more;
   s.nextBefore = snapshot.next_before;
   for (const key of SINGLETONS) s.stateSeq[key] = snapshot.head;
 
   applyMessages(s, snapshot.messages);
+  // What the snapshot's own fields add: the tasks still running and the checkpoints whose events are
+  // older than the messages it carries. A task or checkpoint the messages showed is already there.
+  for (const task of snapshot.tasks) {
+    if (!s.tasks.some((t) => t.task_id === task.task_id)) s.tasks = [...s.tasks, { ...task, seq: snapshot.head }];
+  }
+  for (const checkpoint of snapshot.checkpoints) {
+    if (!s.checkpoints.some((c) => c.checkpoint_id === checkpoint.checkpoint_id)) {
+      s.checkpoints = [...s.checkpoints, { ...checkpoint }];
+    }
+  }
+  // A restore the messages show, for a checkpoint made before them.
+  for (const event of snapshot.messages) {
+    if (event.type === "checkpoint.restored") applyCheckpoint(s, event, seqOf(event));
+  }
   // The requests still open are the snapshot's own list: some are older than
   // the messages it carries, and one can be a step ahead of `head`.
   for (const event of snapshot.pending) {
@@ -576,7 +646,7 @@ export function applyHistory(state: SessionState, page: MessagesPage): SessionSt
 
 function stale(s: SessionState, frame: Frame, key: string): boolean {
   const seq = seqOf(frame);
-  return seq > 0 && seq < (s.stateSeq[key] ?? 0);
+  return seq > 0 && seq <= (s.stateSeq[key] ?? 0);
 }
 
 function mark(s: SessionState, frame: Frame, key: string): void {
@@ -730,31 +800,14 @@ export function reduce(state: SessionState, frame: Frame): Reduced {
         mark(s, frame, "usage.updated");
       }
       break;
-    case "task.updated": {
-      const task: TaskInfo = { ...frame.data, seq };
-      s.tasks = upsertBy(s.tasks, (t) => t.task_id === task.task_id, task);
+    case "task.updated":
+      applyTask(s, frame, seq);
       break;
-    }
-    case "checkpoint.created": {
-      const info: CheckpointInfo = defined<CheckpointInfo>({
-        checkpoint_id: frame.data.checkpoint_id,
-        files: frame.data.files,
-        note: frame.data.note,
-        seq,
-        ts: frame.ts,
-        turn_id: frame.turn_id,
-      });
-      s.checkpoints = upsertBy(s.checkpoints, (c) => c.checkpoint_id === info.checkpoint_id, info);
+    case "checkpoint.created":
+    case "checkpoint.restored":
+      applyCheckpoint(s, frame, seq);
       applyTimeline(s, frame, true);
       break;
-    }
-    case "checkpoint.restored": {
-      s.checkpoints = s.checkpoints.map((c) =>
-        c.checkpoint_id === frame.data.checkpoint_id ? { ...c, restoredSeq: seq } : c,
-      );
-      applyTimeline(s, frame, true);
-      break;
-    }
     case "command.receipt":
       if (frame.command_id !== undefined) {
         recordCommand(s, frame.command_id, (record) => ({

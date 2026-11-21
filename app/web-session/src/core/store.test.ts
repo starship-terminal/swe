@@ -35,8 +35,8 @@ function boot(
   return { store, transport, timers, environment, factory, state: () => store.getState() };
 }
 
-/** The calls to the session's own routes (the status check a reconnect makes is left out). */
-const api = (t: { transport: FakeTransport }) => t.transport.calls.filter((c) => c.path !== "/v1/status");
+/** The calls the store made to the hub. */
+const api = (t: { transport: FakeTransport }) => t.transport.calls;
 
 const frames = (fixture: Fixture, connection = 0, from = 0, to?: number): Frame[] =>
   (fixture.connections[connection] as Fixture["connections"][number]).frames.slice(from, to);
@@ -70,6 +70,7 @@ describe("a store over a recorded stream", () => {
     t.transport.last.send(...frames(t.fixture, 0));
     await drain();
     expect(t.state().session.live.map((l) => l.text)).toEqual(["Hel"]);
+    t.timers.advance(10_000); // the stream stayed open: its drop is retried at once
     t.transport.last.end({ kind: "closed" });
     expect(t.state().connection.state).toBe("reconnecting");
     const second = t.fixture.connections[1] as Fixture["connections"][number];
@@ -136,6 +137,20 @@ describe("a store over a recorded stream", () => {
     const { applyLive } = await import("./reducer");
     const next = applyLive(t.state().session, [{ id: "a1", kind: "assistant", text: "Hel" }]);
     expect(next.live.map((l) => l.text)).toEqual(["Hello "]);
+  });
+
+  it("does not replace newer state with an older snapshot of the same epoch", async () => {
+    const t = playing("epoch_change");
+    const first = frames(t.fixture, 0);
+    const body = (first[0] as Extract<Frame, { type: "session.snapshot" }>).data;
+    t.transport.on("/snapshot", () => ({ status: 200, body: { ...body, head: 1 } }));
+    t.transport.last.send(...first.slice(0, 2));
+    const cursor = t.state().session.cursor;
+    // A state frame on another epoch asks for the snapshot; the hub's answer is on the epoch held and behind the cursor.
+    t.transport.last.send({ v: 2, type: "session.state", session: KEY, seq: 0, ts: 1, data: { state: "idle", live: [], pending: [], head: cursor, epoch: 9 } });
+    await drain();
+    expect(t.state().session.cursor).toBe(cursor);
+    expect(t.state().session.items.length).toBeGreaterThan(0);
   });
 
   it("asks again, with backoff, when the snapshot cannot be fetched", async () => {
@@ -323,39 +338,65 @@ describe("sends", () => {
     expect(t.state().session.commands["id1"]?.result).toMatchObject({ ok: true });
   });
 
-  it("are asked about again when the hub's boot id changes", async () => {
+  it("are asked about again after every reconnect, whether or not the hub restarted", async () => {
     const t = playing("default");
     t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
-    let statusBoot = "boot-1";
-    t.transport.on("/v1/status", () => ({ status: 200, body: { boot_id: statusBoot } }));
     const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
     t.transport.last.send(snapshot, state);
     await t.state().send({ text: "x" });
     await drain();
     expect(t.transport.posts("/message")).toHaveLength(1);
     // The hub restarts: the reconnect gets a snapshot with a new boot id.
+    t.timers.advance(10_000);
     t.transport.last.end({ kind: "closed" });
-    statusBoot = "boot-2";
     t.transport.last.send({ ...snapshot, data: { ...snapshot.data, boot_id: "boot-2" } }, state);
     await drain();
     expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1", "id1"]);
+    expect(t.state().session.bootId).toBe("boot-2");
   });
 
-  it("are asked about again when the status route shows a new boot id after a reconnect", async () => {
-    const t = playing("default");
+  it("are asked about again after a reconnect whose catch-up was a snapshot, which carries no results", async () => {
+    const t = boot();
     t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
-    let boot = "boot-1";
-    t.transport.on("/v1/status", () => ({ status: 200, body: { boot_id: boot } }));
-    const [snapshot, state] = frames(t.fixture) as [Frame, Frame];
-    t.transport.last.send(snapshot, state);
-    await t.state().send({ text: "x" });
+    t.state().start();
+    const snap = (head: number): Frame[] => {
+      const body = loadFixture("default").snapshots[0]?.body as Snapshot;
+      return [
+        snapshotFrame({ ...body, head, boot_id: "b1" }),
+        { v: 2, type: "session.state", session: KEY, seq: 0, ts: 1, data: { state: "idle", live: [], pending: [], head, epoch: 0 } },
+      ];
+    };
+    t.transport.last.send(...snap(5));
+    await t.state().send({ text: "hello" });
     await drain();
+    expect(t.transport.posts("/message")).toHaveLength(1);
+    expect(t.state().outbox.entries[0]?.status).toBe("sent");
+    t.timers.advance(10_000);
     t.transport.last.end({ kind: "closed" });
-    boot = "boot-2";
-    // A replay: no snapshot, so only the status route can say the hub restarted.
-    t.transport.last.send(frames(t.fixture, 0, 1, 2)[0] as Frame);
+    t.transport.last.send(...snap(900)); // the same boot, a wide gap: a snapshot with no command.result
     await drain();
+    // Asked again under the same id; the hub's answer carries the stored result.
     expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1", "id1"]);
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "queued", result: { ok: false, note: "the session is not running" } } }), "POST");
+    t.timers.advance(10_000);
+    t.transport.last.end({ kind: "closed" });
+    t.transport.last.send(...snap(901));
+    await drain();
+    expect(t.state().outbox.entries[0]).toMatchObject({ status: "failed", error: "the session is not running" });
+  });
+
+  it("a send followed at once by stop() is still delivered after start()", async () => {
+    const t = boot({ memory: true });
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    t.state().start();
+    await drain();
+    const sent = t.state().send({ text: "hello" });
+    t.state().stop();
+    expect(await sent).toMatchObject({ ok: true });
+    t.state().start();
+    await drain();
+    expect(t.transport.posts("/message").map((b) => b["text"])).toEqual(["hello"]);
+    t.state().stop();
   });
 
   it("are refused on a session that is gone", async () => {
