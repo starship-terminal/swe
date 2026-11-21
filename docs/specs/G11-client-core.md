@@ -822,6 +822,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 |---|---|
 | `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 326 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
+| G31 (2026-11-21): `tests.test_remote_keeper_only` (local keeper, not kept, a keeper let go, the satellite forward, the satellite's own route, the lookup: receipt, result, unknown id, auth, no side effect, runtime off); `pnpm test` (core: 388 tests, of which `outbox-keeper.test.ts` and `store-keeper.test.ts` are one test per row of G31's tables); 50 runs of the outbox and store tests with four busy loops loading the CPU | pass; 50 of 50 runs, 219 tests each |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
 ## Schema gaps
