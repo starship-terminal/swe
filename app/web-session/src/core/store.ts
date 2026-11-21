@@ -390,12 +390,15 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         ),
 
       async loadOlder() {
-        const { hasMore, nextBefore } = get().session;
+        const { hasMore, nextBefore, epoch, bootId } = get().session;
         if (!hasMore || nextBefore === null) return;
         const mine = generation;
         try {
           const response = await transport.json(`${sessionPath(key, "messages")}?v=2&before=${nextBefore}&limit=100`);
           if (mine !== generation || response.status < 200 || response.status >= 300) return;
+          // A new journal began while the page was out: the page belongs to the old one.
+          const now = get().session;
+          if (now.epoch !== epoch || now.bootId !== bootId) return;
           setSession(applyHistory(get().session, response.body as MessagesPage));
         } catch {
           // The button stays; try again.

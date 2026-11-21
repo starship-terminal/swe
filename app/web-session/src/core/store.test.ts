@@ -817,6 +817,47 @@ describe("history", () => {
     await t.state().loadOlder();
     expect(api(t)).toHaveLength(1);
   });
+
+  it("drops a page that comes back after the journal changed epoch, and pages again from the new epoch", async () => {
+    const t = playing("default");
+    const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
+    t.transport.last.send({ ...snapshot, data: { ...snapshot.data, has_more: true, next_before: 5 } } as Frame, state);
+    const oldPage = {
+      session: KEY,
+      messages: [{ v: 2, type: "message.completed", session: KEY, seq: 2, ts: 1, turn_id: "t0", data: { id: "old", kind: "user", text: "old journal" } }],
+      has_more: true,
+      next_before: 1,
+    };
+    let answer: (value: { status: number; body: unknown }) => void = () => {};
+    t.transport.on("/messages", () => new Promise((resolve) => { answer = resolve; }));
+    const loading = t.state().loadOlder();
+    await drain();
+    // The journal resets while the page is out: a snapshot of the new epoch replaces the timeline.
+    const fresh = {
+      v: 2, type: "session.message", session: KEY, seq: 3, ts: 1, turn_id: "n0",
+      data: { id: "new", kind: "user", text: "new journal" },
+    };
+    const newSnapshot = {
+      ...snapshot,
+      data: { ...snapshot.data, epoch: snapshot.data.epoch + 1, head: 3, has_more: true, next_before: 3, messages: [{ ...fresh, type: "message.completed" }] },
+    } as Frame;
+    t.transport.last.send(newSnapshot);
+    expect(t.state().session.epoch).toBe(snapshot.data.epoch + 1);
+    answer({ status: 200, body: oldPage });
+    await loading;
+    const texts = t.state().session.items.map((item) => ("text" in item ? item.text : undefined));
+    expect(texts).toContain("new journal");
+    expect(texts).not.toContain("old journal");
+    expect(t.state().session.nextBefore).toBe(3);
+    expect(t.state().session.hasMore).toBe(true);
+    // The next call asks again, from the new epoch's marker.
+    t.transport.on("/messages", () => ({ status: 200, body: { session: KEY, messages: [], has_more: false, next_before: null } }));
+    await t.state().loadOlder();
+    expect(api(t).map((call) => call.path)).toEqual([
+      `${BASE}/messages?v=2&before=5&limit=100`,
+      `${BASE}/messages?v=2&before=3&limit=100`,
+    ]);
+  });
 });
 
 describe("start, stop and wake", () => {
