@@ -425,9 +425,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.events()
         if self.path == "/api/model" and self.command == "GET":
             # The server's model list (G32): ``models`` lists two,
-            # ``slow-models`` answers after the adapter gave up on it.
+            # ``slow-models`` answers 1.5 s later, after the start.
             if MODE == "slow-models":
-                time.sleep(3.0)
+                time.sleep(1.5)
             if MODE in ("models", "slow-models"):
                 return self.answer(200, {"data": [
                     {"id": "model-1", "providerID": "fake", "name": "One"},

@@ -86,6 +86,14 @@ describe("the reducer", () => {
     expect(s.options?.model?.value).toBe("sonnet");
   });
 
+  it("a session.row frame with no row keeps the row held", () => {
+    let s = reduce(emptySession(), snapshotFrame(snap(4))).state;
+    s = reduce(s, env("session.row", {})).state;
+    expect(s.row).toMatchObject({ key: T, mode: "keeper" });
+    s = reduce(s, env("session.row", { row: null })).state;
+    expect(s.row).toMatchObject({ key: T });
+  });
+
   it("knows nothing from a hub that sends no options", () => {
     const old = snap(4);
     delete (old as { options?: unknown }).options;
@@ -103,7 +111,8 @@ describe("the selector", () => {
     const view = t.state().sessionOptions;
     expect(view.known).toBe(true);
     expect(view.model).toMatchObject({ value: "haiku", choices: CHOICES, midTurn: "unverified", pending: null, error: null, canChange: true });
-    expect(view.permission_mode).toMatchObject({ value: "default", choices: null, canChange: true });
+    // Shown, never changed from here.
+    expect(view.permission_mode).toMatchObject({ value: "default", choices: null, canChange: false, reason: "display_only" });
     expect(view.plan_mode).toMatchObject({ value: false, canChange: true });
     // Effort is not offered by this session: not there at all.
     expect(view.effort).toBeUndefined();
@@ -122,6 +131,26 @@ describe("the selector", () => {
     await t.send(env("turn.started", {}, { seq: t.next(), turn_id: "t1" }));
     expect(t.state().sessionOptions.turnOpen).toBe(true);
     expect(t.state().sessionOptions.model?.canChange).toBe(true);
+  });
+
+  it("says when a value applies from the next message: changed while the turn in progress runs on the old one", async () => {
+    const t = setup();
+    t.state().start();
+    await t.catchUp();
+    expect(t.state().sessionOptions.model?.fromNextMessage).toBe(false);
+    await t.send(env("turn.started", {}, { seq: t.next(), turn_id: "t1" }));
+    await t.send(optionsFrame(t.next(), offered("sonnet")));
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "sonnet", fromNextMessage: false });
+    const reply: SessionOptions = { ...offered("opus"), model: { value: "opus", mid_turn: "reply_finishes", choices: CHOICES } };
+    await t.send(optionsFrame(t.next(), reply));
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "opus", fromNextMessage: true });
+    await t.send(env("turn.ended", { status: "completed" }, { seq: t.next(), turn_id: "t1" }));
+    expect(t.state().sessionOptions.model?.fromNextMessage).toBe(false);
+    // A change made between turns is what the next turn starts with: nothing to say once it runs.
+    const before: SessionOptions = { ...offered("haiku"), model: { value: "haiku", mid_turn: "reply_finishes", choices: CHOICES } };
+    await t.send(optionsFrame(t.next(), before));
+    await t.send(env("turn.started", {}, { seq: t.next(), turn_id: "t2" }));
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "haiku", fromNextMessage: false });
   });
 
   it("follows the agent: a value it changed by itself (a plan mode it left) shows when the hub says so", async () => {
@@ -227,11 +256,11 @@ describe("setOption", () => {
     expect(await t.state().setOption("model", "opus")).toEqual({ ok: true, commandId: null, receipt: "deferred" });
     expect(await t.state().setOption("model", "default")).toEqual({ ok: true, commandId: null, receipt: "deferred" });
     expect(t.posts.map((p) => p.value)).toEqual(["sonnet"]);
-    expect(t.state().sessionOptions.model?.pending).toEqual({ value: "default", commandId: null });
+    expect(t.state().sessionOptions.model?.pending).toEqual({ value: "default", commandId: null, waiting: null });
     await t.send(optionsFrame(t.next(), offered("sonnet")), result(t.next(), "id1", true));
     // The first settled: the latest goes, the one in between never does.
     expect(t.posts.map((p) => [p.value, p.command_id])).toEqual([["sonnet", "id1"], ["default", "id2"]]);
-    expect(t.state().sessionOptions.model?.pending).toEqual({ value: "default", commandId: "id2" });
+    expect(t.state().sessionOptions.model?.pending).toEqual({ value: "default", commandId: "id2", waiting: null });
     await t.send(optionsFrame(t.next(), offered("default")), result(t.next(), "id2", true));
     expect(t.state().sessionOptions.model).toMatchObject({ value: "default", pending: null });
   });
@@ -361,6 +390,94 @@ describe("setOption", () => {
 });
 
 describe("the gates", () => {
+  it("the permission mode is never sent from the page, whatever the caps allow", async () => {
+    const t = setup();
+    t.state().start();
+    await t.catchUp();
+    expect(await t.state().setOption("permission_mode", "bypassPermissions")).toMatchObject({ ok: false, reason: "display_only" });
+    expect(t.posts).toEqual([]);
+    expect(t.state().sessionOptions.permission_mode).toMatchObject({ canChange: false, reason: "display_only" });
+  });
+
+  it("a deferred change goes through the same gates: it waits while the stream is down, says why, and goes once caught up", async () => {
+    const t = setup();
+    let release: (r: { status: number; body: unknown }) => void = () => {};
+    t.answer.next = () => new Promise((r) => { release = r; });
+    t.state().start();
+    await t.catchUp();
+    void t.state().setOption("model", "sonnet");
+    await drain();
+    expect(await t.state().setOption("model", "default")).toMatchObject({ receipt: "deferred" });
+    t.timers.advance(10_000);
+    t.transport.last.end({ kind: "closed" });
+    await drain();
+    t.answer.next = (body) => ({ status: 200, body: { ok: true, receipt: "accepted", command_id: body.command_id } });
+    release({ status: 409, body: { ok: false, error: { code: "command_rejected", message: "no" } } });
+    await drain();
+    expect(t.posts).toHaveLength(1);
+    const waiting = t.state().sessionOptions.model;
+    expect(waiting).toMatchObject({ pending: { value: "default", commandId: null }, error: { value: "sonnet", message: "no" } });
+    expect(waiting?.pending?.waiting).toMatch(/hub/i);
+    await t.catchUp(20);
+    await drain();
+    expect(t.posts.map((p) => p.value)).toEqual(["sonnet", "default"]);
+  });
+
+  it("a deferred change that waited ends with the reason when the session comes back read-only", async () => {
+    const t = setup();
+    let release: (r: { status: number; body: unknown }) => void = () => {};
+    t.answer.next = () => new Promise((r) => { release = r; });
+    t.state().start();
+    await t.catchUp();
+    void t.state().setOption("model", "sonnet");
+    await drain();
+    await t.state().setOption("model", "default");
+    t.timers.advance(10_000);
+    t.transport.last.end({ kind: "closed" });
+    await drain();
+    release({ status: 409, body: { ok: false, error: { code: "command_rejected", message: "no" } } });
+    await drain();
+    expect(t.state().sessionOptions.model?.pending?.waiting).not.toBeNull();
+    // Back, but resumed in a terminal meanwhile: the change cannot go at all now.
+    await t.send(
+      snapshotFrame(snap(30, { row: { key: T, mode: "keeper", control: "none", control_reason: "Resumed in a terminal" } })),
+      env("session.state", { state: "idle", live: [], pending: [], head: 30, epoch: 0 }, { seq: 0 }),
+    );
+    await drain();
+    expect(t.posts).toHaveLength(1);
+    expect(t.state().sessionOptions.model).toMatchObject({ pending: null, error: { value: "default", message: "Resumed in a terminal" } });
+  });
+
+  it("a deferred change that can no longer go at all ends with the reason", async () => {
+    const t = setup();
+    let release: (r: { status: number; body: unknown }) => void = () => {};
+    t.answer.next = () => new Promise((r) => { release = r; });
+    t.state().start();
+    await t.catchUp();
+    void t.state().setOption("model", "sonnet");
+    await drain();
+    await t.state().setOption("model", "default");
+    // The session is resumed in a terminal: read-only from here.
+    await t.send(env("session.row", { row: { key: T, mode: "keeper", control: "none", control_reason: "Resumed in a terminal" } }));
+    release({ status: 200, body: { ok: true, receipt: "accepted", command_id: "id1" } });
+    await drain();
+    await t.send(result(t.next(), "id1", true));
+    expect(t.posts).toHaveLength(1);
+    expect(t.state().sessionOptions.model).toMatchObject({ pending: null, error: { value: "default", message: "Resumed in a terminal" } });
+  });
+
+  it("a stop() forgets changes in flight: the hub's value shows, with nothing pending", async () => {
+    const t = setup();
+    t.answer.next = () => new Promise(() => {});
+    t.state().start();
+    await t.catchUp();
+    void t.state().setOption("model", "sonnet");
+    await drain();
+    expect(t.state().sessionOptions.model?.pending).not.toBeNull();
+    t.state().stop();
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "haiku", pending: null });
+  });
+
   it("a hub that does not list session_options: refused without a post, and the selector says why", async () => {
     const t = setup({ features: FEATURES.filter((f) => f !== FEATURE_SESSION_OPTIONS) });
     t.state().start();
@@ -378,7 +495,6 @@ describe("the gates", () => {
     expect(await t.state().setOption("plan_mode", true)).toMatchObject({ ok: false, reason: "not_allowed" });
     expect(t.posts).toEqual([]);
     expect(t.state().sessionOptions.model).toMatchObject({ canChange: false, reason: "not_allowed", message: "This session cannot change the model." });
-    expect(t.state().sessionOptions.permission_mode?.canChange).toBe(true);
   });
 
   it("an option the session does not offer: refused without a post", async () => {

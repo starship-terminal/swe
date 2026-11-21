@@ -127,12 +127,6 @@ def _listed(info: Any, field: str, items: str, key: str) -> list[dict]:
             and isinstance(m.get(key), str) and m[key]]
 
 
-def mode_choices(info: Any) -> list[dict]:
-    """The modes a session answer lists, as ``session.options``
-    choices: the agent's id, name and description."""
-    return _listed(info, "modes", "availableModes", "id")
-
-
 def model_choices(info: Any) -> list[dict]:
     """The models a session answer lists, as ``session.options``
     choices."""
@@ -292,10 +286,9 @@ class AcpState(SessionCore):
         self.mode = ""
         self.modes: list[str] = []
         self.models: dict[str, str] = {}
-        # What ``session.options`` says (G32): the agent's own lists and
+        # What ``session.options`` says (G32): the agent's model list and
         # its current model id.
         self.model = ""
-        self.mode_choices: list[dict] = []
         self.model_choices: list[dict] = []
         # the kind streaming now -> its stream id, and the agent's
         # messageId for it
@@ -315,7 +308,6 @@ class AcpState(SessionCore):
         self.mode = current_mode(info)
         self.models = model_ids(info)
         self.model = current_model(info)
-        self.mode_choices = mode_choices(info)
         self.model_choices = model_choices(info)
 
     def options(self) -> dict:
@@ -328,8 +320,10 @@ class AcpState(SessionCore):
         return {
             "model": opts.string_option(self.model, opts.UNVERIFIED,
                                         choices=self.model_choices),
-            "permission_mode": opts.string_option(
-                self.mode, opts.REPLY_FINISHES, choices=self.mode_choices),
+            # The value only, never the agent's mode list: a page does
+            # not offer a more permissive mode (G32, Limits).
+            "permission_mode": opts.string_option(self.mode,
+                                                  opts.REPLY_FINISHES),
             "plan_mode": opts.flag_option(self.mode == PLAN_MODE,
                                           opts.REPLY_FINISHES),
         }

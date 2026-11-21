@@ -50,34 +50,7 @@
     },
     "permission_mode": {
      "value": "auto",
-     "mid_turn": "reply_finishes",
-     "choices": [
-      {
-       "id": "plan",
-       "label": "Plan",
-       "description": "Analyze only, do not modify files or execute commands"
-      },
-      {
-       "id": "default",
-       "label": "Default",
-       "description": "Require approval for file edits or shell commands"
-      },
-      {
-       "id": "auto-edit",
-       "label": "Auto Edit",
-       "description": "Automatically approve file edits"
-      },
-      {
-       "id": "auto",
-       "label": "Auto",
-       "description": "LLM classifier auto-approves safe actions, blocks risky ones"
-      },
-      {
-       "id": "yolo",
-       "label": "YOLO",
-       "description": "Automatically approve all tools"
-      }
-     ]
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": false,

@@ -50,18 +50,7 @@
     },
     "permission_mode": {
      "value": "never",
-     "mid_turn": "next_turn",
-     "choices": [
-      {
-       "id": "untrusted"
-      },
-      {
-       "id": "on-request"
-      },
-      {
-       "id": "never"
-      }
-     ]
+     "mid_turn": "next_turn"
     }
    }
   }
@@ -84,18 +73,7 @@
     },
     "permission_mode": {
      "value": "never",
-     "mid_turn": "next_turn",
-     "choices": [
-      {
-       "id": "untrusted"
-      },
-      {
-       "id": "on-request"
-      },
-      {
-       "id": "never"
-      }
-     ]
+     "mid_turn": "next_turn"
     }
    }
   }
@@ -261,18 +239,7 @@
     },
     "permission_mode": {
      "value": "never",
-     "mid_turn": "next_turn",
-     "choices": [
-      {
-       "id": "untrusted"
-      },
-      {
-       "id": "on-request"
-      },
-      {
-       "id": "never"
-      }
-     ]
+     "mid_turn": "next_turn"
     }
    }
   }
@@ -295,18 +262,7 @@
     },
     "permission_mode": {
      "value": "never",
-     "mid_turn": "next_turn",
-     "choices": [
-      {
-       "id": "untrusted"
-      },
-      {
-       "id": "on-request"
-      },
-      {
-       "id": "never"
-      }
-     ]
+     "mid_turn": "next_turn"
     }
    }
   }
@@ -487,18 +443,7 @@
     },
     "permission_mode": {
      "value": "never",
-     "mid_turn": "next_turn",
-     "choices": [
-      {
-       "id": "untrusted"
-      },
-      {
-       "id": "on-request"
-      },
-      {
-       "id": "never"
-      }
-     ]
+     "mid_turn": "next_turn"
     }
    }
   }
@@ -521,18 +466,7 @@
     },
     "permission_mode": {
      "value": "never",
-     "mid_turn": "next_turn",
-     "choices": [
-      {
-       "id": "untrusted"
-      },
-      {
-       "id": "on-request"
-      },
-      {
-       "id": "never"
-      }
-     ]
+     "mid_turn": "next_turn"
     }
    }
   }

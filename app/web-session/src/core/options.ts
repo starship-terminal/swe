@@ -23,6 +23,12 @@ export const FEATURE_SESSION_OPTIONS = "session_options";
 export type OptionName = keyof SessionOptions;
 export const OPTION_NAMES: readonly OptionName[] = ["model", "effort", "permission_mode", "plan_mode"];
 
+/**
+ * What this page may change. The permission mode is shown and never sent from here: a page would otherwise switch a
+ * running session to its agent's most permissive mode with one call (G32, Limits).
+ */
+export const PAGE_OPTIONS: readonly OptionName[] = ["model", "effort", "plan_mode"];
+
 /** Plan mode is on or off; every other option is one of the agent's own ids. */
 export type OptionValue<N extends OptionName = OptionName> = N extends "plan_mode" ? boolean : string;
 
@@ -34,6 +40,8 @@ export interface PendingChange<V> {
   value: V;
   /** The command id it was sent under; null while it waits for the change before it to settle. */
   commandId: string | null;
+  /** Why it has not gone yet, once the change before it settled (reconnecting, catching up): it goes when that clears. */
+  waiting: string | null;
 }
 
 /** The last change that did not take: the value asked for and the hub's reason, as the hub put it. */
@@ -52,7 +60,8 @@ export type CannotChangeReason =
   | "outdated"
   | "unsupported_hub"
   | "not_kept"
-  | "not_allowed";
+  | "not_allowed"
+  | "display_only";
 
 export interface OptionView<V = string | boolean> {
   name: OptionName;
@@ -63,6 +72,11 @@ export interface OptionView<V = string | boolean> {
   /** The values the agent lists, in its order; null when it lists none (show `value` alone). */
   choices: OptionChoice[] | null;
   midTurn: MidTurn;
+  /**
+   * The value changed while the turn in progress runs, and that reply goes on with the old one: it applies from the
+   * next message (`next_turn` and `reply_finishes`). A view says "from your next message".
+   */
+  fromNextMessage: boolean;
   pending: PendingChange<V> | null;
   error: FailedChange<V> | null;
   /** Whether `setOption` would send a change now. A change in flight does not stop another: the last one wins. */
@@ -89,6 +103,8 @@ export interface OptionWork {
   sending: { commandId: string; value: string | boolean; posted: boolean } | null;
   /** The latest change asked for while one was in flight; sent once that one settles. */
   next?: string | boolean;
+  /** Why `next` waits after the change before it settled: a gate that clears by itself. */
+  waiting?: string;
   error: FailedChange<string | boolean> | null;
 }
 
@@ -139,23 +155,35 @@ export function optionsRefusal(
   return null;
 }
 
+/** Whether `name`'s value changed after the open turn started (so the reply in progress runs on the old one). */
+function changedThisTurn(session: SessionState, name: OptionName): boolean {
+  if (session.openTurn === null) return false;
+  const started = session.turns.find((t) => t.id === session.openTurn)?.startedSeq;
+  const changed = session.optionChangedSeq[name];
+  return started !== undefined && changed !== undefined && changed > started;
+}
+
 function view<V extends string | boolean>(
   name: OptionName,
   offered: { value: V; mid_turn: MidTurn; choices?: OptionChoice[]; reported?: string },
   work: OptionWork | undefined,
   refusal: { reason: CannotChangeReason; message: string } | null,
   allowed: boolean,
+  session: SessionState,
 ): OptionView<V> {
   let pending: PendingChange<V> | null = null;
-  if (work?.next !== undefined) pending = { value: work.next as V, commandId: null };
-  else if (work?.sending) pending = { value: work.sending.value as V, commandId: work.sending.commandId };
-  const why = refusal ?? (allowed ? null : { reason: "not_allowed" as const, message: `This session cannot change ${NAMES[name]}.` });
+  if (work?.next !== undefined) pending = { value: work.next as V, commandId: null, waiting: work.waiting ?? null };
+  else if (work?.sending) pending = { value: work.sending.value as V, commandId: work.sending.commandId, waiting: null };
+  const why = !PAGE_OPTIONS.includes(name)
+    ? { reason: "display_only" as const, message: `Change ${NAMES[name]} where the session runs.` }
+    : (refusal ?? (allowed ? null : { reason: "not_allowed" as const, message: `This session cannot change ${NAMES[name]}.` }));
   return {
     name,
     value: offered.value,
     ...(offered.reported === undefined ? {} : { reported: offered.reported }),
     choices: offered.choices ?? null,
     midTurn: offered.mid_turn,
+    fromNextMessage: offered.mid_turn !== "unverified" && changedThisTurn(session, name),
     pending,
     error: (work?.error ?? null) as FailedChange<V> | null,
     canChange: why === null,
@@ -171,8 +199,8 @@ export function describeOptions(input: DescribeOptionsInput): SessionOptionsView
   const out: SessionOptionsView = { known: offered !== null, turnOpen: session.openTurn !== null };
   if (offered === null) return out;
   const refusal = optionsRefusal(session, connection, supported);
-  if (offered.model) out.model = view("model", offered.model, work.model, refusal, capsAllow(session, "model"));
-  if (offered.effort) out.effort = view("effort", offered.effort, work.effort, refusal, capsAllow(session, "effort"));
+  if (offered.model) out.model = view("model", offered.model, work.model, refusal, capsAllow(session, "model"), session);
+  if (offered.effort) out.effort = view("effort", offered.effort, work.effort, refusal, capsAllow(session, "effort"), session);
   if (offered.permission_mode) {
     out.permission_mode = view(
       "permission_mode",
@@ -180,12 +208,18 @@ export function describeOptions(input: DescribeOptionsInput): SessionOptionsView
       work.permission_mode,
       refusal,
       capsAllow(session, "permission_mode"),
+      session,
     );
   }
   if (offered.plan_mode) {
-    out.plan_mode = view("plan_mode", offered.plan_mode, work.plan_mode, refusal, capsAllow(session, "plan_mode"));
+    out.plan_mode = view("plan_mode", offered.plan_mode, work.plan_mode, refusal, capsAllow(session, "plan_mode"), session);
   }
   return out;
+}
+
+/** A refusal that clears by itself (a reconnect, a catch-up, the features being read again): a deferred change waits. */
+export function passing(reason: CannotChangeReason, supported: boolean | null): boolean {
+  return reason === "not_live" || reason === "catching_up" || (reason === "unsupported_hub" && supported === null);
 }
 
 /** Two views say the same thing: the store keeps the old object then, so a view does not render again. */

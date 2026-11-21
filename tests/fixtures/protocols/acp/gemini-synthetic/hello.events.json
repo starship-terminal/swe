@@ -39,21 +39,7 @@
    "options": {
     "permission_mode": {
      "value": "default",
-     "mid_turn": "reply_finishes",
-     "choices": [
-      {
-       "id": "default",
-       "label": "Default"
-      },
-      {
-       "id": "autoEdit",
-       "label": "Auto Edit"
-      },
-      {
-       "id": "yolo",
-       "label": "YOLO"
-      }
-     ]
+     "mid_turn": "reply_finishes"
     }
    }
   }

@@ -491,8 +491,7 @@ class ThreadState(SessionCore):
 
     def options(self) -> dict:
         """The models ``model/list`` names (model_list, 0.171.0); the
-        effort as its value only; the approval policies are the v2 API's
-        enum, the only values ``set_option`` takes. Every change waits
+        effort and the approval policy as values only. Every change waits
         for the next ``turn/start``: a turn in progress runs on what it
         started with (``next_turn``)."""
         get = self.settings.get
@@ -500,9 +499,11 @@ class ThreadState(SessionCore):
             "model": opts.string_option(get("model", ""), opts.NEXT_TURN,
                                         choices=self.model_choices or None),
             "effort": opts.string_option(get("effort", ""), opts.NEXT_TURN),
+            # The value only: a page does not offer a more permissive
+            # policy (G32, Limits). ``APPROVAL_POLICIES`` only checks
+            # what ``set_option`` is given.
             "permission_mode": opts.string_option(
-                get("permission_mode", ""), opts.NEXT_TURN,
-                choices=[opts.choice(p) for p in APPROVAL_POLICIES]),
+                get("permission_mode", ""), opts.NEXT_TURN),
         }
 
     def model_list(self, answer: Any) -> list:

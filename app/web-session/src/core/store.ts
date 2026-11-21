@@ -29,6 +29,8 @@ import {
   FEATURE_SESSION_OPTIONS,
   OPTION_NAMES,
   optionsRefusal,
+  PAGE_OPTIONS,
+  passing,
   sameOptions,
   type CannotChangeReason,
   type OptionName,
@@ -120,10 +122,11 @@ export interface SessionStoreState {
   /** Restore the files to a checkpoint. Needs a live connection. */
   restore(checkpointId: string): Promise<ActionResult>;
   /**
-   * Change `model`, `effort`, `permission_mode` or `plan_mode` while the session runs (G32): `set_option` through
+   * Change `model`, `effort` or `plan_mode` while the session runs (G32): `set_option` through
    * `POST .../command` with a fresh command id. The shown value changes only when the hub says so; until then the
    * change is `pending` in `sessionOptions`, and a refusal or failure is its `error`, in the hub's words. Asked
-   * again while a change of the same option is in flight, only the latest value is sent, after it.
+   * again while a change of the same option is in flight, only the latest value is sent, after it, through the same
+   * gates. `permission_mode` is refused here: it is shown, never sent from a page.
    */
   setOption<N extends OptionName>(name: N, value: OptionValue<N>): Promise<SetOptionResult>;
   /** Edit, cancel, or send now (steer) a message in the queue. Needs a live connection. */
@@ -229,11 +232,35 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     const refreshOptions = (): void => {
       const state = get();
       const { session, connection } = state;
-      const inputs = [session.options, session.caps, session.openTurn, session.row, session.caughtUp, connection, optionsSupported, optionWork];
+      const inputs = [
+        session.options, session.optionChangedSeq, session.turns, session.caps, session.openTurn, session.row,
+        session.caughtUp, connection, optionsSupported, optionWork,
+      ];
       if (inputs.length === optionInputs.length && inputs.every((value, i) => value === optionInputs[i])) return;
       optionInputs = inputs;
       const next = describeOptions({ session, connection, supported: optionsSupported, work: optionWork });
       if (!sameOptions(next, state.sessionOptions)) set({ sessionOptions: next });
+      flushDeferred();
+    };
+
+    /**
+     * A deferred change whose turn has come (the one before it settled) goes once the gates pass: it waits through a
+     * gate that clears by itself and ends with the reason on one that does not.
+     */
+    const flushDeferred = (): void => {
+      for (const name of OPTION_NAMES) {
+        const work = optionWork[name];
+        if (work === undefined || work.sending || work.next === undefined || work.waiting === undefined) continue;
+        const value = work.next;
+        const refused = optionRefusal(name);
+        if (refused === null) {
+          void sendOption(name, value);
+        } else if (!passing(refused.reason, optionsSupported)) {
+          setWork(name, { sending: null, error: { value, message: refused.message } });
+        } else if (refused.message !== work.waiting) {
+          setWork(name, { ...work, waiting: refused.message });
+        }
+      }
     };
 
     const setWork = (name: OptionName, work: OptionWork): void => {
@@ -248,8 +275,14 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const sent = work.sending.value;
       const next = work.next;
       setWork(name, { sending: null, error: failure === null ? null : { value: sent, message: failure } });
-      // The latest value asked for goes now, unless it is the one that just took.
-      if (next !== undefined && !(failure === null && next === sent)) void sendOption(name, next);
+      // The latest value asked for goes now, unless it is the one that just took, through the same gates as a first
+      // change: one that cannot go now is not sent, and says why.
+      if (next === undefined || (failure === null && next === sent)) return;
+      const refused = optionRefusal(name);
+      if (refused === null) void sendOption(name, next);
+      else if (passing(refused.reason, optionsSupported)) {
+        setWork(name, { sending: null, next, waiting: refused.message, error: optionWork[name]?.error ?? null });
+      } else setWork(name, { sending: null, error: { value: next, message: refused.message } });
     };
 
     /** A result or a refused receipt the stream (or a lookup) brought, for a change in flight. */
@@ -288,6 +321,20 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           settleOption(name, sending.commandId, typeof body.reason === "string" && body.reason !== "" ? body.reason : "The hub refused the change.");
         }
       }
+    };
+
+    /** Why `name` cannot be changed now, before any network call; null when it can. */
+    const optionRefusal = (name: OptionName): OptionRefusal | null => {
+      if (!PAGE_OPTIONS.includes(name)) {
+        return { ok: false, reason: "display_only", message: "The permission mode is changed where the session runs, not from here." };
+      }
+      const { session, connection } = get();
+      const refusal = optionsRefusal(session, connection, optionsSupported);
+      if (refusal !== null) return { ok: false, ...refusal };
+      if (session.options?.[name] === undefined || !capsAllow(session, name)) {
+        return { ok: false, reason: "not_allowed", message: "This session cannot change that." };
+      }
+      return null;
     };
 
     const sendOption = async (name: OptionName, value: string | boolean): Promise<ActionResult> => {
@@ -652,12 +699,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       interrupt: () => gated((commandId) => post("control", { op: "interrupt", command_id: commandId })),
 
       async setOption(name, value) {
-        const { session, connection } = get();
-        const refusal = optionsRefusal(session, connection, optionsSupported);
-        if (refusal !== null) return { ok: false, ...refusal };
-        if (!OPTION_NAMES.includes(name) || session.options?.[name] === undefined || !capsAllow(session, name)) {
-          return { ok: false, reason: "not_allowed", message: "This session cannot change that." };
-        }
+        const refusal = optionRefusal(name);
+        if (refusal !== null) return refusal;
         const work = optionWork[name];
         if (work?.sending) {
           // One change of an option at a time, in order: the last one asked for is the one that goes next.

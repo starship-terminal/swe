@@ -220,6 +220,8 @@ export interface SessionState {
    * snapshot. Null until either has said: a hub without the `session_options` feature never does.
    */
   options: SessionOptions | null;
+  /** The `seq` of the `session.options` that last changed each option's value; unknown after a snapshot. */
+  optionChangedSeq: Record<string, number>;
   openTurn: string | null;
   turns: TurnInfo[];
   /** Timeline items in journal order, one per `seq`. */
@@ -264,6 +266,7 @@ export function emptySession(): SessionState {
     harnessSessionId: null,
     caps: null,
     options: null,
+    optionChangedSeq: {},
     openTurn: null,
     turns: [],
     items: [],

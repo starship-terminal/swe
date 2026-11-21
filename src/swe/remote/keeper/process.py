@@ -132,6 +132,10 @@ class _Sink:
                                      ts=event.get("ts"))
             state = "parked"
             self.parked = True
+        if etype == "session.options" and isinstance(data, dict) \
+                and isinstance(data.get("options"), dict):
+            event = self.keeper._carry_choices(event)
+            data = event["data"]
         stamped = self.keeper.log.emit(event)
         if stamped is None:
             return None
@@ -1270,6 +1274,25 @@ class Keeper:
             discovery.update_spec(self.session_key, self.home, **changes)
         except OSError:
             logger.exception("could not record %s in spec.json", name)
+
+    def _carry_choices(self, event: dict) -> dict:
+        """An adapter that asks for its list after the start (Codex,
+        opencode) says the value first and the list when it comes, if it
+        comes: until then an option keeps the list it had, so a restart
+        or a late or failed list never blanks the picker (G32). Called
+        on the adapter's thread; reads one reference."""
+        before = self._shown_options
+        shown = dict(event["data"]["options"])
+        carried = False
+        for name, option in shown.items():
+            old = before.get(name)
+            if isinstance(option, dict) and "choices" not in option \
+                    and isinstance(old, dict) and old.get("choices"):
+                shown[name] = dict(option, choices=old["choices"])
+                carried = True
+        if not carried:
+            return event
+        return ev.session_options(self.session_key, shown, ts=event.get("ts"))
 
     def _show_remembered(self, name: str, value: Any) -> None:
         """With no agent to ask, ``session.options`` says the value the

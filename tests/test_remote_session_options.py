@@ -11,6 +11,7 @@ restart), and the hub (the snapshot, the stream, ``/v1/status``).
 from __future__ import annotations
 
 import json
+import time
 import unittest
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from swe.remote.adapters import fake, options as opts
 from swe.remote.adapters.base import AdapterError, Caps
 from swe.remote.adapters.core import ALL_CAPS
 
-from tests.test_remote_adapters import _OpencodeCase
+from tests.test_remote_adapters import _CodexCase, _OpencodeCase
 from tests.test_remote_keeper import KeeperCase, S, kill
 from tests.test_remote_sse_v2 import V2Case
 
@@ -162,12 +163,12 @@ class TestAcp(unittest.TestCase):
         for shown in _options(events):
             self.assertNotIn("effort", shown)
 
-    def test_modes_are_the_agents_list_and_plan_mode_is_one_of_them(self):
+    def test_the_mode_is_a_value_only_and_plan_mode_is_one_of_them(self):
         events = self.replay("plan_mode")
         mode = _options(events)[0]["permission_mode"]
-        self.assertEqual([c["id"] for c in mode["choices"]],
-                         ["plan", "default", "auto-edit", "auto", "yolo"])
-        self.assertEqual(mode["choices"][0]["label"], "Plan")
+        # The agent lists yolo and auto among its modes: a page is never
+        # handed them as choices (G32, Limits).
+        self.assertNotIn("choices", mode)
         self.assertEqual(_values(events, "permission_mode"),
                          ["auto", "plan", "auto"])
         self.assertEqual(_values(events, "plan_mode"), [False, True, False])
@@ -200,8 +201,8 @@ class TestCodex(unittest.TestCase):
             for option in shown.values():
                 self.assertEqual(option["mid_turn"], "next_turn")
         self.assertNotIn("choices", first["model"])
-        self.assertEqual([c["id"] for c in first["permission_mode"]
-                          ["choices"]], list(codex_wire.APPROVAL_POLICIES))
+        # The policy is a value only: ``never`` is never offered.
+        self.assertNotIn("choices", first["permission_mode"])
         self.assertEqual(_values(events, "model"),
                          ["gpt-5.6-luna", "gpt-6-luna"])
         self.assertEqual(_values(events, "permission_mode"),
@@ -384,30 +385,62 @@ class TestModelLists(unittest.TestCase):
             [{"id": "p/y", "label": "Y"}])
 
 
-class TestListsAtStart(_OpencodeCase):
-    """The adapters ask for the list at start; it only feeds the picker,
-    so a slow one never stops the start."""
+class TestOpencodeListAfterStart(_OpencodeCase):
+    """The list is asked after the start and arrives as one more
+    session.options: a slow one never holds the start up."""
 
-    def opencode(self, mode: str):
-        from unittest import mock
-        from swe.remote.adapters import opencode_serve
-
-        with mock.patch.object(opencode_serve, "MODEL_LIST_TIMEOUT_S", 0.5):
-            adapter, sink, _sid = self.started(mode)
-        return adapter, sink
-
-    def test_opencode_lists_the_servers_models(self):
-        _adapter, sink = self.opencode("models")
-        shown = _options(sink.events)[0]["model"]
-        self.assertEqual(shown["choices"], [
+    def test_the_servers_models_arrive_after_the_start(self):
+        _adapter, sink, _sid = self.started("models")
+        found = sink.wait_for(lambda e: e["type"] == "session.options"
+                              and "choices" in e["data"]["options"]["model"])
+        self.assertIsNotNone(found)
+        self.assertEqual(found["data"]["options"]["model"]["choices"], [
             {"id": "fake/model-1", "label": "One"},
             {"id": "fake/model-2", "label": "Two"}])
 
-    def test_a_slow_opencode_list_leaves_the_value_alone(self):
-        adapter, sink = self.opencode("slow-models")
-        self.assertEqual(sink.types()[:2], ["session.caps", "session.state"])
+    def test_a_slow_list_does_not_hold_the_start(self):
+        started = time.monotonic()
+        _adapter, sink, _sid = self.started("slow-models")
+        self.assertLess(time.monotonic() - started, 1.4,
+                        "start returned before the list")
         self.assertNotIn("choices", _options(sink.events)[0]["model"])
+        found = sink.wait_for(lambda e: e["type"] == "session.options"
+                              and "choices" in e["data"]["options"]["model"],
+                              timeout=10.0)
+        self.assertIsNotNone(found, "the late list still arrives")
+
+    def test_a_server_with_no_list_leaves_the_value_alone(self):
+        adapter, sink, _sid = self.started()
+        self.assertIsNone(sink.wait_for(
+            lambda e: e["type"] == "session.options"
+            and "choices" in e["data"]["options"]["model"], timeout=0.5))
         self.assertTrue(adapter.capabilities.can_set("model"))
+
+
+class TestCodexListAfterStart(_CodexCase):
+    def test_the_servers_models_arrive_after_the_start(self):
+        _adapter, sink, _sid = self.started("models")
+        found = sink.wait_for(lambda e: e["type"] == "session.options"
+                              and "choices" in e["data"]["options"]["model"])
+        self.assertIsNotNone(found)
+        self.assertEqual(found["data"]["options"]["model"]["choices"], [
+            {"id": "gpt-a", "label": "GPT A"},
+            {"id": "gpt-b", "label": "GPT B"}])
+
+    def test_a_slow_list_does_not_hold_the_start(self):
+        started = time.monotonic()
+        _adapter, sink, _sid = self.started("slow-models")
+        self.assertLess(time.monotonic() - started, 1.4)
+        self.assertNotIn("choices", _options(sink.events)[0]["model"])
+        self.assertIsNotNone(sink.wait_for(
+            lambda e: e["type"] == "session.options"
+            and "choices" in e["data"]["options"]["model"], timeout=10.0))
+
+    def test_a_refused_list_leaves_the_value_alone(self):
+        _adapter, sink, _sid = self.started()
+        self.assertIsNone(sink.wait_for(
+            lambda e: e["type"] == "session.options"
+            and "choices" in e["data"]["options"]["model"], timeout=0.5))
 
 
 class TestSteerEffect(unittest.TestCase):
@@ -619,6 +652,20 @@ class TestKeeper(KeeperCase):
         self.assertEqual(feed.client.welcome["agent"], "down")
         self.assertEqual(feed.client.welcome["options"]["model"]["value"],
                          "haiku")
+
+    def test_a_start_whose_list_has_not_come_keeps_the_last_list(self):
+        # The second agent says its value before (or without) its list,
+        # as Codex and opencode do now.
+        keeper = self.keeper(self.plan(), {"caps": CAPS})
+        feed = self.connect(keeper)
+        feed.live()
+        feed.client.request("park", command_id="p")
+        feed.result("p")
+        self.send(feed)
+        feed.event("turn.ended")
+        shown = self.status(feed)["options"]["model"]
+        self.assertEqual([c["id"] for c in shown["choices"]],
+                         ["sonnet", "haiku"])
 
     def test_an_agent_with_narrower_caps_offers_less(self):
         keeper = self.keeper(self.plan(), {"caps": Caps()})

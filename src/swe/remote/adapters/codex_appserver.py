@@ -50,9 +50,6 @@ from swe.remote.adapters.core import (
 # How long each handshake request, any later request, one stdin write
 # and the kill steps get.
 INIT_TIMEOUT_S = 60.0
-# The model list asked at start feeds only the picker (G32): a slow one is
-# given up on, and the start goes on without it.
-MODEL_LIST_TIMEOUT_S = 5.0
 CALL_TIMEOUT_S = 15.0
 WRITE_TIMEOUT_S = 10.0
 _KILL_WAIT_S = 3.0
@@ -287,7 +284,28 @@ class CodexAppServerAdapter:
             for name, value in self._overrides.items():
                 state.settings[name] = value
             self._emit(state.start_events(self._caps, self._session_id))
+        if self._caps.can_set("model"):
+            # The server's own list for the picker (G32), asked after the
+            # start so it never holds the start up; it arrives as one more
+            # session.options. A refused or late one leaves the value
+            # alone (the keeper keeps the list it last had).
+            threading.Thread(target=self._fetch_models, daemon=True,
+                             name="codex-appserver-models").start()
         return self._session_id
+
+    def _fetch_models(self) -> None:
+        with self._lock:
+            if self._state is None or self._state.done or self._closed:
+                return
+            message = wire.model_list(self._rpc_id())
+        try:
+            listed = self._call(message)
+        except AdapterError:
+            return
+        with self._lock:
+            state = self._state
+            if state is not None and not state.done and not self._closed:
+                self._emit(state.model_list(listed))
 
     def _handshake(self, spec: StartSpec, thread_id: str) -> dict:
         from swe import __version__
@@ -315,18 +333,6 @@ class CodexAppServerAdapter:
         if not self.version:
             self.version = str(thread.get("cliVersion") or "")
             self._check_version()
-        if self._caps.can_set("model") \
-                and isinstance(self._state, wire.ThreadState):
-            # The server's own list for the picker (G32); a server that
-            # refuses it leaves the value alone.
-            try:
-                listed = self._call(wire.model_list(self._rpc_id()), min(
-                    self._init_timeout, MODEL_LIST_TIMEOUT_S))
-            except AdapterError as exc:
-                if exc.code == "agent_down":
-                    raise
-                listed = {}
-            self._state.model_list(listed)
         return thread
 
     def _check_version(self) -> None:

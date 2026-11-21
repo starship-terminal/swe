@@ -178,7 +178,8 @@
   status: todo
   depends_on: [G13]
   owns: ["src/swe/webapp/static/sessions.js", "src/swe/webapp/static/pages/chat.js"]
-  questions: []
+  questions:
+    - "The hub's `set_option` route lets any signed-in device switch a running session to its agent's most permissive mode (Claude's bypass mode, ACP `yolo`, Codex `never`) with no check and no confirmation, and the keeper keeps it for later starts (docs/specs/G32-session-options.md, Limits). Restrict it on the hub, require a confirmation in the view, or accept?"
   verify: ["end-to-end", "screens: all"]
   tier: implement-standard
   est_runtime: 60m

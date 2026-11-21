@@ -2657,9 +2657,13 @@ class _CodexCase(unittest.TestCase):
         return adapter, sink, sid
 
     def sent(self) -> list:
-        return [json.loads(line) for line in
-                self.log.read_text().splitlines()] if self.log.exists() \
+        """What the fake got, the model list aside: the adapter asks for
+        it on a thread of its own after the start (G32), so where it
+        falls among the other requests is not fixed."""
+        lines = [json.loads(line) for line in
+                 self.log.read_text().splitlines()] if self.log.exists() \
             else []
+        return [m for m in lines if m.get("method") != "model/list"]
 
     def sent_methods(self) -> list:
         return [m.get("method") for m in self.sent()[1:]]
@@ -2741,10 +2745,8 @@ class TestCodexAdapterStart(_CodexCase):
         first, *rest = self.sent()
         self.assertEqual(first["argv"], [])
         self.assertEqual(first["env"]["EXTRA"], "1")
-        # model/list last: the server's models for the picker (G32).
         self.assertEqual([m.get("method") for m in rest],
-                         ["initialize", "initialized", "thread/start",
-                          "model/list"])
+                         ["initialize", "initialized", "thread/start"])
         self.assertEqual(rest[0]["params"]["clientInfo"]["name"], "swe")
         self.assertEqual(rest[2]["params"], {
             "cwd": adapter._spec.cwd, "model": "gpt-x",
@@ -3289,10 +3291,8 @@ class TestCodexAdapterOptions(_CodexCase):
         adapter, sink, _sid = self.started(spec={"effort": "low"})
         adapter.set_option("model", "gpt-y")
         adapter.set_option("permission_mode", "never")
-        # The start's model/list (G32) is the last line: nothing is
-        # written until a turn starts.
-        self.assertEqual(self.sent_methods()[-2:],
-                         ["thread/start", "model/list"])
+        self.assertEqual(self.sent_methods()[-1], "thread/start",
+                         "nothing is written until a turn starts")
         self.wait_turn(sink, adapter.send_turn(TurnInput("one")))
         first = self.sent()[-1]["params"]
         self.assertEqual((first["model"], first["effort"],
@@ -4624,12 +4624,14 @@ class _OpencodeCase(unittest.TestCase):
         return adapter, sink, sid
 
     def sent(self) -> list:
-        """The requests the fake got, the stream's and info's aside."""
+        """The requests the fake got, the stream's, info's and the model
+        list's aside: the adapter asks for the list on a thread of its
+        own after the start (G32), so where it falls is not fixed."""
         lines = [json.loads(line) for line in
                  self.log.read_text().splitlines()] if self.log.exists() \
             else []
         return [ln for ln in lines if "path" in ln
-                and ln["path"] != "/api/info"]
+                and ln["path"] not in ("/api/info", "/api/model")]
 
     def first_line(self) -> dict:
         return json.loads(self.log.read_text().splitlines()[0])
@@ -4746,11 +4748,9 @@ class TestOpencodeAdapterStart(_OpencodeCase):
 
     def test_an_effort_with_no_model_goes_on_the_servers_model(self):
         _adapter, _sink, _sid = self.started(spec={"effort": "high"})
-        # Then the server's model list, for the picker (G32).
         self.assertEqual(self.sent_paths(), [
-            ("POST", "/api/session"), ("POST", "/model"),
-            ("GET", "/api/model")])
-        self.assertEqual(self.sent()[-2]["body"], {"model": {
+            ("POST", "/api/session"), ("POST", "/model")])
+        self.assertEqual(self.sent()[-1]["body"], {"model": {
             "providerID": "fake", "id": "model-1", "variant": "high"}})
         self.assertNotIn("model", self.sent()[0]["body"])
 
@@ -4773,9 +4773,7 @@ class TestOpencodeAdapterStart(_OpencodeCase):
             "resume_id": "ses_older00000000000000001"})
         self.assertEqual(sid, "ses_older00000000000000001")
         self.assertEqual(self.sent()[0]["method"], "GET")
-        # The second request is the model list (G32), not a change.
-        self.assertEqual([r["method"] for r in self.sent()], ["GET", "GET"],
-                         "a resume changes no model")
+        self.assertEqual(len(self.sent()), 1, "a resume changes no model")
         adapter.close(0.5)
         forked, sink, sid = self.started(spec={
             "resume_id": "ses_older00000000000000001", "fork": True,
@@ -4785,8 +4783,7 @@ class TestOpencodeAdapterStart(_OpencodeCase):
             [(r["method"], r["path"]) for r in self.sent()],
             [("POST", "/api/session/ses_older00000000000000001/fork"),
              ("POST", f"/api/session/{OC_FORKED}/model"),
-             ("POST", f"/api/session/{OC_FORKED}/agent"),
-             ("GET", "/api/model")])
+             ("POST", f"/api/session/{OC_FORKED}/agent")])
         self.assertEqual(self.sent()[1]["body"], {"model": {
             "providerID": "prov", "id": "m2", "variant": "high"}})
         self.assertEqual(self.sent()[2]["body"], {"agent": "plan"})

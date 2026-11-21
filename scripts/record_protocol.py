@@ -122,6 +122,18 @@ _PREFIXED_ID_RE = _prefixed_id_re(_ID_PREFIXES)
 _CLI_TMP_RE = re.compile(r"/(?:private/)?tmp/claude-\d+/[^\s\"'`]*")
 _TMP_RE = re.compile(r"/(?:private/)?var/folders/[^\s\"'`]*")
 _USERS_RE = re.compile(r"/(?:Users|home)/[^\s\"'`/]+")
+# The machine's OS release and architecture in a user agent
+# (``(Mac OS 27.3.0; arm64)``), and the recording's time in a Codex
+# rollout file name (``rollout-2026-11-22T07-20-54-<id>``), G32.
+_OS_RE = re.compile(r"\((?:Mac OS|macOS|Darwin|Linux|Windows)[^;()]*;"
+                    r"\s*[A-Za-z0-9_]+\)")
+_ROLLOUT_RE = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}")
+
+
+def blank_machine(s: str) -> str:
+    """``_OS_RE`` and ``_ROLLOUT_RE`` applied to one string."""
+    s = _OS_RE.sub("(os; arch)", s)
+    return _ROLLOUT_RE.sub("rollout-2026-01-01T00-00-00", s)
 
 # The fields of the init message and the initialize answer a recording
 # keeps; everything else (commands, skills, plugins, agents, MCP
@@ -204,6 +216,7 @@ class Redactor:
         if self.user:
             s = re.sub(rf"\b{re.escape(self.user)}\b", "user", s)
         s = _EMAIL_RE.sub("user@example.com", s)
+        s = blank_machine(s)
         s = _redact_secrets(s)
         s = _UUID_RE.sub(lambda m: self._id(
             "uuid", m.group(0).lower(),
