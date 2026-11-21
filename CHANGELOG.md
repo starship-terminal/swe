@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Droid limits on a Mac with no Homebrew.** `bundle-swe.sh` used to
-  copy `libcrypto.3.dylib` from Homebrew's OpenSSL and warn when it was
-  missing, which left Droid auth decryption off. It now builds a pinned
-  OpenSSL 3.6.5 for the host architecture and fails the build if that
-  dylib cannot be produced.
-
 ### Added
 
 - **A Claude Code session can run through a keeper, behind a setting.** `swe config set remote.session_view true` and a hub restart turn it on; it is off by default and nothing changes without it. A session launched from the hub, or a terminal session attached with no channel named (Continue in SWE), then runs under a keeper process that holds the agent, its queue and its event log. Restarting the hub leaves the turn running: the new hub reconnects, replays what it missed, and a pending approval can still be answered. Each message, approval and control is stored under its `command_id` (`client_id` still works) before it is delivered, so a retry gets the stored receipt and is never applied twice, and the first of two approval answers wins. The web, iPhone and Mac chats get the same frames as before. Continue in SWE is refused while the session is mid-turn or a `claude` process still has it open. Not on a keeper yet: `/compact` and `/clear`, Autonomy launches. See [docs/specs/G8-hub-on-keepers.md](docs/specs/G8-hub-on-keepers.md).
@@ -60,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Mac Hooks page is a table.** The harness tab strip, which grew with every harness, is a Harness menu at the left of a filter row (All harnesses by default, each harness with its logo), beside the range menu and the Other tools checkbox. The Check card that took a full-width section for one finding is a "Check: N findings" control at the right of that row, closed until clicked, and hidden when the check finds nothing. The Session timeline and Not running cards are one table like the MCP servers and Skills tables: a row per script per event with Script and its summary, Event, Matcher, Harness (when every harness is shown), Fires, Blocks and Rate, in the order a session meets the events, and the scripts nothing fires as muted rows at the bottom with their reason. With one harness picked, a line under the table opens the events nothing is declared on. Clicking a row opens the hook as a full page with the header's back chevron (⌘[): its declaration and runs in a 300pt rail (260pt in a narrower window), and the script's editor filling the rest of the window. Where the editor would drop under 380pt beside the rail (a 900pt window, or a wide sidebar), the rail goes on top at full width, Declaration beside Runs when they fit, and the editor follows under it while the page scrolls instead of a 460pt box in a 440pt side panel. The web Hooks page keeps its layout.
 
 ### Fixed
+
+- **Droid limits on a Mac with no Homebrew.** `bundle-swe.sh` copied `libcrypto.3.dylib` from Homebrew's OpenSSL and only warned when it was missing, so the app installed with Droid auth decryption off. It now builds OpenSSL 3.5.9 LTS from source checked against a pinned checksum, for the host architecture and macOS 26, and fails the build if that dylib cannot be produced or loaded. `SWE_LIBCRYPTO` still points the build at another library, with its licence found beside it as before.
 
 - **A message for a satellite is no longer lost when the hub stops while sending it.** Behind `remote.session_view`, the hub marks a held message or approval answer as claimed and then puts it on the machine's command stream. A hub that stopped between the two left the message marked as sent with nothing sent, and a retry answered "queued". The hub now checks its claimed commands against each machine's stream after it starts, and after a hand-over that failed, and sends what is missing once, in arrival order with the messages still held. One that arrived more than 24 hours ago is rejected as expired. See [docs/specs/G15-satellite-keepers.md](docs/specs/G15-satellite-keepers.md).
 

@@ -271,7 +271,7 @@ release archive):
 | ncurses (`_curses`), loaded from macOS's `/usr/lib` | X11 (MIT-style) | `python-ncurses.txt` |
 
 The `libcrypto.3.dylib` that `bundle-swe.sh` builds for the Droid auth
-decryptor is OpenSSL 3.6.5 (Apache-2.0), pinned by checksum in that
+decryptor is OpenSSL 3.5.9 LTS (Apache-2.0), pinned by checksum in that
 script and built for the host architecture. Its licence ships beside it
 as `Contents/Resources/swe/python/lib/OPENSSL-LICENSE.txt`.
 

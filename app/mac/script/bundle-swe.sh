@@ -117,11 +117,20 @@ find "$py" -name '__pycache__' -type d -prune -exec rm -rf {} +
 # architecture, and kept in the Python cache. A Mac with no Homebrew
 # (the usual case on a machine that only has Nix) used to warn and ship
 # the app with Droid decryption off.
-openssl_version="3.6.5"
-openssl_sha256="a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98"
+#
+# 3.5 is OpenSSL's LTS series (supported until 2030-04-08); non-LTS
+# series get 13 months. Bump within 3.5 for security releases, taking
+# the checksum from the release's .sha256 file. A 4.x pin would change
+# the dylib's name, so check _load_libcrypto's glob first.
+openssl_version="3.5.9"
+openssl_sha256="603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"
 openssl_tag="openssl-${openssl_version}"
 openssl_archive="${openssl_tag}.tar.gz"
 openssl_url="https://github.com/openssl/openssl/releases/download/${openssl_tag}/${openssl_archive}"
+# The app's LSMinimumSystemVersion (build-app.sh) and Package.swift
+# platform. Without it clang targets the build machine's macOS, and a
+# dylib built on a newer macOS refuses to load on an older one.
+openssl_min_macos="26.0"
 # darwin64-arm64-cc / darwin64-x86_64-cc. uname -m, not $triple: the
 # Python triple says aarch64, and OpenSSL's Configure does not.
 case "$(uname -m)" in
@@ -129,9 +138,31 @@ case "$(uname -m)" in
   x86_64) openssl_target="darwin64-x86_64-cc" ;;
   *) echo "bundle-swe: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
-libcrypto="${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-$cache/libcrypto-${openssl_version}-${openssl_target}.dylib}}"
-license="${SWE_LIBCRYPTO_LICENSE:-${QUIVER_LIBCRYPTO_LICENSE:-$cache/openssl-${openssl_version}-LICENSE.txt}}"
-if [ -z "${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-}}" ]; then
+libcrypto_override="${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-}}"
+license_override="${SWE_LIBCRYPTO_LICENSE:-${QUIVER_LIBCRYPTO_LICENSE:-}}"
+if [ -n "$libcrypto_override" ]; then
+  # A library from elsewhere (Homebrew's, say) brings its own licence:
+  # the one named, else the one its OpenSSL prefix ships. The pinned
+  # build's cached licence belongs to a different build, so never use it.
+  libcrypto="$libcrypto_override"
+  openssl_prefix="$(dirname "$(dirname "$libcrypto")")"
+  license_candidates=(${license_override:+"$license_override"}
+                      "$openssl_prefix/share/openssl/LICENSE.txt"
+                      "$openssl_prefix/LICENSE.txt")
+  license=""
+  for cand in "${license_candidates[@]}"; do
+    if [ -f "$cand" ]; then license="$cand"; break; fi
+  done
+  if [ -z "$license" ]; then
+    echo "bundle-swe: no OpenSSL LICENSE.txt for SWE_LIBCRYPTO=$libcrypto" >&2
+    printf 'bundle-swe:   looked at %s\n' "${license_candidates[@]}" >&2
+    echo "bundle-swe: set SWE_LIBCRYPTO_LICENSE to that library's licence" >&2
+    exit 1
+  fi
+else
+  build_id="${openssl_version}-${openssl_target}-macos${openssl_min_macos}"
+  libcrypto="$cache/libcrypto-${build_id}.dylib"
+  license="$cache/openssl-${openssl_version}-LICENSE.txt"
   if [ ! -f "$libcrypto" ] || [ ! -f "$license" ]; then
     echo "bundle-swe: building OpenSSL $openssl_version ($openssl_target)" >&2
     src_tar="$cache/$openssl_archive"
@@ -159,6 +190,7 @@ if [ -z "${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-}}" ]; then
     # show the tail only when the build fails.
     build_log="$work/build.log"
     if ! (cd "$work/$openssl_tag" && \
+          export MACOSX_DEPLOYMENT_TARGET="$openssl_min_macos" && \
           ./Configure "$openssl_target" no-apps --prefix="$work/prefix" \
             --libdir=lib >"$build_log" 2>&1 && \
           make -j"$(sysctl -n hw.ncpu)" build_libs >>"$build_log" 2>&1 && \
@@ -174,22 +206,23 @@ if [ -z "${SWE_LIBCRYPTO:-${QUIVER_LIBCRYPTO:-}}" ]; then
       echo "bundle-swe: OpenSSL built no libcrypto.3.dylib" >&2
       exit 1
     fi
+    # Licence first, dylib last, each renamed into place: a build running
+    # alongside that sees the dylib also sees its licence.
+    staged_license="$(mktemp "$cache/openssl-LICENSE.XXXXXX")"
+    cp "$work/$openssl_tag/LICENSE.txt" "$staged_license"
+    chmod 644 "$staged_license"
+    mv -f "$staged_license" "$license"
     staged="$(mktemp "$cache/libcrypto.XXXXXX")"
     cp "$built" "$staged"
     chmod 755 "$staged"
     install_name_tool -id "@rpath/libcrypto.3.dylib" "$staged"
+    chmod 644 "$staged"
     mv -f "$staged" "$libcrypto"
-    chmod 644 "$libcrypto"
-    cp "$work/$openssl_tag/LICENSE.txt" "$license"
     rm -rf "$work"
   fi
 fi
 if [ ! -f "$libcrypto" ]; then
   echo "bundle-swe: libcrypto.3.dylib not found at $libcrypto" >&2
-  exit 1
-fi
-if [ ! -f "$license" ]; then
-  echo "bundle-swe: no OpenSSL LICENSE.txt at $license; set SWE_LIBCRYPTO_LICENSE" >&2
   exit 1
 fi
 cp "$libcrypto" "$py/lib/libcrypto.3.dylib"
@@ -227,9 +260,10 @@ if ! out="$(HOME="$probe_home" "$dest/bin/swe" version --json 2>&1)" \
   echo "bundle-swe: the bundled swe didn't start: $out" >&2
   exit 1
 fi
-# When a libcrypto was bundled, the decryptor must actually load it —
-# loading the wrong one crashes this interpreter, so probe now.
-if [ -n "$libcrypto" ] && ! SWE_BUNDLED_PYTHON=1 "$py/bin/python3" -I -B -c \
+# The decryptor must actually load the bundled libcrypto: the wrong one
+# (another architecture, a newer macOS) crashes this interpreter or is
+# refused, so probe now.
+if ! SWE_BUNDLED_PYTHON=1 "$py/bin/python3" -I -B -c \
     'import sys; sys.path.insert(0, sys.argv[1]); \
      from swe.harness.rate_limits import _load_libcrypto; \
      sys.exit(0 if _load_libcrypto() is not None else 1)' "$site"; then
