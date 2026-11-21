@@ -1556,6 +1556,11 @@ class RemoteAgent:
         """The answer to a ``kept`` command that must not reach the
         route, or None when it may.
 
+        **Already run.** A command this machine's store knows is a
+        replay, and its stored answer stands however late the replay
+        is read: saying "expired" for something that ran would have the
+        hub reject a command that did its work.
+
         **Too old.** The hub puts a command on the stream when it
         believes this machine is awake, and a machine that fell asleep
         a moment before reads it whenever it wakes. A message or an
@@ -1569,15 +1574,8 @@ class RemoteAgent:
         answer is given instead, a detach or kill is done already, and
         anything else is refused.
         """
-        if isinstance(sent_at, (int, float)) and not isinstance(sent_at, bool):
-            limit = KEPT_HOLD_S if route in ("message", "approval") \
-                else KEPT_FRESH_S
-            if time.time() - sent_at > limit:
-                return 409, protocol.error("expired", (
-                    "this reached the machine too late to run"))
         runtime = self.local.runtime
-        if runtime.owns(key):
-            return None
+        owned = runtime.owns(key)
         stored = None
         if runtime.store is not None and command_id:
             try:
@@ -1585,13 +1583,26 @@ class RemoteAgent:
             except Exception:
                 stored = None
         if stored is not None:
+            # It ran here already (this is a replay): what it did is
+            # the answer, however late the replay is read.
+            if owned:
+                return None  # the route answers the duplicate itself
             reply = {"ok": True, "duplicate": True,
                      "command_id": command_id, "receipt": stored.status}
             if stored.reason:
                 reply["reason"] = stored.reason
             return 200, reply
-        if route == "control" and body.get("op") in ("detach", "kill"):
+        if not owned and route == "control" \
+                and body.get("op") in ("detach", "kill"):
             return 200, {"ok": True, "note": "already detached"}
+        if isinstance(sent_at, (int, float)) and not isinstance(sent_at, bool):
+            limit = KEPT_HOLD_S if route in ("message", "approval") \
+                else KEPT_FRESH_S
+            if time.time() - sent_at > limit:
+                return 409, protocol.error("expired", (
+                    "this reached the machine too late to run"))
+        if owned:
+            return None
         return 409, protocol.error("not_kept", (
             "this session is no longer run by a session keeper"))
 

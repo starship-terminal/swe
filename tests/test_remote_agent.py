@@ -3968,6 +3968,18 @@ class TestSatelliteGuards(SatelliteCase):
         self.settle(key)
         self.assertEqual(self.sends(), ["hello", "an hour late"])
         self.assertEqual(self.calls("interrupt"), [])
+        # A command that already ran is never "too late": its replay,
+        # read after the deadline, answers what it did.
+        frame = self.stream()[-1]
+        self.agent._run_kept(frame["seq"], frame["data"],
+                             self.agent._cmd_epoch,
+                             time.time() - agent_mod.KEPT_HOLD_S - 1)
+        self.done.get(timeout=WAIT)
+        self.assertNotEqual(self.store().get_command("s3").status,
+                            "rejected")
+        self.assertEqual(self.sends(), ["hello", "an hour late"])
+        self.assertIsNone(self.agent._kept_refusal(
+            key, "message", {"text": "an hour late"}, "s3", 0.0))
 
     def test_a_replay_after_the_session_was_let_go_types_nothing(self):
         key, hub_key = self.running()

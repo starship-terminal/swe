@@ -227,7 +227,9 @@ uploads and `attach` keep the old path.
    command's own id; it moves the stream's backlog floor as a
    `command.result` from the satellite used to.
 
-Two commands never reach the route (`RemoteAgent._kept_refusal`):
+Two commands never reach the route (`RemoteAgent._kept_refusal`). A
+command this machine's store already knows is a replay and is checked
+first: its stored answer stands however late the replay is read.
 
 | The command | The satellite answers |
 |---|---|
