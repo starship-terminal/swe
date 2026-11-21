@@ -1,0 +1,47 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "interrupt", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": null}
+{"proc": 0, "dir": "in", "t": 0.508, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.509, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.512, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.512, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.523, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.526, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.526, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."}}}
+{"proc": 0, "dir": "in", "t": 0.538, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 3.114, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 3.581, "http": {"n": 3, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235236989}, "type": "user", "payload": {"text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 3.624, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.628, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.628, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.628, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 4.26, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 5.1200000000000004e-05, "tokens": {"input": 457, "output": 11, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 4.26, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.347, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795235237036}}}
+{"proc": 0, "dir": "in", "t": 4.347, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.347, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.448, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "1. 1 is the start of the count.  \n2. 2 comes right after "}}}
+{"proc": 0, "dir": "in", "t": 4.56, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "1.  \n3. 3 marks the third step forward.  \n4. "}}}
+{"proc": 0, "dir": "in", "t": 4.662, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "4 is a steady next number.  \n5. 5 is halfway to the next"}}}
+{"proc": 0, "dir": "in", "t": 4.769, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " milestone.  \n6. 6 keeps the pace going.  \n7. 7 is"}}}
+{"proc": 0, "dir": "in", "t": 4.87, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " an lucky-feeling number.  \n8. 8 is one less than nine.  \n9. "}}}
+{"proc": 0, "dir": "in", "t": 4.985, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "9 is close to a new decade.  \n10. 10 completes the first ten.  \n"}}}
+{"proc": 0, "dir": "in", "t": 5.086, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "11. 11 starts the second set.  \n12. 12 adds another dozen-level step.  \n"}}}
+{"proc": 0, "dir": "in", "t": 5.201, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "13. 13 is a number people notice.  \n14. 14 moves you farther ahead.  \n"}}}
+{"proc": 0, "dir": "out", "t": 5.201, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/interrupt", "body": null}}
+{"proc": 0, "dir": "in", "t": 5.208, "http": {"n": 4, "status": 200, "body": {"interrupted": true}}}
+{"proc": 0, "dir": "in", "t": 5.208, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": "1. 1 is the start of the count.  \n2. 2 comes right after 1.  \n3. 3 marks the third step forward.  \n4. 4 is a steady next number.  \n5. 5 is halfway to the next milestone.  \n6. 6 keeps the pace going.  \n7. 7 is an lucky-feeling number.  \n8. 8 is one less than nine.  \n9. 9 is close to a new decade.  \n10. 10 completes the first ten.  \n11. 11 starts the second set.  \n12. 12 adds another dozen-level step.  \n13. 13 is a number people notice.  \n14. 14 moves you farther ahead.  \n"}}}
+{"proc": 0, "dir": "in", "t": 5.208, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.208, "sse": {"type": "session.step.failed", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "error": {"type": "aborted", "message": "Step interrupted"}}}}
+{"proc": 0, "dir": "in", "t": 5.208, "sse": {"type": "session.execution.interrupted", "data": {"sessionID": "ses_01", "reason": "user"}}}
+{"proc": 0, "dir": "out", "t": 5.208, "http": {"n": 5, "method": "POST", "path": "/api/session/ses_01/interrupt", "body": null}}
+{"proc": 0, "dir": "in", "t": 5.209, "http": {"n": 5, "status": 200, "body": {"interrupted": false}}}
+{"proc": 0, "exit": 143}

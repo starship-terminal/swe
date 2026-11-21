@@ -1,0 +1,40 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "hello", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": null}
+{"proc": 0, "dir": "in", "t": 0.174, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.174, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.175, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.175, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.179, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.179, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Reply with exactly these words and nothing else: hello there"}}}
+{"proc": 0, "dir": "in", "t": 0.18, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.184, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 0.405, "http": {"n": 3, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235223108}, "type": "user", "payload": {"text": "Reply with exactly these words and nothing else: hello there"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 0.421, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.422, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.422, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.422, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 1.096, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 4.8200000000000006e-05, "tokens": {"input": 447, "output": 7, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 1.096, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 1.204, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795235223121}}}
+{"proc": 0, "dir": "in", "t": 1.204, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 1.204, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 1.211, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "hello there"}}}
+{"proc": 0, "dir": "in", "t": 1.211, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": "hello there"}}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "finish": "stop", "tokens": {"input": 668, "output": 6, "reasoning": 0, "cache": {"read": 4608, "write": 0}}, "cost": 0.00023326}}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.00028146, "tokens": {"input": 1115, "output": 13, "reasoning": 0, "cache": {"read": 4608, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 1.561, "sse": {"type": "model.updated"}}
+{"proc": 0, "exit": 143}

@@ -438,11 +438,11 @@ class CodexAppServerAdapter:
             try:
                 written = self._write(reply)
             except AdapterError:
-                state.pending[request_id] = pending
+                state.reopen(request_id, pending)
                 raise
             if not written:
                 # Still open: the exit sequence retires it.
-                state.pending[request_id] = pending
+                state.reopen(request_id, pending)
                 raise AdapterError("codex is not reachable",
                                    code="agent_down")
             self._emit(events)

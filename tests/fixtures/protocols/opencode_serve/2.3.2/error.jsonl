@@ -1,0 +1,49 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "error", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": {"bad_model_accepted": true, "end": "session.execution.failed", "end_after_a_good_model": "session.execution.succeeded"}}
+{"proc": 0, "dir": "in", "t": 0.635, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.635, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.654, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.654, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.676, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.676, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/model", "body": {"model": {"providerID": "openai", "id": "no-such-model-for-the-recorder"}}}}
+{"proc": 0, "dir": "in", "t": 0.677, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.681, "http": {"n": 3, "status": 204, "body": null}}
+{"proc": 0, "dir": "out", "t": 0.681, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Reply with: ok"}}}
+{"proc": 0, "dir": "in", "t": 0.682, "sse": {"type": "session.model.selected", "data": {"sessionID": "ses_01", "model": {"id": "no-such-model-for-the-recorder", "providerID": "openai"}, "previous": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.694, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 2.717, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 3.162, "http": {"n": 4, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235236941}, "type": "user", "payload": {"text": "Reply with: ok"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 3.181, "sse": {"type": "session.execution.failed", "data": {"sessionID": "ses_01", "error": {"type": "provider.no-route", "message": "Model unavailable: openai/no-such-model-for-the-recorder"}}}}
+{"proc": 0, "dir": "out", "t": 3.592, "http": {"n": 5, "method": "POST", "path": "/api/session/ses_01/model", "body": {"model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 3.596, "sse": {"type": "session.model.selected", "data": {"sessionID": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "previous": {"id": "no-such-model-for-the-recorder", "providerID": "openai", "variant": "default"}}}}
+{"proc": 0, "dir": "in", "t": 3.596, "http": {"n": 5, "status": 204, "body": null}}
+{"proc": 0, "dir": "out", "t": 3.596, "http": {"n": 6, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Reply with: ok"}}}
+{"proc": 0, "dir": "in", "t": 3.598, "http": {"n": 6, "status": 200, "body": {"data": {"id": "msg_02", "sessionID": "ses_01", "time": {"created": 1795235237379}, "type": "user", "payload": {"text": "Reply with: ok"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 3.615, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.616, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.616, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_02"}}}
+{"proc": 0, "dir": "in", "t": 4.165, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 4.8e-05, "tokens": {"input": 440, "output": 8, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 4.165, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.321, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_03", "started": 1795235237391}}}
+{"proc": 0, "dir": "in", "t": 4.321, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.321, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.327, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_03", "ordinal": 0, "delta": "ok"}}}
+{"proc": 0, "dir": "in", "t": 4.327, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_03", "ordinal": 0, "text": "ok"}}}
+{"proc": 0, "dir": "in", "t": 4.37, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.37, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_03", "finish": "stop", "tokens": {"input": 669, "output": 5, "reasoning": 0, "cache": {"read": 4608, "write": 0}}, "cost": 0.00023221}}}
+{"proc": 0, "dir": "in", "t": 4.37, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.00028021000000000003, "tokens": {"input": 1109, "output": 13, "reasoning": 0, "cache": {"read": 4608, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 4.37, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "exit": 143}

@@ -1,0 +1,50 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "interrupt_early", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": {"answer": {"interrupted": true}, "end": "session.execution.interrupted", "deltas": 0}}
+{"proc": 0, "dir": "in", "t": 1.091, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 1.091, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 1.095, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 1.095, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 1.125, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 1.125, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Reply only with: ready"}}}
+{"proc": 0, "dir": "in", "t": 1.129, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 1.149, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 2.94, "http": {"n": 3, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795237107260}, "type": "user", "payload": {"text": "Reply only with: ready"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 7.295, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 7.309, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.31, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.31, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 8.888, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 4.66e-05, "tokens": {"input": 441, "output": 5, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 8.888, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 8.915, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795237111569}}}
+{"proc": 0, "dir": "in", "t": 8.915, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 8.915, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 8.917, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "ready"}}}
+{"proc": 0, "dir": "in", "t": 8.917, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": "ready"}}}
+{"proc": 0, "dir": "in", "t": 8.942, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 8.942, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "finish": "stop", "tokens": {"input": 5268, "output": 5, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0.0010598500000000002}}}
+{"proc": 0, "dir": "in", "t": 8.942, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0011064500000000001, "tokens": {"input": 5709, "output": 10, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 8.942, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "out", "t": 9.344, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."}}}
+{"proc": 0, "dir": "in", "t": 9.386, "http": {"n": 4, "status": 200, "body": {"data": {"id": "msg_03", "sessionID": "ses_01", "time": {"created": 1795237113698}, "type": "user", "payload": {"text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "out", "t": 9.386, "http": {"n": 5, "method": "POST", "path": "/api/session/ses_01/interrupt", "body": null}}
+{"proc": 0, "dir": "in", "t": 9.425, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 9.425, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 9.425, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_03"}}}
+{"proc": 0, "dir": "in", "t": 9.459, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_04", "started": 1795237113735}}}
+{"proc": 0, "dir": "in", "t": 9.459, "sse": {"type": "session.step.failed", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "error": {"type": "aborted", "message": "Step interrupted"}}}}
+{"proc": 0, "dir": "in", "t": 9.459, "sse": {"type": "session.execution.interrupted", "data": {"sessionID": "ses_01", "reason": "user"}}}
+{"proc": 0, "dir": "in", "t": 9.461, "http": {"n": 5, "status": 200, "body": {"interrupted": true}}}
+{"proc": 0, "exit": 143}

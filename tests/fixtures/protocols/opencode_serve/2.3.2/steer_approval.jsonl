@@ -1,0 +1,56 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "steer_approval", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": {"turn_ended_without_an_answer": false, "asked_file_exists": false, "executions_ended": 2}}
+{"proc": 0, "dir": "in", "t": 0.662, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.662, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.665, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.665, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}, "permissions": [{"action": "*", "resource": "*", "effect": "ask"}]}}}
+{"proc": 0, "dir": "in", "t": 0.683, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.683, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Run the shell command `touch asked.txt` in the current folder, then reply with just: done"}}}
+{"proc": 0, "dir": "in", "t": 0.683, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.701, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 3.16, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 3.744, "http": {"n": 3, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235237176}, "type": "user", "payload": {"text": "Run the shell command `touch asked.txt` in the current folder, then reply with just: done"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 3.772, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.773, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.773, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.773, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 4.352, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 4.96e-05, "tokens": {"input": 456, "output": 8, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 4.352, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.521, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795235237203}}}
+{"proc": 0, "dir": "in", "t": 4.521, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.521, "sse": {"type": "session.tool.input.started", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "id": "call_01", "name": "shell"}}}
+{"proc": 0, "dir": "in", "t": 4.611, "sse": {"type": "session.tool.input.ended", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.611, "sse": {"type": "session.tool.called", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "id": "call_01", "input": {"command": "touch asked.txt", "timeout": 120000}, "executed": false}}}
+{"proc": 0, "dir": "in", "t": 4.612, "sse": {"type": "permission.asked", "data": {"id": "per_01", "sessionID": "ses_01", "action": "shell", "resources": ["touch asked.txt"], "save": ["touch *"], "source": {"type": "tool", "messageID": "msg_02", "id": "call_01"}}}}
+{"proc": 0, "dir": "in", "t": 4.615, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "out", "t": 5.617, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Do not run that. Reply only with the word: steered", "delivery": "steer"}}}
+{"proc": 0, "dir": "in", "t": 5.621, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.621, "http": {"n": 4, "status": 200, "body": {"data": {"id": "msg_03", "sessionID": "ses_01", "time": {"created": 1795235239057}, "type": "user", "payload": {"text": "Do not run that. Reply only with the word: steered"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "out", "t": 25.623, "http": {"n": 5, "method": "POST", "path": "/api/session/ses_01/permission/per_01/reply", "body": {"decision": "reject"}}}
+{"proc": 0, "dir": "in", "t": 25.629, "http": {"n": 5, "status": 204, "body": null}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "permission.replied", "data": {"sessionID": "ses_01", "requestID": "per_01", "reply": "reject"}}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "session.tool.failed", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "id": "call_01", "error": {"type": "aborted", "message": "The user declined this tool call"}, "executed": false}}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "session.step.failed", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "error": {"type": "aborted", "message": "Step interrupted"}, "tokens": {"input": 649, "output": 24, "reasoning": 0, "cache": {"read": 5632, "write": 0}}, "cost": 0.00027244}}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.00032204, "tokens": {"input": 1105, "output": 32, "reasoning": 0, "cache": {"read": 5632, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "session.execution.interrupted", "data": {"sessionID": "ses_01", "reason": "shutdown"}}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 25.638, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_03"}}}
+{"proc": 0, "dir": "in", "t": 26.023, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_04", "started": 1795235259072}}}
+{"proc": 0, "dir": "in", "t": 26.023, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 26.023, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 26.026, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": "steered"}}}
+{"proc": 0, "dir": "in", "t": 26.026, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "text": "steered"}}}
+{"proc": 0, "dir": "in", "t": 26.081, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 26.081, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "finish": "stop", "tokens": {"input": 721, "output": 6, "reasoning": 0, "cache": {"read": 5632, "write": 0}}, "cost": 0.00026434}}}
+{"proc": 0, "dir": "in", "t": 26.081, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0005863800000000001, "tokens": {"input": 1826, "output": 38, "reasoning": 0, "cache": {"read": 11264, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 26.081, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "exit": 143}

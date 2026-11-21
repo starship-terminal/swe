@@ -21,7 +21,8 @@ from unittest.mock import MagicMock, patch
 
 from swe.remote import inject, protocol, supervise
 from swe.remote.adapters import (
-    codex_appserver, codex_wire, core, events, fake, registry,
+    codex_appserver, codex_wire, core, events, fake, opencode_serve,
+    opencode_wire, registry,
 )
 from swe.remote.adapters.base import (
     AdapterError, Answer, Caps, StartSpec, TurnInput, UnknownRequest,
@@ -3407,6 +3408,26 @@ class TestAdapterCore(unittest.TestCase):
         with self.assertRaises(UnknownRequest):
             state.take("r1")
 
+    def test_an_answer_that_never_got_through_reopens_the_request(self):
+        state = core.SessionCore("k:1", clock=fake.FakeClock(1.0),
+                                 run_id="r")
+        state.start_events(Caps(), "sid")
+        out: list = []
+        state.open_turn(out)
+        state.ask(out, "r1", "tool", "run it", {"native": 7})
+        payload = state.take("r1")
+        dropped = state.answered("r1", Answer(decision="allow"))
+        self.assertEqual([e["type"] for e in dropped],
+                         ["approval.resolved", "session.state"])
+        self.assertFalse(state.waiting)
+        state.reopen("r1", payload)
+        self.assertTrue(state.waiting)
+        self.assertEqual(state.take("r1"), {"native": 7})
+        # The answer that gets through says "running" again.
+        again = state.answered("r1", Answer(decision="allow"))
+        self.assertEqual([e["type"] for e in again],
+                         ["approval.resolved", "session.state"])
+
     def test_the_writer_reports_a_broken_pipe(self):
         class Broken:
             def write(self, data):
@@ -3449,6 +3470,1929 @@ class TestAdapterCore(unittest.TestCase):
         gate.set()
         writer.stop(5.0)
         self.assertFalse(writer.thread.is_alive())
+
+
+# =====================================================================
+# G16: the opencode session adapter (remote/adapters/opencode_serve.py)
+# and its wire module (opencode_wire.py).
+#
+# The same three layers: every recording under
+# tests/fixtures/protocols/opencode_serve/ replays to its golden events;
+# the wire module event by event; the adapter over
+# tests/fakes/fake_opencode.py (a real HTTP server on a loopback port),
+# including the shared AdapterContract. No test runs the real
+# ``opencode``: CI machines have none.
+
+OPENCODE_FAKE = Path(__file__).resolve().parent / "fakes" / "fake_opencode.py"
+OPENCODE_FIXTURES = PROTOCOLS / "opencode_serve"
+OC_SESSION = "ses_fake00000000000000000001"
+OC_FORKED = "ses_fake00000000000000000002"
+OC_MISSING = "ses_missing0000000000000001"
+OC_KEY = "sk-ant-api03-" + "d" * 40
+
+
+class TestOpencodeFixtures(unittest.TestCase):
+    def fixtures(self):
+        found = sorted(OPENCODE_FIXTURES.rglob("*.jsonl"))
+        self.assertTrue(found, "no recorded fixtures")
+        return found
+
+    def scenario(self, name):
+        lines = _load_fixture(OPENCODE_FIXTURES / opencode_wire.RECORDED_VERSION
+                              / f"{name}.jsonl")
+        return lines[0], lines[1:], opencode_wire.replay(lines)
+
+    @staticmethod
+    def requests(lines, tail):
+        return [ln["http"] for ln in lines if ln.get("dir") == "out"
+                and "http" in ln and ln["http"]["path"].endswith(tail)]
+
+    @staticmethod
+    def replies(got):
+        return [e["data"]["text"] for e in _of(got, "message.completed")
+                if e["data"]["kind"] == "assistant"]
+
+    def test_every_fixture_replays_to_its_golden_events(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=path.name):
+                golden = path.with_name(path.name[:-6] + ".events.json")
+                self.assertTrue(golden.exists(), f"{golden.name} missing")
+                got = opencode_wire.replay(_load_fixture(path))
+                self.assertEqual(got, json.loads(golden.read_text()))
+                for event in got:
+                    self.assertEqual(events.validate(event), [], event)
+
+    def test_headers_say_how_each_was_recorded(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=path.name):
+                header = _load_fixture(path)[0]
+                self.assertEqual(header["fixture"], 1)
+                self.assertEqual(header["adapter"], "opencode_serve")
+                self.assertEqual(header["version"], path.parent.name)
+                self.assertIs(header["synthetic"], False)
+                self.assertIsNone(header["error"])
+                self.assertIn("OPENCODE_SERVER_PASSWORD", header["env_set"])
+                self.assertIn("XDG_CONFIG_HOME", header["env_set"])
+
+    def test_golden_events_keep_the_contract_order(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=path.name):
+                got = opencode_wire.replay(_load_fixture(path))
+                self.assertEqual([e["type"] for e in got[:2]],
+                                 ["session.caps", "session.state"])
+                self.assertEqual(got[-1]["data"]["state"], "closed")
+                _streams_close(self, got)
+                starts = [i for i, e in enumerate(got)
+                          if e["type"] == "session.caps"] + [len(got)]
+                for a, b in zip(starts, starts[1:]):
+                    _contract_order(self, got[a:b])
+
+    def test_only_events_the_module_reads_are_kept_whole(self):
+        for path in self.fixtures():
+            for line in _load_fixture(path)[1:]:
+                event = line.get("sse")
+                if event and event["type"] not in opencode_wire.READ_EVENTS:
+                    self.assertLessEqual(set(event.get("data") or {}),
+                                         {"sessionID"}, event)
+
+    def test_hello(self):
+        _header, lines, got = self.scenario("hello")
+        self.assertEqual(got[0]["data"]["caps"],
+                         opencode_wire.PROVEN.as_dict())
+        self.assertEqual(got[1]["data"]["harness_session_id"], "ses_01")
+        self.assertEqual(self.replies(got), ["hello there"])
+        usage = _of(got, "usage.updated")[-1]["data"]
+        self.assertGreater(usage["input_tokens"], 0)
+        self.assertGreater(usage["cost_usd"], 0)
+        self.assertEqual(_of(got, "turn.ended")[0]["data"]["status"],
+                         "completed")
+        info = next(ln["http"] for ln in lines if ln.get("dir") == "in"
+                    and "http" in ln)
+        self.assertEqual(info["body"], {"version": "2.3.2"})
+        self.assertEqual(lines[-1], {"proc": 0, "exit": 143},
+                         "SIGTERM is how the server stops")
+
+    def test_approval_allow_deny_and_an_edit(self):
+        header, lines, got = self.scenario("approval")
+        asked = _of(got, "approval.requested")
+        self.assertEqual([e["data"]["kind"] for e in asked],
+                         ["command", "command", "tool"])
+        self.assertEqual(asked[0]["data"]["prompt"], "touch allowed.txt")
+        self.assertEqual(asked[2]["data"]["prompt"], "edit: written.txt")
+        for request in asked:
+            self.assertEqual([o["id"] for o in request["data"]["options"]],
+                             ["allow", "deny"])
+            self.assertTrue(request["data"]["call_id"].startswith("call_"))
+        self.assertEqual([e["data"].get("decision") for e in
+                          _of(got, "approval.resolved")],
+                         ["allow", "deny", "allow"])
+        done = _of(got, "tool.completed")
+        self.assertEqual([e["data"]["status"] for e in done],
+                         ["ok", "cancelled", "ok"])
+        self.assertEqual(done[2]["data"]["file_edits"], [
+            {"path": "written.txt", "kind": "add",
+             "diff": "@@ -0,0 +1,1 @@\n+yes\n"}])
+        # A deny with no message ends the turn there.
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")],
+                         ["completed", "interrupted", "completed"])
+        self.assertEqual(header["notes"]["files"], [
+            "allowed.txt", "hello.py", "notes.txt", "written.txt"])
+        sent = [r["body"] for r in self.requests(lines, "/reply")]
+        self.assertEqual(sent, [{"decision": "once"}, {"decision": "reject"},
+                                {"decision": "once"}])
+
+    def test_a_deny_with_a_message_lets_the_turn_go_on(self):
+        header, _lines, got = self.scenario("deny_message")
+        resolved = _of(got, "approval.resolved")[0]["data"]
+        self.assertEqual((resolved["decision"], resolved["text"]),
+                         ("deny", "Not that file. Do not run anything."))
+        done = _of(got, "tool.completed")[0]["data"]
+        self.assertEqual((done["status"], done["output"]),
+                         ("error", "Not that file. Do not run anything."))
+        self.assertEqual(self.replies(got), ["denied"])
+        self.assertEqual(_of(got, "turn.ended")[0]["data"]["status"],
+                         "completed")
+        self.assertNotIn("denied.txt", header["notes"]["files"])
+
+    def test_always_saves_a_rule_for_the_project(self):
+        # Why "always" is never offered: the rule outlives the session.
+        header, lines, got = self.scenario("always")
+        notes = header["notes"]
+        self.assertEqual((notes["approvals_first_turn"],
+                          notes["approvals_second_turn"]), (1, 0))
+        self.assertEqual(notes["saved_rules"],
+                         [{"action": "shell", "resource": "touch *"}])
+        self.assertIs(notes["saved_rules_name_a_project"], True)
+        self.assertEqual(self.requests(lines, "/reply")[0]["body"],
+                         {"decision": "always"})
+        for request in _of(got, "approval.requested"):
+            self.assertNotIn("always",
+                             [o["id"] for o in request["data"]["options"]])
+
+    def test_interrupt(self):
+        _header, lines, got = self.scenario("interrupt")
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")], ["interrupted"])
+        partial = self.replies(got)
+        self.assertEqual(len(partial), 1, "the cut reply is completed")
+        self.assertTrue(partial[0].startswith("1"))
+        answers = [ln["http"]["body"] for ln in lines if ln.get("dir") == "in"
+                   and "interrupted" in (ln.get("http", {}).get("body")
+                                         or {})]
+        self.assertEqual(answers, [{"interrupted": True},
+                                   {"interrupted": False}],
+                         "an interrupt with no turn is answered, not refused")
+
+    def test_an_interrupt_before_the_execution_starts_still_stops_it(self):
+        header, _lines, got = self.scenario("interrupt_early")
+        self.assertEqual(header["notes"]["answer"], {"interrupted": True})
+        self.assertEqual(header["notes"]["deltas"], 0)
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")],
+                         ["completed", "interrupted"])
+
+    def test_steer_joins_the_turn_after_the_reply_in_flight(self):
+        header, lines, got = self.scenario("steer")
+        self.assertEqual(header["notes"]["executions_ended"], 1)
+        self.assertEqual(len(_of(got, "turn.started")), 1)
+        done = [(e["data"]["kind"], e["data"]["id"]) for e in
+                _of(got, "message.completed")]
+        self.assertEqual([k for k, _i in done],
+                         ["user", "assistant", "user", "assistant"])
+        self.assertEqual(done[2][1], done[0][1] + "2")
+        texts = [e["data"]["text"] for e in _of(got, "message.completed")]
+        # opencode does not cut the reply: all sixty numbers came.
+        self.assertIn("60", texts[1])
+        self.assertEqual(texts[3], "steered")
+        steer = self.requests(lines, "/prompt")[1]
+        self.assertEqual(steer["body"]["delivery"], "steer")
+
+    def test_steer_does_not_stop_a_running_command(self):
+        header, _lines, got = self.scenario("steer_tool")
+        notes = header["notes"]
+        self.assertGreater(notes["seconds_from_command_to_turn_end"], 20)
+        self.assertIs(notes["late_file_at_turn_end"], True)
+        types = [(e["type"], e["data"].get("kind")) for e in got]
+        self.assertLess(types.index(("tool.completed", None)),
+                        [i for i, t in enumerate(types)
+                         if t == ("message.completed", "user")][1],
+                        "the steer lands once the command is done")
+        self.assertEqual(_of(got, "tool.completed")[0]["data"]["status"],
+                         "ok")
+
+    def test_a_steer_waits_behind_an_open_approval_then_gets_its_own_turn(
+            self):
+        header, _lines, got = self.scenario("steer_approval")
+        notes = header["notes"]
+        self.assertIs(notes["turn_ended_without_an_answer"], False)
+        self.assertIs(notes["asked_file_exists"], False)
+        self.assertEqual(notes["executions_ended"], 2)
+        started = _of(got, "turn.started")
+        self.assertEqual(len(started), 2)
+        self.assertEqual(started[1]["data"]["text"],
+                         "Do not run that. Reply only with the word: steered")
+        users = [e for e in _of(got, "message.completed")
+                 if e["data"]["kind"] == "user"]
+        self.assertEqual([e["turn_id"] for e in users],
+                         [started[0]["turn_id"], started[1]["turn_id"]])
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")],
+                         ["interrupted", "completed"])
+        self.assertEqual(self.replies(got), ["steered"])
+
+    def test_a_steer_left_by_an_interrupt_rides_the_next_prompt(self):
+        header, _lines, got = self.scenario("steer_interrupt")
+        self.assertIs(header["notes"]["steer_ran_after_the_interrupt"],
+                      False)
+        resolved = _of(got, "approval.resolved")[0]["data"]
+        self.assertEqual(resolved["source"], "turn_ended")
+        second = _of(got, "turn.started")[1]
+        users = [e["data"]["text"] for e in _of(got, "message.completed")
+                 if e["data"]["kind"] == "user"
+                 and e["turn_id"] == second["turn_id"]]
+        self.assertEqual(users, [
+            "Reply only with the word: next",
+            "Do not run that. Reply only with the word: steered"])
+
+    def test_resume_keeps_the_id_and_fork_gets_a_new_one(self):
+        _header, lines, got = self.scenario("resume")
+        sids = [e["data"]["harness_session_id"]
+                for e in _of(got, "session.state")
+                if e["data"].get("harness_session_id")]
+        self.assertEqual(sids, ["ses_01", "ses_01", "ses_02"])
+        opened = [(ln["http"]["method"], ln["http"]["path"]) for ln in lines
+                  if ln.get("dir") == "out" and "http" in ln
+                  and "/prompt" not in ln["http"]["path"]
+                  and "/api/session" in ln["http"]["path"]]
+        self.assertEqual(opened, [("POST", "/api/session"),
+                                  ("GET", "/api/session/ses_01"),
+                                  ("POST", "/api/session/ses_01/fork")])
+        self.assertEqual([r.lower() for r in self.replies(got)],
+                         ["ok", "papaya", "papaya"])
+        ids = [e["turn_id"] for e in _of(got, "turn.started")]
+        self.assertEqual(len(set(ids)), 3)
+
+    def test_rollback_drops_the_turn_from_the_conversation(self):
+        _header, lines, got = self.scenario("rollback")
+        staged = self.requests(lines, "/revert/stage")
+        self.assertEqual(len(staged), 1)
+        second = [ln["http"]["body"]["data"]["id"] for ln in lines
+                  if ln.get("dir") == "in" and "http" in ln
+                  and (ln["http"].get("body") or {}).get("data", {}).get(
+                      "type") == "user"][1]
+        self.assertEqual(staged[0]["body"],
+                         {"messageID": second, "files": False})
+        self.assertEqual(len(self.requests(lines, "/revert/commit")), 1)
+        self.assertEqual(self.replies(got)[-1].lower(), "papaya",
+                         "walrus was rolled back")
+
+    def test_model_and_effort_change_between_turns(self):
+        header, lines, _got = self.scenario("options")
+        ran = header["notes"]["models_that_ran"]
+        self.assertEqual([(m["id"], m["variant"]) for m in ran],
+                         [("gpt-5.4-nano", "low"), ("gpt-5.4-nano", "medium"),
+                          ("gpt-5.4-mini", "low")])
+        self.assertEqual(len(self.requests(lines, "/model")), 2)
+
+    def test_plan_agent_writes_nothing(self):
+        header, lines, _got = self.scenario("plan_mode")
+        notes = header["notes"]
+        self.assertIs(notes["file_while_planning"], False)
+        self.assertIs(notes["file_after_build"], True)
+        self.assertEqual(set(notes["agents_that_ran"]), {"plan", "build"})
+        self.assertEqual([r["body"] for r in self.requests(lines, "/agent")],
+                         [{"agent": "plan"}, {"agent": "build"}])
+
+    def test_attachments(self):
+        _header, lines, got = self.scenario("attach")
+        prompts = self.requests(lines, "/prompt")
+        self.assertEqual(prompts[0]["body"]["files"],
+                         [{"uri": "file:///work/square.png",
+                           "name": "square.png"}])
+        replies = self.replies(got)
+        self.assertEqual(replies[0].lower().strip("."), "red")
+        self.assertEqual(replies[1], "first line of the notes")
+
+    def test_a_failed_turn(self):
+        header, _lines, got = self.scenario("error")
+        self.assertIs(header["notes"]["bad_model_accepted"], True,
+                      "a wrong model is only found out by the turn")
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")], ["failed", "completed"])
+        error = _of(got, "error")[0]["data"]
+        self.assertEqual(error["code"], "provider.no-route")
+        self.assertIn("no-such-model", error["message"])
+        self.assertEqual(_of(got, "turn.ended")[0]["data"]["reason"],
+                         error["message"])
+
+    def test_a_caller_may_choose_a_ses_id_only(self):
+        header, _lines, _got = self.scenario("own_id")
+        self.assertIs(header["notes"]["kept_our_id"], True)
+        self.assertEqual(header["notes"]["uuid_id_status"], 400)
+
+    def test_no_personal_data(self):
+        for path in sorted(OPENCODE_FIXTURES.rglob("*")):
+            if not path.is_file():
+                continue
+            text = path.read_text()
+            with self.subTest(file=path.name):
+                self.assertNotIn("/Users/", text)
+                self.assertNotIn("/var/folders/", text)
+                self.assertNotRegex(text, r"[A-Za-z0-9._%+-]+@(?!example\.com)"
+                                          r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+                self.assertNotRegex(text, r"\bsk-[A-Za-z0-9_-]{8,}")
+                for key in ('"native"', '"projectID"', '"hostname"',
+                            '"subpath"', "EncryptedContent", ".local"):
+                    self.assertNotIn(key, text)
+                self.assertNotRegex(
+                    text, r"\b(ses|msg|per|call)_[A-Za-z0-9]{12,}")
+
+
+class TestOpencodeWire(unittest.TestCase):
+    def test_ids_and_the_listening_line(self):
+        self.assertTrue(opencode_wire.is_session_id(OC_SESSION))
+        for bad in ("", "11111111-2222-4333-8444-555555555555", "ses_",
+                    "ses_a/b", None, 7):
+            self.assertFalse(opencode_wire.is_session_id(bad), bad)
+        self.assertEqual(opencode_wire.listening_url(
+            "opencode server listening on http://127.0.0.1:4096\n"),
+            "http://127.0.0.1:4096")
+        self.assertEqual(opencode_wire.listening_url("Warning: no"), "")
+        self.assertEqual(opencode_wire.listening_url(None), "")
+
+    def test_basic_auth(self):
+        import base64
+
+        header = opencode_wire.basic_auth("pw")
+        self.assertEqual(base64.b64decode(header.split()[1]), b"opencode:pw")
+        password = opencode_wire.new_password()
+        self.assertRegex(password, r"^sk-[0-9a-f]{48}$")
+        self.assertNotEqual(password, opencode_wire.new_password())
+        for said in (password, f"echo {password}", f"x:{password}@host"):
+            self.assertNotIn(password, core.redact(said),
+                             "shaped so the redactor masks it")
+
+    def test_model_refs(self):
+        self.assertEqual(opencode_wire.model_ref("openai/gpt-x", "low"), {
+            "providerID": "openai", "id": "gpt-x", "variant": "low"})
+        self.assertEqual(opencode_wire.model_ref("a/b/c"),
+                         {"providerID": "a", "id": "b/c"})
+        for bad in ("gpt-x", "/x", "x/", ""):
+            self.assertIsNone(opencode_wire.model_ref(bad))
+        self.assertEqual(opencode_wire.model_name(
+            {"providerID": "openai", "id": "gpt-x"}), "openai/gpt-x")
+        self.assertEqual(opencode_wire.model_name({"id": "gpt-x"}), "")
+        self.assertEqual(opencode_wire.model_name(None), "")
+
+    def test_requests(self):
+        w = opencode_wire
+        self.assertEqual(w.info(), ("GET", "/api/info", None))
+        self.assertEqual(w.events_stream().path, "/api/event")
+        self.assertEqual(w.create_session("/w"), (
+            "POST", "/api/session", {"location": {"directory": "/w"}}))
+        made = w.create_session("/w", model="a/b", effort="high",
+                                session_id=OC_SESSION).body
+        self.assertEqual(made["model"],
+                         {"providerID": "a", "id": "b", "variant": "high"})
+        self.assertEqual(made["id"], OC_SESSION)
+        self.assertNotIn("id", w.create_session(
+            "/w", session_id="the-hubs-uuid").body)
+        self.assertEqual(w.get_session("ses_1"),
+                         ("GET", "/api/session/ses_1", None))
+        self.assertEqual(w.fork_session("ses_1"),
+                         ("POST", "/api/session/ses_1/fork", {}))
+        self.assertEqual(w.prompt("ses_1", "hi"), (
+            "POST", "/api/session/ses_1/prompt", {"text": "hi"}))
+        steer = w.prompt("ses_1", "hi", attachments=["/w/a b.png"],
+                         steer=True).body
+        self.assertEqual(steer, {
+            "text": "hi", "delivery": "steer",
+            "files": [{"uri": "file:///w/a%20b.png", "name": "a b.png"}]})
+        self.assertEqual(w.interrupt("ses_1"),
+                         ("POST", "/api/session/ses_1/interrupt", None))
+        self.assertEqual(w.permission_reply("ses_1", "per_1", "once"), (
+            "POST", "/api/session/ses_1/permission/per_1/reply",
+            {"decision": "once"}))
+        self.assertEqual(
+            w.permission_reply("ses_1", "per_1", "reject", "no").body,
+            {"decision": "reject", "message": "no"})
+        self.assertEqual(w.form_reply("ses_1", "frm_1", {"k": "v"}), (
+            "POST", "/api/session/ses_1/form/frm_1/reply",
+            {"answer": {"k": "v"}}))
+        self.assertEqual(w.form_cancel("ses_1", "frm_1"),
+                         ("DELETE", "/api/session/ses_1/form/frm_1", None))
+        self.assertEqual(w.select_model("ses_1", {"id": "m"}).body,
+                         {"model": {"id": "m"}})
+        self.assertEqual(w.select_agent("ses_1", "plan").body,
+                         {"agent": "plan"})
+        self.assertEqual(w.revert_stage("ses_1", "msg_1").body,
+                         {"messageID": "msg_1", "files": False})
+        self.assertEqual(w.revert_commit("ses_1").path,
+                         "/api/session/ses_1/revert/commit")
+        self.assertEqual(w.revert_clear("ses_1"),
+                         ("DELETE", "/api/session/ses_1/revert", None))
+
+    def test_an_id_cannot_name_another_route(self):
+        path = opencode_wire.permission_reply(
+            "ses_1", "../../interrupt?x", "once").path
+        self.assertEqual(
+            path, "/api/session/ses_1/permission/..%2F..%2Finterrupt%3Fx/reply")
+
+    def test_error_text(self):
+        self.assertEqual(opencode_wire.error_text(
+            {"_tag": "BadRequest", "message": "no"}), "no")
+        self.assertEqual(opencode_wire.error_text({"_tag": "Gone"}), "Gone")
+        self.assertEqual(opencode_wire.error_text(None), "")
+        self.assertEqual(opencode_wire.error_tag({"_tag": "Gone"}), "Gone")
+        self.assertEqual(opencode_wire.error_tag("x"), "")
+
+    def test_sse_parser(self):
+        parser = opencode_wire.SseParser()
+        self.assertIsNone(parser.feed(b"event: message\n"))
+        self.assertIsNone(parser.feed(b'data: {"type": "a",\n'))
+        self.assertIsNone(parser.feed(b'data: "data": {}}\r\n'))
+        self.assertEqual(parser.feed(b"\n"), {"type": "a", "data": {}})
+        self.assertIsNone(parser.feed("\n"), "a blank line with no data")
+        self.assertIsNone(parser.feed(": a comment\n"))
+        parser.feed("data: not json\n")
+        self.assertIsNone(parser.feed("\n"))
+        parser.feed("data: [1]\n")
+        self.assertIsNone(parser.feed("\n"), "an event is an object")
+
+    def test_file_edits(self):
+        edits = opencode_wire.file_edits({"files": [
+            {"file": "a.txt", "status": "added",
+             "patch": "Index: a\n===\n--- a\n+++ a\n@@ -0,0 +1 @@\n+x\n"},
+            {"file": "b.txt", "status": "deleted", "patch": ""},
+            {"file": "c.txt", "status": "renamed"},
+            {"patch": "no file"}, "junk"]})
+        self.assertEqual(edits, [
+            {"path": "a.txt", "kind": "add", "diff": "@@ -0,0 +1 @@\n+x\n"},
+            {"path": "b.txt", "kind": "delete"},
+            {"path": "c.txt", "kind": "modify"}])
+        self.assertIsNone(opencode_wire.file_edits({"files": "x"}))
+        self.assertIsNone(opencode_wire.file_edits(None))
+        self.assertIsNone(opencode_wire.file_edits({"files": []}))
+        secret = opencode_wire.file_edits({"files": [{
+            "file": ".env", "patch": "@@ -0,0 +1 @@\n+API_KEY=" + OC_KEY}]})
+        self.assertNotIn("sk-ant", json.dumps(secret))
+
+    def test_the_pre_keeper_helpers(self):
+        w = opencode_wire
+        self.assertEqual(w.legacy_prompt("s 1", "hi", variant="high"), (
+            "POST", "/session/s%201/prompt_async",
+            {"parts": [{"type": "text", "text": "hi"}], "variant": "high"}))
+        self.assertEqual(w.legacy_abort("s1"),
+                         ("POST", "/session/s1/abort", {}))
+        self.assertEqual(w.legacy_permission_reply("s1", "p/1", "once"), (
+            "POST", "/session/s1/permissions/p%2F1", {"response": "once"}))
+        self.assertEqual(w.legacy_permission_reply_old("p1", "once"), (
+            "POST", "/permission/p1/reply", {"reply": "once"}))
+        self.assertEqual(w.legacy_event(
+            b'{"type": "x", "properties": {"a": 1}}'), ("x", {"a": 1}))
+        self.assertEqual(w.legacy_event(
+            b'{"type": "x", "payload": {"a": 1}}'), ("x", {"a": 1}))
+        for bad in (b"not json", b"[1]", b'{"type": "x"}', b"\xff"):
+            self.assertIsNone(w.legacy_event(bad))
+        self.assertTrue(w.legacy_is_live("message.part.updated"))
+        self.assertTrue(w.legacy_is_live("session.idle"))
+        self.assertFalse(w.legacy_is_live("permission.asked"))
+        self.assertIsNone(w.legacy_permission("session.idle", {}, {}))
+        self.assertEqual(w.legacy_permission(
+            "permission.asked", {"id": "p1", "sessionID": "s1",
+                                 "title": "run", "patterns": ["a", "b"]}, {}),
+            ("asked", "p1", "s1", "run\n\n`a`\n`b`"))
+        self.assertEqual(w.legacy_permission(
+            "permission.replied", {"permissionID": "p1"}, {"p1": "s1"}),
+            ("resolved", "p1", "s1", ""))
+
+
+def _oc(etype, **data):
+    return {"type": etype, "data": {"sessionID": OC_SESSION, **data}}
+
+
+class TestOpencodeServeState(unittest.TestCase):
+    def state(self, caps: Caps = ALL_CAPS):
+        clock = iter(range(1000, 100000))
+        state = opencode_wire.ServeState(
+            "opencode:test", clock=lambda: float(next(clock)), caps=caps,
+            run_id="r1")
+        state.start_events(caps.narrowed(opencode_wire.PROVEN), OC_SESSION)
+        return state
+
+    def turn(self, state, text="hi", token=1, message="msg_u1", **kw):
+        state.expect_turn(token, text, **kw)
+        out = state.accepted(token, {"id": message})
+        out += state.feed(_oc("session.execution.started")).events
+        out += state.feed(_oc("session.inbox.delivered",
+                              inboxID=message)).events
+        return out
+
+    def types(self, evs):
+        return [e["type"] for e in evs]
+
+    def test_a_turn(self):
+        state = self.state()
+        self.assertFalse(state.busy)
+        state.expect_turn(1, "hi", command_id="c1", device="phone",
+                          attachments=["/w/a.txt"])
+        self.assertTrue(state.busy, "busy from the moment it is posted")
+        out = state.accepted(1, {"id": "msg_u1"})
+        self.assertEqual(self.types(out), [
+            "turn.started", "session.state", "message.completed"])
+        self.assertEqual(out[0]["command_id"], "c1")
+        self.assertEqual(out[0]["data"], {"by": "phone", "text": "hi"})
+        self.assertEqual(out[2]["data"]["attachments"], ["/w/a.txt"])
+        turn_id = out[0]["turn_id"]
+        self.assertEqual(turn_id, "t-r1-1")
+        self.assertEqual(state.accepted_turns, {1: turn_id})
+        self.assertEqual(state.turn_messages, {turn_id: "msg_u1"})
+        self.assertEqual(state.feed(_oc("session.execution.started")).events,
+                         [])
+        self.assertEqual(state.feed(_oc("session.inbox.delivered",
+                                        inboxID="msg_u1")).events, [])
+        state.feed(_oc("session.step.started", agent="build",
+                       model={"providerID": "p", "id": "m"},
+                       assistantMessageID="msg_a1"))
+        self.assertEqual((state.agent, state.model["id"]), ("build", "m"))
+        out = state.feed(_oc("session.text.delta", assistantMessageID="msg_a1",
+                             ordinal=0, delta="hello there, ")).events
+        out += state.feed(_oc("session.text.delta",
+                              assistantMessageID="msg_a1", ordinal=0,
+                              delta="friend")).events
+        out += state.feed(_oc("session.text.ended",
+                              assistantMessageID="msg_a1", ordinal=0,
+                              text="hello there, friend")).events
+        self.assertEqual(self.types(out)[-1], "message.completed")
+        self.assertEqual(out[-1]["data"]["id"], "msg_a1:0")
+        _streams_close(self, out)
+        state.feed(_oc("session.step.ended", assistantMessageID="msg_a1",
+                       tokens={"input": 9, "output": 2, "cache": {
+                           "read": 4, "write": 1}}))
+        usage = state.feed(_oc("session.usage.updated", cost=0.5,
+                               tokens={"input": 999})).events
+        self.assertEqual(usage[0]["data"], {
+            "input_tokens": 9, "output_tokens": 2, "cache_read_tokens": 4,
+            "cache_write_tokens": 1, "cost_usd": 0.5})
+        out = state.feed(_oc("session.execution.succeeded")).events
+        self.assertEqual(self.types(out), ["turn.ended", "session.state"])
+        self.assertEqual(out[0]["data"]["status"], "completed")
+        self.assertFalse(state.busy)
+        # Usage outside a turn (the title's cost): no turn id.
+        late = state.feed(_oc("session.usage.updated", cost=0.6)).events
+        self.assertNotIn("turn_id", late[0])
+
+    def test_usage_before_any_step_is_the_cost_alone(self):
+        state = self.state()
+        out = state.feed(_oc("session.usage.updated", cost=0.1,
+                             tokens={"input": 5})).events
+        self.assertEqual(out[0]["data"], {"cost_usd": 0.1})
+        for bad in (True, -1, float("nan"), float("inf"), "1"):
+            self.assertEqual(state.feed(_oc("session.usage.updated",
+                                            cost=bad)).events, [])
+
+    def test_events_that_overtake_the_prompts_answer(self):
+        state = self.state()
+        state.expect_turn(7, "hi", command_id="c1", device="phone")
+        out = state.feed(_oc("session.execution.started")).events
+        self.assertEqual(self.types(out), [
+            "turn.started", "session.state", "message.completed"])
+        self.assertEqual(out[0]["command_id"], "c1")
+        turn_id = out[0]["turn_id"]
+        self.assertEqual(state.accepted_turns, {7: turn_id})
+        # The answer, late: nothing more to say, the message id is kept.
+        self.assertEqual(state.accepted(7, {"id": "msg_u1"}), [])
+        self.assertEqual(state.turn_messages, {turn_id: "msg_u1"})
+
+    def test_a_turn_nobody_here_started(self):
+        state = self.state()
+        out = state.feed(_oc("session.execution.started")).events
+        self.assertEqual(self.types(out), ["turn.started", "session.state"])
+        self.assertEqual(out[0]["data"], {})
+        out = state.feed(_oc("session.execution.succeeded")).events
+        self.assertEqual(out[0]["data"]["status"], "completed")
+
+    def test_a_refused_prompt_is_forgotten(self):
+        state = self.state()
+        state.expect_turn(1, "hi")
+        state.forget(1)
+        self.assertFalse(state.busy)
+        self.assertEqual(state.accepted(1, {"id": "msg_u1"}), [])
+        state.forget("never-posted")
+
+    def test_a_steer_lands_when_it_is_delivered(self):
+        state = self.state()
+        first = self.turn(state)[0]["turn_id"]
+        state.feed(_oc("session.text.delta", assistantMessageID="msg_a1",
+                       ordinal=0, delta="1\n2\n"))
+        state.expect_steer(2, "stop", command_id="c2", device="phone")
+        self.assertEqual(state.accepted(2, {"id": "msg_u2"}), [],
+                         "in the inbox, not in the turn yet")
+        self.assertEqual(state.accepted_turns[2], first)
+        out = state.feed(_oc("session.inbox.delivered",
+                             inboxID="msg_u2")).events
+        self.assertEqual([(e["type"], e["data"]["kind"]) for e in out], [
+            ("message.completed", "assistant"),
+            ("message.completed", "user")],
+            "the reply in flight is completed first")
+        self.assertEqual(out[0]["data"]["text"], "1\n2\n")
+        self.assertEqual(out[1]["data"]["id"], f"{first}:user2")
+        self.assertEqual(out[1]["command_id"], "c2")
+        self.assertEqual(state.turn_messages, {first: "msg_u1"},
+                         "a rollback goes to the turn's first message")
+
+    def test_a_steer_delivered_before_its_answer_is_read(self):
+        state = self.state()
+        first = self.turn(state)[0]["turn_id"]
+        state.expect_steer(2, "stop", command_id="c2")
+        out = state.feed(_oc("session.inbox.delivered",
+                             inboxID="msg_u2")).events
+        self.assertEqual([e["data"]["text"] for e in out], ["stop"])
+        self.assertEqual(out[0]["command_id"], "c2")
+        # The whole turn can pass before the answer is read.
+        state.feed(_oc("session.execution.succeeded"))
+        self.assertEqual(state.accepted(2, {"id": "msg_u2"}), [])
+        self.assertEqual(state.accepted_turns[2], first)
+        self.assertIsNone(state.turn, "no turn is opened for it")
+        self.assertEqual(state.turn_messages, {first: "msg_u1"})
+
+    def test_a_steer_taken_after_the_turn_ended_waits_for_its_delivery(self):
+        # After an interrupt the server keeps a steer in its inbox until
+        # the next prompt: a turn opened for it here would never end.
+        state = self.state()
+        self.turn(state)
+        state.expect_steer(2, "stop")
+        state.feed(_oc("session.execution.interrupted", reason="user"))
+        self.assertEqual(state.accepted(2, {"id": "msg_u2"}), [])
+        self.assertEqual(state.accepted_turns[2], "")
+        self.assertIsNone(state.turn)
+        self.assertFalse(state.busy)
+        out = self.turn(state, "next", token=3, message="msg_u3")
+        out += state.feed(_oc("session.inbox.delivered",
+                              inboxID="msg_u2")).events
+        users = [e["data"]["text"] for e in out
+                 if e["type"] == "message.completed"]
+        self.assertEqual(users, ["next", "stop"])
+
+    def test_a_delivery_nobody_posted(self):
+        state = self.state()
+        self.turn(state)
+        for inbox in ("msg_fork_notice", "", None):
+            self.assertEqual(state.feed(_oc("session.inbox.delivered",
+                                            inboxID=inbox)).events, [])
+
+    def test_a_steer_the_turn_never_reached_opens_the_next(self):
+        state = self.state()
+        first = self.turn(state)[0]["turn_id"]
+        state.expect_steer(2, "stop", command_id="c2", device="phone")
+        state.accepted(2, {"id": "msg_u2"})
+        out = state.feed(_oc("session.execution.interrupted",
+                             reason="shutdown")).events
+        self.assertEqual(self.types(out), ["turn.ended", "session.state"])
+        out = state.feed(_oc("session.execution.started")).events
+        self.assertEqual(self.types(out), ["turn.started", "session.state"])
+        self.assertEqual(out[0]["data"], {"by": "phone", "text": "stop"})
+        self.assertEqual(out[0]["command_id"], "c2")
+        second = out[0]["turn_id"]
+        self.assertNotEqual(second, first)
+        out = state.feed(_oc("session.inbox.delivered",
+                             inboxID="msg_u2")).events
+        self.assertEqual(out[0]["data"]["id"], f"{second}:user")
+        self.assertEqual(state.turn_messages[second], "msg_u2")
+
+    def test_a_steer_with_no_turn_and_no_execution_before_it(self):
+        state = self.state()
+        state.expect_steer(1, "go", device="phone")
+        self.assertFalse(state.busy, "a steer is no turn of its own yet")
+        self.assertEqual(state.accepted(1, {"id": "msg_u1"}), [])
+        # Delivered with no ``execution.started`` seen first.
+        out = state.feed(_oc("session.inbox.delivered",
+                             inboxID="msg_u1")).events
+        self.assertEqual(self.types(out), [
+            "turn.started", "session.state", "message.completed"])
+        self.assertEqual(out[0]["data"], {"by": "phone", "text": "go"})
+
+    def test_a_steer_the_server_gave_no_id(self):
+        state = self.state()
+        first = self.turn(state)[0]["turn_id"]
+        state.expect_steer(2, "stop")
+        out = state.accepted(2, {})
+        self.assertEqual([e["data"]["text"] for e in out], ["stop"],
+                         "no delivery to wait for: said at once")
+        self.assertEqual(state.accepted_turns[2], first)
+        state.feed(_oc("session.execution.succeeded"))
+        state.expect_steer(3, "late")
+        self.assertEqual(state.accepted(3, None), [])
+        self.assertEqual(state.accepted_turns[3], "")
+
+    def test_reasoning_and_hidden_reasoning(self):
+        state = self.state()
+        self.turn(state)
+        out = state.feed(_oc("session.reasoning.delta",
+                             assistantMessageID="msg_a1", ordinal=0,
+                             delta="thinking hard about it")).events
+        out += state.feed(_oc("session.reasoning.ended",
+                              assistantMessageID="msg_a1", ordinal=0,
+                              text="thinking hard about it")).events
+        self.assertEqual(out[-1]["type"], "thinking.completed")
+        self.assertEqual(out[-1]["data"]["id"], "msg_a1:r0")
+        self.assertEqual(state.feed(_oc(
+            "session.reasoning.ended", assistantMessageID="msg_a1",
+            ordinal=1, text="")).events, [], "hidden reasoning shows nothing")
+        self.assertEqual(state.feed(_oc(
+            "session.text.ended", assistantMessageID="msg_a1", ordinal=2,
+            text="")).events, [])
+        self.assertEqual(state.feed(_oc(
+            "session.text.ended", ordinal=0, text="x")).events, [],
+            "no message id, no stream")
+
+    def test_text_outside_a_turn_is_dropped(self):
+        state = self.state()
+        for etype in ("session.text.delta", "session.reasoning.delta",
+                      "session.text.ended", "session.reasoning.ended"):
+            self.assertEqual(state.feed(_oc(
+                etype, assistantMessageID="m", ordinal=0, delta="x",
+                text="x")).events, [])
+
+    def test_a_tool_call(self):
+        state = self.state()
+        turn_id = self.turn(state)[0]["turn_id"]
+        state.feed(_oc("session.tool.input.started", id="call_1",
+                       name="shell"))
+        out = state.feed(_oc("session.tool.called", id="call_1",
+                             input={"command": "ls -la"})).events
+        self.assertEqual(out[0]["type"], "tool.started")
+        self.assertEqual(out[0]["data"]["name"], "shell")
+        self.assertIn("ls -la", out[0]["data"]["summary"])
+        self.assertEqual(state.feed(_oc("session.tool.called", id="call_1",
+                                        input={})).events, [],
+                         "a call is started once")
+        out = state.feed(_oc("session.tool.success", id="call_1", content=[
+            {"type": "text", "text": "a"}, {"type": "text", "text": "b"},
+            "junk"], metadata={"exit": 0})).events
+        self.assertEqual(out[0]["data"], {
+            "call_id": "call_1", "status": "ok", "name": "shell",
+            "output": "a\nb"})
+        self.assertEqual(out[0]["turn_id"], turn_id)
+        self.assertEqual(state.feed(_oc("session.tool.success", id="call_1",
+                                        content=[])).events, [])
+        # No name ahead of the call: the call's own, or "tool".
+        out = state.feed(_oc("session.tool.called", id="call_2",
+                             name="read", input={})).events
+        self.assertEqual(out[0]["data"]["name"], "read")
+        out = state.feed(_oc("session.tool.called", id="call_3")).events
+        self.assertEqual(out[0]["data"]["name"], "tool")
+        self.assertEqual(state.feed(_oc("session.tool.called")).events, [])
+        out = state.feed(_oc("session.tool.failed", id="call_2", error={
+            "type": "aborted", "message": "declined"})).events
+        self.assertEqual((out[0]["data"]["status"], out[0]["data"]["output"]),
+                         ("cancelled", "declined"))
+        out = state.feed(_oc("session.tool.failed", id="call_3",
+                             error="boom")).events
+        self.assertEqual(out[0]["data"]["status"], "error")
+
+    def test_a_tool_that_outlives_its_turn(self):
+        state = self.state()
+        self.turn(state)
+        state.feed(_oc("session.tool.called", id="call_1", name="shell",
+                       input={"command": "sleep 9"}))
+        state.feed(_oc("session.execution.interrupted", reason="user"))
+        self.turn(state, token=2, message="msg_u2")
+        out = state.feed(_oc("session.tool.success", id="call_1",
+                             content=[])).events
+        self.assertEqual(out[0]["type"], "tool.completed")
+        self.assertNotIn("turn_id", out[0])
+
+    def test_secrets_never_leave(self):
+        state = self.state()
+        self.turn(state)
+        out = state.feed(_oc("session.text.delta", assistantMessageID="m",
+                             ordinal=0, delta="key " + OC_KEY[:20])).events
+        out += state.feed(_oc("session.text.delta", assistantMessageID="m",
+                              ordinal=0, delta=OC_KEY[20:] + " ok")).events
+        out += state.feed(_oc("session.text.ended", assistantMessageID="m",
+                              ordinal=0, text=f"key {OC_KEY} ok")).events
+        state.feed(_oc("session.tool.input.started", id="c1", name="shell"))
+        out += state.feed(_oc("session.tool.called", id="c1", input={
+            "command": f"curl -H 'x-api-key: {OC_KEY}' x"})).events
+        out += state.feed(_oc("permission.asked", id="per_1", action="shell",
+                              resources=[f"echo {OC_KEY}"],
+                              message=f"uses {OC_KEY}")).events
+        out += state.feed(_oc("session.tool.success", id="c1", content=[
+            {"type": "text", "text": OC_KEY}])).events
+        out += state.feed(_oc("session.step.failed", error={
+            "type": "api", "message": f"bad key {OC_KEY}"})).events
+        self.assertNotIn("sk-ant", json.dumps(out))
+        _streams_close(self, out)
+
+    def test_a_permission(self):
+        state = self.state()
+        turn_id = self.turn(state)[0]["turn_id"]
+        out = state.feed(_oc("permission.asked", id="per_1", action="shell",
+                             resources=["touch a.txt", 7],
+                             source={"type": "tool", "id": "call_1"})).events
+        self.assertEqual(self.types(out),
+                         ["approval.requested", "session.state"])
+        self.assertEqual(out[0]["data"], {
+            "request_id": "per_1", "kind": "command", "prompt": "touch a.txt",
+            "options": [{"id": "allow", "label": "Allow", "kind": "allow"},
+                        {"id": "deny", "label": "Deny", "kind": "deny"}],
+            "call_id": "call_1"})
+        self.assertEqual(out[1]["data"]["state"], "waiting")
+        self.assertEqual(state.feed(_oc("permission.asked", id="per_1",
+                                        action="shell")).events, [],
+                         "asked once")
+        self.assertEqual(state.feed(_oc("permission.asked")).events, [])
+        request, out = state.answer(OC_SESSION, "per_1",
+                                    Answer(decision="allow"))
+        self.assertEqual(request, (
+            "POST", f"/api/session/{OC_SESSION}/permission/per_1/reply",
+            {"decision": "once"}))
+        self.assertEqual(self.types(out),
+                         ["approval.resolved", "session.state"])
+        self.assertEqual(out[0]["data"], {
+            "request_id": "per_1", "source": "user", "decision": "allow"})
+        self.assertEqual(out[0]["turn_id"], turn_id)
+        # The server's echo of our answer changes nothing.
+        self.assertEqual(state.feed(_oc("permission.replied",
+                                        requestID="per_1",
+                                        reply="once")).events, [])
+        with self.assertRaises(UnknownRequest):
+            state.answer(OC_SESSION, "per_1", Answer(decision="allow"))
+
+    def test_permission_answers(self):
+        cases = [
+            (Answer(decision="deny"), {"decision": "reject"}, "deny"),
+            (Answer(decision="deny", text="not that"),
+             {"decision": "reject", "message": "not that"}, "deny"),
+            # A project-wide rule is never saved from a tap.
+            (Answer(decision="always"), {"decision": "once"}, "allow"),
+            (Answer(option_id="allow"), {"decision": "once"}, "allow"),
+            (Answer(option_id="deny"), {"decision": "reject"}, "deny"),
+            # Bare text is feedback: the call does not run.
+            (Answer(text="use another file"),
+             {"decision": "reject", "message": "use another file"}, "deny"),
+        ]
+        for n, (answer, body, decision) in enumerate(cases):
+            with self.subTest(answer=answer):
+                state = self.state()
+                self.turn(state)
+                state.feed(_oc("permission.asked", id=f"per_{n}",
+                               action="edit", resources=["a.txt", "b.txt"],
+                               message="two files"))
+                request, out = state.answer(OC_SESSION, f"per_{n}", answer)
+                self.assertEqual(request.body, body)
+                self.assertEqual(out[0]["data"]["decision"], decision)
+
+    def test_a_permission_for_something_that_is_no_command(self):
+        state = self.state()
+        self.turn(state)
+        out = state.feed(_oc("permission.asked", id="per_1", action="edit",
+                             resources=["a.txt", "b.txt"],
+                             message="two files")).events
+        self.assertEqual(out[0]["data"]["kind"], "tool")
+        self.assertEqual(out[0]["data"]["prompt"],
+                         "edit: a.txt\nb.txt\n\ntwo files")
+        out = state.feed(_oc("permission.asked", id="per_2")).events
+        self.assertEqual(out[0]["data"]["prompt"], "tool: tool")
+
+    def test_a_permission_the_server_settles_itself(self):
+        state = self.state()
+        self.turn(state)
+        state.feed(_oc("permission.asked", id="per_1", action="shell",
+                       resources=["x"]))
+        out = state.feed(_oc("permission.replied", requestID="per_1",
+                             reply="once")).events
+        self.assertEqual(self.types(out),
+                         ["approval.resolved", "session.state"])
+        self.assertEqual(out[0]["data"]["source"], "harness")
+
+    def test_an_interrupt_retires_what_is_open(self):
+        state = self.state()
+        self.turn(state)
+        self.assertEqual(state.interrupt_sent(), [])
+        state.feed(_oc("permission.asked", id="per_1", action="shell",
+                       resources=["x"]))
+        out = state.interrupt_sent()
+        self.assertEqual(self.types(out),
+                         ["approval.resolved", "session.state"])
+        self.assertEqual(out[0]["data"]["source"], "turn_ended")
+        out = state.feed(_oc("session.execution.interrupted",
+                             reason="user")).events
+        self.assertEqual(out[0]["data"]["status"], "interrupted")
+
+    def test_a_turn_that_ends_with_a_request_open(self):
+        state = self.state()
+        self.turn(state)
+        state.feed(_oc("permission.asked", id="per_1", action="shell",
+                       resources=["x"]))
+        out = state.feed(_oc("session.execution.succeeded")).events
+        self.assertEqual(self.types(out), [
+            "approval.resolved", "turn.ended", "session.state"])
+        self.assertEqual(out[0]["data"]["source"], "turn_ended")
+        self.assertEqual(state.pending, {})
+
+    def form(self, fields, **form):
+        return {"type": "form.created", "data": {"form": {
+            "id": "frm_1", "sessionID": OC_SESSION, "fields": fields,
+            **form}}}
+
+    def test_a_form_with_one_question(self):
+        state = self.state()
+        self.turn(state)
+        out = state.feed(self.form([
+            {"key": "colour", "type": "string", "title": "Which one?",
+             "options": [{"value": "red", "label": "Red"},
+                         {"value": OC_KEY}, {"label": "no value"}, "junk"]},
+            {"key": "hidden", "type": "string", "hidden": True}])).events
+        self.assertEqual(self.types(out),
+                         ["input.requested", "session.state"])
+        data = out[0]["data"]
+        self.assertEqual((data["request_id"], data["prompt"], data["kind"]),
+                         ("frm_1", "Which one?", "choice"))
+        self.assertEqual(data["options"][0], {"id": "o1", "label": "Red"})
+        self.assertEqual(data["options"][1]["id"], "o2")
+        self.assertNotIn("sk-ant", json.dumps(out),
+                         "a choice the model wrote is redacted")
+        self.assertEqual(state.feed(self.form([])).events, [], "asked once")
+        request, out = state.answer(OC_SESSION, "frm_1",
+                                    Answer(option_id="o2"))
+        self.assertEqual(request, (
+            "POST", f"/api/session/{OC_SESSION}/form/frm_1/reply",
+            {"answer": {"colour": OC_KEY}}))
+        self.assertEqual(out[0]["data"]["option_id"], "o2")
+        self.assertNotIn("sk-ant", json.dumps(out))
+        self.assertEqual(state.feed({"type": "form.replied", "data": {
+            "id": "frm_1"}}).events, [])
+
+    def test_form_answers_in_text(self):
+        for answer, value in ((Answer(text="blue"), "blue"),
+                              (Answer(option_id="o9"), "o9")):
+            state = self.state()
+            self.turn(state)
+            out = state.feed(self.form(
+                [{"key": "k", "type": "string"}], title="Name it")).events
+            self.assertEqual((out[0]["data"]["prompt"], out[0]["data"]["kind"]),
+                             ("Name it", "text"))
+            request, _out = state.answer(OC_SESSION, "frm_1", answer)
+            self.assertEqual(request.body, {"answer": {"k": value}})
+
+    def test_a_form_we_cannot_show_is_cancelled(self):
+        for fields in ([{"key": "a", "type": "string"},
+                        {"key": "b", "type": "string"}],
+                       [{"key": "a", "type": "boolean"}], []):
+            state = self.state()
+            self.turn(state)
+            fed = state.feed(self.form(fields))
+            self.assertEqual(fed.events, [])
+            self.assertEqual(fed.replies, [(
+                "DELETE", f"/api/session/{OC_SESSION}/form/frm_1", None)])
+            self.assertEqual(state.pending, {})
+            self.assertEqual(state.unknown["form.created"], 1)
+
+    def test_a_form_of_another_session_or_with_no_id(self):
+        state = self.state()
+        self.turn(state)
+        other = self.form([{"key": "a", "type": "string"}])
+        other["data"]["form"]["sessionID"] = "ses_other"
+        nameless = self.form([{"key": "a", "type": "string"}])
+        del nameless["data"]["form"]["id"]
+        for event in (other, nameless,
+                      {"type": "form.created", "data": {"form": "x"}}):
+            fed = state.feed(event)
+            self.assertEqual((fed.events, fed.replies), ([], []))
+
+    def test_a_form_the_server_cancels(self):
+        state = self.state()
+        self.turn(state)
+        state.feed(self.form([{"key": "a", "type": "string"}]))
+        out = state.feed({"type": "form.cancelled",
+                          "data": {"id": "frm_1"}}).events
+        self.assertEqual(out[0]["data"]["source"], "harness")
+
+    def test_a_failed_turn(self):
+        state = self.state()
+        self.turn(state)
+        out = state.feed(_oc("session.step.failed", error={
+            "type": "aborted", "message": "Step interrupted"})).events
+        self.assertEqual(out, [], "an aborted step is no error")
+        failure = {"type": "provider.no-route", "message": "Model unavailable"}
+        out = state.feed(_oc("session.step.failed", error=failure)).events
+        self.assertEqual(self.types(out), ["error"])
+        self.assertEqual(out[0]["data"]["code"], "provider.no-route")
+        out = state.feed(_oc("session.execution.failed",
+                             error=failure)).events
+        self.assertEqual(self.types(out), ["turn.ended", "session.state"],
+                         "one error per turn")
+        self.assertEqual(out[0]["data"], {
+            "status": "failed", "reason": "Model unavailable",
+            "duration_s": out[0]["data"]["duration_s"]})
+        # A failure that says nothing still fails the turn.
+        self.turn(state, token=2, message="msg_u2")
+        out = state.feed(_oc("session.execution.failed")).events
+        self.assertEqual(self.types(out),
+                         ["error", "turn.ended", "session.state"])
+        self.assertEqual(out[0]["data"]["message"], "the turn failed")
+
+    def test_an_end_with_no_turn_open(self):
+        state = self.state()
+        self.assertEqual(state.feed(_oc("session.execution.succeeded")).events,
+                         [])
+        state.feed(_oc("session.step.failed", error={"type": "x"}))
+
+    def test_other_sessions_and_unknown_events(self):
+        state = self.state()
+        self.turn(state)
+        for event in (
+                {"type": "session.text.delta", "data": {
+                    "sessionID": "ses_other", "assistantMessageID": "m",
+                    "ordinal": 0, "delta": "not ours"}},
+                _oc("session.totally.new"), {"type": "project.updated"},
+                {"type": 7, "data": {}}, "junk", None):
+            fed = state.feed(event)
+            self.assertEqual((fed.events, fed.replies), ([], []))
+        self.assertEqual(state.unknown, {
+            "other-session": 1, "session.totally.new": 1, "?": 2})
+
+    def test_model_agent_and_compaction(self):
+        state = self.state()
+        state.feed(_oc("session.model.selected",
+                       model={"providerID": "p", "id": "m2"}))
+        state.feed(_oc("session.agent.selected", agent="plan"))
+        state.feed(_oc("session.model.selected", model="x"))
+        state.feed(_oc("session.agent.selected"))
+        self.assertEqual((state.model["id"], state.agent), ("m2", "plan"))
+        out = state.feed(_oc("session.compaction.ended")).events
+        self.assertEqual(self.types(out), ["context.compacted"])
+
+    def test_exit_mid_turn(self):
+        state = self.state()
+        turn_id = self.turn(state)[0]["turn_id"]
+        state.feed(_oc("session.text.delta", assistantMessageID="m",
+                       ordinal=0, delta="partial reply"))
+        state.feed(_oc("permission.asked", id="per_1", action="shell",
+                       resources=["x"]))
+        out = state.exited("opencode exited with code 3")
+        self.assertEqual(self.types(out), [
+            "approval.resolved", "turn.ended", "session.state"])
+        self.assertEqual(out[0]["data"]["source"], "agent_exit")
+        self.assertEqual((out[1]["turn_id"], out[1]["data"]["status"]),
+                         (turn_id, "failed"))
+        self.assertEqual(out[-1]["data"], {
+            "state": "agent_down", "reason": "opencode exited with code 3"})
+        self.assertEqual(state.feed(_oc("session.execution.started")).events,
+                         [], "nothing after the end")
+
+    def test_replay_of_a_bare_process(self):
+        got = opencode_wire.replay([
+            {"proc": 0, "dir": "out", "t": 0.1, "http": {
+                "n": 1, "method": "POST", "path": "/api/session",
+                "body": {}}},
+            {"proc": 0, "dir": "in", "t": 0.2, "http": {
+                "n": 1, "status": 200, "body": {"data": {"id": OC_SESSION}}}},
+            {"proc": 0, "dir": "out", "t": 0.3, "http": {
+                "n": 2, "method": "POST",
+                "path": f"/api/session/{OC_SESSION}/prompt",
+                "body": {"text": "hi"}}},
+            {"proc": 0, "dir": "in", "t": 0.4, "http": {
+                "n": 2, "status": 400, "body": {"_tag": "Bad"}}},
+            {"proc": 0, "junk": True},
+            {"proc": 0, "exit": 0}])
+        self.assertEqual([e["type"] for e in got],
+                         ["session.caps", "session.state", "session.state"])
+        self.assertEqual(got[1]["data"]["harness_session_id"], OC_SESSION)
+
+
+def _opencode_resolved(caps: Caps = ALL_CAPS,
+                       min_version: str = "") -> registry.Resolved:
+    return registry.Resolved("opencode", "opencode_serve",
+                             (sys.executable, str(OPENCODE_FAKE)), caps,
+                             min_version=min_version)
+
+
+class _OpencodeCase(unittest.TestCase):
+    """An adapter over the fake server, cleaned up after the test."""
+
+    def fake_env(self, mode: str = "ok", reply: str = "hello",
+                 **extra) -> dict:
+        self.log = temp_dir(self) / "fake.log"
+        env = dict(os.environ, FAKE_OPENCODE_MODE=mode,
+                   FAKE_OPENCODE_REPLY=reply,
+                   FAKE_OPENCODE_LOG=str(self.log))
+        env.update(extra)
+        return env
+
+    def adapter(self, mode: str = "ok", *, caps: Caps = ALL_CAPS,
+                reply: str = "hello", min_version: str = "",
+                env_extra: dict | None = None, **kw):
+        adapter = opencode_serve.OpencodeServeAdapter(
+            _opencode_resolved(caps, min_version),
+            env=self.fake_env(mode, reply, **(env_extra or {})), **kw)
+        self.addCleanup(adapter.close, 0.5)
+        return adapter
+
+    def spec(self, **kw) -> StartSpec:
+        return StartSpec(session_key="opencode:test",
+                         cwd=str(temp_dir(self)), **kw)
+
+    def started(self, mode: str = "ok", **kw):
+        spec_kw = kw.pop("spec", {})
+        adapter = self.adapter(mode, **kw)
+        sink = fake.ListSink()
+        sid = adapter.start(self.spec(**spec_kw), sink)
+        return adapter, sink, sid
+
+    def sent(self) -> list:
+        """The requests the fake got, the stream's and info's aside."""
+        lines = [json.loads(line) for line in
+                 self.log.read_text().splitlines()] if self.log.exists() \
+            else []
+        return [ln for ln in lines if "path" in ln
+                and ln["path"] != "/api/info"]
+
+    def first_line(self) -> dict:
+        return json.loads(self.log.read_text().splitlines()[0])
+
+    def sent_paths(self) -> list:
+        return [(r["method"], r["path"].replace(
+            f"/api/session/{OC_SESSION}", "")) for r in self.sent()]
+
+    def wait(self, sink, match, what="the event"):
+        found = sink.wait_for(match, TIMEOUT)
+        self.assertIsNotNone(found, f"timed out waiting for {what}")
+        return found
+
+    def wait_turn(self, sink, turn_id):
+        """The turn's ``turn.ended``, once the ``session.state`` that
+        follows it is in too (they are emitted together)."""
+        def ended_at():
+            return next((i for i, e in enumerate(sink.events)
+                         if e["type"] == "turn.ended"
+                         and e.get("turn_id") == turn_id), None)
+
+        def idle_after(event):
+            at = ended_at()
+            return at is not None and event["type"] == "session.state" \
+                and any(e is event for e in sink.events[at + 1:])
+
+        self.wait(sink, idle_after, "the turn to end")
+        return sink.events[ended_at()]
+
+    def asked(self, sink, etype="approval.requested"):
+        return self.wait(sink, etype, "the request")
+
+    def wait_state(self, sink, state):
+        return self.wait(sink, lambda e: e["type"] == "session.state"
+                         and e["data"]["state"] == state, state)
+
+
+class TestOpencodeContract(AdapterContract, _OpencodeCase):
+    def make_adapter(self, *, caps, reply):
+        return self.adapter(caps=caps, reply=reply)
+
+
+class TestOpencodeAdapterStart(_OpencodeCase):
+    def test_registered_and_resolved(self):
+        self.assertIn("opencode_serve", registry.registered())
+        self.assertIn("opencode_serve", registry.BUILTIN_MODULES)
+        resolved = registry.adapter_for("opencode", {}, which=lambda b: b)
+        self.assertTrue(resolved.ok)
+        self.assertEqual(resolved.argv, opencode_wire.DEFAULT_ARGV)
+        self.assertEqual(resolved.caps, Caps(),
+                         "the fallback keeps every feature off")
+        made = registry.create(resolved)
+        self.assertIsInstance(made, opencode_serve.OpencodeServeAdapter)
+        self.assertEqual(made.capabilities, Caps())
+
+    def test_caps_never_exceed_what_is_proven(self):
+        adapter = self.adapter()
+        self.assertEqual(adapter.capabilities, opencode_wire.PROVEN)
+        self.assertFalse(adapter.capabilities.stop_task)
+        self.assertFalse(adapter.capabilities.can_set("permission_mode"))
+        self.assertEqual(self.adapter(caps=Caps(steer=True)).capabilities,
+                         Caps(steer=True))
+
+    def test_start_binds_loopback_with_a_password_and_names_the_session(self):
+        adapter, sink, sid = self.started(spec={
+            "model": "prov/model-x", "effort": "low",
+            "session_id": "the-hubs-pick"})
+        self.assertEqual(sid, OC_SESSION)
+        self.assertEqual(adapter.session_id, OC_SESSION)
+        self.assertEqual(adapter.version, "2.3.2")
+        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.events[0]["data"]["caps"],
+                         opencode_wire.PROVEN.as_dict())
+        self.assertEqual(sink.events[1]["data"], {
+            "state": "idle", "harness_session_id": OC_SESSION})
+        first = self.first_line()
+        self.assertEqual(first["argv"], ["--hostname", "127.0.0.1",
+                                         "--port", "0"])
+        self.assertIs(first["password_set"], True)
+        self.assertEqual(first["cwd"], os.path.realpath(adapter._spec.cwd))
+        created = self.sent()[0]
+        self.assertEqual((created["method"], created["path"]),
+                         ("POST", "/api/session"))
+        self.assertEqual(created["body"], {
+            "location": {"directory": adapter._spec.cwd},
+            "model": {"providerID": "prov", "id": "model-x",
+                      "variant": "low"}})
+        self.assertTrue(all(r["authed"] for r in self.sent()))
+        self.assertIsNone(adapter.transcript_position())
+
+    def test_the_password_is_never_shown(self):
+        adapter, sink, _sid = self.started()
+        password = adapter._password
+        self.assertGreaterEqual(len(password), 48)
+        turn_id = adapter.send_turn(TurnInput("hi"))
+        self.wait_turn(sink, turn_id)
+        self.assertNotIn(password, json.dumps(sink.events))
+        self.assertNotIn(password, self.log.read_text())
+        other, _sink, _sid = self.started()
+        self.assertNotEqual(other._password, password, "one per start")
+
+    def test_a_password_the_agent_prints_is_masked(self):
+        # opencode hands its environment to the commands its agent runs.
+        adapter, sink, _sid = self.started("password")
+        turn_id = adapter.send_turn(TurnInput("print your environment"))
+        self.wait_turn(sink, turn_id)
+        reply = [e["data"]["text"] for e in sink.of("message.completed")
+                 if e["data"]["kind"] == "assistant"][0]
+        self.assertTrue(reply.startswith("it prints "), reply)
+        self.assertNotIn(adapter._password, json.dumps(sink.events))
+        _streams_close(self, sink.events)
+
+    def test_a_session_id_that_is_already_opencodes_is_kept(self):
+        _adapter, _sink, sid = self.started(spec={
+            "session_id": "ses_chosen0000000000000001"})
+        self.assertEqual(sid, "ses_chosen0000000000000001")
+
+    def test_argv_that_names_a_port_is_left_alone(self):
+        adapter = opencode_serve.OpencodeServeAdapter(
+            registry.Resolved("opencode", "opencode_serve", (
+                sys.executable, str(OPENCODE_FAKE), "--port", "0"),
+                ALL_CAPS), env=self.fake_env())
+        self.addCleanup(adapter.close, 0.5)
+        adapter.start(self.spec(), fake.ListSink())
+        self.assertEqual(self.first_line()["argv"], ["--port", "0"])
+
+    def test_resume_and_fork(self):
+        adapter, sink, sid = self.started(spec={
+            "resume_id": "ses_older00000000000000001"})
+        self.assertEqual(sid, "ses_older00000000000000001")
+        self.assertEqual(self.sent()[0]["method"], "GET")
+        self.assertEqual(len(self.sent()), 1, "a resume changes no model")
+        adapter.close(0.5)
+        forked, sink, sid = self.started(spec={
+            "resume_id": "ses_older00000000000000001", "fork": True,
+            "model": "prov/m2", "effort": "high", "plan_mode": True})
+        self.assertEqual(sid, OC_FORKED)
+        self.assertEqual(
+            [(r["method"], r["path"]) for r in self.sent()],
+            [("POST", "/api/session/ses_older00000000000000001/fork"),
+             ("POST", f"/api/session/{OC_FORKED}/model"),
+             ("POST", f"/api/session/{OC_FORKED}/agent")])
+        self.assertEqual(self.sent()[1]["body"], {"model": {
+            "providerID": "prov", "id": "m2", "variant": "high"}})
+        self.assertEqual(self.sent()[2]["body"], {"agent": "plan"})
+
+    def test_start_refusals(self):
+        for spec, code, said in (
+                ({"resume_id": "11111111-2222-4333-8444-555555555555"},
+                 "bad_request", "names no opencode session"),
+                ({"resume_id": OC_MISSING}, "bad_request", "has no session"),
+                ({"model": "no-provider"}, "bad_request", "provider/model")):
+            with self.subTest(spec=spec):
+                adapter = self.adapter()
+                sink = fake.ListSink()
+                with self.assertRaises(AdapterError) as ctx:
+                    adapter.start(self.spec(**spec), sink)
+                self.assertEqual(ctx.exception.code, code)
+                self.assertIn(said, str(ctx.exception))
+                self.assertEqual(sink.events, [])
+
+    def test_failed_starts_emit_nothing(self):
+        for mode, code, said in (
+                ("exit-at-start", "agent_down", "cannot start"),
+                ("silent", "timeout", "never said it was listening"),
+                ("old", "unsupported_version", "older than 2.3.2"),
+                ("refuse-session", "refused", "no"),
+                ("no-stream", "refused", "event stream")):
+            with self.subTest(mode=mode):
+                adapter = self.adapter(mode, init_timeout=1.0)
+                sink = fake.ListSink()
+                with self.assertRaises(AdapterError) as ctx:
+                    adapter.start(self.spec(), sink)
+                self.assertEqual(ctx.exception.code, code)
+                self.assertIn(said, str(ctx.exception))
+                self.assertEqual(sink.events, [])
+                self.assertIsNotNone(adapter._proc.poll(),
+                                     "the child is gone")
+                with self.assertRaises(AdapterError):
+                    adapter.start(self.spec(), sink)
+                adapter.close(0.5)
+                self.assertEqual(sink.events, [])
+
+    def test_a_start_that_fails_after_the_session_is_known_emits_nothing(
+            self):
+        for mode, spec in (
+                ("refuse-model", {"resume_id": OC_SESSION,
+                                  "model": "prov/m2"}),
+                ("refuse-agent", {"plan_mode": True})):
+            with self.subTest(mode=mode):
+                adapter = self.adapter(mode)
+                sink = fake.ListSink()
+                with self.assertRaises(AdapterError) as ctx:
+                    adapter.start(self.spec(**spec), sink)
+                self.assertEqual(ctx.exception.code, "refused")
+                self.assertEqual(sink.events, [],
+                                 "no start pair for a session that is gone")
+                self.assertIsNotNone(adapter._proc.poll())
+                adapter.close(0.5)
+                self.assertEqual(sink.events, [])
+
+    def test_close_ends_what_the_server_started_too(self):
+        # An npm-style launcher keeps the real server as its child; here
+        # the child holds the server's stdout, so the reader only ends
+        # when the child is gone as well.
+        adapter, _sink, _sid = self.started("child")
+        adapter.close(0.5)
+        adapter._out_reader.join(TIMEOUT)
+        self.assertFalse(adapter._out_reader.is_alive())
+
+    def test_a_min_version_from_the_registry(self):
+        adapter = self.adapter(min_version="9.0.0")
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(self.spec(), fake.ListSink())
+        self.assertEqual(ctx.exception.code, "unsupported_version")
+
+    def test_a_binary_that_is_not_there(self):
+        adapter = opencode_serve.OpencodeServeAdapter(registry.Resolved(
+            "opencode", "opencode_serve", ("/nonexistent/opencode",),
+            ALL_CAPS))
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(self.spec(), fake.ListSink())
+        self.assertEqual(ctx.exception.code, "agent_down")
+        adapter.close(0.5)
+
+    def test_close_stops_a_server_that_ignores_sigterm(self):
+        adapter, sink, _sid = self.started("linger")
+        adapter.close(0.3)
+        self.assertEqual(adapter._proc.poll(), -9)
+        self.assertEqual(sink.events[-1]["data"]["state"], "closed")
+
+    def test_close_mid_turn(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        adapter.close(1.0)
+        self.assertEqual(sink.types()[-2:], ["turn.ended", "session.state"])
+        ended = sink.of("turn.ended")[0]
+        self.assertEqual((ended["turn_id"], ended["data"]["status"]),
+                         (turn_id, "interrupted"))
+        self.assertEqual(sink.events[-1]["data"]["state"], "closed")
+        self.assertEqual(adapter._proc.poll(), 143)
+
+    def test_the_server_dies_mid_turn(self):
+        adapter, sink, _sid = self.started("crash")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        down = self.wait_state(sink, "agent_down")
+        self.assertEqual(sink.types()[-2:], ["turn.ended", "session.state"])
+        ended = sink.of("turn.ended")[0]
+        self.assertEqual((ended["turn_id"], ended["data"]["status"]),
+                         (turn_id, "failed"))
+        self.assertIn("code 3", down["data"]["reason"])
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("again"))
+        self.assertEqual(ctx.exception.code, "agent_down")
+        with self.assertRaises(AdapterError) as ctx:
+            adapter._call(opencode_wire.info())
+        self.assertEqual(ctx.exception.code, "agent_down",
+                         "nothing listens there any more")
+        count = len(sink.events)
+        adapter.close(0.5)
+        self.assertEqual(len(sink.events), count, "already over")
+
+    def test_a_quiet_stream_is_not_a_dead_one(self):
+        # The handshake's deadline must not stay on the event stream.
+        adapter, sink, _sid = self.started(init_timeout=0.3)
+        adapter._reader.join(0.8)
+        self.assertTrue(adapter._reader.is_alive())
+        self.assertIsNone(adapter._proc.poll())
+        self.wait_turn(sink, adapter.send_turn(TurnInput("still there")))
+
+    def test_an_event_line_over_the_bound_is_dropped_alone(self):
+        with mock.patch.object(opencode_serve, "_MAX_LINE", 300):
+            adapter, sink, _sid = self.started(reply="long " * 200)
+            turn_id = adapter.send_turn(TurnInput("hi"))
+            ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertIn("an event line over the size bound",
+                      list(adapter.dropped))
+        self.assertEqual([e for e in sink.of("message.completed")
+                          if e["data"]["kind"] == "assistant"], [],
+                         "the reply's own lines were the long ones")
+
+    def test_a_stream_the_server_drops_ends_the_session(self):
+        adapter, sink, _sid = self.started("drop-stream")
+        turn_id = adapter.send_turn(TurnInput("hi"))
+        self.wait_turn(sink, turn_id)
+        down = self.wait_state(sink, "agent_down")
+        self.assertIn("closed its event stream", down["data"]["reason"])
+        self.assertIsNotNone(adapter._proc.wait(TIMEOUT))
+
+
+class TestOpencodeAdapterTurns(_OpencodeCase):
+    def test_a_turn_streams_and_ends(self):
+        adapter, sink, _sid = self.started(reply="hello there, friend")
+        turn_id = adapter.send_turn(TurnInput(
+            "hi", command_id="c1", device="phone",
+            attachments=["/w/a.txt"]))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertEqual(ended["command_id"], "c1")
+        mine = [e for e in sink.events if e.get("turn_id") == turn_id]
+        self.assertEqual([e["type"] for e in mine][:2],
+                         ["turn.started", "message.completed"])
+        self.assertEqual(mine[1]["data"]["attachments"], ["/w/a.txt"])
+        self.assertIn("message.delta", [e["type"] for e in mine])
+        self.assertEqual(mine[-2]["type"], "usage.updated")
+        _streams_close(self, sink.events)
+        self.assertEqual(sink.events[-1]["data"]["state"], "idle")
+        prompt = self.sent()[-1]
+        self.assertEqual(prompt["body"], {
+            "text": "hi", "files": [{"uri": "file:///w/a.txt",
+                                     "name": "a.txt"}]})
+        second = adapter.send_turn(TurnInput("again"))
+        self.assertNotEqual(second, turn_id)
+        self.wait_turn(sink, second)
+
+    def test_busy_mid_turn_and_interrupt(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("another"))
+        self.assertEqual(ctx.exception.code, "busy")
+        self.wait(sink, "message.delta")
+        adapter.interrupt()
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        partial = [e for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(partial[0]["data"]["text"], "1\n2\n")
+        self.assertEqual(self.sent_paths()[-1], ("POST", "/interrupt"))
+        _streams_close(self, sink.events)
+        before = len(sink.events)
+        adapter.interrupt()
+        self.assertEqual(len(sink.events), before)
+        self.assertEqual(self.sent_paths()[-1], ("POST", "/interrupt"),
+                         "an idle interrupt is not even sent")
+        self.assertEqual(len([p for p in self.sent_paths()
+                              if p[1] == "/interrupt"]), 1)
+
+    def test_a_refused_turn(self):
+        adapter, sink, _sid = self.started()
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("mode:refuse-prompt go"))
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn("Prompt refused", str(ctx.exception))
+        self.assertEqual(len(sink.events), before)
+        self.assertFalse(adapter._state.busy)
+        self.wait_turn(sink, adapter.send_turn(TurnInput("fine now")))
+
+    def test_a_prompt_the_server_never_answers(self):
+        adapter, sink, _sid = self.started(call_timeout=0.3)
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("mode:hang-prompt go"))
+        self.assertEqual(ctx.exception.code, "timeout")
+        self.assertEqual(len(sink.events), before)
+        self.assertFalse(adapter._state.busy)
+
+    def test_events_that_overtake_the_prompts_answer(self):
+        adapter, sink, _sid = self.started(reply="there")
+        turn_id = adapter.send_turn(TurnInput("mode:overtake hi",
+                                              command_id="c1"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["command_id"], "c1")
+        self.assertEqual(len(sink.of("turn.started")), 1)
+        users = [e for e in sink.of("message.completed")
+                 if e["data"]["kind"] == "user"]
+        self.assertEqual(len(users), 1)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["early there"])
+        self.assertIn(turn_id, adapter._state.turn_messages)
+
+    def test_a_reply_whose_end_names_no_text(self):
+        adapter, sink, _sid = self.started("empty-end", reply="line one")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["line one\n"])
+        _streams_close(self, sink.events)
+
+    def test_a_failed_turn(self):
+        adapter, sink, _sid = self.started("fail")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "failed")
+        self.assertIn("Model unavailable", ended["data"]["reason"])
+        self.assertEqual(len(sink.of("error")), 1)
+        self.assertEqual(sink.of("error")[0]["data"]["code"],
+                         "provider.no-route")
+
+    def test_noise_changes_nothing(self):
+        adapter, sink, _sid = self.started("noise", reply="fine")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["fine"])
+        self.assertEqual(list(adapter.dropped), [])
+        self.assertEqual(adapter._state.unknown["other-session"], 1)
+        self.assertEqual(adapter._state.unknown["session.totally.new"], 1)
+        for event in sink.events:
+            self.assertEqual(events.validate(event), [])
+
+    def test_an_event_the_state_machine_chokes_on_is_skipped(self):
+        adapter, sink, _sid = self.started()
+        real = adapter._state.feed
+        calls = []
+
+        def feed(event):
+            calls.append(event.get("type"))
+            if event.get("type") == "session.step.started":
+                raise RuntimeError("boom")
+            return real(event)
+
+        with mock.patch.object(adapter._state, "feed", feed):
+            turn_id = adapter.send_turn(TurnInput("hi"))
+            self.wait_turn(sink, turn_id)
+        self.assertEqual(list(adapter.dropped), ["RuntimeError: boom"])
+
+    def test_approval_allow(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.asked(sink)
+        self.assertEqual(asked["data"]["kind"], "command")
+        self.assertEqual(asked["data"]["prompt"], "touch probe.txt")
+        self.wait_state(sink, "waiting")
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        types = sink.types()
+        self.assertLess(types.index("approval.resolved"),
+                        types.index("tool.completed"),
+                        "resolved before what the answer allowed")
+        self.assertEqual(sink.of("approval.resolved")[0]["data"]["source"],
+                         "user")
+        self.assertEqual(self.sent()[-1]["body"], {"decision": "once"})
+        with self.assertRaises(UnknownRequest):
+            adapter.respond(asked["data"]["request_id"],
+                            Answer(decision="allow"))
+        _contract_order(self, sink.events[2:])
+
+    def test_approval_deny_ends_the_turn(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.asked(sink)
+        adapter.respond(asked["data"]["request_id"], Answer(decision="deny"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        self.assertEqual(sink.of("tool.completed")[0]["data"]["status"],
+                         "cancelled")
+        self.assertEqual(self.sent()[-1]["body"], {"decision": "reject"})
+
+    def test_approval_deny_with_a_message_goes_on(self):
+        adapter, sink, _sid = self.started("approval", reply="understood")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.asked(sink)
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="deny", text="another file"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        done = sink.of("tool.completed")[0]["data"]
+        self.assertEqual((done["status"], done["output"]),
+                         ("error", "another file"))
+        self.assertEqual(self.sent()[-1]["body"],
+                         {"decision": "reject", "message": "another file"})
+
+    def test_always_is_sent_as_once(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("touch it"))
+        asked = self.asked(sink)
+        self.assertEqual([o["id"] for o in asked["data"]["options"]],
+                         ["allow", "deny"])
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="always"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(self.sent()[-1]["body"], {"decision": "once"})
+        self.assertEqual(sink.of("approval.resolved")[0]["data"]["decision"],
+                         "allow")
+
+    def test_an_edit_approval_and_its_file_edits(self):
+        adapter, sink, _sid = self.started("patch")
+        turn_id = adapter.send_turn(TurnInput("write it"))
+        asked = self.asked(sink)
+        self.assertEqual((asked["data"]["kind"], asked["data"]["prompt"]),
+                         ("tool", "edit: probe.txt"))
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(sink.of("tool.completed")[0]["data"]["file_edits"], [
+            {"path": "probe.txt", "kind": "add",
+             "diff": "@@ -0,0 +1,1 @@\n+yes\n"}])
+
+    def test_a_refused_answer_leaves_the_request_open(self):
+        adapter, sink, _sid = self.started("refuse-reply")
+        adapter.send_turn(TurnInput("mode:approval touch it"))
+        asked = self.asked(sink)
+        request_id = asked["data"]["request_id"]
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.respond(request_id, Answer(decision="allow"))
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertEqual(sink.of("approval.resolved"), [])
+        self.assertIn(request_id, adapter._state.pending)
+        self.assertTrue(adapter._state.waiting, "still waiting on it")
+        # The interrupt retires it.
+        adapter.interrupt()
+        self.wait(sink, "turn.ended")
+        self.assertEqual(sink.of("approval.resolved")[0]["data"]["source"],
+                         "turn_ended")
+
+    def test_an_answer_that_cannot_be_posted_leaves_the_request_open(self):
+        adapter, sink, _sid = self.started("approval")
+        adapter.send_turn(TurnInput("touch it"))
+        asked = self.asked(sink)
+        request_id = asked["data"]["request_id"]
+        with mock.patch.object(adapter, "_call", side_effect=AdapterError(
+                "opencode is not reachable", code="agent_down")):
+            with self.assertRaises(AdapterError):
+                adapter.respond(request_id, Answer(decision="allow"))
+        self.assertIn(request_id, adapter._state.pending)
+        adapter.respond(request_id, Answer(decision="allow"))
+        self.wait(sink, "turn.ended")
+        types = sink.types()
+        at = types.index("approval.resolved")
+        self.assertEqual((types[at + 1], sink.events[at + 1]["data"]), (
+            "session.state", {"state": "running"}),
+            "the retry that got through says the session runs again")
+
+    def test_a_question(self):
+        adapter, sink, _sid = self.started("question")
+        turn_id = adapter.send_turn(TurnInput("ask me"))
+        asked = self.asked(sink, "input.requested")
+        self.assertEqual(asked["data"]["prompt"], "Which one?")
+        self.assertEqual([o["id"] for o in asked["data"]["options"]],
+                         ["o1", "o2"])
+        self.assertNotIn("sk-ant", json.dumps(sink.events))
+        adapter.respond(asked["data"]["request_id"], Answer(option_id="o2"))
+        self.wait_turn(sink, turn_id)
+        reply = self.sent()[-1]
+        self.assertTrue(reply["path"].endswith("/reply"))
+        self.assertEqual(reply["body"], {"answer": {"answer": OC_KEY}},
+                         "the model's own value goes back to it")
+        self.assertNotIn("sk-ant", json.dumps(sink.events))
+
+    def test_a_form_with_two_questions_is_cancelled(self):
+        adapter, sink, _sid = self.started("form-many", reply="went on")
+        turn_id = adapter.send_turn(TurnInput("ask me"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertEqual(sink.of("input.requested"), [])
+        self.assertEqual(self.sent()[-1]["method"], "DELETE")
+
+    def test_secrets_are_masked_live(self):
+        adapter, sink, _sid = self.started("secret")
+        turn_id = adapter.send_turn(TurnInput("leak it"))
+        asked = self.asked(sink)
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        self.assertNotIn("sk-ant", json.dumps(sink.events))
+        self.assertIn("the key is", json.dumps(sink.events))
+        _streams_close(self, sink.events)
+
+    def test_turn_ids_carry_a_per_start_prefix(self):
+        one, sink, _sid = self.started()
+        first = one.send_turn(TurnInput("hi"))
+        self.wait_turn(sink, first)
+        two, sink2, _sid = self.started()
+        second = two.send_turn(TurnInput("hi"))
+        self.wait_turn(sink2, second)
+        self.assertNotEqual(first, second)
+        self.assertRegex(first, r"^t-[0-9a-f]{8}-1$")
+
+
+class TestOpencodeAdapterSteer(_OpencodeCase):
+    def test_a_steer_joins_the_turn(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count", command_id="c1"))
+        self.wait(sink, "message.delta")
+        adapter.steer(TurnInput("stop", command_id="c2", device="phone",
+                                attachments=["/w/a.png"]))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertEqual(len(sink.of("turn.started")), 1)
+        done = [(e["data"]["kind"], e["data"]["text"]) for e in
+                sink.of("message.completed")]
+        self.assertEqual(done, [("user", "count"), ("assistant", "1\n2\n"),
+                                ("user", "stop"), ("assistant", "steered")])
+        steer = [e for e in sink.of("message.completed")
+                 if e["data"]["text"] == "stop"][0]
+        self.assertEqual((steer["turn_id"], steer["command_id"],
+                          steer["data"]["by"]), (turn_id, "c2", "phone"))
+        body = self.sent()[-1]["body"]
+        self.assertEqual((body["delivery"], body["files"][0]["name"]),
+                         ("steer", "a.png"))
+        _streams_close(self, sink.events)
+
+    def test_a_steer_behind_an_approval_gets_the_next_turn(self):
+        adapter, sink, _sid = self.started("approval")
+        first = adapter.send_turn(TurnInput("touch it"))
+        asked = self.asked(sink)
+        adapter.steer(TurnInput("never mind", command_id="c2"))
+        self.assertEqual(len([e for e in sink.of("message.completed")
+                              if e["data"]["kind"] == "user"]), 1,
+                         "not in the conversation yet")
+        adapter.respond(asked["data"]["request_id"], Answer(decision="deny"))
+        self.wait(sink, lambda e: e["type"] == "turn.ended"
+                  and e.get("turn_id") != first, "the steer's own turn")
+        started = sink.of("turn.started")
+        self.assertEqual(len(started), 2)
+        self.assertEqual(started[1]["data"]["text"], "never mind")
+        self.assertEqual(started[1]["command_id"], "c2")
+        users = [(e["turn_id"], e["data"]["text"]) for e in
+                 sink.of("message.completed") if e["data"]["kind"] == "user"]
+        self.assertEqual(users, [(first, "touch it"),
+                                 (started[1]["turn_id"], "never mind")])
+        _contract_order(self, sink.events[2:])
+
+    def test_a_refused_steer(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.steer(TurnInput("mode:refuse-prompt stop"))
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertEqual(len(sink.events), before)
+        adapter.interrupt()
+        self.wait_turn(sink, turn_id)
+
+    def test_steer_is_gated(self):
+        adapter, sink, _sid = self.started("slow", caps=Caps())
+        adapter.send_turn(TurnInput("count"))
+        with self.assertRaises(Unsupported):
+            adapter.steer(TurnInput("stop"))
+
+
+class TestOpencodeAdapterOptions(_OpencodeCase):
+    def test_model_and_effort(self):
+        adapter, sink, _sid = self.started(spec={"model": "prov/m1",
+                                                 "effort": "low"})
+        before = len(sink.events)
+        adapter.set_option("effort", "high")
+        self.assertEqual(self.sent()[-1]["body"], {"model": {
+            "providerID": "prov", "id": "m1", "variant": "high"}})
+        adapter.set_option("model", "other/m2")
+        self.assertEqual(self.sent()[-1]["body"], {"model": {
+            "providerID": "other", "id": "m2", "variant": "high"}})
+        self.assertEqual(len(sink.events), before, "no event of its own")
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.set_option("model", "no-provider")
+        self.assertEqual(ctx.exception.code, "bad_request")
+        with self.assertRaises(Unsupported):
+            adapter.set_option("permission_mode", "plan")
+        with self.assertRaises(ValueError):
+            adapter.set_option("colour", "red")
+
+    def test_effort_uses_the_model_the_session_reports(self):
+        adapter, _sink, _sid = self.started()
+        adapter.set_option("effort", "high")
+        self.assertEqual(self.sent()[-1]["body"], {"model": {
+            "providerID": "fake", "id": "model-1", "variant": "high"}})
+
+    def test_a_refused_model_changes_nothing(self):
+        adapter, _sink, _sid = self.started("refuse-model",
+                                            spec={"model": "prov/m1"})
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.set_option("model", "prov/m2")
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn("Unknown model", str(ctx.exception))
+        self.assertEqual(adapter._model, "prov/m1")
+
+    def test_plan_mode_switches_the_agent_and_back(self):
+        adapter, sink, _sid = self.started()
+        adapter.set_option("plan_mode", True)
+        self.assertEqual(self.sent()[-1]["body"], {"agent": "plan"})
+        turn_id = adapter.send_turn(TurnInput("do it"))
+        self.wait_turn(sink, turn_id)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["planning"])
+        adapter.set_option("plan_mode", True)
+        adapter.set_option("plan_mode", False)
+        self.assertEqual(self.sent()[-1]["body"], {"agent": "build"})
+        with self.assertRaises(ValueError):
+            adapter.set_option("plan_mode", "yes")
+
+    def test_rollback(self):
+        adapter, sink, _sid = self.started()
+        first = adapter.send_turn(TurnInput("one"))
+        self.wait_turn(sink, first)
+        second = adapter.send_turn(TurnInput("two"))
+        self.wait_turn(sink, second)
+        message = adapter._state.turn_messages[second]
+        before = len(sink.events)
+        adapter.rollback(second)
+        self.assertEqual(self.sent_paths()[-2:], [
+            ("POST", "/revert/stage"), ("POST", "/revert/commit")])
+        self.assertEqual(self.sent()[-2]["body"],
+                         {"messageID": message, "files": False})
+        self.assertEqual(len(sink.events), before)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.rollback(second)
+        self.assertEqual(ctx.exception.code, "unknown_turn")
+        adapter.rollback(first)
+        self.assertEqual(adapter._state.turn_messages, {})
+
+    def test_rollback_refusals(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.rollback(turn_id)
+        self.assertEqual(ctx.exception.code, "busy")
+        adapter.interrupt()
+        self.wait_turn(sink, turn_id)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.rollback("t-nope-1")
+        self.assertEqual(ctx.exception.code, "unknown_turn")
+        refuser, sink, _sid = self.started("refuse-revert")
+        turn_id = refuser.send_turn(TurnInput("one"))
+        self.wait_turn(sink, turn_id)
+        with self.assertRaises(AdapterError) as ctx:
+            refuser.rollback(turn_id)
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn(turn_id, refuser._state.turn_messages)
+
+    def test_an_interrupt_that_stopped_nothing_retires_nothing(self):
+        adapter, sink, _sid = self.started("deaf-interrupt")
+        turn_id = adapter.send_turn(TurnInput("mode:approval touch it"))
+        asked = self.asked(sink)
+        before = len(sink.events)
+        adapter.interrupt()
+        self.assertEqual(len(sink.events), before)
+        self.assertIn(asked["data"]["request_id"], adapter._state.pending)
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+
+    def test_a_revert_that_cannot_be_committed_is_cleared(self):
+        adapter, sink, _sid = self.started("refuse-commit")
+        turn_id = adapter.send_turn(TurnInput("one"))
+        self.wait_turn(sink, turn_id)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.rollback(turn_id)
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertEqual(self.sent_paths()[-3:], [
+            ("POST", "/revert/stage"), ("POST", "/revert/commit"),
+            ("DELETE", "/revert")])
+        self.assertIn(turn_id, adapter._state.turn_messages)
+
+    def test_a_refused_interrupt(self):
+        adapter, sink, _sid = self.started("refuse-interrupt")
+        adapter.send_turn(TurnInput("mode:slow count"))
+        self.wait(sink, "message.delta")
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.interrupt()
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertEqual(len(sink.events), before)
+
+    def test_stop_task_is_never_offered(self):
+        adapter, _sink, _sid = self.started()
+        with self.assertRaises(Unsupported):
+            adapter.stop_task("task-1")
+
+    def test_calls_before_start(self):
+        adapter = self.adapter()
+        for call in (lambda: adapter.steer(TurnInput("x")),
+                     adapter.interrupt,
+                     lambda: adapter.respond("r", Answer(decision="allow")),
+                     lambda: adapter.set_option("model", "a/b"),
+                     lambda: adapter.stop_task("t"),
+                     lambda: adapter.rollback("t")):
+            with self.assertRaises(AdapterError) as ctx:
+                call()
+            self.assertEqual(ctx.exception.code, "not_started")
+        self.assertEqual(adapter.session_id, "")
 
 
 if __name__ == "__main__":

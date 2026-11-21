@@ -1,0 +1,629 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.582,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.582,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.543,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch allowed.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.543,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.543,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch allowed.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.427,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 4.96e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.854,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "name": "shell",
+   "summary": "shell · touch allowed.txt",
+   "input": {
+    "command": "touch allowed.txt",
+    "timeout": 120000
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.856,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "per_01",
+   "kind": "command",
+   "prompt": "touch allowed.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.856,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.856,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "per_01",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.856,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.273,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "shell",
+   "output": "(no output)"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.273,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 6279,
+   "output_tokens": 24,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0013354
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.699,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.699,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:0",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.736,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 684,
+   "output_tokens": 5,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00159109
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.736,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.193
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.736,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.15,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Run the shell command `touch denied.txt`. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.15,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.15,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Run the shell command `touch denied.txt`. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.371,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_02",
+   "name": "shell",
+   "summary": "shell · touch denied.txt",
+   "input": {
+    "command": "touch denied.txt",
+    "timeout": 120000
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.371,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "per_02",
+   "kind": "command",
+   "prompt": "touch denied.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_02"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.371,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.371,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "per_02",
+   "source": "user",
+   "decision": "deny"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.371,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.375,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_02",
+   "status": "cancelled",
+   "name": "shell",
+   "output": "The user declined this tool call"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.375,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 684,
+   "output_tokens": 5,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00189298
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.375,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "interrupted",
+   "duration_s": 1.225
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.375,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.785,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "text": "Create a file named written.txt containing the single word yes, using your file editing tool. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.785,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.785,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:user",
+   "kind": "user",
+   "text": "Create a file named written.txt containing the single word yes, using your file editing tool. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.821,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "call_03",
+   "name": "patch",
+   "summary": "patch",
+   "input": {
+    "patchText": "*** Begin Patch\n*** Add File: written.txt\n+yes\n*** End Patch"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.821,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "request_id": "per_03",
+   "kind": "tool",
+   "prompt": "edit: written.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_03"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.821,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.821,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "request_id": "per_03",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.821,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.835,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "call_03",
+   "status": "ok",
+   "name": "patch",
+   "output": "Success. Updated the following files:\nA written.txt",
+   "file_edits": [
+    {
+     "path": "written.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,1 @@\n+yes\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.835,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 811,
+   "output_tokens": 29,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00222157
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.343,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.343,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.388,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 874,
+   "output_tokens": 5,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00251526
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.388,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.603
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.388,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.388,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

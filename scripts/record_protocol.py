@@ -19,7 +19,9 @@ compares against).
 
 ``--adapter=claude_stream`` is recorded here; the other adapters'
 scenarios live beside this file (``OTHER_ADAPTERS``: ``record_codex.py``
-for ``codex_appserver``) and share ``Driver`` and ``Redactor``.
+for ``codex_appserver``, ``record_opencode.py`` for ``opencode_serve``)
+and share ``Redactor`` (and ``Driver``, where the wire is lines on
+stdio).
 
 Every scenario runs in a fresh ``mktemp -d`` folder holding two dummy
 files, never in a real project, with the owner's MCP servers, hooks,
@@ -108,8 +110,11 @@ _ID_PREFIXES = ("msg", "req", "toolu", "srvtoolu")
 
 
 def _prefixed_id_re(prefixes) -> "re.Pattern":
-    return re.compile(r"\b(" + "|".join(prefixes)
-                      + r")_(?=[A-Za-z]*[0-9])([A-Za-z0-9]{12,})\b")
+    # Lookarounds, not ``\b``: an id can follow an underscore
+    # (``msg_fork_notice_ses_...``).
+    return re.compile(r"(?<![0-9A-Za-z])(" + "|".join(prefixes)
+                      + r")_(?=[A-Za-z]*[0-9])([A-Za-z0-9]{12,})"
+                      r"(?![0-9A-Za-z])")
 
 
 _PREFIXED_ID_RE = _prefixed_id_re(_ID_PREFIXES)
@@ -905,7 +910,8 @@ def record(adapter: str, scenario: str, version: str, raw_dir: Path | None,
 
 
 # Adapters recorded by a module beside this one: adapter id -> module.
-OTHER_ADAPTERS = {"codex_appserver": "record_codex"}
+OTHER_ADAPTERS = {"codex_appserver": "record_codex",
+                  "opencode_serve": "record_opencode"}
 
 
 def _other(adapter: str):
