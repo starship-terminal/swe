@@ -99,7 +99,7 @@ on today's stream). `V2Stream.catch_up` decides:
 | The request | The stream sends |
 |---|---|
 | `epoch` is the session's epoch, `last` is not past the journal's head, the head is at most `REPLAY_MAX` (500) seqs ahead, and the journal still holds everything after `last` | each journaled event after `last`, in order, then `session.row`, then `session.state` |
-| anything else: no `epoch` or an unreadable one, another epoch, a cursor past the head, a wider gap, a stretch the journal's ring dropped | one `session.snapshot`, then `session.state` |
+| anything else: no `epoch` or an unreadable one, another epoch, a cursor of 0 on a journal that has events, a cursor past the head, a wider gap, a stretch the journal's ring dropped | one `session.snapshot`, then `session.state` |
 
 - A client with no state connects with no `epoch` and is sent the
   snapshot. One that is up to date is sent only `session.row` and
@@ -107,10 +107,15 @@ on today's stream). `V2Stream.catch_up` decides:
 - The row is sent on every replay because a change to it while the
   client was away (a new title, a detach) has no event to replay for a
   keeper-held session, and no v2 event for any other.
+- A cursor of 0 is never replayed: a ring that was trimmed still reads
+  "from the start" with nothing missing, so a replay could not tell
+  what it left out, and a client with no cursor has nothing to add to.
 - Deltas are never replayed: they were never journaled. The state
   frame's `live[]` is what restores a reply in progress.
 - The stream subscribes before it reads the journal, and skips what the
-  read already covered, so nothing falls between the two.
+  read already covered, so nothing falls between the two. Events
+  journaled while the catch-up was being built are sent before its
+  state frame (see "Live text").
 - There are no `journal.truncated` or `journal.caught-up` frames in v2.
   The state frame is the "caught up" mark.
 
@@ -124,7 +129,7 @@ hub keeps, per session, the text so far of every message in progress
 | Source | What it does |
 |---|---|
 | a delta from a keeper | appended to that message's text |
-| a keeper's `welcome.live` on every connect | replaces what the hub had (it missed deltas while it was restarting or the connection was down), and open streams are sent `session.state` again |
+| a keeper's `welcome.live` on every connect | replaces what the hub had (it missed deltas while it was restarting or the connection was down). Open streams are sent `session.state` again once the keeper's replay is in, not before: a client that got the text first would clear it at a replayed `turn.ended` |
 | a v1 delta (an API channel of a session no keeper holds, or a satellite's) | the same, with the offset counted by the hub |
 | `message.completed`, `thinking.completed` | ends the text with that `id` |
 | `tool.started` | ends the text with that `call_id` |
@@ -136,12 +141,16 @@ An event replayed from before a welcome (its seq is at or below
 **Every catch-up ends with the state frame**: a small-gap replay, a
 snapshot (which also carries `live`), and an overflow recovery alike.
 
-**No delta twice.** A delta that arrives while a catch-up is being
-built is in the stream's queue and in `live[]` both. `SyncHub` counts
-every delta it fans out; a state frame records the count it was taken
-at, and the stream drops queued deltas at or below it. After a state
-frame, the next delta for a message starts exactly where its `live[]`
-text ends.
+**The state frame sits at an exact place in the stream.** The live
+text and a stream's queue change in one step under `SyncHub`'s lock,
+and a state item is put in the queue holding the text as it stands at
+that moment. So every event queued before it is sent before it, and
+nothing after it is counted in it. A catch-up ends by putting its state
+item in the queue and sending what is ahead of it (`V2Stream._settle`):
+events journaled while the catch-up was being built go out first, and a
+delta queued before the item is dropped, because that text holds it.
+After a state frame, the next delta for a message starts exactly where
+its `live[]` text ends, and no later event is older than the frame.
 
 ## Delta offsets
 
@@ -284,6 +293,7 @@ snapshot and in a messages page:
 | `command.result` | the same, `command_id` from `command_id` or `client_id`, op `message` as `send` and `approval` as `respond` |
 | `notify` | the same, for the kinds v2 has |
 | `session.ownership`, `session.meta` | no event: a `session.row` frame (and `session.state` after an ownership change) |
+| a tool_use message whose call a legacy channel streamed text for (`acp:<nonce>:<turn>:tool:<call_id>`) | `tool.started`, then `session.state`: the event carries the call's id, not the stream's, so the state frame is what retires that text |
 | anything else | nothing |
 
 - v1 messages carry no id. A journaled one is `j<seq>`. The message
@@ -307,7 +317,7 @@ own frames have no seq (G8). On a v2 stream:
 |---|---|
 | The keeper is lost (killed, crashed) | `session.state`: `agent_down`, `pending: []`, `live: []` |
 | The keeper exited cleanly and the session shows parked | `session.state` |
-| A keeper connects or reconnects | `session.state` with the welcome's live text |
+| A keeper connects or reconnects | the events it replays, then `session.state` with the welcome's live text |
 | Ownership or control changes (detach, kill, resumed in a terminal, Continue in SWE) | `session.row`, then `session.state` |
 | A title or a pin changes | `session.row` |
 | A command the hub failed (`"the hub restarted before this was delivered"`) | `command.result` with `seq` 0 |
@@ -334,6 +344,11 @@ change to it is a change to every client:
 - **What the wire adds to `events.py`** is declared in two tables
   (`WIRE_OPTIONAL`, `WIRE_REQUIRED`): the state frame's `live`,
   `pending`, `head`, `epoch`, and `offset` being required on a delta.
+- **No nulls for "left out".** `events.validate` takes an optional
+  field that is null as left out, so a journal may hold one. The schema
+  does not, and the hub leaves such a field out when it serves the
+  event (`sync.wire`), a null `turn_id` or `command_id` included. A
+  tool's own `input` is passed on as it is.
 - **Names.** `$defs` has `<Type>Event` and `<Type>Data` per event type
   (`tool.completed` is `ToolCompletedEvent`), the shared objects
   (`Caps`, `Option`, `FileEdit`, `PlanItem`, `ChangedFile`,
@@ -356,19 +371,22 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 
 | Check | Result |
 |---|---|
-| `tests.test_remote_sse_v2` (43 tests) | pass, 20 runs in a row |
+| `tests.test_remote_sse_v2` (50 tests) | pass, 20 runs in a row |
 | Full suite against a throwaway HOME | pass (see the PR) |
 | Against an installed `swe` (`pip install -e .` in a fresh venv), a temp HOME, and harness.json pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py` in its `slow` mode: `swe config set remote.session_view true`, `swe remote serve`, pair, `GET /v1/status`, launch. A v2 client connects while the reply is being written, takes the snapshot, and disconnects. The hub is killed with `kill -9` and started again. The client reconnects with its cursor and epoch | pass (see the PR for the transcript) |
 
 ## Interface changes to earlier milestones
 
-- `runtime.py` (G8), four changes: a keeper's delta is handed to
+- `runtime.py` (G8), five changes: a keeper's delta is handed to
   `hub.sync.on_event` before its v1 frame is published; a durable event
   is journaled and handed to `hub.sync.on_event` under
   `Journal.hold(key)`, so v2 streams get events in seq order whichever
   connection's thread brought them; `_take_welcome` hands
-  `welcome.live` and `welcome.last_seq` to `hub.sync.on_welcome`;
+  `welcome.live` and `welcome.last_seq` to `hub.sync.on_welcome`; the
+  keeper's `live` frame (its replay is in) calls `hub.sync.resync`;
   `_truncated` calls `hub.sync.new_epoch`.
+- `HubState.watched` counts open v2 streams, so a client that only
+  holds a v2 stream keeps the hub out of low power.
 - `protocol_compat.to_v2` and `STATE_FOR_STATUS` (G3's file).
 - `GET /v1/status` answers three more fields
   (`tests/test_remote_hub.py` pins the body).

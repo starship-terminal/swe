@@ -74,6 +74,51 @@ _AT_REST = frozenset({"idle", "agent_down", "parked", "closed"})
 _ROW_TYPES = frozenset({"session.ownership", "session.meta"})
 
 
+def _without_nulls(value: Any, spec: Any) -> Any:
+    """``value`` with every optional field that is null left out, by
+    ``spec`` (an ``events.py`` field spec). The same object when there
+    is nothing to leave out. A field of any shape (a tool's ``input``)
+    is not looked into: a null in there is the tool's own."""
+    if isinstance(spec, ev._List) and isinstance(value, list):
+        items = [_without_nulls(item, spec.item) for item in value]
+        if all(new is old for new, old in zip(items, value)):
+            return value
+        return items
+    if not isinstance(spec, ev._Obj) or not isinstance(value, dict):
+        return value
+    out = None
+    for name, item in value.items():
+        if item is None and name in spec.optional:
+            new, drop = None, True
+        else:
+            field = spec.required.get(name) or spec.optional.get(name)
+            new, drop = _without_nulls(item, field), False
+        if (drop or new is not item) and out is None:
+            out = {k: v for k, v in value.items()}
+        if drop:
+            del out[name]
+        elif new is not item:
+            out[name] = new
+    return value if out is None else out
+
+
+def wire(event: dict) -> dict:
+    """A v2 event as the schema has it. ``events.validate`` takes an
+    optional field that is null as left out, so a journal may hold one;
+    on the wire it is left out (and so are a null ``turn_id`` or
+    ``command_id``), which keeps a client's types to "there or not"."""
+    spec = ev.SCHEMAS.get(event.get("type"))
+    data = event.get("data")
+    fixed = _without_nulls(data, spec) if spec is not None else data
+    nulls = [name for name in ("turn_id", "command_id")
+             if name in event and event[name] is None]
+    if fixed is data and not nulls:
+        return event
+    out = {k: v for k, v in event.items() if k not in nulls}
+    out["data"] = fixed
+    return out
+
+
 def served(event: Any, *, msg_id: str | None = None) -> dict | None:
     """One journal event as the v2 frame a client gets, or None when it
     has none. A v1 event is converted; message text is cleaned of what
@@ -85,6 +130,7 @@ def served(event: Any, *, msg_id: str | None = None) -> dict | None:
         if cleaned is None:
             return None
         return protocol_compat.to_v2(cleaned, msg_id=msg_id)
+    event = wire(event)
     data = event.get("data")
     if event.get("type") == "message.completed" and isinstance(data, dict):
         shown = injected_mod.clean({"kind": data.get("kind"),
@@ -216,15 +262,14 @@ class SyncHub:
         self.snapshot_messages = protocol.SNAPSHOT_MESSAGES
         self.ping_s = protocol.PING_S
         self.closed = False
-        # Guards the subscriber lists, the live text and the delta
-        # count. Never held across a journal read or a socket write.
+        # Guards the subscriber lists and the live text. Never held
+        # across a journal read or a socket write. The live text
+        # changes and a stream's queue is added to in one step under
+        # it, so a state item put in a queue holds exactly the text as
+        # it stood at that place in the stream.
         self._lock = threading.RLock()
         self._subs: dict[str, list["V2Stream"]] = {}
         self._live: dict[str, _Live] = {}
-        # Counts every delta fanned out. A state frame records the
-        # count it was taken at, so a stream can drop the queued deltas
-        # that frame's ``live[]`` already holds.
-        self._serial = 0
         self._folds: "collections.OrderedDict[str, Fold]" = \
             collections.OrderedDict()
         self._fold_lock = threading.Lock()
@@ -252,9 +297,12 @@ class SyncHub:
             else:
                 self._subs.pop(stream.key, None)
 
-    def watching(self, key: str) -> int:
-        """How many v2 streams are open on ``key``."""
+    def watching(self, key: str | None = None) -> int:
+        """How many v2 streams are open on ``key`` (on any session when
+        None)."""
         with self._lock:
+            if key is None:
+                return sum(len(subs) for subs in self._subs.values())
             return len(self._subs.get(key, ()))
 
     def wake(self) -> None:
@@ -274,6 +322,26 @@ class SyncHub:
         for stream in self._subs.get(key, ()):
             stream.put(item)
 
+    def _state_item(self, key: str) -> tuple:
+        """A queue item for a state frame, holding the live text as it
+        stands now. Caller holds the lock. Put in a queue at once, it
+        sits exactly where that text is true: every event before it
+        was counted, none after it."""
+        live = self._live.get(key)
+        return ("state", [dict(m) for m in live.entries.values()]
+                if live else [])
+
+    def _put_state(self, key: str) -> None:
+        # Caller holds the lock.
+        if key in self._subs:
+            self._put(key, self._state_item(key))
+
+    def resync(self, key: str) -> None:
+        """Send ``key``'s open streams the state again: the hub's view
+        changed with no event to say so."""
+        with self._lock:
+            self._put_state(key)
+
     # -- what the hub feeds in ----------------------------------------
 
     def on_event(self, key: str, event: dict) -> None:
@@ -284,8 +352,7 @@ class SyncHub:
             if event.get("type") == "message.delta":
                 frame = self._delta(key, event)
                 if frame is not None:
-                    self._serial += 1
-                    self._put(key, ("delta", frame, self._serial))
+                    self._put(key, ("delta", frame))
                 return
             self._settle_live(key, event)
             if key in self._subs:
@@ -297,7 +364,10 @@ class SyncHub:
         """A keeper's welcome: the text it holds for the messages in
         progress, true at ``last_seq``. The hub may have missed deltas
         (it restarted, or the connection dropped), so this replaces what
-        it had, and open streams are sent the state again."""
+        it had. Open streams are sent the state once the keeper's
+        replay is in (:meth:`resync`), not here: the events it replays
+        are older than this text, and a client that got the text first
+        would clear it at a replayed ``turn.ended``."""
         with self._lock:
             kept = self._live[key] = _Live()
             if isinstance(last_seq, int) and not isinstance(last_seq, bool):
@@ -317,7 +387,6 @@ class SyncHub:
                 if msg.get("done") is True:
                     entry["done"] = True
                 kept.entries[entry["id"]] = entry
-            self._put(key, ("state",))
 
     def on_v1(self, key: str, event: dict) -> None:
         """One v1 event for a session's streams: journaled by the hub
@@ -337,24 +406,33 @@ class SyncHub:
             seq = event.get("seq")
             numbered = isinstance(seq, int) and seq > 0
             msg_id = None
+            retired = False
             if live is not None and numbered:
                 if etype == "message.appended":
-                    msg_id = self._pair(live, data.get("kind"))
+                    kind = data.get("kind")
+                    if kind == "tool_use":
+                        retired = self._retire_tool(live, data.get("tool"))
+                    else:
+                        msg_id = self._pair(live, kind)
                 elif etype == "session.status" \
                         and data.get("status") != "active":
                     live.entries.clear()
+            hub_made = not numbered and etype in ("session.status",
+                                                  "approval.resolved")
+            if hub_made and live is not None:
+                # The hub speaking for a keeper that is gone: what it
+                # was writing is gone with it, watched or not.
+                owned = self.hub.runtime.session(key)
+                if owned is not None and owned.lost:
+                    live.entries.clear()
             if not subs:
                 return
-            row = etype in _ROW_TYPES
-            if not numbered and etype in ("session.status",
-                                          "approval.resolved"):
-                # The hub speaking for a keeper that is gone. A stream
-                # takes the state whole: what is open, what is live.
-                owned = self.hub.runtime.session(key)
-                if live is not None and owned is not None and owned.lost:
-                    live.entries.clear()
-                self._put(key, ("state",))
+            if hub_made:
+                # A stream takes the state whole: what is open, what is
+                # live.
+                self._put_state(key)
                 return
+            row = etype in _ROW_TYPES
             frame = None if row else served(event, msg_id=msg_id)
             if frame is not None:
                 self._put(key, ("event", frame))
@@ -366,10 +444,13 @@ class SyncHub:
                 # A change to the row, not to the timeline.
                 self._put(key, ("row",))
                 if etype == "session.ownership":
-                    self._put(key, ("state",))
-            elif frame is None and etype == "approval.resolved":
-                # One that names no request retires them all.
-                self._put(key, ("state",))
+                    self._put_state(key)
+            elif retired or (frame is None
+                             and etype == "approval.resolved"):
+                # Live text ended under an id the event does not carry,
+                # or a resolve that names no request retired them all:
+                # the state says what is left.
+                self._put_state(key)
 
     def on_v1_delta(self, key: str, event: dict) -> None:
         """A v1 ``message.delta`` (an API channel of a session no
@@ -455,6 +536,24 @@ class SyncHub:
                 return mid
         return None
 
+    @staticmethod
+    def _retire_tool(live: _Live, tool: Any) -> bool:
+        """A v1 tool message ends the live text streamed for that call.
+        A legacy channel streams it under its own id
+        (``acp:<nonce>:<turn>:tool:<call_id>``), which the v2
+        ``tool.started`` does not carry, so the caller sends the state.
+        True when something was retired."""
+        call_id = str(tool.get("call_id") or "") \
+            if isinstance(tool, dict) else ""
+        tools = [mid for mid, entry in live.entries.items()
+                 if entry.get("kind") == "tool_use"]
+        match = [mid for mid in tools if call_id and (
+            mid == call_id or mid.endswith(f":tool:{call_id}"))]
+        for mid in (match or tools)[:1]:
+            del live.entries[mid]
+            return True
+        return False
+
     def live(self, key: str) -> list[dict]:
         """The messages ``key`` is still writing, each with its text so
         far."""
@@ -515,25 +614,19 @@ class SyncHub:
             open_ = list(hub._approval_at.get(key) or {})
         return state, open_
 
-    def state_frame(self, key: str, head: int) -> tuple[dict, int]:
-        """The frame every catch-up ends with, and the delta count it
-        was taken at: the session's state, the requests still open (by
-        id), ``head`` (the seq the stream is caught up to) and
-        ``live[]``. A client replaces its live text with ``live[]`` and
-        drops any request card whose id is not listed."""
+    def state_frame(self, key: str, head: int, live: list) -> dict:
+        """The frame every catch-up ends with: the session's state, the
+        requests still open (by id), ``head`` (the seq the stream is
+        caught up to) and ``live[]`` (a state item's text). A client
+        replaces its live text with ``live[]`` and drops any request
+        card whose id is not listed."""
         state, pending = self._volatile(key)
-        epoch = self.epoch(key)
-        with self._lock:
-            live = self._live.get(key)
-            entries = [dict(m) for m in live.entries.values()] \
-                if live else []
-            mark = self._serial
         return {
             "v": ev.VERSION, "type": "session.state", "session": key,
             "seq": 0, "ts": self.now(),
-            "data": {"state": state, "live": entries, "pending": pending,
-                     "head": head, "epoch": epoch},
-        }, mark
+            "data": {"state": state, "live": live, "pending": pending,
+                     "head": head, "epoch": self.epoch(key)},
+        }
 
     def _row(self, key: str, device_id: str | None) -> dict | None:
         row = self.hub.catalog.row_for(key)
@@ -669,11 +762,9 @@ class V2Stream:
         self.asked_epoch = epoch
         self.device_id = device_id
         # The highest journal seq this stream has sent or skipped as
-        # covered, the epoch its client is on, and the delta count its
-        # last state frame was taken at.
+        # covered, and the epoch its client is on.
         self.sent = 0
         self.epoch = 0
-        self.mark = 0
         self.overflow = False
         self.closed = False
         self._q: queue.Queue = queue.Queue(maxsize=sync.queue_max)
@@ -713,7 +804,10 @@ class V2Stream:
         sync = self.sync
         journal = sync.hub.journal
         head = journal.last_seq(self.key)
-        if same_epoch and after <= head \
+        # Never a replay from 0 of a journal that has events: a ring
+        # that was trimmed still reads "from the start" with nothing
+        # missing, and a client with no cursor has nothing to add to.
+        if same_epoch and (after > 0 or head == 0) and after <= head \
                 and head - after <= sync.replay_max:
             events, truncated = journal.read_since(self.key, after)
             if not truncated:
@@ -730,13 +824,37 @@ class V2Stream:
                 # The row as it is now: a change to it while the client
                 # was away (a title, a detach) has no event to replay.
                 frames.extend(self._row())
-                frames.append(self._state())
-                return frames
+                return frames + self._settle()
         return self._snapshot()
 
-    def _state(self) -> dict:
-        frame, self.mark = self.sync.state_frame(self.key, self.sent)
-        return frame
+    def _settle(self) -> list[dict]:
+        """The end of a catch-up: what was queued while it was built,
+        then the state frame. The state item goes in the queue now, so
+        its live text is true at exactly that place: every event queued
+        before it is sent first (or was in the read), and a delta
+        queued before it is dropped, because that text holds it."""
+        sync = self.sync
+        with sync._lock:
+            mine = sync._state_item(self.key)
+            self.put(mine)
+        out: list[dict] = []
+        while True:
+            if self.overflow:
+                # Not even the state item fitted.
+                return out + self._recover()
+            try:
+                item = self._q.get_nowait()
+            except queue.Empty:
+                # A snapshot taken on the way already ended with one.
+                return out
+            if item is mine:
+                out.append(sync.state_frame(self.key, self.sent, item[1]))
+                return out
+            if item[0] in ("delta", "state"):
+                continue  # older than the state this ends with
+            if item[0] == "snapshot":
+                return out + self._snapshot()
+            out.extend(self._take(item))
 
     def _snapshot(self) -> list[dict]:
         sync = self.sync
@@ -744,7 +862,7 @@ class V2Stream:
         self.sent = body["head"]
         self.epoch = body["epoch"]
         return [protocol.sync_frame("session.snapshot", self.key, body,
-                                    ts=sync.now()), self._state()]
+                                    ts=sync.now())] + self._settle()
 
     def _row(self) -> list[dict]:
         frame = self.sync.row_frame(self.key, self.device_id)
@@ -808,10 +926,9 @@ class V2Stream:
                 self.sent = seq
             return []
         if kind == "delta":
-            # One the last state frame's live[] already holds.
-            return [] if item[2] <= self.mark else [item[1]]
+            return [item[1]]
         if kind == "state":
-            return [self._state()]
+            return [self.sync.state_frame(self.key, self.sent, item[1])]
         if kind == "row":
             return self._row()
         if kind == "snapshot":

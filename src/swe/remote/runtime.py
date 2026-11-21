@@ -648,6 +648,10 @@ class SessionRuntime:
                         client.close()
         elif kind == "live":
             owned.live.set()
+            # The replay is in: v2 streams take the state now, with the
+            # text the welcome restored (sending it before the replay
+            # would let a replayed turn.ended clear it on the client).
+            self.hub.sync.resync(owned.key)
         elif kind == "gap":
             oldest = frame.get("oldest_seq")
             self._truncated(owned.key,

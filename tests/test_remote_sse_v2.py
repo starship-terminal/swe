@@ -438,6 +438,17 @@ class TestCatchUp(V2Case):
                              ["session.snapshot", "session.state"], asked)
             self.assertEqual(frames[0]["data"]["epoch"], epoch)
 
+    def test_a_cursor_of_zero_gets_a_snapshot(self):
+        # A ring that was trimmed still reads "from the start" with
+        # nothing missing, so a replay from 0 could not tell what it
+        # left out. A client with no cursor has nothing to add to.
+        key, cursor, epoch = self.session()
+        self.assertLess(cursor, self.srv.state.sync.replay_max)
+        frames = self.caught_up(self.sse(key, last=0, epoch=epoch))
+        self.assertEqual([f["type"] for f in frames],
+                         ["session.snapshot", "session.state"])
+        self.assertEqual(frames[0]["data"]["head"], cursor)
+
     def test_a_cursor_past_the_journal_gets_a_snapshot(self):
         key, cursor, epoch = self.session()
         frames = self.caught_up(self.sse(key, last=cursor + 50, epoch=epoch))
@@ -551,6 +562,81 @@ class TestLiveText(V2Case):
         self.assertEqual(
             [(f["type"], f["data"]["text"], f["data"]["offset"])
              for f in sent], [("message.delta", "lo wo", 3)])
+
+    def test_events_that_land_while_catching_up_come_before_the_state(self):
+        key, adapter = self.streaming(after=[
+            fake.tool("Bash", output="ok"),
+            fake.emit("message.delta", id="a2", kind="assistant",
+                      text="next", seq=1, offset=0)])
+        first = self.caught_up(self.sse(key))[-1]["data"]
+        self.say(key, adapter)
+        stream = self.open(key, last=first["head"], epoch=first["epoch"])
+        journal = self.srv.state.journal
+        read = journal.read_since
+
+        def read_then_the_agent_moves(*args, **kwargs):
+            # The rest of the first reply, a tool call and the start of
+            # the next reply land after the catch-up read the journal
+            # and before its state frame is taken.
+            out = read(*args, **kwargs)
+            journal.read_since = read
+            self.say(key, adapter, 5)
+            return out
+
+        journal.read_since = read_then_the_agent_moves
+        frames = [self.check(f) for f in stream.catch_up()]
+        client = Client(self, lambda: self.snapshot(key))
+        client.live = {"a1": "Hel"}
+        client.cursor, client.epoch = first["head"], first["epoch"]
+        client.feed(frames)
+        # Those events are sent before the state, whose live text is
+        # true after them: no delta from before it, nothing cleared
+        # after it.
+        self.assertEqual(
+            [f["type"] for f in frames],
+            ["session.row", "message.completed", "tool.started",
+             "tool.completed", "session.state"])
+        self.assertEqual(frames[-1]["data"]["live"], [
+            {"id": "a2", "kind": "assistant", "text": "next",
+             "turn_id": "t1"}])
+        self.assertEqual(frames[-1]["data"]["head"], self.seqs(key)[-1])
+        self.assertEqual(client.live, {"a2": "next"})
+        self.assertEqual(client.seqs, self.after(key, first["head"]))
+        self.assertEqual(self.pump(stream), [])
+
+    def test_a_welcome_s_text_is_sent_after_the_replay(self):
+        key = self.launch([fake.say("x")])
+        self.feed.event("turn.ended")
+        self.drain(key)
+        sync = self.srv.state.sync
+        stream = self.open(key)
+        client = Client(self, lambda: self.snapshot(key))
+        client.feed(self.check(f) for f in stream.catch_up())
+        head = client.cursor
+        # The hub's connection to a keeper comes back. While it was
+        # away a turn ended and the next one began a reply: the welcome
+        # holds that reply, and the replay brings the older turn's end.
+        sync.on_welcome(key, [{"id": "n1", "kind": "assistant",
+                               "text": "new reply", "turn_id": "t2"}],
+                        head + 2)
+        self.assertEqual(self.pump(stream), [])
+        for seq, event in enumerate((
+                ev.turn_ended(key, "t1", "completed", ts=1.0),
+                ev.turn_started(key, "t2", ts=1.0)), head + 1):
+            sync.on_event(key, dict(event, seq=seq))
+        sync.resync(key)
+        frames = self.pump(stream)
+        client.feed(frames)
+        self.assertEqual([f["type"] for f in frames],
+                         ["turn.ended", "turn.started", "session.state"])
+        # The replayed turn.ended cleared nothing that was written
+        # after it, on the hub or on the client.
+        self.assertEqual(sync.live(key)[0]["text"], "new reply")
+        self.assertEqual(client.live, {"n1": "new reply"})
+        # An event from after the welcome does end it.
+        sync.on_event(key, dict(ev.message_completed(
+            key, "n1", "assistant", "new reply!", ts=1.0), seq=head + 3))
+        self.assertEqual(sync.live(key), [])
 
     def test_a_reply_survives_a_hub_restart(self):
         key, adapter = self.streaming()
@@ -989,6 +1075,20 @@ class TestSnapshot(V2Case):
              body["open_turn"]), ("agent_down", [], [], [], None))
 
 
+    def test_a_lost_keeper_s_text_goes_with_nobody_watching(self):
+        from tests.test_remote_hub_keeper import Stream
+
+        key = self.busy()
+        sync = self.srv.state.sync
+        self.assertEqual(sync.watching(), 0)
+        self.assertEqual([m["id"] for m in sync.live(key)], ["a1"])
+        told = Stream(self, self.srv.state, key)   # a v1 subscriber
+        kill(self.keepers[0])
+        told.frame("session.status", status="error")
+        self.assertEqual(sync.live(key), [])
+        self.assertEqual(self.snapshot(key)["live"], [])
+
+
 class TestSessionsNoKeeperHolds(HubBase):
     """A terminal session's journal holds v1 events. A v2 client reads
     it as v2 all the same."""
@@ -1121,6 +1221,41 @@ class TestSessionsNoKeeperHolds(HubBase):
         # The ownership event has no v2 frame; the head covers it.
         self.assertEqual(row[1]["data"]["head"], head + 5)
         self.tick_ping(stream, head + 5)
+
+    def test_a_tool_message_ends_the_text_streamed_for_its_call(self):
+        head = self.history() + 5
+        stream = self.state.sync.open(self.KEY, last=head, epoch=0)
+        self.addCleanup(stream.close)
+        stream.catch_up()
+        # The ACP channel streams a tool's title under its own id.
+        for call in ("c7", "c8"):
+            self.state.publish_transient(self.KEY, protocol.delta_event(
+                self.KEY, self.mid, f"acp:ab12:3:tool:{call}", "tool_use",
+                f"Read {call}", 1))
+        self.assertEqual(len(self.pump(stream)), 2)
+        self.emit("message.appended", protocol.message("tool_use", "", tool={
+            "name": "Read", "call_id": "c8", "args_summary": "Read c8",
+            "args_full": ""}))
+        frames = self.pump(stream)
+        # The event carries the call's id, not the stream's: the state
+        # frame after it is what retires the text on a client.
+        self.assertEqual([f["type"] for f in frames],
+                         ["tool.started", "session.state"])
+        self.assertEqual(frames[0]["data"]["call_id"], "c8")
+        self.assertEqual([m["id"] for m in frames[1]["data"]["live"]],
+                         ["acp:ab12:3:tool:c7"])
+        self.assertEqual([m["id"] for m in self.state.sync.live(self.KEY)],
+                         ["acp:ab12:3:tool:c7"])
+
+    def test_an_open_v2_stream_keeps_the_hub_out_of_low_power(self):
+        # No v1 stream, no recent request: only the v2 stream says
+        # someone is watching.
+        self.state._client_seen_at = float("-inf")
+        self.assertFalse(self.state.watched())
+        stream = self.state.sync.open(self.KEY)
+        self.assertTrue(self.state.watched())
+        stream.close()
+        self.assertFalse(self.state.watched())
 
     def test_today_s_stream_is_untouched(self):
         self.history()
@@ -1422,6 +1557,38 @@ class TestSchema(unittest.TestCase):
             {schema.type_name(t) + "Frame"
              for t in protocol.SYNC_FRAME_TYPES},
             {"SessionSnapshotFrame", "SessionRowFrame", "PingFrame"})
+
+    def test_an_optional_field_that_is_null_is_left_out_on_the_wire(self):
+        # events.validate takes a null optional field as left out, so a
+        # journal may hold one. The schema has no nulls there, and the
+        # hub leaves the field out when it serves the event.
+        thinking = dict(SAMPLES["thinking.completed"], turn_id=None)
+        thinking["data"] = dict(thinking["data"], duration_s=None)
+        done = dict(SAMPLES["tool.completed"])
+        done["data"] = dict(done["data"], name=None, file_edits=[
+            {"path": "a.py", "kind": "add", "diff": None},
+            {"path": "b.py", "kind": "delete"}])
+        started = dict(SAMPLES["tool.started"])
+        started["data"] = dict(started["data"], summary=None,
+                               input={"timeout": None})
+        for event in (thinking, done, started):
+            self.assertEqual(ev.validate(event), [])
+            self.assertTrue(schema.validate(event))
+            self.assertEqual(schema.validate(sync_mod.served(event)), [])
+        self.assertEqual(sync_mod.wire(thinking)["data"],
+                         {"id": "m2", "text": "hm"})
+        self.assertNotIn("turn_id", sync_mod.wire(thinking))
+        self.assertEqual(sync_mod.wire(done)["data"]["file_edits"], [
+            {"path": "a.py", "kind": "add"},
+            {"path": "b.py", "kind": "delete"}])
+        self.assertNotIn("name", sync_mod.wire(done)["data"])
+        # A tool's own arguments are not looked into.
+        self.assertEqual(sync_mod.wire(started)["data"]["input"],
+                         {"timeout": None})
+        # Nothing to leave out: the same object, not a copy.
+        for sample in SAMPLES.values():
+            self.assertIs(sync_mod.wire(sample), sample)
+        self.assertIn("duration_s", thinking["data"])
 
     def test_the_constants_a_client_needs(self):
         self.assertEqual(self.schema["x-swe"], {

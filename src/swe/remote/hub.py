@@ -1181,7 +1181,7 @@ class HubState:
         (a client's, or the ntfy notifier's) or a client request within
         the last CLIENT_IDLE_S. Satellite traffic doesn't count: it
         watches the satellite's sessions, not this machine's."""
-        if self.bus.watched():
+        if self.bus.watched() or self.sync.watching():
             return True
         return time.monotonic() - self._client_seen_at < CLIENT_IDLE_S
 
