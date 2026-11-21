@@ -10,7 +10,7 @@ const entry = (over: Partial<OutboxEntry>): OutboxEntry => ({
 });
 const connection = (state: ConnectionStatus["state"]): ConnectionStatus => ({ state, attempt: 0, since: 0, retryAt: null, detail: "" });
 const outbox = (entries: OutboxEntry[], over: Partial<OutboxView> = {}): OutboxView => ({
-  entries, persistent: true, note: "", paused: null, inFlight: null, ...over,
+  entries, persistent: true, note: "", paused: null, inFlight: null, owner: "me", ...over,
 });
 const one = (context: Partial<SendContext> & { entries: OutboxEntry[] }) =>
   describeSends({

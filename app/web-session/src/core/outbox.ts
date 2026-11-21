@@ -22,7 +22,7 @@
 //   send as failed, "may or may not have been sent".
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
-import type { OutboxEntry, OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
 
 /** How long a send that the hub has not taken is worth trying: the time the hub holds a message for a sleeping machine. */
@@ -38,6 +38,9 @@ export const LEGACY_CONFIRM_MS = 45 * 60 * 1000;
 
 /** How long a failed or unconfirmed entry stays for the person to see, when nobody dismisses it. */
 export const TERMINAL_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** How many failed or unconfirmed entries a session keeps at most: the oldest go first, never an open one. */
+export const TERMINAL_KEPT_MAX = 50;
 
 /** Why a send ended without an answer on a path that cannot say whether it arrived. */
 export const MAYBE_SENT =
@@ -60,6 +63,8 @@ export interface OutboxView {
   paused: "unauthorized" | null;
   /** The entry whose post is on its way, if any. */
   inFlight: string | null;
+  /** This page's claim owner: a claim with another owner is another tab's. */
+  owner: string;
 }
 
 export interface OutboxOptions {
@@ -80,6 +85,8 @@ export interface OutboxOptions {
   backoff?: BackoffOptions;
   /** Entries an earlier outbox of this page held (a store that was stopped and started again). */
   initial?: OutboxEntry[];
+  /** This page's claim owner (default: random). Two tabs must never share one. */
+  owner?: string;
   onChange(view: OutboxView): void;
 }
 
@@ -95,7 +102,7 @@ export interface SendResultData {
   cancelled?: boolean;
 }
 
-type Outcome = "done" | "retry" | "paused";
+type Outcome = "done" | "retry" | "paused" | "held";
 
 const TERMINAL = new Set(["failed", "unconfirmed"]);
 
@@ -103,6 +110,28 @@ function errorText(response: JsonResponse): string {
   const body = response.body as { error?: { message?: unknown } } | undefined;
   const message = body?.error?.message;
   return typeof message === "string" && message !== "" ? message : `The hub answered ${response.status}`;
+}
+
+function randomOwner(): string {
+  const bytes = new Uint8Array(8);
+  const crypto = globalThis.crypto as Crypto | undefined;
+  if (crypto?.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return `p-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * What a 503 means, by its error code. `store_failed` is raised before anything was stored, so a repeat is
+ * safe anywhere; `keeper_failed` (the keeper did not answer, possibly after the request reached it) and any
+ * code this client does not know may mean the send was applied.
+ */
+function unavailableIsSafe(response: JsonResponse): boolean {
+  return errorCode(response) === "store_failed";
+}
+
+function errorCode(response: JsonResponse): string {
+  const code = (response.body as { error?: { code?: unknown } } | undefined)?.error?.code;
+  return typeof code === "string" ? code : "";
 }
 
 /** An entry stored by an earlier build of this file, where `waiting` was called `pending`. */
@@ -126,9 +155,13 @@ export class Outbox {
   private writing: Promise<unknown> = Promise.resolve();
   /** Sends whose first write has not finished: not deliverable yet, but not to be lost by a restart. */
   private unwritten: OutboxEntry[] = [];
+  private readonly owner: string;
+  /** Set once the session is known not to exist (or the hub too old): entries loaded later end at once. */
+  private gone: string | null = null;
 
   constructor(options: OutboxOptions) {
     this.options = options;
+    this.owner = options.owner ?? randomOwner();
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
     this.list = (options.initial ?? []).map(normalize);
   }
@@ -140,6 +173,7 @@ export class Outbox {
       note: this.options.storage.note,
       paused: this.paused,
       inFlight: this.inFlight,
+      owner: this.owner,
     };
   }
 
@@ -155,6 +189,8 @@ export class Outbox {
     );
     // The hub may have lost what it owed us while this page was away: ask again where that is safe.
     for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
+    // A 404 (or an outdated hub) that came before the stored entries were loaded applies to them too.
+    if (this.gone !== null) this.sessionGone(this.gone);
     this.changed();
     void this.flush();
   }
@@ -202,6 +238,7 @@ export class Outbox {
   /** The device is back, the page woke, the credential changed, or the session became known: try now. */
   wake(): void {
     this.paused = null;
+    this.gone = null;
     this.clearRetry();
     this.failures = 0;
     this.changed();
@@ -229,6 +266,7 @@ export class Outbox {
 
   /** The session no longer exists: nothing still open can be sent. */
   sessionGone(reason: string = SESSION_GONE): void {
+    this.gone = reason;
     for (const entry of this.list) if (!TERMINAL.has(entry.status)) void this.fail(entry, reason);
   }
 
@@ -287,7 +325,7 @@ export class Outbox {
       if (current === undefined || current.status !== "waiting") continue;
       const outcome = await this.deliver(current);
       if (outcome === "retry") return this.scheduleRetry();
-      if (outcome === "paused") return;
+      if (outcome === "paused" || outcome === "held") return;
     }
     for (const id of [...this.recheck]) {
       if (this.closed || !this.canPost()) return;
@@ -338,13 +376,32 @@ export class Outbox {
 
   /** A waiting entry's post: its first, or a repeat where repeating is safe. */
   private async deliver(entry: OutboxEntry): Promise<Outcome> {
-    if (entry.ambiguous && !this.options.keeperHeld()) {
-      // The last attempt may have been applied, and here a repeat would not be recognised as the same message.
-      await this.fail(entry, MAYBE_SENT);
+    // Claim it first: the counted attempt and this page's claim are on disk before the request leaves, in one
+    // transaction, so a reload or a second tab never makes a "first" post of something already posted.
+    const claim = await this.options.storage.claim(entry, this.owner, this.options.timers.now(), CLAIM_STALE_MS);
+    if (this.closed) return "done";
+    if (claim.kind === "missing") {
+      this.list = this.list.filter((e) => e.commandId !== entry.commandId);
+      this.changed();
       return "done";
     }
-    const attempted: OutboxEntry = { ...entry, attempts: entry.attempts + 1 };
-    this.replace(attempted);
+    if (claim.kind === "settled") {
+      this.adopt(claim.entry);
+      return "done";
+    }
+    if (claim.kind === "busy") {
+      // Another tab is posting it: leave it alone, and look again once its claim would be stale.
+      this.adopt(claim.entry);
+      this.scheduleAge();
+      return "held";
+    }
+    const attempted = claim.entry;
+    this.adopt(attempted);
+    if (attempted.ambiguous && !this.options.keeperHeld()) {
+      // An earlier post may have been applied, and here a repeat would not be recognised as the same message.
+      await this.fail(attempted, MAYBE_SENT);
+      return "done";
+    }
     const response = await this.post(attempted);
     const now = this.current(entry.commandId);
     if (now === undefined) return "done"; // a result came first, or the outbox closed
@@ -375,12 +432,17 @@ export class Outbox {
       await this.save({ ...now, lastError: "This device is not signed in to the hub" });
       return "paused";
     }
-    if (status === 429 || status === 425 || status === 503) {
-      // The hub says not now, before it queued anything: a repeat is safe on any path.
+    if (status === 429 || status === 425 || (status === 503 && unavailableIsSafe(response))) {
+      // The hub said not now before it stored or queued anything: a repeat is safe on any path.
       await this.save({ ...now, lastError: errorText(response) });
       return "retry";
     }
     if (status === 408 || status >= 500) return this.unsure(now, errorText(response));
+    if (status === 409 && errorCode(response) === "duplicate_client_id") {
+      // The legacy path still holds a send under this id: an earlier post of ours got there. It is sent.
+      await this.save({ ...now, status: "sent", path: "legacy", sentAt: this.options.timers.now() });
+      return "done";
+    }
     // The hub looked at it and said no: a repeat gets the same answer.
     await this.fail(now, status === 404 ? SESSION_GONE : errorText(response));
     return "done";
@@ -444,10 +506,19 @@ export class Outbox {
         await this.end(entry, "unconfirmed", KEEPER_UNCONFIRMED);
       }
     }
+    // A cap on what is kept for the person to see: the oldest terminal entries go first, never an open one.
+    const terminal = this.list
+      .filter((entry) => TERMINAL.has(entry.status))
+      .sort((a, b) => (a.endedAt ?? a.createdAt) - (b.endedAt ?? b.createdAt));
+    for (const entry of terminal.slice(0, Math.max(0, terminal.length - TERMINAL_KEPT_MAX))) await this.drop(entry.commandId);
     this.scheduleAge();
   }
 
   private deadline(entry: OutboxEntry): number {
+    if (entry.status === "waiting" && entry.claim !== undefined && entry.claim.owner !== this.owner) {
+      // Another tab's claim: look again when it would be stale (or at the send's own deadline, if sooner).
+      return Math.min(entry.claim.at + CLAIM_STALE_MS, entry.createdAt + OUTBOX_TTL_MS);
+    }
     if (TERMINAL.has(entry.status)) return (entry.endedAt ?? entry.createdAt) + TERMINAL_KEPT_MS;
     if (entry.status === "sent" && entry.path === "legacy") return (entry.sentAt ?? entry.createdAt) + LEGACY_CONFIRM_MS;
     return entry.createdAt + OUTBOX_TTL_MS;
@@ -469,6 +540,11 @@ export class Outbox {
   private clearAge(): void {
     if (this.ageTimer !== null) this.options.timers.clearTimeout(this.ageTimer);
     this.ageTimer = null;
+  }
+
+  /** Take the entry as storage holds it (another page may have moved it on). */
+  private adopt(entry: OutboxEntry): void {
+    if (this.list.some((e) => e.commandId === entry.commandId)) this.replace(entry);
   }
 
   private replace(entry: OutboxEntry): void {
@@ -498,8 +574,10 @@ export class Outbox {
   }
 
   /** Update an entry and write it, then publish the view again: a write that fails turns the storage into memory, and the view says so. */
-  private async save(entry: OutboxEntry): Promise<void> {
-    if (!this.list.some((e) => e.commandId === entry.commandId)) return; // settled meanwhile
+  private async save(update: OutboxEntry): Promise<void> {
+    if (!this.list.some((e) => e.commandId === update.commandId)) return; // settled meanwhile
+    // Anything written after an answer releases this page's claim.
+    const { claim: _released, ...entry } = update;
     this.replace(entry);
     await this.options.storage.put(entry);
     this.changed();

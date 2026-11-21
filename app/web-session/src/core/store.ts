@@ -286,7 +286,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     return {
       session: emptySession(),
       connection: { state: "connecting", attempt: 0, since: timers.now(), retryAt: null, detail: "" },
-      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null },
+      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null, owner: "" },
       sends: [],
       started: false,
 

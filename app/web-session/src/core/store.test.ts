@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { createSessionStore, type SessionStore } from "./store";
 import { openOutboxStorage, MemoryStorage } from "./outbox-storage";
-import { NOT_SENT_IN_TIME, SESSION_GONE, TERMINAL_KEPT_MS } from "./outbox";
+import { MAYBE_SENT, NOT_SENT_IN_TIME, SESSION_GONE, TERMINAL_KEPT_MS } from "./outbox";
+import { CLAIM_STALE_MS } from "./outbox-storage";
 import { FakeEnvironment, FakeTimers, FakeTransport, loadFixture, snapshotFrame, type Fixture } from "./test-support";
 import type { Frame, Snapshot } from "./types";
 
@@ -668,6 +669,105 @@ describe("the send lifecycle through the store (review 3)", () => {
     await drain();
     expect(store.getState().sends).toMatchObject([{ shown: "sent", reason: expect.stringContaining("Queued") }]);
     store.getState().stop();
+  });
+});
+
+describe("reload or a second tab while a post is on its way (review 4)", () => {
+  const T = "local:term-1";
+  const env = (type: string, data: unknown, extra: Record<string, unknown> = {}): Frame =>
+    ({ v: 2, type, session: T, ts: 1, ...extra, data }) as unknown as Frame;
+  const snap = (head: number, row: Record<string, unknown>): Snapshot =>
+    ({
+      session: T, epoch: 0, head, boot_id: "b1", row: { key: T, ...row }, state: "idle", caps: null, open_turn: null,
+      pending: [], queue: [], live: [], plan: null, tasks: [], checkpoints: [], changes: null, usage: null,
+      messages: [], has_more: false, next_before: null,
+    }) as Snapshot;
+  const page = (factory: IDBFactory | null, timers: FakeTimers) => {
+    const transport = new FakeTransport();
+    const store = createSessionStore({
+      sessionKey: T, transport, timers, random: () => 0, environment: new FakeEnvironment(),
+      openStorage: factory === null ? async () => new MemoryStorage("m") : () => openOutboxStorage(factory), newId: () => "id1",
+    });
+    return { store, transport };
+  };
+  const catchUp = (transport: FakeTransport, row: Record<string, unknown>) =>
+    transport.last.send(snapshotFrame(snap(5, row)), env("session.state", { state: "idle", live: [], pending: [], head: 5, epoch: 0 }, { seq: 0 }));
+
+  for (const row of [{}, { mode: "keeper" }]) {
+    const keeper = "mode" in row;
+    it(`${keeper ? "a keeper" : "a legacy"} row: exactly one post per message, and a visible state`, async () => {
+      const factory = new IDBFactory();
+      const timers = new FakeTimers();
+      const posted: Record<string, unknown>[] = [];
+      const a = page(factory, timers);
+      a.transport.on("/message", (_p, r) => {
+        posted.push(r.body as Record<string, unknown>);
+        return new Promise(() => {}); // the first page goes away before the answer
+      }, "POST");
+      a.store.getState().start();
+      catchUp(a.transport, row);
+      await drain();
+      await a.store.getState().send({ text: "rm -rf build" });
+      await drain();
+      expect(posted).toHaveLength(1);
+      // The page reloads (no stop()), or a second tab opens the same session.
+      const b = page(factory, timers);
+      b.transport.on("/message", (_p, r) => {
+        posted.push(r.body as Record<string, unknown>);
+        return { status: 202, body: keeper ? { receipt: "duplicate" } : { ok: true, queued: true } };
+      }, "POST");
+      b.store.getState().start();
+      catchUp(b.transport, row);
+      await drain();
+      expect(posted).toHaveLength(1);
+      expect(b.store.getState().sends[0]).toMatchObject({ shown: "waiting", reason: expect.stringContaining("another tab") });
+      timers.advance(CLAIM_STALE_MS);
+      await drain();
+      if (keeper) {
+        // The hub de-duplicates: posted once more under the same id, and it answers with the stored receipt.
+        expect(posted.map((p) => p["command_id"])).toEqual(["id1", "id1"]);
+        expect(b.store.getState().outbox.entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "duplicate" });
+      } else {
+        expect(posted).toHaveLength(1);
+        expect(b.store.getState().sends[0]).toMatchObject({ shown: "failed", reason: MAYBE_SENT });
+      }
+    });
+  }
+
+  it("a 404 that comes before the stored entries are loaded fails them", async () => {
+    const factory = new IDBFactory();
+    const timers = new FakeTimers();
+    const a = page(factory, timers);
+    a.store.getState().start();
+    await a.store.getState().send({ text: "hello" });
+    await drain();
+    const b = page(factory, timers);
+    b.store.getState().start();
+    b.transport.last.end({ kind: "http", status: 404 });
+    await drain();
+    expect(b.store.getState().connection.state).toBe("gone");
+    expect(b.store.getState().sends).toMatchObject([{ shown: "failed", reason: SESSION_GONE }]);
+  });
+
+  it("503 keeper_failed and then a detach: the retry is not posted to the legacy path", async () => {
+    const timers = new FakeTimers();
+    const a = page(null, timers);
+    let n = 0;
+    a.transport.on("/message", () => (++n === 1
+      ? { status: 503, body: { error: { code: "keeper_failed", message: "the session's keeper did not answer" } } }
+      : { status: 202, body: { ok: true, queued: true } }), "POST");
+    a.store.getState().start();
+    catchUp(a.transport, { mode: "keeper" });
+    await drain();
+    await a.store.getState().send({ text: "hello" });
+    await drain();
+    expect(a.store.getState().outbox.entries[0]).toMatchObject({ status: "waiting", ambiguous: true });
+    a.transport.last.send(env("session.row", { row: { key: T } })); // detached: no mode
+    await drain();
+    timers.advance(1000);
+    await drain();
+    expect(n).toBe(1);
+    expect(a.store.getState().outbox.entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
   });
 });
 

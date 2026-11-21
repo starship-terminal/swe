@@ -51,6 +51,50 @@ export interface OutboxEntry {
   error?: string;
   /** When it reached `failed` or `unconfirmed`. */
   endedAt?: number;
+  /**
+   * The page that is posting it, and since when. Written in the same transaction that counts the attempt,
+   * before the request leaves, and cleared with the answer. A claim another page holds that is fresher than
+   * `CLAIM_STALE_MS` means "another tab is sending"; an older one was abandoned (the page closed mid-post).
+   */
+  claim?: { owner: string; at: number };
+}
+
+/** How long a claim stands before it counts as abandoned: longer than a request may take (30 s). */
+export const CLAIM_STALE_MS = 60_000;
+
+/** What claiming an entry found. */
+export type Claim =
+  /** This page may post it: the attempt is counted and on disk. `ambiguous` is set when an earlier claim was abandoned. */
+  | { kind: "claimed"; entry: OutboxEntry }
+  /** Another page claimed it moments ago and is posting it. */
+  | { kind: "busy"; entry: OutboxEntry }
+  /** It is no longer waiting (another page sent or ended it): this is how it stands. */
+  | { kind: "settled"; entry: OutboxEntry }
+  /** It is gone from storage (another page saw it through). */
+  | { kind: "missing" };
+
+/**
+ * The claim rule, the same for every storage: given the entry as stored, may `owner` post it now? An
+ * abandoned claim (another page's, older than `staleMs`, or this page's own) means an earlier post may have
+ * reached the hub, so the entry comes back `ambiguous` and the outbox's repeat rule decides.
+ */
+export function decideClaim(
+  stored: OutboxEntry | undefined,
+  owner: string,
+  now: number,
+  staleMs: number,
+): { claim: Claim; write?: OutboxEntry } {
+  if (stored === undefined) return { claim: { kind: "missing" } };
+  // `pending` is what an earlier build of the outbox called `waiting`.
+  if ((stored.status as string) === "pending") stored = { ...stored, status: "waiting" };
+  if (stored.status !== "waiting") return { claim: { kind: "settled", entry: stored } };
+  let entry = stored;
+  if (entry.claim !== undefined) {
+    if (entry.claim.owner !== owner && now - entry.claim.at < staleMs) return { claim: { kind: "busy", entry } };
+    entry = { ...entry, ambiguous: true };
+  }
+  const claimed: OutboxEntry = { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } };
+  return { claim: { kind: "claimed", entry: claimed }, write: claimed };
 }
 
 export interface OutboxStorage {
@@ -61,6 +105,12 @@ export interface OutboxStorage {
   load(session: string): Promise<OutboxEntry[]>;
   put(entry: OutboxEntry): Promise<void>;
   remove(commandId: string): Promise<void>;
+  /**
+   * Claim an entry for posting, atomically: read it as stored and, by `decideClaim`, write the claim and the
+   * counted attempt in the same transaction. `entry` is the outbox's own copy, which a storage with nothing
+   * stored (memory) decides on.
+   */
+  claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim>;
   close(): void;
 }
 
@@ -75,6 +125,10 @@ export class MemoryStorage implements OutboxStorage {
   }
   async put(): Promise<void> {}
   async remove(): Promise<void> {}
+  /** In memory there are no other pages to coordinate with: the outbox's own copy decides. */
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
+    return decideClaim(entry, owner, now, staleMs).claim;
+  }
   close(): void {}
 }
 
@@ -110,6 +164,10 @@ export class DeferredStorage implements OutboxStorage {
 
   async remove(commandId: string): Promise<void> {
     await (await this.ready).remove(commandId);
+  }
+
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
+    return (await this.ready).claim(entry, owner, now, staleMs);
   }
 
   close(): void {
@@ -158,6 +216,24 @@ class IndexedDbStorage implements OutboxStorage {
     const tx = this.db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).delete(commandId);
     await done(tx);
+  }
+
+  /** One read-write transaction: IndexedDB runs them one at a time across every tab, so two pages cannot both claim. */
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
+    const tx = this.db.transaction(STORE, "readwrite");
+    const finished = done(tx);
+    const store = tx.objectStore(STORE);
+    const claim = await new Promise<Claim>((resolve, reject) => {
+      const read = store.get(entry.commandId);
+      read.onerror = () => reject(read.error ?? new Error("IndexedDB read failed"));
+      read.onsuccess = () => {
+        const decided = decideClaim(read.result as OutboxEntry | undefined, owner, now, staleMs);
+        if (decided.write !== undefined) store.put(decided.write);
+        resolve(decided.claim);
+      };
+    });
+    await finished;
+    return claim;
   }
 
   close(): void {
@@ -220,6 +296,15 @@ export class FallbackStorage implements OutboxStorage {
       await this.inner.remove(commandId);
     } catch (error) {
       this.fail(error);
+    }
+  }
+
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
+    try {
+      return await this.inner.claim(entry, owner, now, staleMs);
+    } catch (error) {
+      this.fail(error);
+      return this.inner.claim(entry, owner, now, staleMs);
     }
   }
 

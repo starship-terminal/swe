@@ -48,6 +48,9 @@ function waitingReason(entry: OutboxEntry, context: SendContext): string {
     return "Waiting: you are offline. It will be sent when you are back.";
   }
   if (!context.loaded) return "Waiting for the hub. It will be sent once the session is loaded.";
+  if (entry.claim !== undefined && entry.claim.owner !== context.outbox.owner) {
+    return "Being sent from another tab, or from a page that closed while sending. Checked again within a minute.";
+  }
   if (entry.lastError !== undefined) return `${entry.lastError}. Trying again.`;
   if (context.connection.state === "hub_down") return "Waiting: the hub is not answering. It will be sent once it does.";
   return "Waiting to be sent.";

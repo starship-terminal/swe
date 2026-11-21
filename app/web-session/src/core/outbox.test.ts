@@ -11,10 +11,12 @@ import {
   Outbox,
   OUTBOX_TTL_MS,
   SESSION_GONE,
+  TERMINAL_KEPT_MAX,
   TERMINAL_KEPT_MS,
   type OutboxView,
 } from "./outbox";
 import {
+  CLAIM_STALE_MS,
   DeferredStorage,
   FallbackStorage,
   MemoryStorage,
@@ -138,6 +140,7 @@ describe("a new send", () => {
       load: (session) => inner.load(session),
       put: (entry) => new Promise<void>((resolve) => (finish = () => void inner.put(entry).then(resolve))),
       remove: (id) => inner.remove(id),
+      claim: (...args) => inner.claim(...args),
       close: () => inner.close(),
     };
     const outbox = await t.make(slow);
@@ -326,11 +329,14 @@ describe("answers that are not 2xx", () => {
     }
   });
 
-  it("429, 425 and 503 say not now before anything is queued: tried again on any path", async () => {
+  it("429, 425 and a 503 store_failed say not now before anything is stored: tried again on any path", async () => {
     for (const status of [429, 425, 503]) {
       const t = setup();
       legacy(t);
       t.hub.status = status;
+      if (status === 503) {
+        t.transport.on("/message", () => ({ status: 503, body: { error: { code: "store_failed", message: "refused 503" } } }), "POST");
+      }
       const outbox = await t.make();
       await outbox.send({ text: "x" });
       await drain();
@@ -631,6 +637,7 @@ describe("surviving a reload, a restart and a broken database", () => {
       load: (session) => inner.load(session),
       put: (entry) => new Promise<void>((resolve) => (finish = () => void inner.put(entry).then(resolve))),
       remove: (id) => inner.remove(id),
+      claim: (...args) => inner.claim(...args),
       close: () => {},
     };
     const first = await t.make(slow);
@@ -684,6 +691,7 @@ describe("surviving a reload, a restart and a broken database", () => {
         throw new Error("the disk is full");
       },
       remove: async () => {},
+      claim: (entry, owner, now, staleMs) => new MemoryStorage().claim(entry, owner, now, staleMs),
       close: () => {},
     };
     const t = setup({ storage: new FallbackStorage(broken, (note) => notes.push(note)) });
@@ -706,6 +714,171 @@ describe("surviving a reload, a restart and a broken database", () => {
     expect(storage.kind).toBe("indexeddb");
     storage.close();
     expect(await new MemoryStorage("because").load()).toEqual([]);
+  });
+});
+
+describe("one page posts an entry (claims)", () => {
+  it("two outboxes over one database, an entry both loaded: exactly one post", async () => {
+    const t = setup();
+    legacy(t);
+    t.world.canPost = false;
+    const a = await t.make();
+    await a.send({ text: "made offline" });
+    const b = await t.make(); // a second tab, which loads the same entry
+    let answer: (r: JsonResponse) => void = () => {};
+    t.transport.on("/message", (_path, request) => {
+      t.hub.received.push(request.body as Record<string, unknown>);
+      return new Promise<JsonResponse>((r) => (answer = r));
+    }, "POST");
+    t.world.canPost = true;
+    a.wake();
+    b.wake();
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    answer({ status: 202, body: { ok: true, queued: true } });
+    await drain();
+    b.wake();
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    expect(b.view.entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+  });
+
+  it("an entry another page claimed moments ago is left alone, then treated as abandoned after the limit", async () => {
+    const t = setup();
+    legacy(t);
+    const storage = await openOutboxStorage(t.factory);
+    const now = t.timers.now();
+    await storage.put({
+      commandId: "x1", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: now,
+      status: "waiting", attempts: 1, claim: { owner: "another-page", at: now },
+    });
+    await t.make();
+    await drain();
+    expect(t.transport.calls).toEqual([]);
+    expect(t.view().entries[0]).toMatchObject({ status: "waiting", claim: { owner: "another-page" } });
+    t.timers.advance(CLAIM_STALE_MS);
+    await drain();
+    // Its post may have reached the hub, and this path does not de-duplicate: it is not posted again.
+    expect(t.transport.calls).toEqual([]);
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+  });
+
+  it("an abandoned claim on a keeper row is posted again under the same id, and the hub answers with the stored receipt", async () => {
+    const t = setup();
+    t.hub.applied.push("x1"); // the abandoned post did reach the hub
+    const storage = await openOutboxStorage(t.factory);
+    const now = t.timers.now();
+    await storage.put({
+      commandId: "x1", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: now,
+      status: "waiting", attempts: 1, claim: { owner: "a-closed-page", at: now - CLAIM_STALE_MS },
+    });
+    await t.make();
+    await drain();
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual(["x1"]);
+    expect(t.hub.applied).toEqual(["x1"]);
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "queued", attempts: 2 });
+    expect((await stored(t.factory))[0]?.claim).toBeUndefined();
+  });
+
+  it("writes the counted attempt and the claim before the request leaves", async () => {
+    const t = setup();
+    t.transport.on("/message", () => new Promise<JsonResponse>(() => {}), "POST");
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(await stored(t.factory)).toMatchObject([{ status: "waiting", attempts: 1, claim: { owner: t.view().owner } }]);
+  });
+
+  it("in memory there is no other page: the outbox's own copy decides", async () => {
+    const memory = new MemoryStorage();
+    const entry: OutboxEntry = { commandId: "m", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 0, status: "waiting", attempts: 0 };
+    expect(await memory.claim(entry, "me", 10, CLAIM_STALE_MS)).toMatchObject({ kind: "claimed", entry: { attempts: 1, claim: { owner: "me", at: 10 } } });
+  });
+});
+
+describe("what a 503 means", () => {
+  it("keeper_failed, or a code this client does not know: may have been applied, so the row decides", async () => {
+    for (const code of ["keeper_failed", "something_new"]) {
+      const t = setup({ random: () => 0 });
+      let n = 0;
+      t.transport.on("/message", () => {
+        n++;
+        return n === 1
+          ? { status: 503, body: { error: { code, message: "the session's keeper did not answer" } } }
+          : { status: 202, body: { ok: true, queued: true } };
+      }, "POST");
+      const outbox = await t.make();
+      await outbox.send({ text: "hello" });
+      await drain();
+      expect(t.view().entries[0], code).toMatchObject({ status: "waiting", ambiguous: true });
+      t.world.keeper = false; // detached before the retry
+      t.timers.advance(1000);
+      await drain();
+      expect(n, code).toBe(1);
+      expect(t.view().entries[0], code).toMatchObject({ status: "failed", error: MAYBE_SENT });
+    }
+  });
+
+  it("store_failed: nothing was stored, so it is tried again on any path", async () => {
+    const t = setup({ random: () => 0 });
+    legacy(t);
+    let n = 0;
+    t.transport.on("/message", () => (++n === 1 ? { status: 503, body: { error: { code: "store_failed", message: "disk" } } } : { status: 202, body: {} }), "POST");
+    const outbox = await t.make();
+    await outbox.send({ text: "hello" });
+    await drain();
+    t.timers.advance(500);
+    await drain();
+    expect(n).toBe(2);
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+  });
+
+  it("409 duplicate_client_id: the legacy path already holds this send, so it is sent", async () => {
+    const t = setup();
+    legacy(t);
+    t.transport.on("/message", () => ({ status: 409, body: { error: { code: "duplicate_client_id", message: "a send with this client_id is still queued" } } }), "POST");
+    const outbox = await t.make();
+    await outbox.send({ text: "hello" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+  });
+});
+
+describe("what is kept", () => {
+  it("at most TERMINAL_KEPT_MAX ended entries, the oldest dropped first, never an open one", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const storage = await openOutboxStorage(t.factory);
+    for (let n = 0; n < TERMINAL_KEPT_MAX + 3; n++) {
+      await storage.put({ commandId: `f${String(n).padStart(3, "0")}`, session: KEY, text: String(n), attachments: [], mode: "queue", createdAt: n, status: "failed", attempts: 1, error: "no", endedAt: t.timers.now() - 1000 + n });
+    }
+    await storage.put({ commandId: "open", session: KEY, text: "open", attachments: [], mode: "queue", createdAt: 0, status: "waiting", attempts: 0 });
+    // The open one is older than every ended one, and stays.
+    await t.make();
+    await drain();
+    const kept = t.view().entries;
+    expect(kept.filter((e) => e.status === "failed")).toHaveLength(TERMINAL_KEPT_MAX);
+    expect(kept.some((e) => e.commandId === "open")).toBe(true);
+    expect(kept.some((e) => e.commandId === "f000" || e.commandId === "f001" || e.commandId === "f002")).toBe(false);
+  });
+
+  it("entries loaded after the session was found gone end at once", async () => {
+    const t = setup();
+    const storage = await openOutboxStorage(t.factory);
+    await storage.put({ commandId: "w", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: t.timers.now(), status: "waiting", attempts: 0 });
+    t.world.canPost = false;
+    let open: (s: OutboxStorage) => void = () => {};
+    const deferred = new DeferredStorage(new Promise<OutboxStorage>((resolve) => (open = resolve)));
+    const outbox = new Outbox({
+      session: KEY, storage: deferred, transport: t.transport, timers: t.timers, random: () => 0.5, newId: () => "n",
+      canPost: () => false, keeperHeld: () => true, onChange: (view) => t.views.push(view),
+    });
+    const loading = outbox.init();
+    outbox.sessionGone(); // the 404 came first
+    open(storage);
+    await loading;
+    await drain();
+    expect(t.view().entries).toMatchObject([{ commandId: "w", status: "failed", error: SESSION_GONE }]);
   });
 });
 
