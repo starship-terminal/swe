@@ -488,7 +488,8 @@ class ThreadState(SessionCore):
         self._expected: dict[Any, _Expected] = {}
         # rpc id of an accepted turn/start or turn/steer -> our turn id
         self.accepted: dict[Any, str] = {}
-        self._tools: dict[str, str] = {}  # item id -> tool name
+        # item id -> (tool name, the turn it started in)
+        self._tools: dict[str, tuple[str, str]] = {}
         # fileChange item id -> the paths it touches, for its approval
         self._changes: dict[str, list] = {}
         self._errored = False
@@ -554,6 +555,8 @@ class ThreadState(SessionCore):
         if pending.method == "item/tool/requestUserInput":
             text = answer.text
             if not text and answer.option_id:
+                # The choice as the model wrote it; an id that names
+                # none of them is sent as it is.
                 text = next((o["label"] for o in pending.options
                              if o["id"] == answer.option_id),
                             answer.option_id)
@@ -722,15 +725,21 @@ class ThreadState(SessionCore):
                 and self._one_question(params):
             self._ensure_turn(fed.events)
             question = params["questions"][0]
-            options = [{"id": text_of(o.get("label")),
-                        "label": text_of(o.get("label"))}
-                       for o in question.get("options") or ()
-                       if isinstance(o, dict) and text_of(o.get("label"))]
+            # The model wrote the choices: what a device sees and what
+            # the log keeps is an opaque id and the redacted label; the
+            # label as written stays here, for the answer.
+            labels = [text_of(o.get("label"))
+                      for o in question.get("options") or ()
+                      if isinstance(o, dict) and text_of(o.get("label"))]
+            shown = [{"id": f"o{n}", "label": redact(label)}
+                     for n, label in enumerate(labels, 1)]
             self.ask_input(
                 fed.events, request_id, text_of(question.get("question")),
                 _Pending(rpc_id, method, params,
                          question_id=text_of(question.get("id")),
-                         options=options), options=options)
+                         options=[{"id": f"o{n}", "label": label}
+                                  for n, label in enumerate(labels, 1)]),
+                options=shown)
         else:
             # Nothing we serve: answer, so the server never waits on us.
             self.note_unknown(method)
@@ -839,7 +848,7 @@ class ThreadState(SessionCore):
             return False
         name, tool_input = card
         name = redact(name)
-        self._tools[item["id"]] = name
+        self._tools[item["id"]] = (name, self.tid() or "")
         if item.get("type") == "fileChange":
             self._changes[item["id"]] = [
                 c["path"] for c in tool_input["changes"] if c["path"]]
@@ -857,10 +866,12 @@ class ThreadState(SessionCore):
         iid = item["id"]
         if kind == "userMessage":
             return
+        if iid in self._tools and self._tools[iid][1] != self.tid():
+            # A tool call from an earlier turn (a steer left it running)
+            # finishing now, between turns or during a later one.
+            self._tool_completed(item, out)
+            return
         if self.turn is None:
-            # Past its turn's end: only a tool call still open counts.
-            if iid in self._tools:
-                self._tool_completed(item, out)
             return
         if kind == "agentMessage":
             text = text_of(item.get("text"))
@@ -885,14 +896,17 @@ class ThreadState(SessionCore):
             self._tool_completed(item, out)
 
     def _tool_completed(self, item: dict, out: list) -> None:
-        name = self._tools.pop(item["id"])
+        name, turn_id = self._tools.pop(item["id"])
         status = _ITEM_STATUS.get(text_of(item.get("status")), "ok")
+        # A call that outlived its turn completes outside it: its result
+        # belongs to no turn, least of all one that started since.
+        same_turn = bool(turn_id) and turn_id == self.tid()
         self.out(out, ev.tool_completed(
             self.key, item["id"], status, name=name,
             output=clip(redact(_tool_output(item))),
             file_edits=file_edits(item) if item.get("type") == "fileChange"
             and status == "ok" else None,
-            turn_id=self.tid(), ts=self.now()))
+            turn_id=turn_id if same_turn else None, ts=self.now()))
 
     def _streamed(self, sid: str) -> bool:
         block = self.streams.get(sid)

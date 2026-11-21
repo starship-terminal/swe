@@ -1437,9 +1437,6 @@ class TestInjectResultDegraded(unittest.TestCase):
         self.assertFalse(res.degraded)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 # =====================================================================
 # G16: the Codex session adapter (remote/adapters/codex_appserver.py)
@@ -2240,12 +2237,12 @@ class TestCodexThreadState(unittest.TestCase):
                          ["input.requested", "session.state"])
         self.assertEqual(out[0]["data"], {
             "request_id": "aaaa0001-4", "prompt": "Which?", "kind": "choice",
-            "options": [{"id": "red", "label": "red"},
-                        {"id": "blue", "label": "blue"}]})
-        reply, resolved = state.answer("aaaa0001-4", Answer(option_id="blue"))
+            "options": [{"id": "o1", "label": "red"},
+                        {"id": "o2", "label": "blue"}]})
+        reply, resolved = state.answer("aaaa0001-4", Answer(option_id="o2"))
         self.assertEqual(reply["result"],
                          {"answers": {"q1": {"answers": ["blue"]}}})
-        self.assertEqual(resolved[0]["data"]["option_id"], "blue")
+        self.assertEqual(resolved[0]["data"]["option_id"], "o2")
         self.assertNotIn("decision", resolved[0]["data"])
         # Free text, and no options: a text question.
         out, _ = self.feed(state, {
@@ -2255,6 +2252,36 @@ class TestCodexThreadState(unittest.TestCase):
         reply, _ = state.answer("aaaa0001-5", Answer(text="Ada"))
         self.assertEqual(reply["result"],
                          {"answers": {"q9": {"answers": ["Ada"]}}})
+
+    def test_a_choice_that_holds_a_secret_is_never_shown(self):
+        # The model writes the choices; one can quote a key from the
+        # conversation. Devices and the log get an opaque id and the
+        # redacted label; the answer to Codex is the label as written.
+        key = "sk-ant-api03-" + "c" * 40
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(state, {
+            "id": 4, "method": "item/tool/requestUserInput",
+            "params": {"questions": [{
+                "id": "q1", "question": f"Use {key}?",
+                "options": [{"label": f"use {key}", "description": ""},
+                            {"label": "no", "description": ""}]}]}})
+        self.assertNotIn("sk-ant", json.dumps(out))
+        self.assertEqual([o["id"] for o in out[0]["data"]["options"]],
+                         ["o1", "o2"])
+        self.assertEqual(out[0]["data"]["options"][1]["label"], "no")
+        reply, resolved = state.answer("aaaa0001-4", Answer(option_id="o1"))
+        self.assertEqual(reply["result"],
+                         {"answers": {"q1": {"answers": [f"use {key}"]}}})
+        self.assertNotIn("sk-ant", json.dumps(resolved))
+        self.assertEqual(resolved[0]["data"]["option_id"], "o1")
+        # An id that names no choice is passed on as the answer.
+        self.feed(state, {
+            "id": 5, "method": "item/tool/requestUserInput",
+            "params": {"questions": [{"id": "q2", "question": "Which?",
+                                      "options": [{"label": "a"}]}]}})
+        reply, _ = state.answer("aaaa0001-5", Answer(option_id="other"))
+        self.assertEqual(reply["result"],
+                         {"answers": {"q2": {"answers": ["other"]}}})
 
     def test_requests_nothing_serves_get_an_error_answer(self):
         state, _clock, _ = self.in_turn()
@@ -2496,6 +2523,29 @@ class TestCodexThreadState(unittest.TestCase):
         self.assertEqual([e["type"] for e in out], ["tool.completed"])
         self.assertNotIn("turn_id", out[0])
         self.assertEqual(out[0]["data"]["output"], "late\n")
+
+    def test_a_command_that_ends_during_a_later_turn(self):
+        # The keeper may start the next turn at once: the old command's
+        # result must not be filed under it.
+        state, _clock, _ = self.in_turn()
+        old = {"type": "commandExecution", "id": "x1",
+               "command": "sleep 25", "status": "inProgress"}
+        self.feed(state, _note("item/started", item=old),
+                  _note("turn/completed", turn={"id": "native-1",
+                                                "status": "completed"}))
+        state.expect_turn(2, "next")
+        self.feed(state, {"id": 2, "result": {"turn": {"id": "native-2"}}})
+        new = {"type": "commandExecution", "id": "x2", "command": "ls",
+               "status": "inProgress"}
+        out, _ = self.feed(
+            state,
+            _note("item/started", item=new),
+            _note("item/completed", item={**old, "status": "completed"}),
+            _note("item/completed", item={**new, "status": "completed"}))
+        done = _of(out, "tool.completed")
+        self.assertEqual([e["data"]["call_id"] for e in done], ["x1", "x2"])
+        self.assertNotIn("turn_id", done[0])
+        self.assertEqual(done[1]["turn_id"], "t-aaaa0001-2")
 
     def test_events_before_the_start_pair_are_held(self):
         state = codex_wire.ThreadState("codex:t", run_id="aaaa0001")
@@ -2911,7 +2961,10 @@ class TestCodexAdapterTurns(_CodexCase):
         turn_id = adapter.send_turn(TurnInput("go"))
         asked = self.asked(sink, "input.requested")
         self.assertEqual(asked["data"]["kind"], "choice")
-        adapter.respond(asked["data"]["request_id"], Answer(option_id="red"))
+        self.assertEqual(asked["data"]["options"],
+                         [{"id": "o1", "label": "red"},
+                          {"id": "o2", "label": "blue"}])
+        adapter.respond(asked["data"]["request_id"], Answer(option_id="o1"))
         self.wait_turn(sink, turn_id)
         replies = [e["data"]["text"] for e in sink.of("message.completed")
                    if e["data"]["kind"] == "assistant"]
@@ -3396,3 +3449,7 @@ class TestAdapterCore(unittest.TestCase):
         gate.set()
         writer.stop(5.0)
         self.assertFalse(writer.thread.is_alive())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -120,7 +120,7 @@ What the server prints:
 | `item/commandExecution/requestApproval` (a request) | `approval.requested` kind command, prompt the command line; options allow, deny, and always only when `availableDecisions` lists `acceptForSession`; then `session.state` waiting |
 | `item/fileChange/requestApproval` (a request) | `approval.requested` kind tool, prompt naming the files; options allow and deny |
 | `item/permissions/requestApproval` (a request) | `approval.requested` kind tool; answered `{permissions, scope: turn / session}` |
-| `item/tool/requestUserInput` with one question (a request) | `input.requested` (choice when it has options); answered `{answers: {<question id>: {answers: [text]}}}` |
+| `item/tool/requestUserInput` with one question (a request) | `input.requested` (choice when it has options: ids `o1`, `o2`..., labels redacted; the label as the model wrote it is kept for the answer only); answered `{answers: {<question id>: {answers: [text]}}}` |
 | `serverRequest/resolved` | `approval.resolved` `source: harness` when the request is still open |
 | `thread/tokenUsage/updated` | `usage.updated` (the `last` breakdown; `context_window` from `modelContextWindow`) |
 | `thread/compacted`, `item/completed` `contextCompaction` | `context.compacted` |
@@ -247,8 +247,10 @@ closest correct thing and nothing in G3 was bent.
    mid-reply, after the answer when an approval is open. G3 says
    `steer` "emits that user `message.completed`".
 5. **A tool call can outlive its turn.** A command a steer left running
-   finishes after `turn.ended`; its `tool.completed` then carries no
-   `turn_id`. G3's ordering puts `turn.ended` last in a turn.
+   finishes after `turn.ended`, between turns or during a later one;
+   its `tool.completed` then carries no `turn_id` (never the id of a
+   turn that started since). G3's ordering puts `turn.ended` last in a
+   turn.
 6. **`steer` means something different per harness.** On Codex it does
    not stop a running command and waits behind an open approval; on
    Claude it kills the call and withdraws the approval. One label
