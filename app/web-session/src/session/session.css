@@ -1,0 +1,107 @@
+/* The timeline's own rules: the few things a utility class cannot say (the animated disclosure, the
+ * keyframes). Every rule sits under .swe-sv so none reaches the plain-JS web app when the view is
+ * embedded there, and colours come from tokens only. Motion runs only when the person has not asked
+ * for less of it. */
+.swe-sv .sv-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+}
+
+.swe-sv .sv-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.swe-sv .sv-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.swe-sv .sv-chevron-open {
+  transform: rotate(90deg);
+}
+
+.swe-sv .sv-inline-code {
+  font-size: 0.92em;
+}
+
+/* The caret: after the last thing written, on its line. */
+.swe-sv .sv-live > .sv-prose > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .swe-sv .sv-collapse {
+    transition: grid-template-rows 200ms ease;
+  }
+
+  .swe-sv .sv-chevron {
+    transition: transform 160ms ease;
+  }
+
+  .swe-sv .sv-enter {
+    animation: sv-enter 200ms ease-out both;
+  }
+
+  .swe-sv .sv-spin {
+    animation: sv-spin 900ms linear infinite;
+  }
+
+  .swe-sv .sv-pulse {
+    animation: sv-pulse 1.4s ease-in-out infinite;
+  }
+
+  .swe-sv .sv-live > .sv-prose > :last-child::after {
+    animation: sv-blink 1s steps(2, start) infinite;
+  }
+
+  .swe-sv .sv-banner-enter {
+    animation: sv-banner 200ms ease-out both;
+  }
+}
+
+@keyframes sv-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sv-banner {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sv-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes sv-blink {
+  to {
+    visibility: hidden;
+  }
+}
