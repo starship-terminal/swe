@@ -1,0 +1,674 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.882,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.882,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.919,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch allowed.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.919,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.919,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch allowed.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.938,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "name": "shell",
+   "summary": "shell · touch allowed.txt",
+   "input": {
+    "command": "touch allowed.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.939,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "kind": "command",
+   "prompt": "/bin/zsh -lc 'touch allowed.txt'",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000004"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.939,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.939,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.939,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.997,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "status": "ok",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.02,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10774,
+   "output_tokens": 104,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10771,
+   "context_tokens": 10878,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.851,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.851,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.863,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10901,
+   "output_tokens": 5,
+   "cache_read_tokens": 10771,
+   "cache_write_tokens": 127,
+   "context_tokens": 10906,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.876,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.957
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.876,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.891,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Run the shell command `touch denied.txt`. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.891,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.891,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Run the shell command `touch denied.txt`. If you are not allowed, reply only with: denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.402,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000007",
+   "name": "shell",
+   "summary": "shell · touch denied.txt",
+   "input": {
+    "command": "touch denied.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.402,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "00000001-1",
+   "kind": "command",
+   "prompt": "/bin/zsh -lc 'touch denied.txt'",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000007"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.402,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.402,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "00000001-1",
+   "source": "user",
+   "decision": "deny"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.402,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.402,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000007",
+   "status": "cancelled",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.429,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 10932,
+   "output_tokens": 93,
+   "cache_read_tokens": 10898,
+   "cache_write_tokens": 31,
+   "context_tokens": 11025,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.323,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "denied",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.323,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "denied"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.376,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 11070,
+   "output_tokens": 6,
+   "cache_read_tokens": 10929,
+   "cache_write_tokens": 138,
+   "context_tokens": 11076,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.408,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.517
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.408,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.425,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "text": "Use apply_patch to create a file named patched.txt containing the single word yes. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.425,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.425,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:user",
+   "kind": "user",
+   "text": "Use apply_patch to create a file named patched.txt containing the single word yes. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.723,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000010",
+   "name": "apply_patch",
+   "summary": "apply_patch · /work/patched.txt",
+   "input": {
+    "path": "/work/patched.txt",
+    "changes": [
+     {
+      "path": "/work/patched.txt",
+      "kind": "add"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.723,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "request_id": "00000001-2",
+   "kind": "tool",
+   "prompt": "Apply file changes:\n/work/patched.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000010"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.723,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.723,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "request_id": "00000001-2",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.723,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.753,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000010",
+   "status": "ok",
+   "name": "apply_patch",
+   "output": "",
+   "file_edits": [
+    {
+     "path": "/work/patched.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,1 @@\n+yes\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.756,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 11104,
+   "output_tokens": 87,
+   "cache_read_tokens": 11067,
+   "cache_write_tokens": 34,
+   "context_tokens": 11191,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.479,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_04",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.479,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_04",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.496,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 11215,
+   "output_tokens": 5,
+   "cache_read_tokens": 11101,
+   "cache_write_tokens": 111,
+   "context_tokens": 11220,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.532,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.107
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.532,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.532,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

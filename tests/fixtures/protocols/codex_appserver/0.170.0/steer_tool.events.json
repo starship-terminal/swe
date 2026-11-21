@@ -1,0 +1,219 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.883,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.883,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.926,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run this exact shell command and nothing else: sleep 25 && touch late.txt . Then reply with just: finished"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.926,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.926,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run this exact shell command and nothing else: sleep 25 && touch late.txt . Then reply with just: finished"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.356,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "name": "shell",
+   "summary": "shell · sleep 25 && touch late.txt",
+   "input": {
+    "command": "sleep 25 && touch late.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.379,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10763,
+   "output_tokens": 113,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10760,
+   "context_tokens": 10876,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.384,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user2",
+   "kind": "user",
+   "text": "Never mind the command. Reply only with the word: steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.184,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10921,
+   "output_tokens": 98,
+   "cache_read_tokens": 10760,
+   "cache_write_tokens": 158,
+   "context_tokens": 11019,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.984,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "steered",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.984,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.023,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 11042,
+   "output_tokens": 6,
+   "cache_read_tokens": 10918,
+   "cache_write_tokens": 121,
+   "context_tokens": 11048,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.043,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 7.117
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.043,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000028.256,
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "status": "ok",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000028.256,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

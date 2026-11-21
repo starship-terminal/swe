@@ -1,21 +1,36 @@
-"""Tier-A adapter tests: opencode serve + codex app-server injectors.
+"""Tier-A adapter tests: opencode serve + codex app-server.
 
-No real harness binaries — ``_spawn`` is patched with scripted fakes
-(os.pipe for the app-server's stdio so the real reader thread runs).
+First the pre-keeper injectors (``remote/inject.py``): no real harness
+binaries, ``_spawn`` is patched with scripted fakes (os.pipe for the
+app-server's stdio so the real reader thread runs).
+
+Then the G16 session adapters (``remote/adapters/``), from the "G16"
+banner on: recorded fixtures, the wire modules, and each adapter over a
+fake agent under ``tests/fakes/``, with the shared ``AdapterContract``.
 """
 
 import io
 import json
 import os
+import sys
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 from swe.remote import inject, protocol, supervise
+from swe.remote.adapters import (
+    codex_appserver, codex_wire, core, events, fake, registry,
+)
+from swe.remote.adapters.base import (
+    AdapterError, Answer, Caps, StartSpec, TurnInput, UnknownRequest,
+    Unsupported,
+)
 from swe.sessions.models import Session
 
 from tests._tempdir import temp_dir
+from tests.test_remote_adapter_base import ALL_CAPS, AdapterContract
 
 
 class _FakeClock:
@@ -1420,6 +1435,2020 @@ class TestInjectResultDegraded(unittest.TestCase):
                 session, {"text": "x", "mode": "steer"}, "active")
         self.assertTrue(res.ok)
         self.assertFalse(res.degraded)
+
+
+
+# =====================================================================
+# G16: the Codex session adapter (remote/adapters/codex_appserver.py)
+# and its wire module (codex_wire.py).
+#
+# Three layers, as for Claude (test_remote_claude_adapter.py): every
+# recording under tests/fixtures/protocols/codex_appserver/ replays to
+# its golden events; the wire module line by line; the adapter over
+# tests/fakes/fake_codex.py, including the shared AdapterContract. No
+# test runs the real ``codex``: CI machines have none.
+
+CODEX_FAKE = Path(__file__).resolve().parent / "fakes" / "fake_codex.py"
+PROTOCOLS = Path(__file__).resolve().parent / "fixtures" / "protocols"
+CODEX_FIXTURES = PROTOCOLS / "codex_appserver"
+TIMEOUT = 10.0
+THREAD = "11111111-2222-7333-8444-555555555555"
+FORKED = "11111111-2222-7333-8444-666666666666"
+STEM = f"rollout-2026-01-02T03-04-05-{THREAD}"
+
+
+def _load_fixture(path: Path) -> list:
+    return [json.loads(line) for line in path.read_text().splitlines()
+            if line.strip()]
+
+
+def _of(evs, etype):
+    return [e for e in evs if e["type"] == etype]
+
+
+def _streams_close(test, evs) -> None:
+    """Every streamed message ends in a completion that starts with
+    what its deltas added up to, at the offsets they claimed."""
+    text: dict = {}
+    for event in evs:
+        data = event["data"]
+        if event["type"] == "message.delta":
+            test.assertEqual(data["offset"], len(text.get(data["id"], "")))
+            text[data["id"]] = text.get(data["id"], "") + data["text"]
+        elif event["type"] in ("message.completed", "thinking.completed") \
+                and data["id"] in text:
+            test.assertEqual(text.pop(data["id"]), data["text"])
+    test.assertEqual(text, {}, "a stream was left open")
+
+
+def _contract_order(test, evs) -> None:
+    """The ordering rules of base.py over one replayed session."""
+    open_turn = None
+    open_requests: set = set()
+    open_tools: set = set()
+    for event in evs:
+        etype, data = event["type"], event["data"]
+        if etype == "turn.started":
+            test.assertIsNone(open_turn)
+            open_turn = event["turn_id"]
+        elif etype == "turn.ended":
+            test.assertEqual(event["turn_id"], open_turn)
+            test.assertEqual(open_requests, set(),
+                             "a request outlived its turn")
+            open_turn = None
+        elif etype in ("approval.requested", "input.requested"):
+            open_requests.add(data["request_id"])
+        elif etype == "approval.resolved":
+            test.assertIn(data["request_id"], open_requests)
+            open_requests.discard(data["request_id"])
+        elif etype == "tool.started":
+            open_tools.add(data["call_id"])
+        elif etype == "tool.completed":
+            test.assertIn(data["call_id"], open_tools)
+            open_tools.discard(data["call_id"])
+        if event.get("turn_id") and etype != "turn.ended":
+            test.assertEqual(event["turn_id"], open_turn, event)
+    test.assertIsNone(open_turn)
+
+
+class TestCodexFixtures(unittest.TestCase):
+    def fixtures(self):
+        found = sorted(CODEX_FIXTURES.rglob("*.jsonl"))
+        self.assertTrue(found, "no recorded fixtures")
+        return found
+
+    def scenario(self, name):
+        lines = _load_fixture(
+            CODEX_FIXTURES / codex_wire.RECORDED_VERSION / f"{name}.jsonl")
+        return lines[0], lines[1:], codex_wire.replay(lines)
+
+    def test_every_fixture_replays_to_its_golden_events(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=path.name):
+                golden = path.with_name(path.name[:-6] + ".events.json")
+                self.assertTrue(golden.exists(), f"{golden.name} missing")
+                got = codex_wire.replay(_load_fixture(path))
+                self.assertEqual(got, json.loads(golden.read_text()))
+                for event in got:
+                    self.assertEqual(events.validate(event), [], event)
+
+    def test_headers_say_how_each_was_recorded(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=path.name):
+                header = _load_fixture(path)[0]
+                self.assertEqual(header["fixture"], 1)
+                self.assertEqual(header["adapter"], "codex_appserver")
+                self.assertEqual(header["version"], path.parent.name)
+                self.assertIs(header["synthetic"], False)
+                self.assertIsNone(header["error"])
+                self.assertEqual(header["env_set"], ["CODEX_HOME", "HOME"])
+
+    def test_golden_events_keep_the_contract_order(self):
+        for path in self.fixtures():
+            with self.subTest(fixture=path.name):
+                got = codex_wire.replay(_load_fixture(path))
+                self.assertEqual([e["type"] for e in got[:2]],
+                                 ["session.caps", "session.state"])
+                self.assertEqual(got[-1]["data"]["state"], "closed")
+                _streams_close(self, got)
+                # One process at a time: each has its own start pair.
+                starts = [i for i, e in enumerate(got)
+                          if e["type"] == "session.caps"] + [len(got)]
+                for a, b in zip(starts, starts[1:]):
+                    _contract_order(self, got[a:b])
+
+    def test_turn_ids_never_repeat_across_processes(self):
+        _header, _lines, got = self.scenario("resume")
+        ids = [e["turn_id"] for e in _of(got, "turn.started")]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(len(set(ids)), 3)
+        users = [e["data"]["id"] for e in _of(got, "message.completed")
+                 if e["data"]["kind"] == "user"]
+        self.assertEqual(len(set(users)), 3)
+
+    def test_hello(self):
+        _header, _lines, got = self.scenario("hello")
+        self.assertEqual(got[0]["data"]["caps"],
+                         codex_wire.PROVEN.as_dict())
+        replies = [e["data"]["text"] for e in _of(got, "message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["hello there"])
+        self.assertGreater(len(_of(got, "message.delta")), 1)
+        usage = _of(got, "usage.updated")[0]["data"]
+        self.assertGreater(usage["context_window"], 0)
+        self.assertGreater(usage["input_tokens"], 0)
+        self.assertEqual(_of(got, "turn.ended")[0]["data"]["status"],
+                         "completed")
+
+    def test_approval_allow_deny_and_a_file_change(self):
+        header, lines, got = self.scenario("approval")
+        asked = _of(got, "approval.requested")
+        self.assertEqual([e["data"]["kind"] for e in asked],
+                         ["command", "command", "tool"])
+        self.assertIn("touch allowed.txt", asked[0]["data"]["prompt"])
+        self.assertIn("/work/patched.txt", asked[2]["data"]["prompt"])
+        for request in asked:
+            # The server lists no acceptForSession here: no "always".
+            self.assertEqual([o["id"] for o in request["data"]["options"]],
+                             ["allow", "deny"])
+        self.assertEqual([e["data"].get("decision") for e in
+                          _of(got, "approval.resolved")],
+                         ["allow", "deny", "allow"])
+        done = _of(got, "tool.completed")
+        self.assertEqual([e["data"]["status"] for e in done],
+                         ["ok", "cancelled", "ok"])
+        self.assertEqual(done[2]["data"]["file_edits"], [
+            {"path": "/work/patched.txt", "kind": "add",
+             "diff": "@@ -0,0 +1,1 @@\n+yes\n"}])
+        self.assertEqual(header["notes"]["files"], [
+            "allowed.txt", "hello.py", "notes.txt", "patched.txt"])
+        # What we answered on the wire.
+        sent = [ln["msg"]["result"]["decision"] for ln in lines
+                if ln.get("dir") == "out" and "result" in ln.get("msg", {})]
+        self.assertEqual(sent, ["accept", "decline", "accept"])
+
+    def test_accept_for_session_does_not_stop_the_next_file_change(self):
+        # Why a file change offers no "always".
+        header, _lines, got = self.scenario("always")
+        self.assertEqual(header["notes"]["approvals_first_turn"], 1)
+        self.assertEqual(header["notes"]["approvals_second_turn"], 1)
+        self.assertEqual(len(_of(got, "approval.requested")), 2)
+        for request in _of(got, "approval.requested"):
+            self.assertNotIn("always",
+                             [o["id"] for o in request["data"]["options"]])
+
+    def test_interrupt(self):
+        _header, lines, got = self.scenario("interrupt")
+        ended = _of(got, "turn.ended")
+        self.assertEqual([e["data"]["status"] for e in ended],
+                         ["interrupted"])
+        partial = [e for e in _of(got, "message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(len(partial), 1, "the cut reply is completed")
+        self.assertTrue(partial[0]["data"]["text"].startswith("1."))
+        # Idle afterwards: the server refuses, the adapter treats it as
+        # a no-op.
+        errors = [ln["msg"]["error"]["message"] for ln in lines
+                  if "error" in ln.get("msg", {})]
+        self.assertEqual(errors, ["no active turn to interrupt"])
+
+    def test_steer_joins_the_turn_and_cuts_the_reply(self):
+        _header, lines, got = self.scenario("steer")
+        self.assertEqual(len(_of(got, "turn.started")), 1)
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")], ["completed"])
+        done = [(e["data"]["kind"], e["data"]["id"]) for e in
+                _of(got, "message.completed")]
+        self.assertEqual([k for k, _i in done],
+                         ["user", "assistant", "user", "assistant"],
+                         "the cut reply completes before the steer")
+        self.assertEqual(done[2][1], done[0][1] + "2")
+        texts = [e["data"]["text"] for e in _of(got, "message.completed")]
+        self.assertTrue(texts[1].startswith("1."))
+        self.assertEqual(texts[3], "steered")
+        # The server sent no completion for the cut reply.
+        completed = [ln["msg"]["params"]["item"]["id"] for ln in lines
+                     if ln.get("msg", {}).get("method") == "item/completed"
+                     and ln["msg"]["params"]["item"]["type"]
+                     == "agentMessage"]
+        self.assertNotIn(done[1][1], completed)
+        errors = [ln["msg"]["error"]["message"] for ln in lines
+                  if "error" in ln.get("msg", {})]
+        self.assertEqual(errors, ["no active turn to steer"])
+
+    def test_steer_does_not_stop_a_running_command(self):
+        header, _lines, got = self.scenario("steer_tool")
+        notes = header["notes"]
+        self.assertIs(notes["late_file_at_turn_end"], False)
+        self.assertIs(notes["late_file_30s_after_command_began"], True)
+        types = [e["type"] for e in got]
+        ended = types.index("turn.ended")
+        done = types.index("tool.completed")
+        self.assertGreater(done, ended, "the command outlives the turn")
+        self.assertNotIn("turn_id", got[done])
+        self.assertEqual(got[done]["data"]["status"], "ok")
+        self.assertEqual(got[done]["data"]["call_id"],
+                         _of(got, "tool.started")[0]["data"]["call_id"])
+
+    def test_steer_waits_for_an_open_approval(self):
+        header, lines, got = self.scenario("steer_approval")
+        self.assertIs(header["notes"]["turn_ended_without_an_answer"], False)
+        self.assertIs(header["notes"]["asked_file_exists"], False)
+        types = [(e["type"], e["data"].get("kind") or e["data"].get(
+            "source")) for e in got]
+        asked = types.index(("approval.requested", "command"))
+        resolved = types.index(("approval.resolved", "user"))
+        steered = [i for i, t in enumerate(types)
+                   if t == ("message.completed", "user")][1]
+        self.assertLess(asked, resolved)
+        self.assertLess(resolved, steered,
+                        "the steer lands once the approval is answered")
+        # 20 s passed between the steer and our answer with no line
+        # from the server but the steer's own answer.
+        steer_at = next(ln["t"] for ln in lines if ln.get("msg", {}).get(
+            "method") == "turn/steer")
+        answer_at = next(ln["t"] for ln in lines if ln.get("dir") == "out"
+                         and "result" in ln.get("msg", {}))
+        between = [ln for ln in lines if ln.get("dir") == "in"
+                   and steer_at < ln["t"] < answer_at
+                   and "method" in ln.get("msg", {})]
+        self.assertGreater(answer_at - steer_at, 15)
+        self.assertEqual(between, [])
+
+    def test_resume_keeps_the_id_and_fork_gets_a_new_one(self):
+        _header, lines, got = self.scenario("resume")
+        sids = [e["data"]["harness_session_id"]
+                for e in _of(got, "session.state")
+                if e["data"].get("harness_session_id")]
+        self.assertEqual(len(sids), 3)
+        self.assertEqual(sids[0], sids[1], "a resume keeps the id")
+        self.assertNotEqual(sids[0], sids[2], "a fork gets the new id")
+        for sid in sids:
+            self.assertTrue(sid.startswith("rollout-"))
+        methods = [ln["msg"]["method"] for ln in lines
+                   if ln.get("dir") == "out" and ln["msg"].get(
+                       "method", "").startswith("thread/")]
+        self.assertEqual(methods,
+                         ["thread/start", "thread/resume", "thread/fork"])
+        replies = [e["data"]["text"] for e in _of(got, "message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual([r.lower() for r in replies],
+                         ["ok", "papaya", "papaya"])
+
+    def test_rollback_drops_the_turn_from_the_conversation(self):
+        _header, lines, got = self.scenario("rollback")
+        reverts = [ln["msg"] for ln in lines
+                   if ln.get("msg", {}).get("method") == "thread/revert"]
+        self.assertEqual(len(reverts), 1)
+        second = [ln["msg"]["result"]["turn"]["id"] for ln in lines
+                  if ln.get("dir") == "in" and "turn" in (
+                      ln.get("msg", {}).get("result") or {})][1]
+        self.assertEqual(reverts[0]["params"]["beforeTurnId"], second)
+        replies = [e["data"]["text"] for e in _of(got, "message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies[-1].lower(), "papaya",
+                         "walrus was rolled back")
+        # The revert wrote a new rollout file: same thread, new stem.
+        sids = [e["data"]["harness_session_id"]
+                for e in _of(got, "session.state")
+                if e["data"].get("harness_session_id")]
+        self.assertEqual(len(sids), 2)
+        self.assertNotEqual(sids[0], sids[1])
+        self.assertEqual(codex_wire.thread_id_of(sids[0]),
+                         codex_wire.thread_id_of(sids[1]))
+
+    def test_turn_start_overrides_hold_for_later_turns(self):
+        header, lines, _got = self.scenario("options")
+        notes = header["notes"]
+        self.assertEqual((notes["approvals_under_untrusted"],
+                          notes["approvals_under_never"],
+                          notes["approvals_with_no_override"]), (1, 0, 0))
+        starts = [ln["msg"]["params"] for ln in lines
+                  if ln.get("msg", {}).get("method") == "turn/start"]
+        self.assertEqual((starts[1]["model"], starts[1]["effort"],
+                          starts[1]["approvalPolicy"]),
+                         ("gpt-6-luna", "medium", "never"))
+        for name in ("model", "effort", "approvalPolicy"):
+            self.assertNotIn(name, starts[2])
+
+    def test_model_and_effort_overrides_are_read(self):
+        header, _lines, got = self.scenario("error")
+        notes = header["notes"]
+        self.assertEqual(notes["next_turn_without_override"], "failed",
+                         "the model override is kept")
+        self.assertEqual(notes["bad_effort_turn"], "failed")
+        self.assertEqual(notes["turn_after_a_good_override"], "completed")
+        self.assertEqual([e["data"]["status"] for e in
+                          _of(got, "turn.ended")],
+                         ["failed", "failed", "failed", "completed"])
+        errors = _of(got, "error")
+        self.assertEqual([e["data"]["code"] for e in errors],
+                         ["modelNotFound", "modelNotFound", "other"])
+        self.assertIn("no-such-effort", errors[2]["data"]["message"])
+        self.assertIn("does not exist",
+                      _of(got, "turn.ended")[0]["data"]["reason"])
+
+    def test_attachments(self):
+        _header, lines, got = self.scenario("attach")
+        starts = [ln["msg"]["params"]["input"] for ln in lines
+                  if ln.get("msg", {}).get("method") == "turn/start"]
+        self.assertEqual([i["type"] for i in starts[0]],
+                         ["text", "localImage"])
+        self.assertTrue(starts[1][0]["text"].startswith(
+            "[Attached file: /work/notes.txt] "))
+        replies = [e["data"]["text"] for e in _of(got, "message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies[0].lower().strip("."), "red")
+        self.assertEqual(replies[1], "first line of the notes")
+
+    def test_no_personal_data(self):
+        for path in sorted(CODEX_FIXTURES.rglob("*")):
+            if not path.is_file():
+                continue
+            text = path.read_text()
+            with self.subTest(file=path.name):
+                self.assertNotIn("/Users/", text)
+                self.assertNotIn("/var/folders/", text)
+                self.assertNotRegex(text, r"[A-Za-z0-9._%+-]+@(?!example\.com)"
+                                          r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+                self.assertNotRegex(text, r"\bsk-[A-Za-z0-9_-]{8,}")
+                for key in ('"serverName"', '"installationId"',
+                            '"planType"', '"instructionSources"',
+                            '"gitInfo"', ".local"):
+                    self.assertNotIn(key, text)
+
+
+class TestCodexWire(unittest.TestCase):
+    def test_ids(self):
+        self.assertEqual(codex_wire.thread_id_of(STEM), THREAD)
+        self.assertEqual(codex_wire.thread_id_of(THREAD.upper()), THREAD)
+        self.assertEqual(
+            codex_wire.thread_id_of(f"{STEM}_{FORKED}"), THREAD,
+            "a resumed rollout's own uuid only names the file")
+        for bad in ("", "s-1", None, 7):
+            self.assertEqual(codex_wire.thread_id_of(bad), "")
+        thread = {"id": THREAD, "path": f"/h/sessions/2026/{STEM}.jsonl"}
+        self.assertEqual(codex_wire.session_ref(thread), STEM)
+        self.assertEqual(codex_wire.session_ref({"id": THREAD}), THREAD)
+        self.assertEqual(codex_wire.session_ref(
+            {"id": THREAD, "path": "/h/x.jsonl"}), THREAD)
+        self.assertEqual(codex_wire.session_ref(None), "")
+        self.assertEqual(codex_wire.agent_version(
+            "swe/0.170.0 (Mac OS 27.3.0; arm64) unknown"), "0.170.0")
+        self.assertEqual(codex_wire.agent_version("codex"), "")
+        self.assertEqual(codex_wire.agent_version(None), "")
+
+    def test_encode_and_decode(self):
+        line = codex_wire.encode({"a": "é"})
+        self.assertEqual(line, '{"a":"é"}\n'.encode())
+        self.assertEqual(codex_wire.decode(line), {"a": "é"})
+        for junk in (b"", b"  \n", b"not json", b"[1]", "7"):
+            self.assertIsNone(codex_wire.decode(junk))
+
+    def test_requests(self):
+        self.assertEqual(codex_wire.request(1, "x"), {
+            "jsonrpc": "2.0", "id": 1, "method": "x", "params": {}})
+        hello = codex_wire.initialize(1, "9.9")
+        self.assertEqual(hello["params"]["clientInfo"],
+                         {"name": "swe", "title": "SWE", "version": "9.9"})
+        self.assertEqual(codex_wire.initialized(),
+                         {"jsonrpc": "2.0", "method": "initialized"})
+        self.assertEqual(
+            codex_wire.thread_start(2, cwd="/w", model="m",
+                                    approval_policy="never")["params"],
+            {"cwd": "/w", "model": "m", "approvalPolicy": "never"})
+        # A permission mode that is not a Codex policy is left out.
+        self.assertEqual(
+            codex_wire.thread_start(2, cwd="/w",
+                                    approval_policy="acceptEdits")["params"],
+            {"cwd": "/w"})
+        self.assertEqual(
+            codex_wire.thread_resume(3, THREAD, cwd="/w")["params"],
+            {"threadId": THREAD, "excludeTurns": True, "cwd": "/w"})
+        fork = codex_wire.thread_fork(4, THREAD, model="m")
+        self.assertEqual((fork["method"], fork["params"]["model"]),
+                         ("thread/fork", "m"))
+        self.assertEqual(
+            codex_wire.thread_revert(5, THREAD, "turn-2")["params"],
+            {"threadId": THREAD, "beforeTurnId": "turn-2"})
+        self.assertEqual(codex_wire.turn_interrupt(6, THREAD, "t")["params"],
+                         {"threadId": THREAD, "turnId": "t"})
+        self.assertEqual(codex_wire.approval_reply(0, "accept"), {
+            "jsonrpc": "2.0", "id": 0, "result": {"decision": "accept"}})
+        self.assertEqual(codex_wire.error(9, "no")["error"],
+                         {"code": -32601, "message": "no"})
+
+    def test_turn_start_and_steer(self):
+        start = codex_wire.turn_start(
+            7, THREAD, "look", attachments=["/a/shot.PNG", "/a/notes.txt"],
+            model="m", effort="low", approval_policy="on-request")
+        self.assertEqual(start["params"], {
+            "threadId": THREAD, "clientUserMessageId": "swe-7",
+            "input": [{"type": "text", "text_elements": [],
+                       "text": "[Attached file: /a/notes.txt] look"},
+                      {"type": "localImage", "path": "/a/shot.PNG"}],
+            "model": "m", "effort": "low", "approvalPolicy": "on-request"})
+        plain = codex_wire.turn_start(8, THREAD, "hi")["params"]
+        self.assertEqual(sorted(plain),
+                         ["clientUserMessageId", "input", "threadId"])
+        steer = codex_wire.turn_steer(9, THREAD, "turn-1", "more")
+        self.assertEqual(steer["method"], "turn/steer")
+        self.assertEqual(steer["params"]["expectedTurnId"], "turn-1")
+        self.assertEqual(steer["params"]["clientUserMessageId"], "swe-9")
+
+    def test_file_edits(self):
+        item = {"changes": [
+            {"path": "/w/a", "kind": {"type": "add"}, "diff": "x\ny\n"},
+            {"path": "/w/b", "kind": {"type": "delete"}, "diff": "gone\n"},
+            {"path": "/w/c", "kind": {"type": "update", "move_path": "/w/d"},
+             "diff": "@@ -1 +1 @@\n-a\n+b\n"},
+            {"path": "/w/e", "kind": "update", "diff": ""},
+            {"path": "", "kind": {"type": "add"}}, "junk"]}
+        self.assertEqual(codex_wire.file_edits(item), [
+            {"path": "/w/a", "kind": "add",
+             "diff": "@@ -0,0 +1,2 @@\n+x\n+y\n"},
+            {"path": "/w/b", "kind": "delete",
+             "diff": "@@ -1,1 +0,0 @@\n-gone\n"},
+            {"path": "/w/d", "kind": "modify", "old_path": "/w/c",
+             "diff": "@@ -1 +1 @@\n-a\n+b\n"},
+            {"path": "/w/e", "kind": "modify"}])
+        self.assertIsNone(codex_wire.file_edits({"changes": []}))
+        self.assertIsNone(codex_wire.file_edits("x"))
+        secret = codex_wire.file_edits({"changes": [{
+            "path": "/w/.env", "kind": {"type": "add"},
+            "diff": "API_KEY=sk-ant-api03-" + "a" * 40 + "\n"}]})
+        self.assertNotIn("sk-ant-api03", secret[0]["diff"])
+
+    def test_tool_cards(self):
+        card = codex_wire.tool_card
+        self.assertEqual(card({"type": "commandExecution", "command":
+                               "/bin/zsh -lc 'ls'", "cwd": "/w",
+                               "commandActions": [{"command": "ls"}]}),
+                         ("shell", {"command": "ls", "cwd": "/w"}))
+        self.assertEqual(card({"type": "commandExecution",
+                               "command": "ls -la"})[1]["command"], "ls -la")
+        self.assertEqual(card({"type": "mcpToolCall", "server": "fs",
+                               "tool": "read", "arguments": {"p": 1}}),
+                         ("fs.read", {"p": 1}))
+        self.assertEqual(card({"type": "dynamicToolCall", "tool": "calc",
+                               "arguments": [1]}), ("calc", [1]))
+        self.assertEqual(card({"type": "webSearch", "query": "q"}),
+                         ("web_search", {"query": "q"}))
+        self.assertEqual(card({"type": "imageView", "path": "/a.png"}),
+                         ("view_image", {"path": "/a.png"}))
+        self.assertEqual(card({"type": "collabAgentToolCall",
+                               "tool": "spawnAgent", "prompt": "go"}),
+                         ("agent.spawnAgent", {"prompt": "go"}))
+        self.assertIsNone(card({"type": "sleep"}))
+
+    def test_the_pre_keeper_channel_helpers(self):
+        w = codex_wire
+        self.assertTrue(w.is_approval_request(
+            "item/commandExecution/requestApproval"))
+        self.assertTrue(w.is_approval_request("execCommandApproval"))
+        self.assertFalse(w.is_approval_request("turn/started"))
+        self.assertEqual(w.approval_prompt("m", {"reason": "r",
+                                                 "command": "c"}), "r")
+        self.assertEqual(w.approval_prompt("m", {"itemId": "i"}), "i")
+        self.assertEqual(w.approval_prompt("m", {}), "m")
+        self.assertEqual(w.live_text("item/agentMessage/delta",
+                                     {"itemId": "i", "delta": "d"}),
+                         ("delta", "i", "d"))
+        self.assertIsNone(w.live_text("item/agentMessage/delta",
+                                      {"itemId": "i", "delta": ""}))
+        self.assertEqual(w.live_text("item/completed",
+                                     {"item": {"id": "i"}}),
+                         ("done", "i", ""))
+        self.assertIsNone(w.live_text("item/completed", {"item": 3}))
+        self.assertEqual(w.live_text("turn/failed", {}),
+                         ("turn_done", "", ""))
+        self.assertIsNone(w.live_text("thread/started", {}))
+        self.assertEqual(w.started_turn_id("turn/started",
+                                           {"turn": {"id": "t9"}}), "t9")
+        self.assertIsNone(w.started_turn_id("turn/started", {"turn": {}}))
+        self.assertEqual(w.started_turn_id("codex/turnCompleted", {}), "")
+        self.assertIsNone(w.started_turn_id("item/started", {}))
+        self.assertEqual(w.plain_turn_params("t", "hi", model="m"), {
+            "threadId": "t", "input": [{"type": "text", "text": "hi"}],
+            "model": "m"})
+        self.assertEqual(w.interrupt_params("t"), {"threadId": "t"})
+        self.assertEqual(w.interrupt_params("t", "u"),
+                         {"threadId": "t", "turnId": "u"})
+        self.assertIs(inject._CODEX_DECISIONS, w.DECISIONS)
+
+
+def _note(method, **params):
+    params.setdefault("threadId", THREAD)
+    return {"method": method, "params": params}
+
+
+class TestCodexThreadState(unittest.TestCase):
+    """``ThreadState`` line by line, with a fake clock."""
+
+    def state(self, caps=codex_wire.PROVEN):
+        clock = fake.FakeClock(100.0)
+        state = codex_wire.ThreadState("codex:t", clock=clock,
+                                       run_id="aaaa0001")
+        state.thread_id = THREAD
+        first = state.start_events(caps, STEM)
+        self.assertEqual([e["type"] for e in first],
+                         ["session.caps", "session.state"])
+        return state, clock
+
+    def feed(self, state, *msgs):
+        out, replies = [], []
+        for msg in msgs:
+            fed = state.feed(msg)
+            out.extend(fed.events)
+            replies.extend(fed.replies)
+        for event in out:
+            self.assertEqual(events.validate(event), [], event)
+        return out, replies
+
+    def in_turn(self, text="go", **kw):
+        state, clock = self.state()
+        state.expect_turn(1, text, **kw)
+        out, _ = self.feed(state, {"id": 1, "result": {
+            "turn": {"id": "native-1"}}})
+        return state, clock, out
+
+    def test_a_turn_opens_when_the_server_accepts_it(self):
+        state, _clock = self.state()
+        self.assertFalse(state.busy)
+        state.expect_turn(1, "go", attachments=["/a.txt"], command_id="c1",
+                          device="phone")
+        self.assertTrue(state.busy)
+        self.assertIsNone(state.turn, "nothing is emitted before the answer")
+        out, _ = self.feed(state, {"id": 1, "result": {
+            "turn": {"id": "native-1"}}})
+        self.assertEqual([e["type"] for e in out], [
+            "turn.started", "session.state", "message.completed"])
+        self.assertEqual(out[0]["turn_id"], "t-aaaa0001-1")
+        self.assertEqual(out[0]["command_id"], "c1")
+        self.assertEqual(out[0]["data"], {"by": "phone", "text": "go"})
+        self.assertEqual(out[2]["data"], {
+            "id": "t-aaaa0001-1:user", "kind": "user", "text": "go",
+            "by": "phone", "attachments": ["/a.txt"]})
+        self.assertEqual(state.accepted, {1: "t-aaaa0001-1"})
+        self.assertEqual(state.native_turns, {"t-aaaa0001-1": "native-1"})
+
+    def test_a_refused_turn_emits_nothing(self):
+        state, _clock = self.state()
+        state.expect_turn(1, "go")
+        fed = state.feed({"id": 1, "error": {"code": -32600,
+                                             "message": "busy"}})
+        self.assertEqual(fed.events, [])
+        self.assertEqual((fed.acks[0].ok, fed.acks[0].error,
+                          fed.acks[0].code), (False, "busy", -32600))
+        self.assertFalse(state.busy)
+        state.expect_turn(2, "again")
+        state.forget(2)
+        self.assertFalse(state.busy)
+
+    def test_notifications_that_overtake_the_answer_open_the_turn(self):
+        state, _clock = self.state()
+        state.expect_turn(1, "go", command_id="c1")
+        out, _ = self.feed(state, _note("turn/started",
+                                        turn={"id": "native-1"}))
+        self.assertEqual([e["type"] for e in out], [
+            "turn.started", "session.state", "message.completed"])
+        self.assertEqual(out[0]["command_id"], "c1")
+        self.assertEqual(state.turn.native_id, "native-1")
+        # The answer then adds nothing.
+        out, _ = self.feed(state, {"id": 1, "result": {
+            "turn": {"id": "native-1"}}})
+        self.assertEqual(out, [])
+        self.assertEqual(state.accepted, {1: "t-aaaa0001-1"})
+
+    def test_a_turn_the_server_starts_itself(self):
+        state, _clock = self.state()
+        out, _ = self.feed(state, _note("turn/started",
+                                        turn={"id": "native-7"}))
+        self.assertEqual([e["type"] for e in out],
+                         ["turn.started", "session.state"])
+        self.assertNotIn("command_id", out[0])
+        self.assertTrue(state.busy)
+
+    def test_streaming_text_and_completion(self):
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(
+            state,
+            _note("item/started", item={"type": "agentMessage", "id": "m1"}),
+            _note("item/agentMessage/delta", itemId="m1", delta="hello "),
+            _note("item/agentMessage/delta", itemId="m1", delta="there"),
+            _note("item/completed", item={"type": "agentMessage", "id": "m1",
+                                          "text": "hello there"}))
+        self.assertEqual([e["type"] for e in out], [
+            "message.delta", "message.delta", "message.completed"])
+        self.assertEqual([(e["data"]["text"], e["data"]["offset"],
+                           e["data"]["seq"], e["data"]["done"])
+                          for e in out[:2]],
+                         [("hello ", 0, 1, False), ("there", 6, 2, True)])
+        self.assertEqual(out[2]["data"]["text"], "hello there")
+        # Late deltas and a second completion of the id are dropped.
+        out, _ = self.feed(
+            state,
+            _note("item/agentMessage/delta", itemId="m1", delta="x"),
+            _note("item/completed", item={"type": "agentMessage", "id": "m1",
+                                          "text": "hello there"}))
+        self.assertEqual(out, [])
+
+    def test_a_secret_split_across_deltas_never_streams(self):
+        state, _clock, _ = self.in_turn()
+        key = "sk-ant-api03-" + "b" * 40
+        out, _ = self.feed(
+            state,
+            _note("item/agentMessage/delta", itemId="m1", delta="the key "),
+            _note("item/agentMessage/delta", itemId="m1", delta=key[:20]),
+            _note("item/agentMessage/delta", itemId="m1", delta=key[20:]),
+            _note("item/agentMessage/delta", itemId="m1", delta=" ok"),
+            _note("item/completed", item={"type": "agentMessage", "id": "m1",
+                                          "text": f"the key {key} ok"}))
+        text = "".join(e["data"]["text"] for e in out
+                       if e["type"] == "message.delta")
+        self.assertNotIn("sk-ant", json.dumps(out))
+        self.assertEqual(text, out[-1]["data"]["text"])
+        _streams_close(self, out)
+
+    def test_reasoning_and_empty_items(self):
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(
+            state,
+            _note("item/started", item={"type": "reasoning", "id": "r1"}),
+            _note("item/reasoning/summaryTextDelta", itemId="r1",
+                  delta="part one"),
+            _note("item/reasoning/summaryPartAdded", itemId="r1",
+                  summaryIndex=1),
+            _note("item/reasoning/textDelta", itemId="r1", delta="part two"),
+            _note("item/completed", item={
+                "type": "reasoning", "id": "r1",
+                "summary": ["part one", "part two"], "content": []}),
+            # Empty items are how the real CLI reports hidden reasoning
+            # and commentary: nothing is shown for them.
+            _note("item/started", item={"type": "reasoning", "id": "r2"}),
+            _note("item/completed", item={"type": "reasoning", "id": "r2",
+                                          "summary": [], "content": []}),
+            _note("item/started", item={"type": "agentMessage", "id": "m0"}),
+            _note("item/completed", item={"type": "agentMessage",
+                                          "id": "m0", "text": ""}))
+        self.assertEqual([e["type"] for e in out], [
+            "message.delta", "message.delta", "message.delta",
+            "thinking.completed"])
+        self.assertEqual({e["data"]["kind"] for e in out[:3]}, {"thinking"})
+        self.assertEqual(out[3]["data"]["text"], "part one\n\npart two")
+        _streams_close(self, out)
+
+    def test_tools(self):
+        state, _clock, _ = self.in_turn()
+        command = {"type": "commandExecution", "id": "x1", "command":
+                   "/bin/zsh -lc 'ls'", "cwd": "/w", "status": "inProgress",
+                   "commandActions": [{"command": "ls"}]}
+        out, _ = self.feed(
+            state,
+            _note("item/started", item=command),
+            _note("item/completed", item={**command, "status": "failed",
+                                          "exitCode": 2,
+                                          "aggregatedOutput": "y" * 9000}),
+            # Completed without a start (a resumed thread): both rows.
+            _note("item/completed", item={
+                "type": "mcpToolCall", "id": "x2", "server": "fs",
+                "tool": "read", "arguments": {"token": "abc"},
+                "status": "completed",
+                "result": {"content": [{"text": "one"}, {"text": "two"}]}}),
+            _note("item/completed", item={"type": "sleep", "id": "x3"}))
+        self.assertEqual([e["type"] for e in out], [
+            "tool.started", "tool.completed", "tool.started",
+            "tool.completed"])
+        self.assertEqual(out[0]["data"], {
+            "call_id": "x1", "name": "shell", "summary": "shell · ls",
+            "input": {"command": "ls", "cwd": "/w"}})
+        self.assertEqual(out[1]["data"]["status"], "error")
+        self.assertEqual(len(out[1]["data"]["output"]), 8002)
+        self.assertEqual(out[2]["data"]["input"], {"token": "[REDACTED]"})
+        self.assertEqual(out[3]["data"]["output"], "one\ntwo")
+
+    def test_command_approval_options_follow_the_server(self):
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(state, {
+            "id": 5, "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": THREAD, "itemId": "x1",
+                       "command": "curl example.com", "reason": "network",
+                       "networkApprovalContext": {"host": "example.com"},
+                       "availableDecisions": ["accept", "acceptForSession",
+                                              "cancel"]}})
+        self.assertEqual([e["type"] for e in out],
+                         ["approval.requested", "session.state"])
+        asked = out[0]["data"]
+        self.assertEqual(asked["request_id"], "aaaa0001-5")
+        self.assertEqual(asked["kind"], "command")
+        self.assertEqual(asked["call_id"], "x1")
+        self.assertEqual(asked["prompt"], "curl example.com\n\nNetwork "
+                         "access: example.com\n\nnetwork")
+        self.assertEqual([o["id"] for o in asked["options"]],
+                         ["allow", "always", "deny"])
+        self.assertEqual(out[1]["data"]["state"], "waiting")
+        reply, resolved = state.answer("aaaa0001-5",
+                                       Answer(decision="always",
+                                              device="mac"))
+        self.assertEqual(reply, {"jsonrpc": "2.0", "id": 5, "result": {
+            "decision": "acceptForSession"}})
+        self.assertEqual(resolved[0]["data"], {
+            "request_id": "aaaa0001-5", "source": "user",
+            "decision": "always", "by": "mac"})
+        self.assertEqual(resolved[1]["data"]["state"], "running")
+        with self.assertRaises(UnknownRequest):
+            state.answer("aaaa0001-5", Answer(decision="allow"))
+
+    def test_always_is_allow_where_the_server_does_not_offer_it(self):
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(
+            state,
+            {"id": 5, "method": "item/commandExecution/requestApproval",
+             "params": {"command": "ls",
+                        "availableDecisions": ["accept", "cancel"]}},
+            {"id": 6, "method": "item/fileChange/requestApproval",
+             "params": {"itemId": "p1", "grantRoot": "/w",
+                        "reason": "outside the sandbox"}})
+        asked = _of(out, "approval.requested")
+        for request in asked:
+            self.assertEqual([o["id"] for o in request["data"]["options"]],
+                             ["allow", "deny"])
+        self.assertEqual(asked[1]["data"]["prompt"],
+                         "Apply file changes under /w\n\noutside the sandbox")
+        self.assertEqual(len(_of(out, "session.state")), 1,
+                         "waiting is said once")
+        reply, resolved = state.answer("aaaa0001-5", Answer(decision="always"))
+        self.assertEqual(reply["result"], {"decision": "accept"})
+        self.assertEqual(resolved[0]["data"]["decision"], "allow")
+        self.assertEqual(len(resolved), 1, "one request is still open")
+        # A bare text answer is a deny; an option id is a decision.
+        reply, resolved = state.answer("aaaa0001-6", Answer(text="not that"))
+        self.assertEqual(reply["result"], {"decision": "decline"})
+        self.assertEqual(resolved[0]["data"]["decision"], "deny")
+        self.assertEqual(resolved[0]["data"]["text"], "not that")
+        self.assertEqual(resolved[1]["data"]["state"], "running")
+
+    def test_permissions_request(self):
+        state, _clock, _ = self.in_turn()
+        wanted = {"network": {"enabled": True}}
+        for rpc, decision, body in (
+                (1, "allow", {"permissions": wanted, "scope": "turn"}),
+                (2, "always", {"permissions": wanted, "scope": "session"}),
+                (3, "deny", {"permissions": {}, "scope": "turn"})):
+            out, _ = self.feed(state, {
+                "id": rpc, "method": "item/permissions/requestApproval",
+                "params": {"itemId": "x", "permissions": wanted}})
+            asked = _of(out, "approval.requested")[0]["data"]
+            self.assertIn('"network"', asked["prompt"])
+            reply, resolved = state.answer(asked["request_id"],
+                                           Answer(option_id=decision))
+            self.assertEqual(reply["result"], body)
+            self.assertEqual(resolved[0]["data"]["decision"], decision)
+
+    def test_a_question(self):
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(state, {
+            "id": 4, "method": "item/tool/requestUserInput",
+            "params": {"questions": [{
+                "id": "q1", "header": "Pick", "question": "Which?",
+                "options": [{"label": "red", "description": "warm"},
+                            {"label": "blue", "description": "cold"}]}]}})
+        self.assertEqual([e["type"] for e in out],
+                         ["input.requested", "session.state"])
+        self.assertEqual(out[0]["data"], {
+            "request_id": "aaaa0001-4", "prompt": "Which?", "kind": "choice",
+            "options": [{"id": "o1", "label": "red"},
+                        {"id": "o2", "label": "blue"}]})
+        reply, resolved = state.answer("aaaa0001-4", Answer(option_id="o2"))
+        self.assertEqual(reply["result"],
+                         {"answers": {"q1": {"answers": ["blue"]}}})
+        self.assertEqual(resolved[0]["data"]["option_id"], "o2")
+        self.assertNotIn("decision", resolved[0]["data"])
+        # Free text, and no options: a text question.
+        out, _ = self.feed(state, {
+            "id": 5, "method": "item/tool/requestUserInput",
+            "params": {"questions": [{"id": "q9", "question": "Name?"}]}})
+        self.assertEqual(out[0]["data"]["kind"], "text")
+        reply, _ = state.answer("aaaa0001-5", Answer(text="Ada"))
+        self.assertEqual(reply["result"],
+                         {"answers": {"q9": {"answers": ["Ada"]}}})
+
+    def test_a_choice_that_holds_a_secret_is_never_shown(self):
+        # The model writes the choices; one can quote a key from the
+        # conversation. Devices and the log get an opaque id and the
+        # redacted label; the answer to Codex is the label as written.
+        key = "sk-ant-api03-" + "c" * 40
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(state, {
+            "id": 4, "method": "item/tool/requestUserInput",
+            "params": {"questions": [{
+                "id": "q1", "question": f"Use {key}?",
+                "options": [{"label": f"use {key}", "description": ""},
+                            {"label": "no", "description": ""}]}]}})
+        self.assertNotIn("sk-ant", json.dumps(out))
+        self.assertEqual([o["id"] for o in out[0]["data"]["options"]],
+                         ["o1", "o2"])
+        self.assertEqual(out[0]["data"]["options"][1]["label"], "no")
+        reply, resolved = state.answer("aaaa0001-4", Answer(option_id="o1"))
+        self.assertEqual(reply["result"],
+                         {"answers": {"q1": {"answers": [f"use {key}"]}}})
+        self.assertNotIn("sk-ant", json.dumps(resolved))
+        self.assertEqual(resolved[0]["data"]["option_id"], "o1")
+        # An id that names no choice is passed on as the answer.
+        self.feed(state, {
+            "id": 5, "method": "item/tool/requestUserInput",
+            "params": {"questions": [{"id": "q2", "question": "Which?",
+                                      "options": [{"label": "a"}]}]}})
+        reply, _ = state.answer("aaaa0001-5", Answer(option_id="other"))
+        self.assertEqual(reply["result"],
+                         {"answers": {"q2": {"answers": ["other"]}}})
+
+    def test_requests_nothing_serves_get_an_error_answer(self):
+        state, _clock, _ = self.in_turn()
+        for rpc, method, params in (
+                (1, "mcpServer/elicitation/request", {}),
+                (2, "item/tool/requestUserInput",
+                 {"questions": [{"id": "a"}, {"id": "b"}]}),
+                (3, "account/chatgptAuthTokens/refresh", {})):
+            out, replies = self.feed(state, {"id": rpc, "method": method,
+                                             "params": params})
+            self.assertEqual(out, [])
+            self.assertEqual(replies[0]["id"], rpc)
+            self.assertEqual(replies[0]["error"]["code"], -32601)
+        self.assertEqual(state.pending, {})
+        self.assertEqual(state.unknown["mcpServer/elicitation/request"], 1)
+
+    def test_a_request_the_server_takes_back(self):
+        state, _clock, _ = self.in_turn()
+        self.feed(state, {"id": 5, "method":
+                          "item/commandExecution/requestApproval",
+                          "params": {"command": "ls"}})
+        out, _ = self.feed(state, _note("serverRequest/resolved",
+                                        requestId=5))
+        self.assertEqual([(e["type"], e["data"].get("source")
+                           or e["data"].get("state")) for e in out],
+                         [("approval.resolved", "harness"),
+                          ("session.state", "running")])
+        # After our own answer the same notification finds nothing.
+        out, _ = self.feed(state, _note("serverRequest/resolved",
+                                        requestId=5))
+        self.assertEqual(out, [])
+
+    def test_a_steer_lands_when_its_item_does(self):
+        state, _clock, _ = self.in_turn()
+        self.feed(state,
+                  _note("item/started", item={"type": "userMessage",
+                                              "id": "u1", "clientId": "swe-1"}),
+                  _note("item/agentMessage/delta", itemId="m1",
+                        delta="one two "))
+        state.expect_steer(2, "stop", command_id="c2", device="phone",
+                           attachments=["/a.png"])
+        out, _ = self.feed(state, {"id": 2, "result": {"turnId": "native-1"}})
+        self.assertEqual(out, [], "accepted, not landed yet")
+        self.assertEqual(state.accepted, {1: "t-aaaa0001-1",
+                                          2: "t-aaaa0001-1"})
+        out, _ = self.feed(state,
+                           _note("item/agentMessage/delta", itemId="m1",
+                                 delta="three "),
+                           _note("item/started", item={
+                               "type": "userMessage", "id": "u2",
+                               "clientId": "swe-2"}))
+        self.assertEqual([e["type"] for e in out], [
+            "message.delta", "message.completed", "message.completed"])
+        self.assertEqual(out[1]["data"], {"id": "m1", "kind": "assistant",
+                                          "text": "one two three "})
+        self.assertEqual(out[2]["data"], {
+            "id": "t-aaaa0001-1:user2", "kind": "user", "text": "stop",
+            "by": "phone", "attachments": ["/a.png"]})
+        self.assertEqual(out[2]["command_id"], "c2")
+        # The abandoned reply's late deltas are dropped.
+        out, _ = self.feed(state, _note("item/agentMessage/delta",
+                                        itemId="m1", delta="four"))
+        self.assertEqual(out, [])
+
+    def test_a_steer_whose_item_overtook_its_answer(self):
+        state, _clock, _ = self.in_turn()
+        state.expect_steer(2, "stop")
+        out, _ = self.feed(state, _note("item/started", item={
+            "type": "userMessage", "id": "u2", "clientId": "swe-2"}))
+        self.assertEqual(out, [])
+        out, _ = self.feed(state, {"id": 2, "result": {"turnId": "n"}})
+        self.assertEqual([e["data"]["text"] for e in out], ["stop"])
+
+    def test_steers_without_client_ids_land_in_order(self):
+        state, _clock, _ = self.in_turn()
+        state.expect_steer(2, "first")
+        state.expect_steer(3, "second")
+        self.feed(state, {"id": 2, "result": {}}, {"id": 3, "result": {}})
+        out, _ = self.feed(state, _note("item/started", item={
+            "type": "userMessage", "id": "u2", "clientId": None}))
+        self.assertEqual([e["data"]["text"] for e in out], ["first"])
+        # The turn ends before the second is announced: it still shows.
+        out, _ = self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "completed"}))
+        self.assertEqual([e["type"] for e in out], [
+            "message.completed", "turn.ended", "session.state"])
+        self.assertEqual(out[0]["data"]["id"], "t-aaaa0001-1:user3")
+
+    def test_a_steer_answered_after_the_turn_ended(self):
+        state, _clock, _ = self.in_turn()
+        state.expect_steer(2, "late")
+        self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "completed"}))
+        fed = state.feed({"id": 2, "result": {"turnId": "native-1"}})
+        self.assertEqual(fed.events, [])
+        self.assertNotIn(2, state.accepted)
+
+    def test_turn_end_closes_what_is_open(self):
+        state, clock, _ = self.in_turn(command_id="c1")
+        self.feed(state,
+                  _note("item/agentMessage/delta", itemId="m1",
+                        delta="half a"),
+                  {"id": 5, "method": "item/commandExecution/requestApproval",
+                   "params": {"command": "ls"}})
+        clock.advance(2.5)
+        out, _ = self.feed(
+            state,
+            _note("turn/completed", turn={"id": "some-older-turn",
+                                          "status": "completed"}))
+        self.assertEqual(out, [], "another turn's end is not ours")
+        out, _ = self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "completed"}))
+        self.assertEqual([e["type"] for e in out], [
+            "message.delta", "message.completed", "approval.resolved",
+            "turn.ended", "session.state"])
+        self.assertEqual(out[1]["data"]["text"], "half a")
+        self.assertEqual(out[2]["data"]["source"], "turn_ended")
+        self.assertEqual(out[3]["data"], {"status": "completed",
+                                          "duration_s": 2.5})
+        self.assertEqual(out[3]["command_id"], "c1")
+        self.assertEqual(out[4]["data"]["state"], "idle")
+        self.assertFalse(state.busy)
+        # Nothing of it is left for the next turn.
+        out, _ = self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "completed"}))
+        self.assertEqual(out, [])
+
+    def test_interrupt(self):
+        state, _clock, _ = self.in_turn()
+        self.feed(state, {"id": 5, "method":
+                          "item/fileChange/requestApproval", "params": {}})
+        out = state.interrupt_sent()
+        self.assertEqual([(e["type"], e["data"].get("source")
+                           or e["data"].get("state")) for e in out],
+                         [("approval.resolved", "turn_ended"),
+                          ("session.state", "running")])
+        out, _ = self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "interrupted"}))
+        self.assertEqual(out[0]["data"]["status"], "interrupted")
+        self.assertEqual(state.interrupt_sent(), [])
+
+    def test_a_failed_turn(self):
+        state, _clock, _ = self.in_turn()
+        failure = {"message": "quota: token=abc12345 exhausted",
+                   "codexErrorInfo": {"httpConnectionFailed": {}}}
+        out, _ = self.feed(
+            state,
+            _note("error", error=failure, willRetry=True),
+            _note("error", error=failure, willRetry=False),
+            _note("turn/completed", turn={"id": "native-1",
+                                          "status": "failed",
+                                          "error": failure}))
+        self.assertEqual([e["type"] for e in out],
+                         ["error", "turn.ended", "session.state"])
+        self.assertEqual(out[0]["data"]["code"], "httpConnectionFailed")
+        self.assertEqual(out[1]["data"]["status"], "failed")
+        self.assertEqual(out[1]["data"]["reason"], out[0]["data"]["message"])
+        # With no error notification first, the turn's own error serves.
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "failed",
+            "error": {"message": "boom"}}))
+        self.assertEqual([(e["type"], e["data"].get("code")) for e in out][0],
+                         ("error", "error"))
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(state, _note("turn/completed", turn={
+            "id": "native-1", "status": "failed"}))
+        self.assertEqual(out[0]["data"]["message"], "the turn failed")
+        # An error with no turn open is not ours to report.
+        out, _ = self.feed(state, _note("error", error=failure,
+                                        willRetry=False))
+        self.assertEqual(out, [])
+
+    def test_plan_usage_and_compaction(self):
+        state, _clock, _ = self.in_turn()
+        out, _ = self.feed(
+            state,
+            _note("turn/plan/updated", explanation="because",
+                  plan=[{"step": "a", "status": "completed"},
+                        {"step": "b", "status": "inProgress"},
+                        {"step": "c", "status": "pending"}, "junk"]),
+            _note("item/completed", item={"type": "plan", "id": "p1",
+                                          "text": "# The plan"}),
+            _note("thread/tokenUsage/updated", tokenUsage={
+                "last": {"inputTokens": 10, "outputTokens": 2,
+                         "cachedInputTokens": 4, "totalTokens": 12,
+                         "cacheWriteInputTokens": -1},
+                "modelContextWindow": 1000}),
+            _note("thread/tokenUsage/updated", tokenUsage={"last": None}),
+            _note("thread/tokenUsage/updated", tokenUsage={"last": {}}),
+            _note("thread/compacted"),
+            _note("item/completed", item={"type": "contextCompaction",
+                                          "id": "cc"}))
+        self.assertEqual([e["type"] for e in out], [
+            "plan.updated", "plan.updated", "usage.updated",
+            "context.compacted", "context.compacted"])
+        self.assertEqual(out[0]["data"], {"text": "because", "items": [
+            {"text": "a", "status": "completed"},
+            {"text": "b", "status": "in_progress"},
+            {"text": "c", "status": "pending"}]})
+        self.assertEqual(out[1]["data"], {"items": [], "text": "# The plan"})
+        self.assertEqual(out[2]["data"], {
+            "input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 4,
+            "context_tokens": 12, "context_window": 1000})
+
+    def test_other_threads_and_unknown_lines_are_skipped(self):
+        state, _clock, _ = self.in_turn()
+        out, replies = self.feed(
+            state,
+            {"method": "item/agentMessage/delta",
+             "params": {"threadId": "a-sub-agent", "itemId": "m9",
+                        "delta": "not ours"}},
+            {"method": "account/rateLimits/updated", "params": {}},
+            {"method": "item/completed", "params": "not an object"},
+            {"method": "item/started", "params": {"item": {"type": "x"}}},
+            {"neither": "method nor id"},
+            _note("item/completed", item={"type": "userMessage",
+                                          "id": "u1"}))
+        self.assertEqual((out, replies), ([], []))
+        self.assertEqual(state.unknown, {
+            "other-thread": 1, "account/rateLimits/updated": 1, "?": 1})
+        self.assertEqual(state.feed("junk").events, [])
+
+    def test_a_command_that_outlives_its_turn(self):
+        state, _clock, _ = self.in_turn()
+        command = {"type": "commandExecution", "id": "x1",
+                   "command": "sleep 25", "status": "inProgress"}
+        self.feed(state, _note("item/started", item=command),
+                  _note("turn/completed", turn={"id": "native-1",
+                                                "status": "completed"}))
+        out, _ = self.feed(
+            state,
+            _note("item/completed", item={**command, "status": "completed",
+                                          "aggregatedOutput": "late\n"}),
+            # Anything else past the turn's end is dropped.
+            _note("item/completed", item={"type": "agentMessage",
+                                          "id": "m5", "text": "stray"}),
+            _note("item/agentMessage/delta", itemId="m6", delta="stray"))
+        self.assertEqual([e["type"] for e in out], ["tool.completed"])
+        self.assertNotIn("turn_id", out[0])
+        self.assertEqual(out[0]["data"]["output"], "late\n")
+
+    def test_a_command_that_ends_during_a_later_turn(self):
+        # The keeper may start the next turn at once: the old command's
+        # result must not be filed under it.
+        state, _clock, _ = self.in_turn()
+        old = {"type": "commandExecution", "id": "x1",
+               "command": "sleep 25", "status": "inProgress"}
+        self.feed(state, _note("item/started", item=old),
+                  _note("turn/completed", turn={"id": "native-1",
+                                                "status": "completed"}))
+        state.expect_turn(2, "next")
+        self.feed(state, {"id": 2, "result": {"turn": {"id": "native-2"}}})
+        new = {"type": "commandExecution", "id": "x2", "command": "ls",
+               "status": "inProgress"}
+        out, _ = self.feed(
+            state,
+            _note("item/started", item=new),
+            _note("item/completed", item={**old, "status": "completed"}),
+            _note("item/completed", item={**new, "status": "completed"}))
+        done = _of(out, "tool.completed")
+        self.assertEqual([e["data"]["call_id"] for e in done], ["x1", "x2"])
+        self.assertNotIn("turn_id", done[0])
+        self.assertEqual(done[1]["turn_id"], "t-aaaa0001-2")
+
+    def test_events_before_the_start_pair_are_held(self):
+        state = codex_wire.ThreadState("codex:t", run_id="aaaa0001")
+        state.thread_id = THREAD
+        fed = state.feed(_note("turn/started", turn={"id": "n1"}))
+        self.assertEqual(fed.events, [])
+        out = state.start_events(codex_wire.PROVEN, STEM)
+        self.assertEqual([e["type"] for e in out], [
+            "session.caps", "session.state", "turn.started",
+            "session.state"])
+
+    def test_exit_and_close_sequences(self):
+        for finish, source, status, last in (
+                (lambda s: s.exited("codex exited with code 3"),
+                 "agent_exit", "failed", "agent_down"),
+                (lambda s: s.closed(), "closed", "interrupted", "closed")):
+            state, _clock, _ = self.in_turn()
+            self.feed(state, {"id": 5, "method":
+                              "item/commandExecution/requestApproval",
+                              "params": {"command": "ls"}})
+            out = finish(state)
+            self.assertEqual([e["type"] for e in out], [
+                "approval.resolved", "turn.ended", "session.state"])
+            self.assertEqual(out[0]["data"]["source"], source)
+            self.assertEqual(out[1]["data"]["status"], status)
+            self.assertEqual(out[2]["data"]["state"], last)
+            self.assertEqual(finish(state), [], "said once")
+            self.assertEqual(state.feed(_note("turn/started",
+                                              turn={"id": "n"})).events, [])
+
+    def test_narrowing_says_so_once(self):
+        state, _clock = self.state()
+        out: list = []
+        state.narrow(out, Caps(rollback=True, fork=True,
+                               options=codex_wire.PROVEN.options))
+        state.narrow(out, Caps(rollback=True, fork=True,
+                               options=codex_wire.PROVEN.options))
+        self.assertEqual(len(out), 1)
+        self.assertIs(out[0]["data"]["caps"]["steer"], False)
+        self.assertIs(out[0]["data"]["caps"]["rollback"], True)
+
+    def test_replay_maps_recorded_answers(self):
+        answer = codex_wire._answer_from_reply
+        self.assertEqual(answer({"decision": "accept"}).decision, "allow")
+        self.assertEqual(answer({"decision": "acceptForSession"}).decision,
+                         "always")
+        self.assertEqual(answer({"decision": "cancel"}).decision, "deny")
+        self.assertEqual(answer(None).decision, "deny")
+        self.assertEqual(answer({"permissions": {}}).decision, "deny")
+        self.assertEqual(answer({"permissions": {"n": 1},
+                                 "scope": "session"}).decision, "always")
+        self.assertEqual(answer({"permissions": {"n": 1}}).decision, "allow")
+        self.assertEqual(answer({"answers": {"q": {"answers": ["a", "b"]}}}
+                                ).text, "a b")
+        self.assertEqual(answer({"answers": {}}).text, "-")
+        # A fixture with no header, and lines replay skips.
+        got = codex_wire.replay([
+            {"proc": 0, "dir": "out", "t": 0.0,
+             "msg": codex_wire.thread_start(1, cwd="/w")},
+            {"proc": 0, "dir": "in", "t": 0.1, "raw": "not json"},
+            {"proc": 0, "dir": "in", "t": 0.2,
+             "msg": {"id": 1, "result": {"thread": {"id": THREAD}}}},
+            {"proc": 0, "exit": 0}])
+        self.assertEqual([e["type"] for e in got],
+                         ["session.caps", "session.state", "session.state"])
+        self.assertEqual(got[1]["data"]["harness_session_id"], THREAD)
+
+
+def _codex_resolved(caps: Caps = ALL_CAPS,
+                    min_version: str = "") -> registry.Resolved:
+    return registry.Resolved("codex", "codex_appserver",
+                             (sys.executable, str(CODEX_FAKE)), caps,
+                             min_version=min_version)
+
+
+class _CodexCase(unittest.TestCase):
+    """An adapter over the fake app-server, cleaned up after the test."""
+
+    def fake_env(self, mode: str = "ok", reply: str = "hello",
+                 **extra) -> dict:
+        self.log = temp_dir(self) / "fake.log"
+        self.codex_home = temp_dir(self)
+        env = dict(os.environ, FAKE_CODEX_MODE=mode, FAKE_CODEX_REPLY=reply,
+                   FAKE_CODEX_LOG=str(self.log),
+                   CODEX_HOME=str(self.codex_home))
+        env.update(extra)
+        return env
+
+    def adapter(self, mode: str = "ok", *, caps: Caps = ALL_CAPS,
+                reply: str = "hello", min_version: str = "",
+                env_extra: dict | None = None, **kw):
+        adapter = codex_appserver.CodexAppServerAdapter(
+            _codex_resolved(caps, min_version),
+            env=self.fake_env(mode, reply, **(env_extra or {})), **kw)
+        self.addCleanup(adapter.close, 0.5)
+        return adapter
+
+    def spec(self, **kw) -> StartSpec:
+        return StartSpec(session_key="codex:test", cwd=str(temp_dir(self)),
+                         **kw)
+
+    def started(self, mode: str = "ok", **kw):
+        spec_kw = kw.pop("spec", {})
+        adapter = self.adapter(mode, **kw)
+        sink = fake.ListSink()
+        sid = adapter.start(self.spec(**spec_kw), sink)
+        return adapter, sink, sid
+
+    def sent(self) -> list:
+        return [json.loads(line) for line in
+                self.log.read_text().splitlines()] if self.log.exists() \
+            else []
+
+    def sent_methods(self) -> list:
+        return [m.get("method") for m in self.sent()[1:]]
+
+    def wait(self, sink, match, what="the event"):
+        found = sink.wait_for(match, TIMEOUT)
+        self.assertIsNotNone(found, f"timed out waiting for {what}")
+        return found
+
+    def wait_turn(self, sink, turn_id):
+        """The turn's ``turn.ended``, once the ``session.state`` that
+        follows it is in too (they are emitted together)."""
+        def ended_at():
+            return next((i for i, e in enumerate(sink.events)
+                         if e["type"] == "turn.ended"
+                         and e.get("turn_id") == turn_id), None)
+
+        def idle_after(event):
+            at = ended_at()
+            return at is not None and event["type"] == "session.state" \
+                and any(e is event for e in sink.events[at + 1:])
+
+        self.wait(sink, idle_after, "the turn to end")
+        return sink.events[ended_at()]
+
+    def asked(self, sink, etype="approval.requested"):
+        return self.wait(sink, etype, "the request")
+
+    def wait_state(self, sink, state):
+        return self.wait(sink, lambda e: e["type"] == "session.state"
+                         and e["data"]["state"] == state, state)
+
+
+class TestCodexContract(AdapterContract, _CodexCase):
+    def make_adapter(self, *, caps, reply):
+        return self.adapter(caps=caps, reply=reply)
+
+
+class TestCodexAdapterStart(_CodexCase):
+    def test_registered_and_resolved(self):
+        self.assertIn("codex_appserver", registry.registered())
+        self.assertIn("codex_appserver", registry.BUILTIN_MODULES)
+        resolved = registry.adapter_for("codex", {}, which=lambda b: b)
+        self.assertTrue(resolved.ok)
+        self.assertEqual(resolved.argv, codex_wire.DEFAULT_ARGV)
+        self.assertEqual(resolved.caps, Caps(),
+                         "the fallback keeps every feature off")
+        made = registry.create(resolved)
+        self.assertIsInstance(made, codex_appserver.CodexAppServerAdapter)
+        self.assertEqual(made.capabilities, Caps())
+
+    def test_caps_never_exceed_what_is_proven(self):
+        adapter = self.adapter()
+        self.assertEqual(adapter.capabilities, codex_wire.PROVEN)
+        self.assertFalse(adapter.capabilities.plan_mode)
+        self.assertFalse(adapter.capabilities.stop_task)
+        self.assertEqual(self.adapter(caps=Caps(steer=True)).capabilities,
+                         Caps(steer=True))
+
+    def test_start_handshakes_and_names_the_session(self):
+        adapter, sink, sid = self.started(spec={
+            "model": "gpt-x", "permission_mode": "on-request",
+            "session_id": "the-hubs-pick", "env": {"FAKE_CODEX_EXTRA": "1"}})
+        self.assertEqual(sid, STEM, "the id SWE's session list uses")
+        self.assertEqual(adapter.session_id, STEM)
+        self.assertEqual(adapter.version, "0.170.0")
+        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.events[0]["data"]["caps"],
+                         codex_wire.PROVEN.as_dict())
+        self.assertEqual(sink.events[1]["data"], {
+            "state": "idle", "harness_session_id": STEM})
+        first, *rest = self.sent()
+        self.assertEqual(first["argv"], [])
+        self.assertEqual(first["env"]["EXTRA"], "1")
+        self.assertEqual([m.get("method") for m in rest],
+                         ["initialize", "initialized", "thread/start"])
+        self.assertEqual(rest[0]["params"]["clientInfo"]["name"], "swe")
+        self.assertEqual(rest[2]["params"], {
+            "cwd": adapter._spec.cwd, "model": "gpt-x",
+            "approvalPolicy": "on-request"})
+
+    def test_a_permission_mode_codex_does_not_know_is_left_out(self):
+        self.started(spec={"permission_mode": "acceptEdits"})
+        self.assertNotIn("approvalPolicy", self.sent()[3]["params"])
+
+    def test_resume_and_fork(self):
+        adapter, sink, sid = self.started(spec={"resume_id": STEM})
+        self.assertEqual(sid, STEM)
+        resume = self.sent()[3]
+        self.assertEqual(resume["method"], "thread/resume")
+        self.assertEqual(resume["params"]["threadId"], THREAD)
+        self.assertIs(resume["params"]["excludeTurns"], True)
+        adapter.close(0.5)
+        forked, sink, sid = self.started(spec={
+            "resume_id": THREAD, "fork": True, "model": "m"})
+        self.assertEqual(sid, f"rollout-2026-01-02T03-04-05-{FORKED}")
+        fork = self.sent()[3]
+        self.assertEqual((fork["method"], fork["params"]["threadId"],
+                          fork["params"]["model"]),
+                         ("thread/fork", THREAD, "m"))
+        turn_id = forked.send_turn(TurnInput("hi"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(self.sent()[-1]["params"]["threadId"], FORKED)
+
+    def test_bad_resume_ids(self):
+        adapter = self.adapter()
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(self.spec(resume_id="not-a-thread"),
+                          fake.ListSink())
+        self.assertEqual(ctx.exception.code, "bad_request")
+        gone = "99999999-2222-7333-8444-555555555555"
+        other = self.adapter()
+        sink = fake.ListSink()
+        with self.assertRaises(AdapterError) as ctx:
+            other.start(self.spec(resume_id=gone), sink)
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn("no rollout found", str(ctx.exception))
+        self.assertEqual(sink.events, [], "a failed start emits nothing")
+        with self.assertRaises(AdapterError) as ctx:
+            other.start(self.spec(), sink)
+        self.assertEqual(ctx.exception.code, "started")
+
+    def assert_start_fails(self, mode, code, text="", **kw):
+        adapter = self.adapter(mode, **kw)
+        sink = fake.ListSink()
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(self.spec(), sink)
+        self.assertEqual(ctx.exception.code, code)
+        if text:
+            self.assertIn(text, str(ctx.exception))
+        self.assertEqual(sink.events, [])
+        self.assertIsNotNone(adapter._proc.poll(), "the child is stopped")
+        with self.assertRaises(AdapterError):
+            adapter.send_turn(TurnInput("hi"))
+        return adapter
+
+    def test_start_failures(self):
+        self.assert_start_fails("exit-at-init", "agent_down",
+                                text="not logged in")
+        self.assert_start_fails("refuse-init", "refused",
+                                text="client version not supported")
+        self.assert_start_fails("refuse-thread", "refused",
+                                text="not logged in")
+        self.assert_start_fails("silent-init", "timeout", init_timeout=0.3)
+
+    def test_version_floor(self):
+        adapter = self.assert_start_fails("old", "unsupported_version",
+                                          text="0.1.0 is older than 0.170.0")
+        self.assertEqual(adapter.version, "0.1.0")
+        # harness.json's min_version wins over the module's.
+        _adapter, _sink, sid = self.started("old", min_version="0.0.1")
+        self.assertEqual(sid, STEM)
+
+    def test_spawn_failure(self):
+        def boom(*a, **kw):
+            raise OSError("no such file")
+
+        adapter = codex_appserver.CodexAppServerAdapter(
+            _codex_resolved(), spawn=boom)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.start(self.spec(), fake.ListSink())
+        self.assertEqual(ctx.exception.code, "agent_down")
+        adapter.close()
+
+    def test_transcript_position(self):
+        adapter, _sink, _sid = self.started()
+        self.assertIsNone(adapter.transcript_position(),
+                          "no rollout before the first turn")
+        rollout = Path(adapter._rollout)
+        self.assertEqual(rollout.name, STEM + ".jsonl")
+        rollout.parent.mkdir(parents=True)
+        rollout.write_text("12345")
+        position = adapter.transcript_position()
+        self.assertEqual((position.path, position.offset), (str(rollout), 5))
+        self.assertIsNone(self.adapter().transcript_position())
+
+
+class TestCodexAdapterTurns(_CodexCase):
+    def test_a_turn_streams_and_ends(self):
+        adapter, sink, _sid = self.started(reply="hello there")
+        turn_id = adapter.send_turn(TurnInput(
+            "hi", command_id="c1", device="phone",
+            attachments=["/w/a.txt"]))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertEqual(ended["command_id"], "c1")
+        mine = [e for e in sink.events if e.get("turn_id") == turn_id]
+        self.assertEqual([e["type"] for e in mine], [
+            "turn.started", "message.completed", "message.delta",
+            "message.delta", "message.completed", "usage.updated",
+            "turn.ended"])
+        self.assertEqual(mine[1]["data"]["attachments"], ["/w/a.txt"])
+        _streams_close(self, sink.events)
+        self.assertEqual(sink.events[-1]["data"]["state"], "idle")
+        start = self.sent()[-1]
+        self.assertEqual(start["method"], "turn/start")
+        self.assertEqual(start["params"]["input"][0]["text"],
+                         "[Attached file: /w/a.txt] hi")
+        # A second turn gets the next id.
+        second = adapter.send_turn(TurnInput("again"))
+        self.assertNotEqual(second, turn_id)
+        self.wait_turn(sink, second)
+
+    def test_busy_mid_turn(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("another"))
+        self.assertEqual(ctx.exception.code, "busy")
+        self.wait(sink, "message.delta")
+        adapter.interrupt()
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        partial = [e for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(partial[0]["data"]["text"], "1\n2\n")
+        self.assertEqual(self.sent()[-1]["params"]["turnId"],
+                         adapter._state.native_turns[turn_id])
+        _streams_close(self, sink.events)
+        before = len(sink.events)
+        adapter.interrupt()
+        self.assertEqual(len(sink.events), before)
+
+    def test_a_refused_turn(self):
+        adapter, sink, _sid = self.started("refuse-turn")
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput("go"))
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn("the model is not available", str(ctx.exception))
+        self.assertEqual(len(sink.events), before)
+        self.assertFalse(adapter._state.busy)
+
+    def test_a_turn_start_the_server_never_answers(self):
+        adapter, sink, _sid = self.started()
+        # Swallow the answer: the reader never sees it.
+        with mock.patch.object(adapter, "_dispatch"):
+            with mock.patch.object(adapter, "_call_timeout", 0.2):
+                with self.assertRaises(AdapterError) as ctx:
+                    adapter.send_turn(TurnInput("go"))
+        self.assertEqual(ctx.exception.code, "timeout")
+        self.assertFalse(adapter._state.busy)
+        self.assertEqual(sink.of("turn.started"), [])
+
+    def test_approval_allow(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.asked(sink)
+        self.assertEqual(asked["data"]["kind"], "command")
+        self.assertEqual(asked["data"]["call_id"], "exec-0001")
+        self.assertEqual([o["id"] for o in asked["data"]["options"]],
+                         ["allow", "always", "deny"])
+        self.assertTrue(asked["data"]["request_id"].endswith("-0"))
+        self.wait_state(sink, "waiting")
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="always", device="mac"))
+        self.wait_turn(sink, turn_id)
+        resolved = sink.of("approval.resolved")
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0]["data"]["decision"], "always")
+        self.assertEqual(resolved[0]["data"]["by"], "mac")
+        reply = [m for m in self.sent() if "result" in m][0]
+        self.assertEqual(reply, {"jsonrpc": "2.0", "id": 0, "result": {
+            "decision": "acceptForSession"}})
+        done = sink.of("tool.completed")[0]["data"]
+        self.assertEqual((done["status"], done["output"]),
+                         ("ok", "made a.txt\n"))
+        with self.assertRaises(UnknownRequest):
+            adapter.respond(asked["data"]["request_id"],
+                            Answer(decision="allow"))
+        _contract_order(self, sink.events)
+
+    def test_approval_deny_and_a_file_change(self):
+        adapter, sink, _sid = self.started("patch")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.asked(sink)
+        self.assertEqual(asked["data"]["kind"], "tool")
+        self.assertEqual(asked["data"]["prompt"],
+                         "Apply file changes:\n/w/new.txt\n/w/old.txt")
+        adapter.respond(asked["data"]["request_id"], Answer(decision="deny"))
+        self.wait_turn(sink, turn_id)
+        done = sink.of("tool.completed")[0]["data"]
+        self.assertEqual(done["status"], "cancelled")
+        self.assertNotIn("file_edits", done)
+        # Allowed, the edits come with the completion.
+        turn_id = adapter.send_turn(TurnInput("again"))
+        asked = self.wait(sink, lambda e: e["type"] == "approval.requested"
+                          and e.get("turn_id") == turn_id)
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        edits = sink.of("tool.completed")[1]["data"]["file_edits"]
+        self.assertEqual(edits, [
+            {"path": "/w/new.txt", "kind": "add",
+             "diff": "@@ -0,0 +1,1 @@\n+yes\n"},
+            {"path": "/w/moved.txt", "kind": "modify",
+             "old_path": "/w/old.txt", "diff": "@@ -1 +1 @@\n-a\n+b\n"}])
+
+    def test_question_and_permissions(self):
+        adapter, sink, _sid = self.started("question", reply="x")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.asked(sink, "input.requested")
+        self.assertEqual(asked["data"]["kind"], "choice")
+        self.assertEqual(asked["data"]["options"],
+                         [{"id": "o1", "label": "red"},
+                          {"id": "o2", "label": "blue"}])
+        adapter.respond(asked["data"]["request_id"], Answer(option_id="o1"))
+        self.wait_turn(sink, turn_id)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["you said red"])
+        turn_id = adapter.send_turn(TurnInput("mode:permissions go"))
+        asked = self.wait(sink, lambda e: e["type"] == "approval.requested")
+        adapter.respond(asked["data"]["request_id"],
+                        Answer(decision="allow"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(sink.of("message.completed")[-1]["data"]["text"],
+                         "granted")
+        # Two questions at once have no card: the server is told so and
+        # goes on.
+        turn_id = adapter.send_turn(TurnInput("mode:questions go"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(sink.of("message.completed")[-1]["data"]["text"],
+                         "unanswered")
+
+    def test_a_withdrawn_approval(self):
+        adapter, sink, _sid = self.started("withdraw")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        resolved = sink.of("approval.resolved")
+        self.assertEqual([e["data"]["source"] for e in resolved],
+                         ["harness"])
+        with self.assertRaises(UnknownRequest):
+            adapter.respond(resolved[0]["data"]["request_id"],
+                            Answer(decision="allow"))
+        _contract_order(self, sink.events)
+
+    def test_interrupt_retires_an_open_approval(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.asked(sink)
+        adapter.interrupt()
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "interrupted")
+        self.assertEqual(sink.of("approval.resolved")[0]["data"]["source"],
+                         "turn_ended")
+        with self.assertRaises(UnknownRequest):
+            adapter.respond(asked["data"]["request_id"],
+                            Answer(decision="allow"))
+
+    def test_noise_changes_nothing(self):
+        adapter, sink, _sid = self.started("noise", reply="fine")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        replies = [e["data"]["text"] for e in sink.of("message.completed")
+                   if e["data"]["kind"] == "assistant"]
+        self.assertEqual(replies, ["fine"])
+        self.assertEqual(list(adapter.dropped), [])
+        # The unknown server request got its error answer (queued by the
+        # reader; closing lets the fake read to the end of its input).
+        adapter.close(2.0)
+        refusals = [m for m in self.sent() if "error" in m]
+        self.assertEqual([(m["id"], m["error"]["code"]) for m in refusals],
+                         [(900, -32601)])
+        _contract_order(self, sink.events)
+
+    def test_plan_reasoning_and_tools(self):
+        adapter, sink, _sid = self.started("plan")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.wait_turn(sink, turn_id)
+        self.assertEqual(len(sink.of("plan.updated")[0]["data"]["items"]), 3)
+        thinking = sink.of("thinking.completed")
+        self.assertEqual([e["data"]["text"] for e in thinking],
+                         ["thinking it over"])
+        tools = [(e["data"]["name"], e["data"]["status"])
+                 for e in sink.of("tool.completed")]
+        self.assertEqual(tools, [("web_search", "ok"),
+                                 ("files.read", "error")])
+        self.assertEqual(sink.of("tool.completed")[1]["data"]["output"],
+                         "no such file")
+        self.assertEqual(len(sink.of("context.compacted")), 1)
+        _streams_close(self, sink.events)
+        _contract_order(self, sink.events)
+
+    def test_a_failed_turn_is_redacted(self):
+        adapter, sink, _sid = self.started("fail")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "failed")
+        errors = sink.of("error")
+        self.assertEqual(len(errors), 1, "the retried error is not shown")
+        self.assertEqual(errors[0]["data"]["code"], "modelNotFound")
+        self.assertNotIn("sk-test", json.dumps(sink.events))
+        self.assertIn("api_key=[REDACTED]", errors[0]["data"]["message"])
+        # The session goes on.
+        self.assertEqual(sink.events[-1]["data"]["state"], "idle")
+
+    def test_the_agent_dying_mid_turn(self):
+        adapter, sink, _sid = self.started("crash")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        down = self.wait_state(sink, "agent_down")
+        self.assertIn("code 3", down["data"]["reason"])
+        self.assertIn("the model stream broke", down["data"]["reason"])
+        self.assertEqual(sink.types()[-2:], ["turn.ended", "session.state"])
+        ended = [e for e in sink.of("turn.ended")
+                 if e.get("turn_id") == turn_id]
+        self.assertEqual(ended[0]["data"]["status"], "failed")
+        count = len(sink.events)
+        for call in (lambda: adapter.send_turn(TurnInput("x")),
+                     adapter.interrupt,
+                     lambda: adapter.set_option("model", "m"),
+                     lambda: adapter.respond("r", Answer(decision="allow"))):
+            with self.assertRaises(AdapterError) as ctx:
+                call()
+            self.assertEqual(ctx.exception.code, "agent_down")
+        adapter.close(0.5)
+        self.assertEqual(len(sink.events), count, "nothing after agent_down")
+
+    def test_a_dead_pipe_is_agent_down(self):
+        adapter, sink, _sid = self.started("approval")
+        adapter.send_turn(TurnInput("go"))
+        asked = self.asked(sink)
+        adapter._proc.stdin.close()
+        for call in (lambda: adapter.respond(asked["data"]["request_id"],
+                                             Answer(decision="allow")),
+                     adapter.interrupt):
+            with self.assertRaises(AdapterError) as ctx:
+                call()
+            self.assertEqual(ctx.exception.code, "agent_down")
+        self.wait_state(sink, "agent_down")
+        self.assertEqual(sink.of("approval.resolved")[-1]["data"]["source"],
+                         "agent_exit", "the unanswered request is retired")
+
+    def test_close_mid_turn(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        self.asked(sink)
+        adapter.close(1.0)
+        tail = sink.events[-3:]
+        self.assertEqual([e["type"] for e in tail], [
+            "approval.resolved", "turn.ended", "session.state"])
+        self.assertEqual(tail[0]["data"]["source"], "closed")
+        self.assertEqual((tail[1]["turn_id"], tail[1]["data"]["status"]),
+                         (turn_id, "interrupted"))
+        self.assertEqual(tail[2]["data"]["state"], "closed")
+        self.assertEqual(adapter._proc.poll(), 0, "EOF ended the server")
+        self.assertFalse(adapter._writer.thread.is_alive())
+
+    def test_close_kills_a_server_that_lingers(self):
+        adapter, sink, _sid = self.started("linger")
+        adapter.close(0.2)
+        self.assertEqual(sink.events[-1]["data"]["state"], "closed")
+        self.assertIsNotNone(adapter._proc.poll(), "terminated")
+
+    def test_a_server_that_stops_reading(self):
+        import time as _time
+
+        adapter, sink, _sid = self.started("deaf", write_timeout=0.5)
+        big = "x" * (2 * 1024 * 1024)  # past any pipe buffer
+        began = _time.monotonic()
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.send_turn(TurnInput(big))
+        self.assertEqual(ctx.exception.code, "timeout")
+        self.assertLess(_time.monotonic() - began, 5.0)
+        self.assertEqual(sink.of("turn.started"), [])
+        self.assertFalse(adapter._state.busy)
+        self.wait_state(sink, "agent_down")
+        adapter.close(0.5)
+        self.assertIsNotNone(adapter._proc.poll(), "the child is gone")
+        self.assertFalse(adapter._writer.thread.is_alive())
+
+    def test_close_while_the_writer_is_stuck(self):
+        import time as _time
+
+        adapter, sink, _sid = self.started("deaf", write_timeout=30.0)
+        adapter._write(codex_wire.request(99, "x", {
+            "pad": "y" * (2 * 1024 * 1024)}), wait=False)
+        began = _time.monotonic()
+        adapter.close(0.5)
+        self.assertLess(_time.monotonic() - began, 8.0)
+        self.assertIsNotNone(adapter._proc.poll(), "the child is gone")
+        self.assertEqual(sink.events[-1]["data"]["state"], "closed")
+        self.assertFalse(adapter._writer.thread.is_alive())
+
+    def test_a_line_the_state_machine_chokes_on_is_skipped(self):
+        adapter, sink, _sid = self.started(reply="still here")
+        real = adapter._state.feed
+        calls = []
+
+        def feed(msg):
+            if not calls:
+                calls.append(msg)
+                raise RuntimeError("boom")
+            return real(msg)
+
+        with mock.patch.object(adapter._state, "feed", feed):
+            with mock.patch.object(adapter, "_call_timeout", 0.3):
+                # The answer to turn/start is the line that is lost; the
+                # turn's own notifications still open it.
+                turn_id = adapter.send_turn(TurnInput("eaten"))
+            self.wait_turn(sink, turn_id)
+        self.assertEqual(len(adapter.dropped), 1)
+        self.assertIn("boom", adapter.dropped[0])
+        self.assertEqual(sink.of("message.completed")[-1]["data"]["text"],
+                         "still here")
+
+
+class TestCodexAdapterSteer(_CodexCase):
+    def test_a_steer_joins_the_turn(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count", command_id="c1"))
+        self.wait(sink, "message.delta")
+        adapter.steer(TurnInput("stop", command_id="c2", device="phone",
+                                attachments=["/w/a.png"]))
+        ended = self.wait_turn(sink, turn_id)
+        self.assertEqual(ended["data"]["status"], "completed")
+        self.assertEqual(len(sink.of("turn.started")), 1)
+        done = sink.of("message.completed")
+        self.assertEqual([(e["data"]["kind"], e["data"]["text"])
+                          for e in done],
+                         [("user", "count"), ("assistant", "1\n2\n"),
+                          ("user", "stop"), ("assistant", "steered")])
+        self.assertEqual(done[2]["command_id"], "c2")
+        self.assertEqual(done[2]["data"]["by"], "phone")
+        self.assertEqual(done[2]["data"]["attachments"], ["/w/a.png"])
+        self.assertEqual(done[2]["turn_id"], turn_id)
+        steer = [m for m in self.sent() if m.get("method") == "turn/steer"][0]
+        self.assertEqual(steer["params"]["expectedTurnId"],
+                         adapter._state.native_turns[turn_id])
+        self.assertEqual(steer["params"]["input"][1],
+                         {"type": "localImage", "path": "/w/a.png"})
+        _streams_close(self, sink.events)
+        _contract_order(self, sink.events)
+
+    def test_a_steer_leaves_an_open_approval_open(self):
+        adapter, sink, _sid = self.started("approval")
+        turn_id = adapter.send_turn(TurnInput("go"))
+        asked = self.asked(sink)
+        adapter.steer(TurnInput("never mind"))
+        self.assertEqual(sink.of("approval.resolved"), [])
+        self.assertIn(asked["data"]["request_id"], adapter._state.pending)
+        adapter.respond(asked["data"]["request_id"], Answer(decision="deny"))
+        self.wait_turn(sink, turn_id)
+        types = [(e["type"], e["data"].get("kind")) for e in sink.events]
+        self.assertLess(types.index(("approval.resolved", None)),
+                        [i for i, t in enumerate(types)
+                         if t == ("message.completed", "user")][1])
+        _contract_order(self, sink.events)
+
+    def test_a_command_outlives_the_steered_turn(self):
+        adapter, sink, _sid = self.started("late-tool")
+        turn_id = adapter.send_turn(TurnInput("run it"))
+        self.wait(sink, "message.delta")
+        adapter.steer(TurnInput("never mind"))
+        self.wait_turn(sink, turn_id)
+        late = self.wait(sink, "tool.completed")
+        self.assertNotIn("turn_id", late)
+        self.assertEqual(late["data"]["output"], "late\n")
+        types = sink.types()
+        self.assertGreater(types.index("tool.completed"),
+                           types.index("turn.ended"))
+
+    def test_steer_refusals(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        # The server's turn id moved on under us: refused, nothing shown.
+        with mock.patch.object(adapter._state.turn, "native_id", "stale"):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.steer(TurnInput("more"))
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn("does not match", str(ctx.exception))
+        adapter.interrupt()
+        self.wait_turn(sink, turn_id)
+        before = len(sink.events)
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.steer(TurnInput("more"))
+        self.assertEqual(ctx.exception.code, "idle")
+        self.assertEqual(len(sink.events), before)
+
+    def test_a_steer_that_races_the_turns_end(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        self.wait(sink, "message.delta")
+        native = adapter._state.native_turns[turn_id]
+        adapter.interrupt()
+        self.wait_turn(sink, turn_id)
+        # The adapter still believed the turn was open when it wrote.
+        adapter._state.open_turn([])
+        adapter._state.turn.native_id = native
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.steer(TurnInput("too late"))
+        self.assertEqual(ctx.exception.code, "idle")
+
+    def test_a_server_without_turn_steer_narrows_the_caps(self):
+        adapter, sink, _sid = self.started("slow", env_extra={
+            "FAKE_CODEX_MODE": "no-steer"})
+        self.assertTrue(adapter.capabilities.steer)
+        adapter.send_turn(TurnInput("mode:slow count"))
+        self.wait(sink, "message.delta")
+        with self.assertRaises(Unsupported) as ctx:
+            adapter.steer(TurnInput("more"))
+        self.assertEqual(ctx.exception.feature, "steer")
+        caps = sink.of("session.caps")
+        self.assertEqual(len(caps), 2)
+        self.assertIs(caps[1]["data"]["caps"]["steer"], False)
+        self.assertIs(caps[1]["data"]["caps"]["rollback"], True)
+        self.assertFalse(adapter.capabilities.steer)
+        with self.assertRaises(Unsupported):
+            adapter.steer(TurnInput("again"))
+        self.assertEqual(len(sink.of("session.caps")), 2)
+        self.assertEqual(len([m for m in self.sent()
+                              if m.get("method") == "turn/steer"]), 1)
+
+
+class TestCodexAdapterOptions(_CodexCase):
+    def test_options_ride_the_next_turn_start_once(self):
+        adapter, sink, _sid = self.started(spec={"effort": "low"})
+        adapter.set_option("model", "gpt-y")
+        adapter.set_option("permission_mode", "never")
+        self.assertEqual(self.sent_methods()[-1], "thread/start",
+                         "nothing is written until a turn starts")
+        self.wait_turn(sink, adapter.send_turn(TurnInput("one")))
+        first = self.sent()[-1]["params"]
+        self.assertEqual((first["model"], first["effort"],
+                          first["approvalPolicy"]),
+                         ("gpt-y", "low", "never"))
+        self.wait_turn(sink, adapter.send_turn(TurnInput("two")))
+        second = self.sent()[-1]["params"]
+        for name in ("model", "effort", "approvalPolicy"):
+            self.assertNotIn(name, second, "the server keeps them")
+        adapter.set_option("effort", "high")
+        self.wait_turn(sink, adapter.send_turn(TurnInput("three")))
+        third = self.sent()[-1]["params"]
+        self.assertEqual(third["effort"], "high")
+        self.assertNotIn("model", third)
+
+    def test_a_refused_turn_keeps_its_options_for_the_next(self):
+        adapter, sink, _sid = self.started()
+        adapter.set_option("model", "gpt-y")
+        with self.assertRaises(AdapterError):
+            adapter.send_turn(TurnInput("mode:refuse-turn go"))
+        self.wait_turn(sink, adapter.send_turn(TurnInput("go")))
+        self.assertEqual(self.sent()[-1]["params"]["model"], "gpt-y")
+
+    def test_option_checks(self):
+        adapter, _sink, _sid = self.started()
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.set_option("permission_mode", "acceptEdits")
+        self.assertEqual(ctx.exception.code, "bad_request")
+        self.assertIn("untrusted, on-request, never", str(ctx.exception))
+        with self.assertRaises(Unsupported):
+            adapter.set_option("plan_mode", True)
+        with self.assertRaises(ValueError):
+            adapter.set_option("model", "two words")
+        with self.assertRaises(ValueError):
+            adapter.set_option("colour", "red")
+        with self.assertRaises(Unsupported):
+            adapter.stop_task("task-1")
+        limited, _sink, _sid = self.started(caps=Caps(options={"model"}))
+        limited.set_option("model", "m")
+        with self.assertRaises(Unsupported):
+            limited.set_option("effort", "high")
+
+    def test_rollback(self):
+        adapter, sink, _sid = self.started()
+        first = adapter.send_turn(TurnInput("one"))
+        self.wait_turn(sink, first)
+        second = adapter.send_turn(TurnInput("two"))
+        self.wait_turn(sink, second)
+        third = adapter.send_turn(TurnInput("three"))
+        self.wait_turn(sink, third)
+        native = adapter._state.native_turns[second]
+        before = len(sink.events)
+        adapter.rollback(second)
+        revert = self.sent()[-1]
+        self.assertEqual(revert["method"], "thread/revert")
+        self.assertEqual(revert["params"], {"threadId": THREAD,
+                                            "beforeTurnId": native})
+        # The reverted history is a new rollout file, so the id SWE's
+        # session list knows the thread by moves; the adapter says so.
+        moved = f"{STEM}_11111111-2222-7333-8444-777777777777"
+        self.assertEqual([(e["type"], e["data"]) for e in
+                          sink.events[before:]],
+                         [("session.state", {"state": "idle",
+                                             "harness_session_id": moved})])
+        self.assertEqual(adapter.session_id, moved)
+        self.assertTrue(adapter._rollout.endswith(moved + ".jsonl"))
+        self.assertEqual(codex_wire.thread_id_of(moved), THREAD,
+                         "it still resumes as the same thread")
+        self.assertEqual(list(adapter._state.native_turns), [first])
+        # A second one that names the same file says nothing.
+        self.wait_turn(sink, adapter.send_turn(TurnInput("four")))
+        count = len(sink.of("session.state"))
+        adapter.rollback(list(adapter._state.native_turns)[-1])
+        self.assertEqual(len(sink.of("session.state")), count)
+        for gone in (second, third, "t-other-1"):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.rollback(gone)
+            self.assertEqual(ctx.exception.code, "unknown_turn")
+
+    def test_rollback_refusals(self):
+        adapter, sink, _sid = self.started("slow")
+        turn_id = adapter.send_turn(TurnInput("count"))
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.rollback(turn_id)
+        self.assertEqual(ctx.exception.code, "busy")
+        adapter.interrupt()
+        self.wait_turn(sink, turn_id)
+        other, sink, _sid = self.started("ok", env_extra={
+            "FAKE_CODEX_MODE": "refuse-revert"})
+        turn_id = other.send_turn(TurnInput("one"))
+        self.wait_turn(sink, turn_id)
+        with self.assertRaises(AdapterError) as ctx:
+            other.rollback(turn_id)
+        self.assertEqual(ctx.exception.code, "refused")
+        self.assertIn(turn_id, other._state.native_turns)
+
+
+class TestAdapterCore(unittest.TestCase):
+    """The pieces of adapters/core.py the adapters share."""
+
+    def test_small_helpers(self):
+        self.assertEqual(core.text_of(3), "")
+        self.assertEqual(core.jsonable({1: (float("nan"), {2}, None)}),
+                         {"1": ["nan", "{2}", None]})
+        self.assertEqual(core.clip("abc", 2), "ab\n…")
+        self.assertEqual(core.clip("abc"), "abc")
+        for bad in (-1, True, 1.5, "3", None):
+            self.assertIsNone(core.count(bad))
+        self.assertEqual(core.count(0), 0)
+
+    def test_a_request_withdrawn_outside_a_turn(self):
+        state = core.SessionCore("k:1", clock=fake.FakeClock(1.0),
+                                 run_id="r")
+        state.start_events(Caps(), "sid")
+        out: list = []
+        state.ask(out, "r1", "tool", "", None)
+        self.assertEqual(out[0]["data"]["prompt"], "approval needed")
+        self.assertFalse(state.withdrawn(out, "nope"))
+        self.assertTrue(state.withdrawn(out, "r1"))
+        self.assertEqual([e["type"] for e in out], [
+            "approval.requested", "session.state", "approval.resolved"],
+            "no turn is open: nothing is running again")
+        state.finish_turn(out)  # no turn: a no-op
+        self.assertEqual(len(out), 3)
+        with self.assertRaises(UnknownRequest):
+            state.take("r1")
+
+    def test_the_writer_reports_a_broken_pipe(self):
+        class Broken:
+            def write(self, data):
+                raise BrokenPipeError()
+
+            def flush(self):
+                pass
+
+            def close(self):
+                raise OSError("already closed")
+
+        writer = core.LineWriter(Broken(), "test-writer")
+        self.assertFalse(writer.send(b"x\n", 5.0))
+        writer.thread.join(5.0)
+        self.assertTrue(writer.broken)
+        self.assertFalse(writer.send(b"y\n", 5.0), "takes nothing more")
+        writer.stop(1.0)
+        core.close_quietly(None)
+
+    def test_the_writer_stalls_past_its_deadline(self):
+        gate = threading.Event()
+
+        class Stuck:
+            def write(self, data):
+                gate.wait(10.0)
+                raise BrokenPipeError()  # as when the child is killed
+
+            def flush(self):
+                pass
+
+            def close(self):
+                pass
+
+        writer = core.LineWriter(Stuck(), "test-writer")
+        self.addCleanup(gate.set)
+        with self.assertRaises(core.Stalled):
+            writer.send(b"x\n", 0.1)
+        self.assertTrue(writer.stalled)
+        self.assertFalse(writer.send(b"y\n", None))
+        gate.set()
+        writer.stop(5.0)
+        self.assertFalse(writer.thread.is_alive())
 
 
 if __name__ == "__main__":

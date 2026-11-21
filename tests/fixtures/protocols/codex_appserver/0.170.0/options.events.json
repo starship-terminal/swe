@@ -1,0 +1,544 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.926,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.926,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.968,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch one.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.968,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.968,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch one.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.102,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "name": "shell",
+   "summary": "shell · touch one.txt",
+   "input": {
+    "command": "touch one.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.102,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "kind": "command",
+   "prompt": "/bin/zsh -lc 'touch one.txt'",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000004"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.102,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.102,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.102,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.147,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "status": "ok",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.151,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10769,
+   "output_tokens": 105,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10766,
+   "context_tokens": 10874,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.283,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.283,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.297,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10897,
+   "output_tokens": 5,
+   "cache_read_tokens": 10766,
+   "cache_write_tokens": 128,
+   "context_tokens": 10902,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.304,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 3.336
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.304,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.31,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Run the shell command `touch two.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.31,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.31,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Run the shell command `touch two.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.912,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000007",
+   "name": "shell",
+   "summary": "shell · touch two.txt",
+   "input": {
+    "command": "touch two.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.914,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000007",
+   "status": "ok",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.925,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 20770,
+   "output_tokens": 82,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 20767,
+   "context_tokens": 20852,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.858,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.858,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.866,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 20875,
+   "output_tokens": 5,
+   "cache_read_tokens": 20767,
+   "cache_write_tokens": 105,
+   "context_tokens": 20880,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.893,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.583
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.893,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.899,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "text": "Run the shell command `touch three.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.899,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.899,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:user",
+   "kind": "user",
+   "text": "Run the shell command `touch three.txt`, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.509,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000010",
+   "name": "shell",
+   "summary": "shell · touch three.txt",
+   "input": {
+    "command": "touch three.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.516,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000010",
+   "status": "ok",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.546,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 20901,
+   "output_tokens": 82,
+   "cache_read_tokens": 20872,
+   "cache_write_tokens": 26,
+   "context_tokens": 20983,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.508,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_04",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.508,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_04",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.518,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 21006,
+   "output_tokens": 5,
+   "cache_read_tokens": 20898,
+   "cache_write_tokens": 105,
+   "context_tokens": 21011,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.534,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.635
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.534,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.534,
+  "data": {
+   "state": "closed"
+  }
+ }
+]
