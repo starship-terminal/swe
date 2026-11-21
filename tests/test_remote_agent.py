@@ -2287,7 +2287,10 @@ class TestR3FinalEdges(unittest.TestCase):
         with patch.object(ag.tail_manager, "sweep_stale", sweep), \
              patch.object(attachments, "sweep", side_effect=swept.append):
             ag._tail_loop()
-        self.assertEqual(calls, [(ag._outbox, (agent_mod.OUTBOX_KEY,))])
+        # This machine's own stream stays too (the loopback API reads
+        # it), with the journal of every session a keeper holds here.
+        self.assertEqual(calls, [(ag._outbox, (agent_mod.OUTBOX_KEY,
+                                               hub.GLOBAL_KEY))])
         # Staged attachments age out here too, as on the hub.
         self.assertEqual(swept, [self.home])
 
