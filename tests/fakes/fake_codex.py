@@ -1,6 +1,6 @@
 """A fake ``codex app-server`` speaking JSON-RPC on stdio.
 
-Started by tests/test_remote_codex_adapter.py as ``[sys.executable,
+Started by tests/test_remote_adapters.py as ``[sys.executable,
 this file]``. It answers the way the recordings under
 tests/fixtures/protocols/codex_appserver/ show the real CLI does,
 closely enough for the adapter contract: the ``initialize`` handshake,
