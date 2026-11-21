@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { fetchTransport, SseParser, sessionPath, type StreamEnd } from "./transport";
 
@@ -194,6 +194,44 @@ describe("fetchTransport.json", () => {
       },
     });
     await expect(transport.json("/a")).rejects.toThrow("offline");
+  });
+});
+
+describe("fetchTransport.json timeout", () => {
+  it("aborts a request that is not answered in time and rejects, so nothing waits on it for good", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | null | undefined;
+      const transport = fetchTransport({
+        timeoutMs: 5000,
+        fetch: (_url, init) => {
+          signal = init?.signal;
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          });
+        },
+      });
+      const out = transport.json("/a", { method: "POST", body: {} });
+      const caught = out.catch((error: Error) => error.name);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      expect(await caught).toBe("AbortError");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears its timer when the answer comes", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = fetchTransport({ fetch: async () => new Response("{}") });
+      await transport.json("/a");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

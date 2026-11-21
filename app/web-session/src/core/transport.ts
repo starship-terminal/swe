@@ -99,6 +99,12 @@ export interface FetchTransportOptions {
   /** The headers of every request (the credential). Read at each request, so a rotated token is picked up. */
   headers?: () => Record<string, string>;
   fetch?: typeof fetch;
+  /**
+   * How long a JSON request may take, in milliseconds (default 30 s). A request that has not been
+   * answered by then is aborted and rejects, as if the network were down: a request that hangs
+   * (a device that slept, a network that changed) would otherwise hold the outbox for good.
+   */
+  timeoutMs?: number;
 }
 
 export function fetchTransport(options: FetchTransportOptions = {}): Transport {
@@ -162,22 +168,29 @@ export function fetchTransport(options: FetchTransportOptions = {}): Transport {
 
     async json(path, request = {}) {
       const body = request.body === undefined ? undefined : JSON.stringify(request.body);
-      const response = await doFetch(base + path, {
-        method: request.method ?? (body === undefined ? "GET" : "POST"),
-        headers: headers(body === undefined ? undefined : { "Content-Type": "application/json" }),
-        ...(body === undefined ? {} : { body }),
-        cache: "no-store",
-      });
-      const text = await response.text();
-      let parsed: unknown;
-      if (text !== "") {
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          parsed = undefined;
+      const controller = new AbortController();
+      const timer = globalThis.setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
+      try {
+        const response = await doFetch(base + path, {
+          method: request.method ?? (body === undefined ? "GET" : "POST"),
+          headers: headers(body === undefined ? undefined : { "Content-Type": "application/json" }),
+          ...(body === undefined ? {} : { body }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const text = await response.text();
+        let parsed: unknown;
+        if (text !== "") {
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = undefined;
+          }
         }
+        return { status: response.status, body: parsed };
+      } finally {
+        globalThis.clearTimeout(timer);
       }
-      return { status: response.status, body: parsed };
     },
   };
 }

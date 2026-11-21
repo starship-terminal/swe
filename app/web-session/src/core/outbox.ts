@@ -38,6 +38,8 @@ export interface OutboxOptions {
   /** Makes a fresh command id: 1 to 64 characters of letters, digits, `_` and `-`. */
   newId: () => string;
   backoff?: BackoffOptions;
+  /** Entries an earlier outbox of this page held (a store that was stopped and started again). */
+  initial?: OutboxEntry[];
   onChange(view: OutboxView): void;
 }
 
@@ -66,9 +68,11 @@ export class Outbox {
   private failures = 0;
   private paused: OutboxView["paused"] = null;
   private closed = false;
+  private writing: Promise<unknown> = Promise.resolve();
 
   constructor(options: OutboxOptions) {
     this.options = options;
+    this.list = [...(options.initial ?? [])];
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
   }
 
@@ -113,9 +117,14 @@ export class Outbox {
       status: "pending",
       attempts: 0,
     };
+    // Nothing is sent before it is on disk: a page that closes after the hub got the message
+    // but before the write would lose the id a retry needs. Writes run in the order of the sends.
+    const written = this.writing.then(() => this.options.storage.put(entry));
+    this.writing = written.catch(() => {});
+    await written;
+    if (this.closed) return entry;
     this.list = [...this.list, entry];
     this.changed();
-    await this.options.storage.put(entry);
     if (this.retryTimer === null) void this.flush();
     return entry;
   }
@@ -207,7 +216,10 @@ export class Outbox {
         this.recheck.add(id);
         return this.scheduleRetry();
       }
-      if (outcome === "paused") return;
+      if (outcome === "paused") {
+        this.recheck.add(id); // asked about again after sign-in
+        return;
+      }
     }
     this.failures = 0;
   }
@@ -233,6 +245,10 @@ export class Outbox {
       // Closed, or the result came down the stream first and the entry is gone.
       return "done";
     }
+    if (this.list.find((e) => e.commandId === entry.commandId)?.status === "failed") {
+      // A failed result came down the stream before this receipt: it stays failed.
+      return "done";
+    }
     const { status } = response;
     if (status >= 200 && status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: { ok?: unknown; cancelled?: unknown; note?: unknown } };
@@ -249,7 +265,7 @@ export class Outbox {
       const sent: OutboxEntry = { ...attempt, status: "sent", receipt };
       delete sent.error;
       this.replace(sent);
-      await this.options.storage.put(sent);
+      await this.save(sent);
       return "done";
     }
     if (status === 401 || status === 403) {
@@ -258,7 +274,7 @@ export class Outbox {
       return "paused";
     }
     if (status === 408 || status === 425 || status === 429 || status >= 500) {
-      await this.options.storage.put(this.list.find((e) => e.commandId === entry.commandId) ?? attempt);
+      await this.save(this.list.find((e) => e.commandId === entry.commandId) ?? attempt);
       return "retry";
     }
     // The hub looked at it and said no: retrying the same id gets the same answer.
@@ -277,7 +293,7 @@ export class Outbox {
     const failed: OutboxEntry = { ...entry, status: "failed", error };
     this.recheck.delete(entry.commandId);
     this.replace(failed);
-    await this.options.storage.put(failed);
+    await this.save(failed);
   }
 
   private async drop(commandId: string): Promise<void> {
@@ -285,6 +301,18 @@ export class Outbox {
     this.list = this.list.filter((e) => e.commandId !== commandId);
     this.changed();
     await this.options.storage.remove(commandId);
+    this.changed();
+  }
+
+  /** Write an entry, then publish the view again: a write that fails turns the storage into memory, and the view says so. */
+  private async save(entry: OutboxEntry): Promise<void> {
+    await this.options.storage.put(entry);
+    this.changed();
+  }
+
+  /** Publish the view again (the storage's state may have changed). */
+  refresh(): void {
+    this.changed();
   }
 
   private scheduleRetry(): void {

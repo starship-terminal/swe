@@ -103,6 +103,18 @@ reply with an emoji in it would read as a hole at its next delta. The
 reducer counts code points (`codePointLength`) and keeps the length of
 each live text beside it. `reducer.test.ts` has the case.
 
+**Ids can be reused.** An agent that restarts counts from its first id
+again (`perm-1`, `toolu_1`). An id is matched with its `seq`: the same
+`seq` is the same event, a different one under a known id is a new request or
+call, and a page of older history matches its events to their own instance
+(the latest one at or before the event's `seq`), not to the newest.
+
+**A snapshot fetched after a hole** replaces only the text of the messages
+the hole stopped. The stream may have moved on while it was on its way, so a
+message that is not stopped keeps the text the stream gave it, and one the
+stream ended meanwhile is not brought back. A whole snapshot (an epoch
+change) older than what the stream gave is not taken.
+
 **Message ids and the live text.** A message's live text ends on
 `message.completed` or `thinking.completed` with its `id`, on
 `tool.started` with its `call_id`, on `turn.ended`, on a journaled state
@@ -167,6 +179,9 @@ time by hand and nothing waits.
 `status` is `{state, attempt, since, retryAt, detail}`; `detail` is a few
 words for a tooltip ("HTTP 502", "no frame for 25 s", a network error).
 
+JSON requests time out after 30 s (`timeoutMs`) and reject like a lost
+network, so one request that hangs across a sleep cannot hold the outbox.
+
 The real transport reads SSE from `fetch` streams, as `chat.js` does
 (`EventSource` cannot send an `Authorization` header). `fetchTransport({
 baseUrl, headers })` takes the credential from a function, read at each
@@ -192,6 +207,9 @@ first attempt.
   one. A lost response, a reload and a hub restart all end the same way:
   the command was applied once. `outbox.test.ts` has a hub that applies a
   command once and loses the first response.
+- **On disk first.** `send()` resolves, and the entry becomes visible and
+  deliverable, only after its first write. A page that closes after the hub
+  took the message but before the write would lose the id a retry needs.
 - **A result ends it.** An ok result, or a cancelled one (taken out of the
   queue, or steered), removes the entry. Any other result marks it failed
   with the hub's note.

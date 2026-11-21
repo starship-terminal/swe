@@ -676,6 +676,39 @@ describe("older history", () => {
   });
 });
 
+describe("older history with reused ids", () => {
+  it("gives an older call and request their own items and leaves the newer ones alone", () => {
+    const call = (type: "tool.started" | "tool.completed", seq: number, extra: object) =>
+      env(type, { call_id: "toolu_1", ...(type === "tool.started" ? { name: "Bash" } : { status: "ok" }), ...extra } as never, { seq, turn_id: "t1" });
+    const ask = (seq: number) => env("approval.requested", { request_id: "perm-1", kind: "tool", prompt: String(seq) }, { seq, turn_id: "t1" });
+    const answer = (seq: number, by: string) => env("approval.resolved", { request_id: "perm-1", source: "user", decision: "allow", by }, { seq, turn_id: "t1" });
+    // The client holds the newer instances (seq 100 and up) and is then given a page with the older ones.
+    let state = feed(start({ head: 110, has_more: true, next_before: 50 }), call("tool.started", 100, {}), call("tool.completed", 101, { output: "new" }), ask(102), answer(103, "laptop")).state;
+    state = applyHistory(state, {
+      session: S,
+      messages: [call("tool.started", 10, {}), call("tool.completed", 11, { output: "old" }), ask(12), answer(13, "phone")] as never,
+      has_more: false,
+      next_before: null,
+    });
+    const tools = state.items.filter((i): i is ToolItem => i.kind === "tool");
+    expect(tools.map((t) => [t.seq, t.output, t.completedSeq])).toEqual([
+      [10, "old", 11],
+      [100, "new", 101],
+    ]);
+    const requests = state.items.filter((i) => i.kind === "request") as unknown as { seq: number; resolution?: { by?: string } }[];
+    expect(requests.map((r) => [r.seq, r.resolution?.by])).toEqual([
+      [12, "phone"],
+      [102, "laptop"],
+    ]);
+    // Loading the same page again changes nothing.
+    const again = applyHistory(state, { session: S, messages: [call("tool.started", 10, {}), ask(12)] as never, has_more: false, next_before: null });
+    expect(again.items).toEqual(state.items);
+    // And the newest instance is still the one later events find.
+    state = reduce(state, call("tool.completed", 120, { output: "newest" })).state;
+    expect((state.items.find((i) => i.seq === 100) as ToolItem).output).toBe("newest");
+  });
+});
+
 describe("purity", () => {
   it("never changes the state it is given", () => {
     const before = feed(start(), delta("a", "x", 0)).state;

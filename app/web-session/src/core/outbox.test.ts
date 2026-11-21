@@ -388,6 +388,94 @@ describe("results", () => {
   });
 });
 
+describe("races the outbox must win", () => {
+  it("does not post a send before its first write has finished", async () => {
+    const t = setup();
+    const inner = await openOutboxStorage(t.factory);
+    let finish: () => void = () => {};
+    const slow: OutboxStorage = {
+      get kind() { return inner.kind; },
+      get note() { return inner.note; },
+      load: (session) => inner.load(session),
+      put: (entry) => new Promise<void>((resolve) => { finish = () => void inner.put(entry).then(resolve); }),
+      remove: (id) => inner.remove(id),
+      close: () => inner.close(),
+    };
+    const outbox = await t.make(slow);
+    const sending = outbox.send({ text: "x" });
+    outbox.wake(); // the connection goes live while the database is still writing
+    await drain();
+    expect(t.transport.calls).toEqual([]);
+    expect(t.view().entries).toEqual([]);
+    finish();
+    await sending;
+    await drain();
+    expect(t.hub.received).toEqual(["c1"]);
+    expect(await stored(t.factory)).toMatchObject([{ commandId: "c1" }]);
+  });
+
+  it("keeps a send failed when its failed result came before its receipt", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    let answer: (r: JsonResponse) => void = () => {};
+    t.transport.on("/message", () => new Promise<JsonResponse>((r) => (answer = r)), "POST");
+    const entry = await outbox.send({ text: "x" });
+    await settle();
+    outbox.noteResult(entry.commandId, { ok: false, note: "the session is not running" });
+    await settle();
+    answer({ status: 202, body: { receipt: "accepted" } });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "the session is not running" });
+  });
+
+  it("asks about an acknowledged send after sign-in when the first ask was refused", async () => {
+    const t = setup();
+    const before = await t.make();
+    const entry = await before.send({ text: "x" });
+    await drain();
+    before.close();
+    t.hub.status = 401;
+    const after = await t.make();
+    await drain();
+    expect(t.view().paused).toBe("unauthorized");
+    t.hub.status = null;
+    t.hub.results.set(entry.commandId, { ok: true });
+    t.hub.received.length = 0;
+    after.wake();
+    await drain();
+    expect(t.hub.received).toEqual([entry.commandId]);
+    expect(t.view().entries).toEqual([]);
+  });
+
+  it("tells the view when a write turns the storage into memory", async () => {
+    const broken: OutboxStorage = {
+      kind: "indexeddb",
+      note: "",
+      load: async () => [],
+      put: async () => { throw new Error("quota"); },
+      remove: async () => {},
+      close: () => {},
+    };
+    const t = setup({ storage: new FallbackStorage(broken) });
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view()).toMatchObject({ persistent: false, note: expect.stringContaining("quota") });
+  });
+
+  it("starts from the entries it is given", async () => {
+    const t = setup({ storage: new MemoryStorage("none") });
+    const carried: OutboxEntry = { commandId: "old", session: KEY, text: "kept", attachments: [], mode: "queue", createdAt: 1, status: "pending", attempts: 0 };
+    const outbox = new Outbox({
+      session: KEY, storage: new MemoryStorage("none"), transport: t.transport, timers: t.timers, random: () => 0.5, newId: () => "n1",
+      initial: [carried], onChange: () => {},
+    });
+    await outbox.init();
+    await drain();
+    expect(t.hub.received).toEqual(["old"]);
+  });
+});
+
 describe("failed sends", () => {
   it("can be dismissed, or sent again as a new message", async () => {
     const t = setup();

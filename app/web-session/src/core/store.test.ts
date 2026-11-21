@@ -104,6 +104,40 @@ describe("a store over a recorded stream", () => {
     expect(api(t)).toHaveLength(1);
   });
 
+  it("does not bring back a reply the stream finished while the snapshot was on its way", async () => {
+    const t = playing("streaming");
+    const all = frames(t.fixture);
+    const hole = t.fixture.snapshots[0] as Fixture["snapshots"][number];
+    let answer: (r: { status: number; body: unknown }) => void = () => {};
+    t.transport.on("/snapshot", () => new Promise((resolve) => (answer = resolve)));
+    const lost = all.findIndex((f) => f.type === "message.delta" && f.data.offset === 3);
+    const upTo = all.findIndex((f) => f.type === "message.delta" && f.data.offset === 6);
+    t.transport.last.send(...all.slice(0, upTo + 1).filter((_f, i) => i !== lost));
+    await drain();
+    // The rest of the stream, the completion included, arrives before the response does.
+    t.transport.last.send(...all.slice(upTo + 1));
+    expect(t.state().session.live).toEqual([]);
+    answer({ status: 200, body: hole.body }); // older: it still has "Hello wor" in progress
+    await drain();
+    expect(t.state().session.live).toEqual([]);
+    expect(t.state().session.stopped).toEqual([]);
+    expect(t.state().session.items.filter((i) => i.kind === "message" && i.role === "assistant")).toHaveLength(1);
+  });
+
+  it("keeps the text of a message the hole did not stop when the snapshot is older than the stream", async () => {
+    const t = playing("streaming");
+    const all = frames(t.fixture);
+    const hole = t.fixture.snapshots[0] as Fixture["snapshots"][number];
+    t.transport.on("/snapshot", () => ({ status: 200, body: { ...hole.body, live: [{ id: "a1", kind: "assistant", text: "Hel" }, ...hole.body.live] } }));
+    t.transport.last.send(...all.slice(0, 3)); // snapshot, state, "Hel"
+    expect(t.state().session.live.map((l) => l.text)).toEqual(["Hel"]);
+    t.transport.last.send(all[3] as Frame); // "lo "
+    // A stale snapshot (answering an earlier hole) must not roll "Hello " back to "Hel".
+    const { applyLive } = await import("./reducer");
+    const next = applyLive(t.state().session, [{ id: "a1", kind: "assistant", text: "Hel" }]);
+    expect(next.live.map((l) => l.text)).toEqual(["Hello "]);
+  });
+
   it("asks again, with backoff, when the snapshot cannot be fetched", async () => {
     const t = playing("streaming");
     const all = frames(t.fixture);
@@ -340,6 +374,31 @@ describe("sends", () => {
     real.state().start();
     await drain();
     expect(real.state().outbox).toMatchObject({ persistent: true, note: "" });
+  });
+
+  it("are kept when the store is stopped and started again with no database to read them from", async () => {
+    const t = boot({ memory: true, online: false });
+    t.transport.down = true;
+    t.state().start();
+    await t.state().send({ text: "typed offline" });
+    expect(t.state().outbox.entries).toHaveLength(1);
+    t.state().stop();
+    t.state().start();
+    await drain();
+    expect(t.state().outbox.entries).toMatchObject([{ text: "typed offline", status: "pending" }]);
+  });
+
+  it("a failed send is not sent again once the session is read-only", async () => {
+    const t = playing("default");
+    t.transport.on("/message", () => ({ status: 409, body: { error: { message: "no" } } }), "POST");
+    const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
+    t.transport.last.send(snapshot, state);
+    await t.state().send({ text: "x" });
+    await drain();
+    expect(t.state().outbox.entries[0]?.status).toBe("failed");
+    t.transport.last.send({ v: 2, type: "session.row", session: KEY, ts: 1, data: { row: { key: KEY, control: "read_only", control_reason: "Started in a terminal" } } });
+    expect(await t.state().retrySend("id1")).toMatchObject({ ok: false, reason: "read_only" });
+    expect(t.state().outbox.entries).toHaveLength(1);
   });
 
   it("survive a reload of the page: a new store over the same database sends them", async () => {

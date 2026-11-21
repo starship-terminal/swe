@@ -117,8 +117,13 @@ function insertItem(s: SessionState, item: TimelineItem): void {
     if ((items[at] as TimelineItem).seq === item.seq) return;
     s.items = [...items.slice(0, at), item, ...items.slice(at)];
   }
-  if (item.kind === "tool") s.index = { ...s.index, tool: { ...s.index.tool, [item.callId]: item.seq } };
-  if (item.kind === "request") s.index = { ...s.index, request: { ...s.index.request, [item.requestId]: item.seq } };
+  // The index points at the latest instance of an id: an older one (a page of history) never takes it over.
+  if (item.kind === "tool" && item.seq > (s.index.tool[item.callId] ?? -1)) {
+    s.index = { ...s.index, tool: { ...s.index.tool, [item.callId]: item.seq } };
+  }
+  if (item.kind === "request" && item.seq > (s.index.request[item.requestId] ?? -1)) {
+    s.index = { ...s.index, request: { ...s.index.request, [item.requestId]: item.seq } };
+  }
 }
 
 function replaceItem(s: SessionState, seq: number, update: (item: TimelineItem) => TimelineItem): void {
@@ -130,11 +135,31 @@ function replaceItem(s: SessionState, seq: number, update: (item: TimelineItem) 
   s.items = [...s.items.slice(0, at), next, ...s.items.slice(at + 1)];
 }
 
-function toolItem(s: SessionState, callId: string): ToolItem | undefined {
-  const seq = s.index.tool[callId];
-  if (seq === undefined) return undefined;
-  const item = s.items[findSeq(s.items, seq)];
-  return item !== undefined && item.seq === seq && item.kind === "tool" ? item : undefined;
+/**
+ * The item of the latest instance of an id at or before `atOrBefore`. An id can be used again (an
+ * agent that restarts counts from its first id), so a page of older history must match its events
+ * to their own instance, not to the newest one the index points at.
+ */
+function instance<T extends TimelineItem>(
+  s: SessionState,
+  kind: T["kind"],
+  latest: number | undefined,
+  matches: (item: T) => boolean,
+  atOrBefore: number,
+): T | undefined {
+  if (latest !== undefined && latest <= atOrBefore) {
+    const item = s.items[findSeq(s.items, latest)];
+    return item !== undefined && item.seq === latest && item.kind === kind ? (item as T) : undefined;
+  }
+  for (let at = findSeq(s.items, atOrBefore + 1) - 1; at >= 0; at--) {
+    const item = s.items[at] as TimelineItem;
+    if (item.kind === kind && matches(item as T)) return item as T;
+  }
+  return undefined;
+}
+
+function toolItem(s: SessionState, callId: string, atOrBefore = Infinity): ToolItem | undefined {
+  return instance<ToolItem>(s, "tool", s.index.tool[callId], (item) => item.callId === callId, atOrBefore);
 }
 
 function upsertTurn(s: SessionState, id: string, patch: Partial<TurnInfo>): void {
@@ -233,7 +258,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
       if (live) dropLive(s, frame.data.call_id);
       const known = toolItem(s, frame.data.call_id);
       if (known !== undefined && known.seq === seq) return; // the same event again
-      if (known !== undefined && known.seq > seq) {
+      if (known !== undefined && known.seq > seq && known.completedSeq === known.seq) {
         // The completion got here first (its item sits at the completion's seq): take the start's fields.
         replaceItem(s, known.seq, (item) =>
           item.kind === "tool"
@@ -248,8 +273,9 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
         );
         return;
       }
-      // Otherwise a new call (an id an earlier call used is reused).
+      // Otherwise a new call (an id an earlier call used is reused), or an older one in a page of history.
       if (seq <= 0) return;
+      if (seq > 0 && toolItem(s, frame.data.call_id, seq)?.seq === seq) return;
       insertItem(
         s,
         defined<ToolItem>({
@@ -278,7 +304,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
       return;
     }
     case "tool.completed": {
-      const known = toolItem(s, frame.data.call_id);
+      const known = toolItem(s, frame.data.call_id, seq > 0 ? seq : Infinity);
       const done = defined<Partial<ToolItem>>({
         status: frame.data.status,
         name: frame.data.name,
@@ -309,7 +335,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
     case "approval.requested":
     case "input.requested": {
       const id = frame.data.request_id;
-      const known = requestItem(s, id);
+      const known = requestItem(s, id, seq > 0 ? seq : Infinity);
       // The same event can arrive again right after a snapshot: the same seq is the same request.
       // A different seq under a known id is a new request that reuses it (an agent that restarts
       // starts its counters again), so it is shown, and opens, like any other.
@@ -351,7 +377,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
         text: frame.data.text,
         by: frame.data.by,
       });
-      if (s.index.request[id] === undefined) {
+      if (requestItem(s, id, seq > 0 ? seq : Infinity) === undefined) {
         // Its request has not arrived (frames out of order, or it is older than this client's history).
         if (live && s.earlyAnswers[id] === undefined) {
           const kept = Object.keys(s.earlyAnswers);
@@ -361,7 +387,7 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
         }
         return;
       }
-      resolve(s, id, resolution);
+      resolve(s, id, resolution, seq > 0 ? seq : Infinity);
       return;
     }
     case "context.compacted":
@@ -420,11 +446,8 @@ function applyTimeline(s: SessionState, frame: Frame, live: boolean): void {
   }
 }
 
-function requestItem(s: SessionState, id: string): RequestItem | undefined {
-  const seq = s.index.request[id];
-  if (seq === undefined) return undefined;
-  const item = s.items[findSeq(s.items, seq)];
-  return item !== undefined && item.seq === seq && item.kind === "request" ? item : undefined;
+function requestItem(s: SessionState, id: string, atOrBefore = Infinity): RequestItem | undefined {
+  return instance<RequestItem>(s, "request", s.index.request[id], (item) => item.requestId === id, atOrBefore);
 }
 
 function resolutionOf(s: SessionState, id: string): Resolution | undefined {
@@ -438,8 +461,8 @@ function isResolved(s: SessionState, id: string): boolean {
 }
 
 /** Record how a request ended. The first answer stands; only a `dropped` mark is replaced. */
-function resolve(s: SessionState, id: string, resolution: Resolution): void {
-  const seq = s.index.request[id];
+function resolve(s: SessionState, id: string, resolution: Resolution, atOrBefore = Infinity): void {
+  const seq = requestItem(s, id, atOrBefore)?.seq;
   if (seq === undefined) return;
   replaceItem(s, seq, (item) => {
     if (item.kind !== "request") return item;
@@ -491,7 +514,7 @@ function applySnapshot(prev: SessionState, snapshot: Snapshot): SessionState {
   // The requests still open are the snapshot's own list: some are older than
   // the messages it carries, and one can be a step ahead of `head`.
   for (const event of snapshot.pending) {
-    if (s.index.request[event.data.request_id] === undefined) {
+    if (requestItem(s, event.data.request_id, event.seq)?.seq !== event.seq) {
       insertItem(
         s,
         defined<RequestItem>({
@@ -512,12 +535,31 @@ function applySnapshot(prev: SessionState, snapshot: Snapshot): SessionState {
 }
 
 /**
- * After a hole in the deltas: the live text from a snapshot fetched by GET
- * replaces what the client holds, and appends carry on from it. Nothing else
- * changes: the stream is still in step with everything but that text.
+ * After a hole in the deltas: the live text from a snapshot fetched by GET replaces the text of the
+ * messages a hole stopped, and appends carry on from it. Nothing else changes: the stream is still
+ * in step with everything but those texts, and it may have moved on while the snapshot was on its
+ * way, so a message that is not stopped keeps the text the stream gave it, and one the stream ended
+ * meanwhile (`ended`) is not brought back.
  */
-export function applyLive(state: SessionState, live: readonly LiveMessage[]): SessionState {
-  return { ...state, live: live.map(toLive), stopped: [] };
+export function applyLive(state: SessionState, live: readonly LiveMessage[], ended: ReadonlySet<string> = new Set()): SessionState {
+  const stopped = new Set(state.stopped);
+  const next = state.live.filter((entry) => !stopped.has(entry.id));
+  const held = new Set(next.map((entry) => entry.id));
+  const order = state.live.map((entry) => entry.id);
+  const taken = new Map<string, LiveText>();
+  for (const message of live) {
+    if (ended.has(message.id)) continue;
+    if (stopped.has(message.id) || !held.has(message.id)) taken.set(message.id, toLive(message));
+  }
+  // Keep each message where it was, and add the ones that were not held at the end.
+  const merged: LiveText[] = [];
+  for (const id of order) {
+    const entry = taken.get(id) ?? next.find((e) => e.id === id);
+    if (entry !== undefined) merged.push(entry);
+    taken.delete(id);
+  }
+  merged.push(...taken.values());
+  return { ...state, live: merged, stopped: [] };
 }
 
 /** Older history (a `messages` page): added to the timeline, nothing else changes. */

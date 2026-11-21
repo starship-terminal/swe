@@ -127,12 +127,17 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
 
   let supervisor: Supervisor | null = null;
   let outbox: Outbox | null = null;
+  // What the outbox held when the store was stopped: a store started again keeps unsent messages
+  // even when there is no database to read them back from.
+  let carried: OutboxEntry[] = [];
   let generation = 0;
   let knownBoot: string | null = null;
   let wasLive = false;
   let snapshotBusy = false;
   let snapshotWanted: { reason: "hole" | "epoch" } | null = null;
   let snapshotTimer: unknown = null;
+  // Messages the stream ended while a snapshot was on its way: the snapshot's text for them is old.
+  let endedMeanwhile = new Set<string>();
 
   const store = createStore<SessionStoreState>()((set, get) => {
     const setSession = (session: SessionState) => set({ session });
@@ -141,6 +146,10 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const before = get().session;
       const { state, effects } = reduce(before, frame);
       set({ session: state });
+      if (snapshotBusy) {
+        const still = new Set(state.live.map((entry) => entry.id));
+        for (const entry of before.live) if (!still.has(entry.id)) endedMeanwhile.add(entry.id);
+      }
       if (frame.type === "session.snapshot") {
         noteBoot(frame.data.boot_id);
       } else if (frame.type === "command.result" && frame.command_id !== undefined) {
@@ -172,6 +181,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     };
 
     const fetchSnapshot = async (reason: "hole" | "epoch", attempt: number): Promise<void> => {
+      if (!snapshotBusy || attempt === 1) endedMeanwhile = new Set();
       snapshotBusy = true;
       const mine = generation;
       let body: unknown;
@@ -184,10 +194,16 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       if (mine !== generation) return;
       if (body !== undefined && body !== null && typeof body === "object") {
         const snapshot = body as Snapshot;
+        const held = get().session;
         if (reason === "epoch") {
+          // A snapshot older than what the stream has already given is not taken.
+          if (snapshot.epoch === held.epoch && snapshot.head < held.cursor) {
+            snapshotBusy = false;
+            return;
+          }
           ingest({ v: 2, type: "session.snapshot", session: key, ts: timers.now() / 1000, data: snapshot });
         } else {
-          setSession(applyLive(get().session, snapshot.live));
+          setSession(applyLive(held, snapshot.live, endedMeanwhile));
         }
         snapshotBusy = false;
         const next = snapshotWanted;
@@ -261,8 +277,11 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         if (get().started) return;
         generation++;
         set({ started: true });
-        const storage = new DeferredStorage((options.openStorage ?? (() => openOutboxStorage()))());
+        const storage = new DeferredStorage(
+          (options.openStorage ?? (() => openOutboxStorage(undefined, () => outbox?.refresh())))(),
+        );
         outbox = new Outbox({
+          initial: carried,
           session: key,
           storage,
           transport,
@@ -298,6 +317,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         generation++;
         supervisor?.stop();
         supervisor = null;
+        carried = outbox?.view.entries ?? carried;
         outbox?.close();
         outbox = null;
         if (snapshotTimer !== null) timers.clearTimeout(snapshotTimer);
@@ -358,6 +378,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       },
 
       async retrySend(commandId) {
+        const refusal = gateSend(get().connection, get().session);
+        if (refusal !== null) return refusal;
         const entry = await outbox?.retry(commandId);
         return entry === undefined ? undefined : { ok: true, entry };
       },
