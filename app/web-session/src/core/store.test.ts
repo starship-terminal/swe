@@ -853,6 +853,41 @@ describe("history", () => {
       `${BASE}/messages?v=2&before=3&limit=100`,
     ]);
   });
+
+  it("drops a page that comes back after a snapshot of the same journal moved the page marker", async () => {
+    const t = playing("default");
+    const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
+    t.transport.last.send({ ...snapshot, data: { ...snapshot.data, has_more: true, next_before: 5 } } as Frame, state);
+    let answer: (value: { status: number; body: unknown }) => void = () => {};
+    t.transport.on("/messages", () => new Promise((resolve) => { answer = resolve; }));
+    const loading = t.state().loadOlder();
+    await drain();
+    // A catch-up over a gap too big to replay: a snapshot of the same epoch and boot, whose page marker is
+    // later than the one the page was asked from.
+    const newer = { v: 2, type: "message.completed", session: KEY, seq: 41, ts: 1, turn_id: "n0", data: { id: "late", kind: "user", text: "after the gap" } };
+    t.transport.last.send({ ...snapshot, data: { ...snapshot.data, head: 41, has_more: true, next_before: 40, messages: [newer] } } as Frame);
+    expect(t.state().session.epoch).toBe(snapshot.data.epoch);
+    answer({
+      status: 200,
+      body: {
+        session: KEY,
+        messages: [{ v: 2, type: "message.completed", session: KEY, seq: 2, ts: 1, turn_id: "t0", data: { id: "old", kind: "user", text: "before 5" } }],
+        has_more: true,
+        next_before: 1,
+      },
+    });
+    await loading;
+    const texts = t.state().session.items.map((item) => ("text" in item ? item.text : undefined));
+    expect(texts).not.toContain("before 5");
+    expect(t.state().session.nextBefore).toBe(40);
+    // The next call pages from the snapshot's marker, so nothing between 5 and 40 is stepped over.
+    t.transport.on("/messages", () => ({ status: 200, body: { session: KEY, messages: [], has_more: false, next_before: null } }));
+    await t.state().loadOlder();
+    expect(api(t).map((call) => call.path)).toEqual([
+      `${BASE}/messages?v=2&before=5&limit=100`,
+      `${BASE}/messages?v=2&before=40&limit=100`,
+    ]);
+  });
 });
 
 describe("start, stop and wake", () => {
@@ -909,5 +944,102 @@ describe("start, stop and wake", () => {
     const body = loadFixture("default").snapshots[0]?.body as Snapshot;
     t.transport.last.send(snapshotFrame(body));
     expect(t.state().session.session).toBe(KEY);
+  });
+});
+
+describe("what start() takes from storage (review 7)", () => {
+  const T = "local:term-1";
+  const env = (type: string, data: unknown, extra: Record<string, unknown> = {}): Frame =>
+    ({ v: 2, type, session: T, ts: 1, ...extra, data }) as unknown as Frame;
+  const snap = (head: number, row: Record<string, unknown>): Snapshot =>
+    ({
+      session: T, epoch: 0, head, boot_id: "b1", row: { key: T, ...row }, state: "idle", caps: null, open_turn: null,
+      pending: [], queue: [], live: [], plan: null, tasks: [], checkpoints: [], changes: null, usage: null,
+      messages: [], has_more: false, next_before: null,
+    }) as Snapshot;
+  const catchUp = (transport: FakeTransport, row: Record<string, unknown> = {}) =>
+    transport.last.send(snapshotFrame(snap(5, row)), env("session.state", { state: "idle", live: [], pending: [], head: 5, epoch: 0 }, { seq: 0 }));
+  const make = () => {
+    const factory = new IDBFactory();
+    const timers = new FakeTimers();
+    const transport = new FakeTransport();
+    const store = createSessionStore({
+      sessionKey: T, transport, timers, random: () => 0, environment: new FakeEnvironment(),
+      openStorage: () => openOutboxStorage(factory), newId: () => "id1",
+    });
+    const onDisk = async () => (await openOutboxStorage(factory)).load(T);
+    return { factory, timers, transport, store, onDisk, state: () => store.getState() };
+  };
+
+  it("a send discarded right after start(), while storage is opened, written back and loaded, never comes back", async () => {
+    const t = make();
+    t.transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true } }), "POST");
+    t.state().start();
+    await t.state().send({ text: "never mind" }); // waiting: the row is not known yet
+    await drain();
+    t.state().stop();
+    t.state().start();
+    // The new outbox's view is up at once, and offers nothing while it loads.
+    expect(t.state().outbox.loading).toBe(true);
+    expect(t.state().sends).toMatchObject([{ commandId: "id1", canDiscard: false, canRetry: false }]);
+    await t.state().discardSend("id1"); // a caller that does not read `canDiscard`
+    catchUp(t.transport);
+    await drain();
+    expect(t.transport.posts("/message")).toEqual([]);
+    expect(await t.onDisk()).toEqual([]);
+    expect(t.state().sends).toEqual([]);
+  });
+
+  it("stop() mid-post on a legacy row, a 202 while stopped, start() again: the send is sent, not failed", async () => {
+    const t = make();
+    let answer: (r: { status: number; body: unknown }) => void = () => {};
+    let posts = 0;
+    t.transport.on("/message", () => {
+      posts++;
+      return new Promise((resolve) => (answer = resolve));
+    }, "POST");
+    t.state().start();
+    catchUp(t.transport);
+    await drain();
+    await t.state().send({ text: "hi" });
+    await drain();
+    expect(posts).toBe(1);
+    t.state().stop();
+    answer({ status: 202, body: { ok: true, queued: true, client_id: "id1" } });
+    await drain();
+    t.state().start();
+    catchUp(t.transport);
+    await drain();
+    expect(t.state().outbox.entries).toMatchObject([{ commandId: "id1", status: "sent", path: "legacy" }]);
+    expect((await t.onDisk())[0]).toMatchObject({ status: "sent", path: "legacy" });
+    expect((await t.onDisk())[0]).not.toHaveProperty("claim");
+    t.timers.advance(CLAIM_STALE_MS + 1000);
+    await drain();
+    expect(t.state().sends).toMatchObject([{ commandId: "id1", shown: "sent" }]);
+    expect(posts).toBe(1);
+  });
+
+  it("stop() mid-post, an answer while stopped that settles it, start() again: it is not handed back and posted", async () => {
+    const t = make();
+    let answer: (r: { status: number; body: unknown }) => void = () => {};
+    let posts = 0;
+    t.transport.on("/message", () => {
+      posts++;
+      return new Promise((resolve) => (answer = resolve));
+    }, "POST");
+    t.state().start();
+    catchUp(t.transport, { mode: "keeper" });
+    await drain();
+    await t.state().send({ text: "hi" });
+    await drain();
+    t.state().stop();
+    answer({ status: 202, body: { ok: true, receipt: "accepted", result: { ok: true } } });
+    await drain();
+    t.state().start();
+    catchUp(t.transport, { mode: "keeper" });
+    await drain();
+    expect(posts).toBe(1);
+    expect(t.state().outbox.entries).toEqual([]);
+    expect(await t.onDisk()).toEqual([]);
   });
 });

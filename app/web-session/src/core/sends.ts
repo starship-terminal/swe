@@ -62,8 +62,29 @@ function sentReason(entry: OutboxEntry): string {
   return "Sent. Waiting for the session to take it.";
 }
 
+/** What a terminal entry shows while the outbox loads (an open one shows `waiting`). */
+const TERMINAL_SHOWN: Partial<Record<OutboxEntry["status"], SendShown>> = {
+  sent: "sent",
+  failed: "failed",
+  unconfirmed: "unconfirmed",
+};
+
 /** Each unfinished send, oldest first, with what its bubble shows. */
 export function describeSends(context: SendContext): SendView[] {
+  // While the outbox loads what storage holds, an entry shown may be about to change or go: offer nothing on it.
+  if (context.outbox.loading) {
+    return context.outbox.entries.map((entry) => ({
+      commandId: entry.commandId,
+      text: entry.text,
+      attachments: entry.attachments,
+      mode: entry.mode,
+      createdAt: entry.createdAt,
+      shown: TERMINAL_SHOWN[entry.status] ?? "waiting",
+      reason: "Loading the sends kept on this device.",
+      canRetry: false,
+      canDiscard: false,
+    }));
+  }
   return context.outbox.entries.map((entry) => {
     const base = {
       commandId: entry.commandId,

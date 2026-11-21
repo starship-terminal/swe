@@ -1108,3 +1108,114 @@ describe("the person's actions", () => {
     expect((await stored(t.factory))[0]).not.toHaveProperty("claim");
   });
 });
+
+describe("init(): storage is the truth at start", () => {
+  /** A storage over the test's database whose `load` or `put` answers only when the test says. */
+  async function holding(t: ReturnType<typeof setup>, what: "load" | "put") {
+    const inner = await openOutboxStorage(t.factory);
+    let release: () => void = () => {};
+    let puts = 0;
+    const storage: OutboxStorage = {
+      get kind() {
+        return inner.kind;
+      },
+      get note() {
+        return inner.note;
+      },
+      // The transaction starts at once; only its answer waits.
+      load: (session) => {
+        const started = inner.load(session);
+        return what === "load" ? new Promise((resolve) => (release = () => void started.then(resolve))) : started;
+      },
+      // Only the first write is held: the ones after it go as usual.
+      put: (entry) => {
+        puts++;
+        const started = inner.put(entry);
+        return what === "put" && puts === 1 ? new Promise((resolve) => (release = () => void started.then(resolve))) : started;
+      },
+      remove: (id) => inner.remove(id),
+      claim: (...args) => inner.claim(...args),
+      abandon: (...args) => inner.abandon(...args),
+      close: () => inner.close(),
+    };
+    return { storage, release: () => release(), puts: () => puts };
+  }
+
+  const handedOver = (id: string, over: Partial<OutboxEntry> = {}): OutboxEntry => ({
+    commandId: id, session: KEY, text: id, attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 0, ...over,
+  });
+
+  it("a handed-over send discarded while the write-back runs is not written again, posted or left on disk", async () => {
+    const t = setup();
+    t.world.canPost = false; // y may wait; x must not come back
+    const held = await holding(t, "put");
+    const outbox = t.build(held.storage, { initial: [handedOver("y"), handedOver("x", { createdAt: 2 })] });
+    const loading = outbox.init();
+    await drain(); // the write-back of y is out; x is next
+    await outbox.discard("x");
+    held.release();
+    await loading;
+    await drain();
+    t.world.canPost = true;
+    outbox.wake();
+    await drain();
+    expect(t.hub.received.map((body) => body["command_id"])).toEqual(["y"]);
+    expect(t.view().entries.map((e) => e.commandId)).toEqual(["y"]);
+    expect((await stored(t.factory)).map((e) => e.commandId)).toEqual(["y"]);
+  });
+
+  it("a send discarded while storage is loading is not taken back from the load", async () => {
+    const t = setup();
+    await (await openOutboxStorage(t.factory)).put(handedOver("x"));
+    const held = await holding(t, "load");
+    const outbox = t.build(held.storage, { initial: [handedOver("x")] });
+    const loading = outbox.init();
+    await drain(); // the load's read has run; its answer still holds x
+    await outbox.discard("x");
+    held.release();
+    await loading;
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
+  });
+
+  it("where storage has the entry, its copy wins over the one handed over", async () => {
+    const t = setup();
+    legacy(t);
+    await (await openOutboxStorage(t.factory)).put(handedOver("x", { status: "sent", path: "legacy", sentAt: 1, attempts: 1 }));
+    const outbox = await t.make(undefined, [handedOver("x", { attempts: 1, claim: { owner: "old", at: 0 } })]);
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ commandId: "x", status: "sent" }]);
+    expect((await stored(t.factory))[0]).toMatchObject({ status: "sent" });
+    outbox.close();
+  });
+
+  it("a handed-over send storage does not have is written once, and sent", async () => {
+    const t = setup();
+    const held = await holding(t, "load");
+    const outbox = t.build(held.storage, { initial: [handedOver("x")] });
+    const loading = outbox.init();
+    held.release();
+    await loading;
+    await drain();
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual(["x"]);
+    // Written back once by init(); every later write is the send's own lifecycle (its answer).
+    expect(held.puts()).toBe(2);
+    expect(await stored(t.factory)).toMatchObject([{ commandId: "x", status: "sent" }]);
+  });
+
+  it("a result that comes while loading settles a handed-over send before it is posted", async () => {
+    const t = setup();
+    const held = await holding(t, "load");
+    const outbox = t.build(held.storage, { initial: [handedOver("x", { attempts: 1, status: "sent", path: "legacy", sentAt: 1 })] });
+    const loading = outbox.init();
+    outbox.noteResult("x", { ok: true });
+    held.release();
+    await loading;
+    await drain();
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
+  });
+});

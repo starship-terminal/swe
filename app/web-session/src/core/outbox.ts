@@ -65,6 +65,8 @@ export interface OutboxView {
   inFlight: string | null;
   /** This page's claim owner: a claim with another owner is another tab's. */
   owner: string;
+  /** Storage is still being loaded: what `entries` shows may change, so no action should be offered on it. */
+  loading: boolean;
 }
 
 export interface OutboxOptions {
@@ -161,15 +163,24 @@ export class Outbox {
   private closeAfterLate = false;
   /** Set once the session is known not to exist (or the hub too old): entries loaded later end at once. */
   private gone: string | null = null;
-  /** Storage has been loaded: until then a result for an id not in the list may be for a stored send. */
-  private loaded = false;
+  /**
+   * `init()` has finished: storage is loaded and merged. Until then nothing is posted or aged, and results, late
+   * answers and a gone session are held, so nothing can be written over what the load is about to read.
+   */
+  private ready = false;
   private early = new Map<string, SendResultData>();
+  private lateWhileLoading = new Map<string, { entry: OutboxEntry; settled: boolean }>();
+  /** Ids this outbox removed (discarded, retried, settled): never taken back from storage or written again. */
+  private removed = new Set<string>();
+  /** Ids an earlier outbox of this page handed over. */
+  private readonly carried: Set<string>;
 
   constructor(options: OutboxOptions) {
     this.options = options;
     this.owner = options.owner ?? randomOwner();
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
     this.list = (options.initial ?? []).map(normalize);
+    this.carried = new Set(this.list.map((entry) => entry.commandId));
   }
 
   get view(): OutboxView {
@@ -180,29 +191,50 @@ export class Outbox {
       paused: this.paused,
       inFlight: this.inFlight,
       owner: this.owner,
+      loading: !this.ready,
     };
   }
 
-  /** Load what an earlier page left, then age it and try to send it. */
+  /**
+   * Load what storage holds, merge what an earlier outbox of this page handed over, then age it and try to send
+   * it. Storage is the truth at start: where it has an entry, its copy wins over the one handed over (a post's
+   * answer written after `stop()` is newer than the copy taken at `stop()`). A handed-over entry storage lacks
+   * (its first write never finished, or the storage is memory) is written once. Nothing removed meanwhile comes back.
+   */
   async init(): Promise<void> {
-    // What an earlier outbox handed over is written again (once is enough for the storage, twice is harmless).
-    for (const entry of this.list) await this.options.storage.put(entry);
-    const stored = await this.options.storage.load(this.options.session);
+    const loaded = await this.options.storage.load(this.options.session);
     if (this.closed) return;
-    const known = new Set(this.list.map((entry) => entry.commandId));
-    this.list = [...this.list, ...stored.filter((entry) => !known.has(entry.commandId)).map(normalize)].sort(
-      (a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId),
-    );
-    this.loaded = true;
-    // Results that came while storage was loading, and those the session held already, settle what was loaded,
-    // before anything is posted: a legacy send is never asked about again, so a result missed here would be lost.
-    const early = this.early;
-    this.early = new Map();
-    for (const entry of [...this.list]) {
-      const result = early.get(entry.commandId) ?? this.options.knownResult?.(entry.commandId);
-      if (result !== undefined) await this.settle(entry, result);
+    const stored = loaded.map(normalize).filter((entry) => !this.removed.has(entry.commandId));
+    const storedIds = new Set(stored.map((entry) => entry.commandId));
+    // From memory: what storage lacks (a handed-over entry, a send made while loading whose write the load missed).
+    const fromMemory = this.list.filter((entry) => !storedIds.has(entry.commandId));
+    this.list = [...stored, ...fromMemory].sort((a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId));
+    for (const entry of fromMemory) {
+      // A send made here wrote itself; a handed-over one the person removed meanwhile stays removed.
+      if (!this.carried.has(entry.commandId) || this.removed.has(entry.commandId)) continue;
+      if (!this.list.includes(entry)) continue;
+      await this.options.storage.put(entry);
       if (this.closed) return;
     }
+    // Answers, results that came while loading, and results the session held already, before anything is posted:
+    // a legacy send is never asked about again, so a result missed here would be lost.
+    for (const entry of [...this.list]) {
+      const result = this.options.knownResult?.(entry.commandId);
+      if (result !== undefined && !this.early.has(entry.commandId)) this.early.set(entry.commandId, result);
+    }
+    while (this.lateWhileLoading.size > 0 || this.early.size > 0) {
+      for (const [id, { entry, settled }] of this.takeAll(this.lateWhileLoading)) {
+        if (!this.list.some((e) => e.commandId === id)) continue;
+        if (settled) await this.drop(id);
+        else this.replace(entry);
+      }
+      for (const [id, result] of this.takeAll(this.early)) {
+        const entry = this.list.find((e) => e.commandId === id);
+        if (entry !== undefined) await this.settle(entry, result);
+      }
+      if (this.closed) return;
+    }
+    this.ready = true;
     // The hub may have lost what it owed us while this page was away: ask again where that is safe.
     for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
     // A 404 (or an outdated hub) that came before the stored entries were loaded applies to them too.
@@ -275,17 +307,16 @@ export class Outbox {
   }
 
   /**
-   * The `command.result` for a send came down the stream. An empty id changes nothing; an unknown one is kept
-   * until storage is loaded (it may be a stored send's), and changes nothing after that.
+   * The `command.result` for a send came down the stream. An empty id changes nothing. While storage loads, every
+   * result is kept and applied once loading ends (it may be a stored send's); after that, an unknown id changes nothing.
    */
   noteResult(commandId: string, result: SendResultData): void {
     if (commandId === "") return;
-    const entry = this.list.find((e) => e.commandId === commandId);
-    if (entry !== undefined) {
-      void this.settle(entry, result);
+    if (this.ready) {
+      const entry = this.list.find((e) => e.commandId === commandId);
+      if (entry !== undefined) void this.settle(entry, result);
       return;
     }
-    if (this.loaded) return;
     this.early.delete(commandId);
     if (this.early.size >= EARLY_RESULTS_KEPT) this.early.delete(this.early.keys().next().value as string);
     this.early.set(commandId, result);
@@ -294,6 +325,7 @@ export class Outbox {
   /** The session no longer exists: nothing still open can be sent. */
   sessionGone(reason: string = SESSION_GONE): void {
     this.gone = reason;
+    if (!this.ready) return; // applied once loading ends
     for (const entry of this.list) if (!TERMINAL.has(entry.status)) void this.fail(entry, reason);
   }
 
@@ -343,6 +375,7 @@ export class Outbox {
   }
 
   private async pass(): Promise<void> {
+    if (!this.ready) return; // `init()` runs the first pass
     await this.age();
     if (!this.canPost()) return;
     // Sends go in the order they were typed: one that cannot go holds the ones behind it.
@@ -535,7 +568,12 @@ export class Outbox {
 
   /** An entry the outbox that this one replaced finished posting after it closed. */
   adoptLate(entry: OutboxEntry, settled: boolean): void {
-    if (this.closed || !this.list.some((e) => e.commandId === entry.commandId)) return;
+    if (this.closed) return;
+    if (!this.ready) {
+      this.lateWhileLoading.set(entry.commandId, { entry, settled });
+      return;
+    }
+    if (!this.list.some((e) => e.commandId === entry.commandId)) return;
     if (settled) {
       void this.drop(entry.commandId);
       return;
@@ -678,6 +716,7 @@ export class Outbox {
   }
 
   private async drop(commandId: string): Promise<void> {
+    this.removed.add(commandId);
     this.recheck.delete(commandId);
     this.list = this.list.filter((e) => e.commandId !== commandId);
     this.changed();
@@ -711,6 +750,13 @@ export class Outbox {
   private clearRetry(): void {
     if (this.retryTimer !== null) this.options.timers.clearTimeout(this.retryTimer);
     this.retryTimer = null;
+  }
+
+  /** Empty a map and hand back what it held. */
+  private takeAll<V>(map: Map<string, V>): [string, V][] {
+    const all = [...map];
+    map.clear();
+    return all;
   }
 
   private changed(): void {

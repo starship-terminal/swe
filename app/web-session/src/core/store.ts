@@ -292,7 +292,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     return {
       session: emptySession(),
       connection: { state: "connecting", attempt: 0, since: timers.now(), retryAt: null, detail: "" },
-      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null, owner: "" },
+      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null, owner: "", loading: false },
       sends: [],
       started: false,
 
@@ -319,7 +319,11 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           // One owner for every outbox this store makes: a claim from before a stop() is this page's own.
           owner,
           // A post that was out when the store stopped answers to the outbox that replaced it.
-          onLate: (entry, settled) => outbox?.adoptLate(entry, settled),
+          onLate: (entry, settled) => {
+            // What a later start() hands over must not undo it: a settled send is not sent again.
+            carried = carried.flatMap((e) => (e.commandId !== entry.commandId ? [e] : settled ? [] : [entry]));
+            outbox?.adoptLate(entry, settled);
+          },
           // A result this store took in before the outbox loaded its stored sends (a stop() and start(), say).
           knownResult: (commandId) => {
             const result = get().session.commands[commandId]?.result;
@@ -330,6 +334,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
           onChange: (view) => setOutbox(view),
         });
+        // The new outbox's view at once, loading: the old one's would offer Discard on entries it no longer holds.
+        setOutbox(outbox.view);
         void outbox.init();
         supervisor = new Supervisor({
           transport,
@@ -406,9 +412,10 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         try {
           const response = await transport.json(`${sessionPath(key, "messages")}?v=2&before=${nextBefore}&limit=100`);
           if (mine !== generation || response.status < 200 || response.status >= 300) return;
-          // A new journal began while the page was out: the page belongs to the old one.
+          // A new journal began while the page was out (the page belongs to the old one), or a snapshot moved
+          // the page marker (applying the page would leave a stretch later calls step over): drop the page.
           const now = get().session;
-          if (now.epoch !== epoch || now.bootId !== bootId) return;
+          if (now.epoch !== epoch || now.bootId !== bootId || now.nextBefore !== nextBefore) return;
           setSession(applyHistory(get().session, response.body as MessagesPage));
         } catch {
           // The button stays; try again.

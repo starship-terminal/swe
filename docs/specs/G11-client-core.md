@@ -317,6 +317,19 @@ Other rules:
   deliverable, only after its first write. A store stopped and started
   again hands its entries, the ones still being written included, to the
   new outbox.
+- **Storage is the truth at start.** `init()` loads storage first. Where
+  storage has an entry, its copy wins over the one handed over (an answer
+  written after `stop()` is newer than the copy taken at `stop()`); a
+  handed-over entry storage lacks is written once. The outbox remembers
+  every id it removed (discarded, retried, settled) and never takes one
+  back from a load or writes it again. Until `init()` ends nothing is
+  posted or aged, and results, late answers and a gone session are held
+  and applied once loading ends.
+- **Nothing to act on while loading.** `start()` publishes the new
+  outbox's view at once, with `outbox.loading` true, and while it is true
+  every `SendView` has `canDiscard` and `canRetry` false ("Loading the
+  sends kept on this device."). `discardSend` called anyway is safe: the
+  id stays removed.
 - **Order.** Sends go oldest first, one at a time: one that cannot go holds
   back the ones behind it.
 - **No Discard while it is claimed.** An entry is `inFlight` (shown
@@ -405,7 +418,7 @@ const items = useSessionStore(store, (s) => s.session.items);
 | `interrupt()` | Stop: `POST .../control {op: "interrupt"}` |
 | `restore(checkpointId)` | `POST .../restore {checkpoint_id}`: see Schema gaps |
 | `queueAction("edit" \| "cancel" \| "steer", queuedCommandId, text?)` | `POST .../queue` |
-| `loadOlder()` | the page before the oldest held (`GET .../messages?v=2&before=`) |
+| `loadOlder()` | the page before the oldest held (`GET .../messages?v=2&before=`). A page is dropped if, while it was out, the epoch, the boot or the page marker changed (a snapshot replaced what it would extend); the next call pages from the new marker |
 | `discardSend(id)`, `retrySend(id)` | dismiss a failed send, or send it again as a new one |
 | `refusal()` | why a gated action cannot run now, or null: for disabling a control and saying why |
 
@@ -480,7 +493,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 275 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 285 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -529,23 +542,15 @@ These are known and left for later. None of them posts a message twice or
 hammers the hub, but each can show the wrong end state or hold a resource.
 They are not fixed in G11; G13 should know them.
 
-1. **A delivered legacy send can end `failed` after `stop()` mid-post.**
-   `init()` in [outbox.ts](../../app/web-session/src/core/outbox.ts)
-   writes the carried in-memory copy back over what `late()` stored. If a
-   202 arrives on a legacy row while the store is stopped, it is stored as
-   `sent`. Then `start()` writes back `waiting` with the old claim, and
-   60 s later the entry ends `failed` with "may or may not have been
-   sent", although it was delivered once. Only one POST goes out, and a
-   later `command.result` ok still removes the entry.
-2. **`stop()` during the claim transaction leaves a claim for a send that
+1. **`stop()` during the claim transaction leaves a claim for a send that
    was never posted.** On a legacy row that entry ends "may or may not
    have been sent" after 60 s.
-3. **A recheck post that is out at `close()` keeps its IndexedDB
+2. **A recheck post that is out at `close()` keeps its IndexedDB
    connection open.** `close()` sets `closeAfterLate`, but `ask()` never
    calls `late()`, so the connection stays open until the page unloads.
-4. **Two tabs can disagree after a device sleep.** One send can show
+3. **Two tabs can disagree after a device sleep.** One send can show
    `failed` in one tab and `sent` in the other. No second post goes out.
-5. **The reducer never trims.** Every item, turn and index entry stays for
+4. **The reducer never trims.** Every item, turn and index entry stays for
    the life of the view.
 
 ## What G12 and G13 must know

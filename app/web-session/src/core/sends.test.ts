@@ -10,7 +10,7 @@ const entry = (over: Partial<OutboxEntry>): OutboxEntry => ({
 });
 const connection = (state: ConnectionStatus["state"]): ConnectionStatus => ({ state, attempt: 0, since: 0, retryAt: null, detail: "" });
 const outbox = (entries: OutboxEntry[], over: Partial<OutboxView> = {}): OutboxView => ({
-  entries, persistent: true, note: "", paused: null, inFlight: null, owner: "me", ...over,
+  entries, persistent: true, note: "", paused: null, inFlight: null, owner: "me", loading: false, ...over,
 });
 const one = (context: Partial<SendContext> & { entries: OutboxEntry[] }) =>
   describeSends({
@@ -39,5 +39,15 @@ describe("describeSends", () => {
     expect(one({ entries: [entry({ status: "sent", path: "keeper", receipt: "held" })] })?.reason).toContain("Held");
     expect(one({ entries: [entry({ status: "failed", error: "no" })] })).toMatchObject({ shown: "failed", reason: "no", canRetry: true, canDiscard: true });
     expect(one({ entries: [entry({ status: "unconfirmed", error: "maybe" })] })).toMatchObject({ shown: "unconfirmed", reason: "maybe", canRetry: true });
+  });
+
+  it("offers nothing while the outbox is loading what storage holds", () => {
+    const entries = [entry({ commandId: "a" }), entry({ commandId: "b", status: "failed", error: "no" })];
+    const views = describeSends({ outbox: outbox(entries, { loading: true }), connection: connection("live"), loaded: true, online: true });
+    expect(views.map((v) => [v.commandId, v.shown, v.canDiscard, v.canRetry])).toEqual([
+      ["a", "waiting", false, false],
+      ["b", "failed", false, false],
+    ]);
+    expect(views[0]?.reason).toBe("Loading the sends kept on this device.");
   });
 });
