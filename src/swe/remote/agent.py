@@ -91,6 +91,18 @@ KEPT_FILE = "agent-kept.json"
 # How long the agent leaves a hub alone that does not take keeper
 # journals (an older hub, or one with its session runtime off).
 KEPT_RETRY_S = 60.0
+# How old a ``kept`` command may be when this machine reads it: the
+# hub's 24 hour hold for a message or an answer, ten minutes for
+# anything else (see ``RemoteAgent._kept_refusal``). Measured against
+# the hub's clock, so the short one leaves room for two clocks that
+# disagree by minutes.
+KEPT_HOLD_S = 24 * 3600.0
+KEPT_FRESH_S = 600.0
+# How long the outbox waits for the hub to release a session this
+# machine let go. A hub that still has not taken the release by then
+# (it keeps failing on that session) no longer holds every other
+# session's events back.
+KEPT_RELEASE_WAIT_S = 60.0
 
 
 def take_lock(home: Path | None = None):
@@ -704,7 +716,8 @@ class RemoteAgent:
         # until it has said), "released": this machine let it go}.
         self._kept_lock = threading.Lock()
         self._kept: dict[str, dict] = {
-            key: {"acked": None, "released": bool(released)}
+            key: {"acked": None, "released": bool(released),
+                  "since": time.monotonic()}
             for key, released in self._load_kept().items()}
         # Set when the command stream comes up: the next upload opens
         # with "this machine is back", and the hub answers by
@@ -965,11 +978,13 @@ class RemoteAgent:
             for key in owned:
                 entry = self._kept.get(key)
                 if entry is None or entry["released"]:
-                    self._kept[key] = {"acked": None, "released": False}
+                    self._kept[key] = {"acked": None, "released": False,
+                                       "since": time.monotonic()}
                     changed = True
             for key, entry in self._kept.items():
                 if key not in owned and not entry["released"]:
                     entry["released"] = True
+                    entry["since"] = time.monotonic()
                     changed = True
         if changed:
             self._save_kept()
@@ -1001,6 +1016,10 @@ class RemoteAgent:
                 "cwd": row.get("cwd") or "",
                 "adapter": row.get("adapter") or "",
             }
+            if state["released"]:
+                # Said with the question too: a hub that already took
+                # this release must not start the copy over.
+                entry["released"] = True
             return entry, False
         batch: list[dict] = []
         if acked < head:
@@ -1011,17 +1030,21 @@ class RemoteAgent:
                 if event["seq"] > head:
                     break
                 n = _encoded_len(event) + 2
-                if n > budget:
-                    # One event too big for a body: cut its long
-                    # strings. It keeps its seq, so nothing after it is
-                    # renumbered.
-                    event = _clip_event(event, budget - 2) \
-                        if not batch else None
-                    if event is None:
+                if size + n > budget:
+                    if batch or budget < EVENTS_BODY_MAX:
+                        # It goes in the next upload, where it may
+                        # have a whole body to itself.
                         break
+                    # One event too big for any body: cut its long
+                    # strings. It keeps its seq, so nothing after it
+                    # is renumbered. One that cannot be cut to fit is
+                    # sent as its seq alone: the hub refuses that and
+                    # moves on, where otherwise the copy would stop
+                    # here for good.
+                    event = _clip_event(event, budget - 2) or {
+                        "v": event.get("v"), "seq": event["seq"],
+                        "type": "journal.skipped"}
                     n = _encoded_len(event) + 2
-                if batch and size + n > budget:
-                    break
                 batch.append(event)
                 size += n
             entry["events"] = batch
@@ -1030,29 +1053,29 @@ class RemoteAgent:
         if state["released"] and not more:
             entry["released"] = True
         elif not batch and acked <= head and not hello:
-            return None, False
-        return entry, more and bool(batch)
+            return None, more
+        return entry, more
 
     def _push_kept(self) -> bool:
-        """One upload of what the hub's copies lack. False only when
-        the hub could not be reached (the caller holds the rest of the
-        uplink back, so a released session's last events arrive before
-        its tailer's first)."""
+        """One upload of what the hub's copies lack. False when the
+        rest of the uplink must wait: the hub could not be reached, or
+        a session this machine let go is not released on the hub yet.
+        Until it is, the hub numbers nothing in that session's journal,
+        so the tailer's events for it must not arrive first."""
         owned = self._sync_kept()
         with self._kept_lock:
             states = {k: dict(v) for k, v in self._kept.items()}
-        hello = self._kept_hello
+            hello, self._kept_hello = self._kept_hello, False
         if not states and not hello:
             return True
         if time.monotonic() < self._kept_off_until:
+            self._again_hello(hello)
             return True
-        self._kept_hello = False
         sessions: list[dict] = []
         budget = EVENTS_BODY_MAX
         again = False
         for key, state in states.items():
-            entry, more = self._kept_entry(key, state, owned,
-                                           max(budget, 4096), hello)
+            entry, more = self._kept_entry(key, state, owned, budget, hello)
             again = again or more or state["acked"] is None
             if entry is None:
                 continue
@@ -1062,17 +1085,18 @@ class RemoteAgent:
                 again = True
                 break
         if not sessions and not hello:
-            return True
+            return self._kept_settled()
         status, reply = _post(
             self.hub, "/v1/agent/kept", self.cred,
             {"machine_id": self.machine_id, "hello": hello,
              "sessions": sessions})
         if status != 200:
-            self._kept_hello = self._kept_hello or hello
+            self._again_hello(hello)
             if status in (0, 401) or status >= 500:
                 return False
             # An older hub (404) or one whose session runtime is off
-            # (409): it copies no keeper journals. Ask again later.
+            # (409): it copies no keeper journals, so there is nothing
+            # to wait for. Ask again later.
             self._kept_off_until = time.monotonic() + KEPT_RETRY_S
             return True
         acked = reply.get("acked") if isinstance(reply, dict) else None
@@ -1088,7 +1112,7 @@ class RemoteAgent:
                     continue
                 if key in gone and entry["released"]:
                     del self._kept[key]
-                    changed = True
+                    changed = moved = True
                 else:
                     moved = moved or entry["acked"] != seq
                     entry["acked"] = seq
@@ -1098,7 +1122,23 @@ class RemoteAgent:
             # More to send, and the hub is taking it: go again now. A
             # hub that took nothing is asked again on the next tick.
             self._kick.set()
-        return True
+        return self._kept_settled()
+
+    def _again_hello(self, hello: bool) -> None:
+        """An upload that said "this machine is back" did not go: the
+        next one says it."""
+        if hello:
+            with self._kept_lock:
+                self._kept_hello = True
+
+    def _kept_settled(self) -> bool:
+        """Whether no session this machine let go still waits to be
+        released on the hub (one that has waited past
+        ``KEPT_RELEASE_WAIT_S`` no longer counts)."""
+        fresh = time.monotonic() - KEPT_RELEASE_WAIT_S
+        with self._kept_lock:
+            return not any(e["released"] and e["since"] > fresh
+                           for e in self._kept.values())
 
     def _report_kept(self, command_id: str, via: str, status: int,
                      body: dict) -> bool:
@@ -1334,7 +1374,7 @@ class RemoteAgent:
         with self._kept_lock:
             for entry in self._kept.values():
                 entry["acked"] = None
-        self._kept_hello = True
+            self._kept_hello = True
         self._kick.set()
 
     def _handle_frame(self, blob: bytes) -> str | None:
@@ -1368,9 +1408,11 @@ class RemoteAgent:
             # a session's commands (and the uploads a message names)
             # stay in order and the stream is never held by one.
             data = ev.get("data") or {}
+            sent_at = ev.get("ts")
             self._sendq.submit(
                 str(data.get("session") or ""),
-                lambda: self._run_kept(seq, data, epoch), lambda: None)
+                lambda: self._run_kept(seq, data, epoch, sent_at),
+                lambda: None)
             return None
         if op in _SESSION_QUEUED_OPS:
             # Headless sends block for the whole turn and an attachment
@@ -1474,7 +1516,8 @@ class RemoteAgent:
             "POST", f"/v1/sessions/{quote(key, safe='')}/{route}", body,
             device=device)
 
-    def _run_kept(self, seq, data: dict, epoch: int) -> None:
+    def _run_kept(self, seq, data: dict, epoch: int,
+                  sent_at: float | None = None) -> None:
         """Run one ``kept`` command: hand the client's request to this
         machine's route under the id the hub stored it by, then tell
         the hub what the route answered. Done only once the hub knows;
@@ -1484,11 +1527,60 @@ class RemoteAgent:
         route = str(data.get("route") or "")
         body = data.get("body") if isinstance(data.get("body"), dict) else {}
         command_id = str(data.get("id") or body.get("command_id") or "")
-        status, reply = self._local_post(
-            key, route, body, str(data.get("device") or "") or None)
+        refused = self._kept_refusal(key, route, body, command_id, sent_at)
+        if refused is not None:
+            status, reply = refused
+        else:
+            status, reply = self._local_post(
+                key, route, body, str(data.get("device") or "") or None)
         if self._report_kept(command_id, str(data.get("command_id") or ""),
                              status, reply):
             self._mark_done(seq, epoch)
+
+    def _kept_refusal(self, key: str, route: str, body: dict,
+                      command_id: str, sent_at: float | None
+                      ) -> tuple[int, dict] | None:
+        """The answer to a ``kept`` command that must not reach the
+        route, or None when it may.
+
+        **Too old.** The hub puts a command on the stream when it
+        believes this machine is awake, and a machine that fell asleep
+        a moment before reads it whenever it wakes. A message or an
+        answer older than the 24 hour hold has expired; anything else
+        (a Stop, an option change, a queue edit) older than
+        ``KEPT_FRESH_S`` would act on a turn it was never meant for.
+
+        **No keeper here any more.** The session was let go since (a
+        replay after a restart, a detach that already ran). The route
+        would take the old path and type into a pane, so the stored
+        answer is given instead, a detach or kill is done already, and
+        anything else is refused.
+        """
+        if isinstance(sent_at, (int, float)) and not isinstance(sent_at, bool):
+            limit = KEPT_HOLD_S if route in ("message", "approval") \
+                else KEPT_FRESH_S
+            if time.time() - sent_at > limit:
+                return 409, protocol.error("expired", (
+                    "this reached the machine too late to run"))
+        runtime = self.local.runtime
+        if runtime.owns(key):
+            return None
+        stored = None
+        if runtime.store is not None and command_id:
+            try:
+                stored = runtime.store.get_command(command_id)
+            except Exception:
+                stored = None
+        if stored is not None:
+            reply = {"ok": True, "duplicate": True,
+                     "command_id": command_id, "receipt": stored.status}
+            if stored.reason:
+                reply["reason"] = stored.reason
+            return 200, reply
+        if route == "control" and body.get("op") in ("detach", "kill"):
+            return 200, {"ok": True, "note": "already detached"}
+        return 409, protocol.error("not_kept", (
+            "this session is no longer run by a session keeper"))
 
     @staticmethod
     def _local_result(status: int, reply: dict) -> tuple[bool, str, bool]:
@@ -2147,6 +2239,13 @@ class SatelliteKeepers:
         seen = 0
         with journal.hold(key):
             last = journal.last_seq(key)
+            if key not in self._mirrors and let_go \
+                    and self._released_before(store, key, head):
+                # A release this hub already took (its answer was lost
+                # on the way back). Nothing to do, and above all
+                # nothing to drop: the hub has numbered that journal
+                # since.
+                return last, True
             if key not in self._mirrors:
                 # The first event of a copy, or the first after the
                 # satellite let the session go and took it back. What
@@ -2179,7 +2278,7 @@ class SatelliteKeepers:
                     # local keeper: every effect can be applied twice,
                     # and a hub that dies in between is sent the event
                     # again.
-                    self._apply(store, key, event)
+                    self._apply(store, key, mid, event)
                     if not journal.append_at(key, event):
                         break  # not written: the satellite sends it again
                     taken.append(event)
@@ -2197,10 +2296,27 @@ class SatelliteKeepers:
             self._publish(key, event)
         if released:
             try:
+                # ``last_seq`` is where this copy ended: a release for
+                # the same keeper events, sent again, is known by it.
                 store.update_session(key, state="closed")
+                store.note_seq(key, acked)
             except (StoreError, ValueError):
                 logger.exception("closing %s", key)
         return acked, released
+
+    @staticmethod
+    def _released_before(store, key: str, head) -> bool:
+        """Whether the hub already took the release of the copy that
+        ends at ``head``: its row is closed, and that copy reached
+        there. A later copy of the same session (it was continued
+        again) ends at a higher seq, and is taken as new."""
+        try:
+            row = store.get_session(key)
+        except Exception:
+            return False
+        return row is not None and row.state == "closed" \
+            and isinstance(head, int) and not isinstance(head, bool) \
+            and head <= row.last_seq
 
     def _begin(self, store, key: str, mid: str, local_key: str,
                row) -> None:
@@ -2246,11 +2362,12 @@ class SatelliteKeepers:
                 return None
         return dict(event, session=key, machine=mid)
 
-    def _apply(self, store, key: str, event: dict) -> None:
+    def _apply(self, store, key: str, mid: str, event: dict) -> None:
         """The store's part of one keeper event: the session's state,
         and the receipt and result of a command that came through this
-        hub. A command sent on the satellite itself is not in this
-        store, and those calls change nothing."""
+        hub for this session. A command sent on the satellite itself is
+        not in this store, and a satellite's events never touch a
+        command stored for another machine or session."""
         from swe.remote import protocol_compat
         from swe.remote.adapters import events as ev
         from swe.remote.store import StoreError
@@ -2261,10 +2378,18 @@ class SatelliteKeepers:
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
         cid = event.get("command_id")
         try:
+            if etype in ("command.receipt", "command.result"):
+                cmd = store.get_command(cid) if isinstance(cid, str) \
+                    else None
+                if cmd is None or cmd.machine != mid or cmd.session != key:
+                    return
             if etype == "session.state":
                 state = data.get("state")
                 if isinstance(state, str) and state in ev.SESSION_STATES:
-                    store.update_session(key, state=state)
+                    if state != "closed":
+                        # ``closed`` in the store means the hub stopped
+                        # copying; only a release says that.
+                        store.update_session(key, state=state)
                     status = protocol_compat.STATUS_FOR_STATE.get(state)
                     # The list hears it now; the satellite's next
                     # catalog push says the same.
@@ -2292,10 +2417,16 @@ class SatelliteKeepers:
 
     def _publish(self, key: str, event: dict) -> None:
         """Send one event just stored to the session's open streams,
-        as today's clients read it, and to the v2 listeners."""
+        as today's clients read it, and to the v2 listeners. A v1
+        event in a copy is the session's history from before its
+        keeper: the hub published it when the satellite's tailer first
+        uploaded it, and saying it again would raise its notification
+        and reopen its approval."""
         from swe.remote.adapters import events as ev
 
         state = self.state
+        if event.get("v") != ev.VERSION:
+            return
         try:
             frame = state.runtime.v1(key, event)
             if frame is not None:

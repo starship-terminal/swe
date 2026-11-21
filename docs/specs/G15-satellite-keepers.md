@@ -115,14 +115,30 @@ and is answered `{"ok": true, "acked": {"claude:<id>": 41}, "released":
 - **An event the hub will not take** (it fails the v2 schema, or is a
   v1 type a satellite may not upload) is skipped, and `acked` moves
   past it so it is not sent for ever.
+- **An event too big for a body** is sent with its long strings cut,
+  alone in an upload so it has the whole body; it keeps its seq. One
+  that cannot be cut to fit is sent as its seq alone, which the hub
+  refuses and moves past, so the copy carries on after it.
 - **Effects first, the journal second**, as for a local keeper: the
   session's `state`, and the receipt and result of a command that came
   through this hub, are written to the hub's store before the event is
   journaled. Each can be applied twice.
-- **Publishing.** Each stored event goes to the session's open streams
-  as today's clients read it (`SessionRuntime.v1`) and to the hub
-  runtime's `listeners` as the v2 event, so approvals reach the inbox
-  and a v2 stream (G9) needs nothing new.
+- **Publishing.** Each stored v2 event goes to the session's open
+  streams as today's clients read it (`SessionRuntime.v1`) and to the
+  hub runtime's `listeners` as the v2 event, so approvals reach the
+  inbox and a v2 stream (G9) needs nothing new. A v1 event in a copy
+  is the session's history from before its keeper. The hub published
+  it when the satellite's tailer first uploaded it, so it is stored
+  and not published again: its notification would be raised twice and
+  an approval long answered would reopen.
+- **Whose commands.** A copied `command.receipt` or `command.result`
+  changes a stored command only when that command was stored for this
+  machine and this session. A satellite cannot settle a command held
+  for another machine, or one of the hub's own.
+- **`closed` is the hub's word.** A copied `session.state closed` does
+  not close the hub's row: a closed row means the hub stopped copying,
+  and only a release says that. A hub restarted between the keeper's
+  last event and the release still knows it copies that journal.
 
 The agent is woken to upload by the session runtime's listener, so an
 event leaves within the same tick it was journaled.
@@ -155,10 +171,23 @@ When the satellite's runtime no longer holds a session (`detach`,
 `kill`, resumed in a terminal), the agent marks it released in
 `agent-kept.json` and uploads up to the keeper's last event, then
 `released: true`. What the satellite journals after that (its tailer is
-back) travels the ordinary way and the hub numbers it. The uplink sends
-keeper journals first and holds the outbox back when that upload could
-not reach the hub, so the release arrives before the tailer's first
-event.
+back) travels the ordinary way and the hub numbers it.
+
+- **The outbox waits for the release.** `_push_kept` answers False
+  while any released session is not yet released on the hub, and the
+  uplink loop then sends nothing else. Otherwise the tailer's first
+  events would reach a hub that still copies the journal and numbers
+  nothing in it, and they would never be journaled there. A release
+  the hub has not taken after 60 seconds (`KEPT_RELEASE_WAIT_S`) stops
+  holding the outbox; it is still asked for.
+- **Taking a release twice changes nothing.** The hub records where the
+  copy ended (`sessions.last_seq`) when it releases. A release for a
+  copy that ends at or before that seq, for a key the hub no longer
+  copies, is answered `released` again and nothing is dropped: the
+  answer to the first was lost, or the agent restarted before it heard
+  it. A release question carries `released: true` too, for the same
+  reason. A copy that ends later is the session continued again, and
+  starts a new copy.
 
 ## Commands: hub to satellite to keeper
 
@@ -197,6 +226,13 @@ uploads and `attach` keep the old path.
    `command.result` in the copied journal. `via` is the stream
    command's own id; it moves the stream's backlog floor as a
    `command.result` from the satellite used to.
+
+Two commands never reach the route (`RemoteAgent._kept_refusal`):
+
+| The command | The satellite answers |
+|---|---|
+| Read too late. The hub puts a command on the stream when it believes the machine is awake; a machine that fell asleep a moment before reads it when it wakes. A message or an answer older than 24 hours, or anything else older than 10 minutes (`KEPT_FRESH_S`), by the hub's timestamp on the command | 409 `expired`, which the hub stores as a rejection |
+| For a session no keeper holds here any more (a replay after a restart, the session let go since). The route would take the old path and type into a pane | the stored receipt when this machine's store has the id; `already detached` for a detach or kill; else 409 `not_kept` |
 
 The `kept` command:
 
@@ -277,7 +313,7 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 
 | Check | Result |
 |---|---|
-| `tests.test_remote_agent` (208 tests, 36 new) | pass, 5 runs in a row |
+| `tests.test_remote_agent` (219 tests, 47 new) | pass |
 | Full suite against a throwaway HOME | pass (see the PR) |
 | Against an installed `swe` (`pip install -e .` in a fresh venv), two throwaway HOMEs on one Mac, `swe remote serve` in one and `swe remote agent` in the other, harness.json on the satellite pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py` (`FAKE_CLAUDE_MODE=approval`): a launch on the satellite asked for on the hub; an approval and a send from the hub answered by the satellite's keeper; `kill -9` the agent with an approval open, a message sent meanwhile answered `held` (its retry `duplicate`, a Stop 409 `machine_offline`); the agent started again, the approval answered, the held message run once; 55 events, seqs 1..55, the satellite's journal and the hub's copy both equal to the keeper's log; then the hub stopped and the satellite's loopback API listing the session and running one more turn, 401 without the token or with a paired credential, 404 for `/v1/devices`; `local.json` mode 0600 and its token in no other file under either HOME, logs included; detach ends the keeper | pass |
 
@@ -320,8 +356,9 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 - **A hub that dies between claiming a held command and putting it on
   the stream** leaves it `queued` and undelivered. The window is two
   adjacent statements; nothing replays it.
-- **Upload size.** One event larger than a request body (4 MiB) is sent
-  with its long strings cut. It keeps its seq.
+- **Clocks.** The ten-minute limit on a late Stop compares the hub's
+  timestamp with the satellite's clock. Two machines whose clocks
+  disagree by more than that refuse each other's controls.
 - **One process per machine writes the store.** Running `swe remote
   serve` and `swe remote agent` over one `~/.swe` by hand is not
   guarded here; the service installers refuse it.

@@ -25,6 +25,7 @@ from swe.remote import usage as usage_mod
 from swe.remote import attachments, catalog as catalog_mod
 from swe.remote import inject, journal, pairing, protocol, supervise
 from swe.remote import hub
+from swe.remote.adapters import events as ev2
 from swe.remote.adapters import fake
 from swe.remote.hub import HubState, make_server
 from swe.remote.keeper import discovery
@@ -3097,10 +3098,13 @@ class SatelliteCase(KeeperHubCase):
         each."""
         agent = agent or self.agent
         for _attempt in range(50):
-            self.assertTrue(agent._push_kept())
+            # False while a session this machine let go is not yet
+            # released on the hub: the next upload carries on.
+            agent._push_kept()
             with agent._kept_lock:
                 behind = [k for k, st in agent._kept.items()
-                          if st["acked"] != agent.local.journal.last_seq(k)]
+                          if st["released"] or st["acked"]
+                          != agent.local.journal.last_seq(k)]
             if not behind:
                 return
         self.fail(f"the hub's copy never caught up: {behind}")
@@ -3127,7 +3131,7 @@ class SatelliteCase(KeeperHubCase):
         agent = agent or self.agent
         self.online()
         agent._hub_back()
-        self.assertTrue(agent._push_kept())
+        agent._push_kept()
 
     def stream(self) -> list[dict]:
         """Everything the hub has put on the satellite's command
@@ -3668,6 +3672,9 @@ class TestSatelliteEdges(SatelliteCase):
             "launch_id": "l9"})
         self.assertEqual((ok, note), (True, "starting"))
         self.assertEqual(told.get(timeout=WAIT), "l9")
+        for thread in threading.enumerate():
+            if thread.name == "remote-launch-l9":
+                thread.join(WAIT)  # it closes the session it never got
         # On the uplink, in the shape a failed tmux launch reports.
         failed = [e["data"] for e in self.agent.outbox
                   if e["type"] == "command.result"
@@ -3778,6 +3785,281 @@ class TestSatelliteEdges(SatelliteCase):
         self.assertEqual(status, 403)
 
 
+class TestSatelliteRelease(SatelliteCase):
+    """Letting a session go: the release reaches the hub before the
+    tailer's events, and taking it twice changes nothing."""
+
+    def released(self) -> tuple[str, str, list[int]]:
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        self.assertTrue(self.agent._push_events())
+        self.agent.runtime.close(key)
+        kept = [e["seq"] for e in
+                self.agent.local.journal.read_since(key, 0)[0]
+                if e.get("v") == 2]
+        return key, hub_key, kept
+
+    def test_the_outbox_waits_for_the_release(self):
+        key, hub_key, kept = self.released()
+        # The tailer has the session back and reads something.
+        self.agent._capture(key, protocol.event(
+            "message.appended", key, self.mid,
+            {"kind": "assistant", "text": "from the terminal"}))
+        # The command stream came back meanwhile: the first upload can
+        # only ask how far the hub's copy reaches.
+        self.agent._hub_back()
+        self.assertFalse(self.agent._push_kept())
+        self.assertTrue(agent_mod.mirrored(self.srv.state, hub_key))
+        # So the uplink loop sends nothing else yet. Once the release
+        # is taken, it does, and the hub numbers the event.
+        self.push()
+        self.assertTrue(self.agent._push_kept())
+        self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+        self.assertTrue(self.agent._push_events())
+        last = self.journal(hub_key)[-1]
+        self.assertEqual((last["data"]["text"], last["seq"]),
+                         ("from the terminal", kept[-1] + 1))
+
+    def test_a_release_that_waited_too_long_stops_holding_the_outbox(self):
+        key, hub_key, kept = self.released()
+        with patch.object(agent_mod.SatelliteKeepers, "take",
+                          return_value=(None, False)):
+            self.assertFalse(self.agent._push_kept())
+            with self.agent._kept_lock:
+                self.agent._kept[key]["since"] -= \
+                    agent_mod.KEPT_RELEASE_WAIT_S + 1
+            self.assertTrue(self.agent._push_kept())
+        # It is still asked for, and taken when the hub can.
+        self.push()
+        self.assertEqual(self.agent._kept, {})
+
+    def test_a_release_sent_twice_drops_nothing(self):
+        key, hub_key, kept = self.released()
+        entry = {"key": key, "head": kept[-1], "released": True,
+                 "events": []}
+        self.push()
+        self.assertEqual(self.seqs(hub_key), kept)
+        # The hub numbers the journal itself now.
+        self.srv.state.emit(hub_key, protocol.event(
+            "message.appended", hub_key, self.mid,
+            {"kind": "assistant", "text": "from the terminal"}))
+        before = self.journal(hub_key)
+        self.assertEqual(before[-1]["seq"], kept[-1] + 1)
+        frames = Stream(self, self.srv.state, hub_key)
+        # The answer was lost: the agent says it again, with events
+        # the hub already has, and once more after a restart, as a
+        # question.
+        events = self.agent.local.journal.read_since(key, kept[-3])[0]
+        for again in (dict(entry, events=events[:2]),
+                      {"key": key, "head": kept[-1], "released": True,
+                       "row": {"harness": "claude"}}):
+            status, out = self.kept({"sessions": [again]})
+            self.assertEqual(out["released"], [key])
+            self.assertEqual(self.journal(hub_key), before)
+        self.assertTrue(frames.q.empty())
+        self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+        # And an agent that never heard the answer ends the same way.
+        with self.agent._kept_lock:
+            self.agent._kept[key] = {"acked": None, "released": True,
+                                     "since": time.monotonic()}
+        self.push()
+        self.assertEqual(self.agent._kept, {})
+        self.assertEqual(self.journal(hub_key), before)
+
+    def test_a_copy_survives_a_hub_restart_after_its_keeper_closed(self):
+        key, hub_key, kept = self.released()
+        # The keeper's last events are up (``closed`` among them); the
+        # release is not.
+        events = self.agent.local.journal.read_since(
+            key, self.seqs(hub_key)[-1])[0]
+        events = [e for e in events if e.get("v") == 2]
+        self.assertIn("closed", [e["data"].get("state") for e in events
+                                 if e["type"] == "session.state"])
+        self.kept({"sessions": [
+            {"key": key, "head": kept[-1], "events": events}]})
+        self.assertEqual(self.seqs(hub_key), kept)
+        self.assertNotEqual(self.store().get_session(hub_key).state,
+                            "closed")
+        # A hub started now still knows it copies that journal.
+        self.assertIn(hub_key, agent_mod.SatelliteKeepers(
+            self.srv.state)._mirrors)
+
+    def test_a_session_continued_again_is_copied_again(self):
+        key, hub_key, kept = self.released()
+        self.push()
+        self.assertEqual(self.store().get_session(hub_key).last_seq,
+                         kept[-1])
+        # A later copy of the same session ends past the first: it is
+        # not mistaken for the release the hub already took.
+        side = agent_mod.satellite_keepers(self.srv.state)
+        self.assertFalse(side._released_before(
+            self.store(), hub_key, kept[-1] + 5))
+        self.assertTrue(side._released_before(
+            self.store(), hub_key, kept[-1]))
+
+
+class TestSatelliteGuards(SatelliteCase):
+    def running(self) -> tuple[str, str]:
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        return key, hub_key
+
+    def test_a_satellites_events_cannot_touch_anothers_commands(self):
+        key, hub_key = self.running()
+        store = self.store()
+        # Held for another machine, and one of this machine's own for
+        # another session.
+        store.record_command("x1", session="claude:zz@other", op="send",
+                             status="held", payload={"text": "theirs"},
+                             machine="other")
+        store.record_command("x2", session="claude:zz@" + self.mid,
+                             op="send", status="held",
+                             payload={"text": "elsewhere"}, machine=self.mid)
+        head = self.agent.local.journal.last_seq(key)
+        forged = []
+        for n, cid in enumerate(("x1", "x2"), start=1):
+            for event in (
+                    ev2.command_receipt(key, cid, "rejected",
+                                        reason="unknown_request"),
+                    ev2.command_result(key, cid, "send", True)):
+                forged.append(dict(event, seq=head + len(forged) + 1))
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": head + 4, "events": forged}]})
+        self.assertEqual(out["acked"], {key: head + 4})
+        for cid in ("x1", "x2"):
+            cmd = store.get_command(cid)
+            self.assertEqual((cmd.status, cmd.result), ("held", None))
+
+    def test_a_command_read_too_late_is_refused(self):
+        key, hub_key = self.running()
+        self.online()
+        frames = Stream(self, self.srv.state, hub_key)
+        for route, body, cid, age, ran in (
+                ("control", {"op": "interrupt"}, "s1",
+                 agent_mod.KEPT_FRESH_S + 1, False),
+                ("message", {"text": "a day late"}, "s2",
+                 agent_mod.KEPT_HOLD_S + 1, False),
+                ("message", {"text": "an hour late"}, "s3", 3600.0, True)):
+            status, out = self.post(hub_key, route,
+                                    {**body, "command_id": cid})
+            self.assertEqual(status, 202, out)
+            frame = self.stream()[-1]
+            # Read by a machine that was asleep when it was sent.
+            self.agent._run_kept(
+                frame["seq"], frame["data"], self.agent._cmd_epoch,
+                time.time() - age)
+            self.done.get(timeout=WAIT)
+            stored = self.store().get_command(cid)
+            if ran:
+                self.sat.result(cid)
+                self.assertNotEqual(stored.status, "rejected")
+                continue
+            self.assertEqual((stored.status, stored.result["ok"]),
+                             ("rejected", False))
+            self.assertIn("too late", stored.reason)
+            told = frames.frame("command.result", client_id=cid)
+            self.assertFalse(told["data"]["ok"])
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "an hour late"])
+        self.assertEqual(self.calls("interrupt"), [])
+
+    def test_a_replay_after_the_session_was_let_go_types_nothing(self):
+        key, hub_key = self.running()
+        self.online()
+        self.post(hub_key, "message", {"text": "again", "client_id": "m1"})
+        message = self.stream()[-1]
+        self.deliver()
+        self.finished()
+        self.sat.result("m1")
+        self.post(hub_key, "control", {"op": "detach", "command_id": "d1"})
+        detach = self.stream()[-1]
+        self.deliver()
+        self.finished()
+        self.assertFalse(self.agent.runtime.owns(key))
+        # Both are replayed (the agent restarted before it had marked
+        # them done), with the session a terminal session again. The
+        # old path would type the message into a pane and kill it.
+        answers = []
+        report = self.agent._report_kept
+
+        def reported(command_id, via, status, body):
+            answers.append((command_id, status, body.get("receipt"),
+                            body.get("note")))
+            return report(command_id, via, status, body)
+
+        self.agent._report_kept = reported
+        with patch.object(inject, "injector_for",
+                          side_effect=AssertionError("typed into a pane")), \
+             patch.object(supervise, "attach",
+                          side_effect=AssertionError("attached")):
+            for frame in (message, detach):
+                self.agent._run_kept(frame["seq"], frame["data"],
+                                     self.agent._cmd_epoch)
+            # A command that never ran here is refused outright.
+            status, reply = self.agent._kept_refusal(
+                key, "message", {"text": "new"}, "m9", None)
+        self.assertEqual(answers, [("m1", 200, "accepted", None),
+                                   ("d1", 200, None, "already detached")])
+        self.assertEqual((status, reply["error"]["code"]),
+                         (409, "not_kept"))
+        self.assertEqual(self.sends(), ["hello", "again"])
+
+    def test_an_event_that_cannot_be_cut_to_fit_is_skipped(self):
+        key = self.start([fake.say("x" * 40000)])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        with patch.object(agent_mod, "EVENTS_BODY_MAX", 16384), \
+             patch.object(agent_mod, "_clip_event", return_value=None):
+            self.push()
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        big = [e["seq"] for e in local if e["type"] == "message.completed"
+               and e["data"]["kind"] == "assistant"]
+        # Everything but that one event is copied, under its own seq.
+        self.assertEqual(self.seqs(hub_key),
+                         [e["seq"] for e in local if e["seq"] not in big])
+
+    def test_a_later_sessions_big_event_waits_for_a_body_of_its_own(self):
+        first = self.start([fake.say("a" * 9000)])
+        self.sat.event("turn.ended")
+        self.settle(first)
+        second = self.start([fake.say("b" * 9000)], launch_id="l2")
+        self.sat.event("turn.ended")
+        self.settle(second)
+        self.assertTrue(self.agent._push_catalog())
+        with patch.object(agent_mod, "EVENTS_BODY_MAX", 16384):
+            self.push()
+        # Neither was cut: each went up whole in an upload it fit.
+        for key, letter in ((first, "a"), (second, "b")):
+            copied = self.journal(protocol.remote_key(self.mid, key))
+            local = self.agent.local.journal.read_since(key, 0)[0]
+            self.assertEqual([dict(e, session=key) for e in copied], local)
+            self.assertIn(letter * 9000, [
+                e["data"].get("text") for e in copied
+                if e["type"] == "message.completed"])
+
+    def test_a_hello_set_during_an_upload_is_not_lost(self):
+        self.agent._hub_back()
+        with patch.object(agent_mod, "_post", return_value=(0, {})):
+            self.assertFalse(self.agent._push_kept())
+        self.assertTrue(self.agent._kept_hello)
+        with patch.object(agent_mod, "_post", return_value=(404, {})):
+            self.assertTrue(self.agent._push_kept())
+        # An older hub: asked again later, and the hello still owed.
+        self.assertTrue(self.agent._kept_hello)
+        self.assertTrue(self.agent._push_kept())
+        self.assertTrue(self.agent._kept_hello)
+        self.agent._kept_off_until = 0.0
+        self.assertTrue(self.agent._push_kept())
+        self.assertFalse(self.agent._kept_hello)
+
+
 class TestSatelliteContinue(SatelliteCase):
     SID = "0f4d7a52-3a44-4c3e-9d6b-2f8a5f6f0015"
 
@@ -3831,6 +4113,14 @@ class TestSatelliteContinue(SatelliteCase):
         # The hub's own numbering of that journal gave way to the
         # satellite's: the earlier history, then the keeper's events.
         frames.frame("journal.truncated")
+        # The history came up once already, when the tailer read it:
+        # it is copied, not announced again (its notifications and
+        # approvals would be raised a second time).
+        while not frames.q.empty():
+            frames.seen.append(frames.q.get())
+        said = [f["data"].get("text") for f in frames.seen
+                if f.get("type") == "message.appended"]
+        self.assertEqual(said, ["go on", "continued"])
         local = self.agent.local.journal.read_since(key, 0)[0]
         copied = self.journal(hub_key)
         self.assertEqual([e["seq"] for e in copied],
