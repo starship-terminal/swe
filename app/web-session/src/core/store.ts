@@ -14,7 +14,7 @@ import { useStore } from "zustand";
 import { gate, gateSend, type Refusal } from "./gate";
 import { Outbox, randomOwner, SESSION_GONE, type OutboxView, type SendInput, type SendResultData } from "./outbox";
 import { describeSends, type SendView } from "./sends";
-import { DeferredStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { DeferredStorage, MemoryStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
 import { emptySession, type SessionState } from "./state";
 import {
@@ -300,8 +300,13 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         if (get().started) return;
         generation++;
         set({ started: true });
+        const opening = (options.openStorage ?? (() => openOutboxStorage(undefined, () => outbox?.refresh())))();
+        // `openOutboxStorage` never fails (it falls back to memory itself); a custom `openStorage` can.
         const storage = new DeferredStorage(
-          (options.openStorage ?? (() => openOutboxStorage(undefined, () => outbox?.refresh())))(),
+          Promise.resolve(opening).catch((error: unknown) => {
+            const text = error instanceof Error ? error.message : String(error);
+            return new MemoryStorage(`The outbox storage did not open (${text}); sends are kept in memory and will not survive a reload`);
+          }),
         );
         outbox = new Outbox({
           initial: carried,

@@ -115,6 +115,23 @@ type Outcome = "done" | "retry" | "paused" | "held";
 
 const TERMINAL = new Set(["failed", "unconfirmed"]);
 
+const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 1, failed: 2, unconfirmed: 2 };
+
+/**
+ * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
+ * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
+ * `sent` over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
+ * with attempts+1, so a claim-free copy at the same count is the released one); `ambiguous` over not.
+ */
+export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
+  return (
+    STAGE[a.status] - STAGE[b.status] ||
+    a.attempts - b.attempts ||
+    Number(a.claim === undefined) - Number(b.claim === undefined) ||
+    Number(a.ambiguous === true) - Number(b.ambiguous === true)
+  );
+}
+
 function errorText(response: JsonResponse): string {
   const body = response.body as { error?: { message?: unknown } } | undefined;
   const message = body?.error?.message;
@@ -170,7 +187,7 @@ export class Outbox {
   private ready = false;
   private early = new Map<string, SendResultData>();
   private lateWhileLoading = new Map<string, { entry: OutboxEntry; settled: boolean }>();
-  /** Ids this outbox removed (discarded, retried, settled): never taken back from storage or written again. */
+  /** Ids this outbox removed while loading (discarded, retried, settled): never taken back from the load or written again. */
   private removed = new Set<string>();
   /** Ids an earlier outbox of this page handed over. */
   private readonly carried: Set<string>;
@@ -197,22 +214,51 @@ export class Outbox {
 
   /**
    * Load what storage holds, merge what an earlier outbox of this page handed over, then age it and try to send
-   * it. Storage is the truth at start: where it has an entry, its copy wins over the one handed over (a post's
-   * answer written after `stop()` is newer than the copy taken at `stop()`). A handed-over entry storage lacks
-   * (its first write never finished, or the storage is memory) is written once. Nothing removed meanwhile comes back.
+   * it. Where storage and the handed-over list both hold a send, the copy further along wins (`furtherAlong`), and
+   * storage is corrected when it is the handed-over one. A handed-over entry storage lacks (its first write never
+   * finished, or the storage is memory) is written once. Nothing removed meanwhile comes back.
    */
   async init(): Promise<void> {
+    try {
+      await this.load();
+    } catch {
+      // The storage failed while loading (only a storage that throws, not a fallback one): what memory holds stands,
+      // and loading still ends, so the view offers its actions again.
+    }
+    if (this.closed) return;
+    this.ready = true;
+    this.removed.clear(); // only the merge reads it
+    // The hub may have lost what it owed us while this page was away: ask again where that is safe.
+    for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
+    // A 404 (or an outdated hub) that came before the stored entries were loaded applies to them too.
+    if (this.gone !== null) this.sessionGone(this.gone);
+    this.changed();
+    void this.flush();
+  }
+
+  /** `init()`'s merge, then what was held while loading. */
+  private async load(): Promise<void> {
     const loaded = await this.options.storage.load(this.options.session);
     if (this.closed) return;
     const stored = loaded.map(normalize).filter((entry) => !this.removed.has(entry.commandId));
-    const storedIds = new Set(stored.map((entry) => entry.commandId));
-    // From memory: what storage lacks (a handed-over entry, a send made while loading whose write the load missed).
-    const fromMemory = this.list.filter((entry) => !storedIds.has(entry.commandId));
-    this.list = [...stored, ...fromMemory].sort((a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId));
-    for (const entry of fromMemory) {
-      // A send made here wrote itself; a handed-over one the person removed meanwhile stays removed.
-      if (!this.carried.has(entry.commandId) || this.removed.has(entry.commandId)) continue;
-      if (!this.list.includes(entry)) continue;
+    // Of two copies of one send, the one further along wins, wherever it is: storage can hold an older copy (a write
+    // that failed and fell back to memory) as well as a newer one (an answer written after `stop()`). Ties keep the
+    // stored copy. A copy only in memory (a handed-over one storage lacks, a send made while loading whose write the
+    // load missed) is kept as it is.
+    const memory = new Map(this.list.map((entry) => [entry.commandId, entry]));
+    const toWrite: OutboxEntry[] = [];
+    const merged = stored.map((copy) => {
+      const mine = memory.get(copy.commandId);
+      memory.delete(copy.commandId);
+      if (mine === undefined || furtherAlong(mine, copy) <= 0) return copy;
+      toWrite.push(mine); // storage learns it now, so the next start does not depend on what is handed over
+      return mine;
+    });
+    for (const entry of memory.values()) if (this.carried.has(entry.commandId)) toWrite.push(entry); // a send made here wrote itself
+    this.list = [...merged, ...memory.values()].sort((a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId));
+    for (const entry of toWrite) {
+      // One the person removed meanwhile stays removed.
+      if (this.removed.has(entry.commandId) || !this.list.includes(entry)) continue;
       await this.options.storage.put(entry);
       if (this.closed) return;
     }
@@ -234,13 +280,6 @@ export class Outbox {
       }
       if (this.closed) return;
     }
-    this.ready = true;
-    // The hub may have lost what it owed us while this page was away: ask again where that is safe.
-    for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
-    // A 404 (or an outdated hub) that came before the stored entries were loaded applies to them too.
-    if (this.gone !== null) this.sessionGone(this.gone);
-    this.changed();
-    void this.flush();
   }
 
   /** Everything not yet finished, the sends still being written included: what a restarted outbox starts from. */
@@ -716,7 +755,7 @@ export class Outbox {
   }
 
   private async drop(commandId: string): Promise<void> {
-    this.removed.add(commandId);
+    if (!this.ready) this.removed.add(commandId);
     this.recheck.delete(commandId);
     this.list = this.list.filter((e) => e.commandId !== commandId);
     this.changed();

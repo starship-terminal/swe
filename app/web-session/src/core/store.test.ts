@@ -2,7 +2,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
 import { createSessionStore, type SessionStore } from "./store";
-import { openOutboxStorage, MemoryStorage } from "./outbox-storage";
+import { FallbackStorage, openOutboxStorage, MemoryStorage, type OutboxStorage } from "./outbox-storage";
 import { MAYBE_SENT, NOT_SENT_IN_TIME, SESSION_GONE, TERMINAL_KEPT_MS } from "./outbox";
 import { CLAIM_STALE_MS } from "./outbox-storage";
 import { FakeEnvironment, FakeTimers, FakeTransport, drain, loadFixture, snapshotFrame, type Fixture } from "./test-support";
@@ -971,23 +971,112 @@ describe("what start() takes from storage (review 7)", () => {
     return { factory, timers, transport, store, onDisk, state: () => store.getState() };
   };
 
-  it("a send discarded right after start(), while storage is opened, written back and loaded, never comes back", async () => {
-    const t = make();
-    t.transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true } }), "POST");
-    t.state().start();
-    await t.state().send({ text: "never mind" }); // waiting: the row is not known yet
+  it("a send discarded right after start(), while storage is opened and loaded, never comes back", async () => {
+    const factory = new IDBFactory();
+    const transport = new FakeTransport();
+    transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true } }), "POST");
+    // The second page's database opens when the test says; every call waits for it in call order, so the load
+    // reads before the discard's removal runs.
+    let opens = 0;
+    let open: (s: OutboxStorage) => void = () => {};
+    const store = createSessionStore({
+      sessionKey: T, transport, timers: new FakeTimers(), random: () => 0, environment: new FakeEnvironment(), newId: () => "id1",
+      openStorage: () => (++opens === 1 ? openOutboxStorage(factory) : new Promise<OutboxStorage>((resolve) => (open = resolve))),
+    });
+    store.getState().start();
+    await store.getState().send({ text: "never mind" }); // waiting: the row is not known yet
     await drain();
-    t.state().stop();
-    t.state().start();
+    store.getState().stop();
+    store.getState().start();
     // The new outbox's view is up at once, and offers nothing while it loads.
-    expect(t.state().outbox.loading).toBe(true);
-    expect(t.state().sends).toMatchObject([{ commandId: "id1", canDiscard: false, canRetry: false }]);
-    await t.state().discardSend("id1"); // a caller that does not read `canDiscard`
-    catchUp(t.transport);
+    expect(store.getState().outbox.loading).toBe(true);
+    expect(store.getState().sends).toMatchObject([{ commandId: "id1", canDiscard: false, canRetry: false }]);
+    const discarding = store.getState().discardSend("id1"); // a caller that does not read `canDiscard`
+    open(await openOutboxStorage(factory));
+    await discarding;
     await drain();
-    expect(t.transport.posts("/message")).toEqual([]);
-    expect(await t.onDisk()).toEqual([]);
-    expect(t.state().sends).toEqual([]);
+    // Loaded, the row still unknown: nothing has been posted or claimed, and the load did not bring it back.
+    expect(store.getState().outbox.loading).toBe(false);
+    expect(store.getState().sends).toEqual([]);
+    catchUp(transport);
+    await drain();
+    expect(transport.posts("/message")).toEqual([]);
+    expect(await (await openOutboxStorage(factory)).load(T)).toEqual([]);
+  });
+
+  it("a claim write that failed (storage fell back to memory) leaves an older copy on disk: a restart does not post it again", async () => {
+    const factory = new IDBFactory();
+    const transport = new FakeTransport();
+    const posts: string[] = [];
+    transport.on("/message", (_p, r) => {
+      posts.push(String((r.body as { command_id: string }).command_id));
+      return { status: 202, body: { ok: true, queued: true } };
+    }, "POST");
+    let opens = 0;
+    const open = async (): Promise<OutboxStorage> => {
+      const real = await openOutboxStorage(factory);
+      if (++opens > 1) return real;
+      // The first page's database fails at its first claim (a lost IndexedDB connection, as WebKit reports).
+      return new FallbackStorage({
+        get kind() {
+          return real.kind;
+        },
+        get note() {
+          return real.note;
+        },
+        load: (session) => real.load(session),
+        put: (entry) => real.put(entry),
+        remove: (id) => real.remove(id),
+        claim: async () => {
+          throw new Error("Connection to Indexed Database server lost");
+        },
+        abandon: (...args) => real.abandon(...args),
+        close: () => real.close(),
+      });
+    };
+    const store = createSessionStore({
+      sessionKey: T, transport, timers: new FakeTimers(), random: () => 0, environment: new FakeEnvironment(), newId: () => "id1",
+      openStorage: open,
+    });
+    store.getState().start();
+    catchUp(transport); // a session no keeper holds
+    await drain();
+    await store.getState().send({ text: "rm -rf build" });
+    await drain();
+    expect(posts).toEqual(["id1"]);
+    expect(store.getState().outbox.entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+    store.getState().stop();
+    store.getState().start(); // the view remounts; the new page's database opens fine
+    catchUp(transport);
+    await drain();
+    expect(posts).toEqual(["id1"]); // a legacy hub would type it in again on a second post
+    expect(store.getState().outbox.entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+    expect((await (await openOutboxStorage(factory)).load(T))[0]).toMatchObject({ status: "sent" });
+  });
+
+  it("an outbox storage that does not open: loading ends, in memory, with the handed-over send", async () => {
+    const transport = new FakeTransport();
+    transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true } }), "POST");
+    let opens = 0;
+    const store = createSessionStore({
+      sessionKey: T, transport, timers: new FakeTimers(), random: () => 0, environment: new FakeEnvironment(), newId: () => "id1",
+      openStorage: async () => {
+        if (++opens === 1) return new MemoryStorage("m");
+        throw new Error("blocked by the browser");
+      },
+    });
+    store.getState().start();
+    await store.getState().send({ text: "hi" });
+    await drain();
+    store.getState().stop();
+    store.getState().start();
+    await drain();
+    expect(store.getState().outbox).toMatchObject({ loading: false, persistent: false });
+    expect(store.getState().outbox.note).toContain("blocked by the browser");
+    expect(store.getState().sends).toMatchObject([{ commandId: "id1", canDiscard: true }]);
+    catchUp(transport);
+    await drain();
+    expect(transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1"]);
   });
 
   it("stop() mid-post on a legacy row, a 202 while stopped, start() again: the send is sent, not failed", async () => {

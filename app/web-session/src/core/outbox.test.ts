@@ -8,6 +8,7 @@ import {
   LEGACY_UNCONFIRMED,
   MAYBE_SENT,
   NOT_SENT_IN_TIME,
+  furtherAlong,
   Outbox,
   OUTBOX_TTL_MS,
   SESSION_GONE,
@@ -17,6 +18,7 @@ import {
 } from "./outbox";
 import {
   CLAIM_STALE_MS,
+  decideClaim,
   DeferredStorage,
   FallbackStorage,
   MemoryStorage,
@@ -1164,20 +1166,46 @@ describe("init(): storage is the truth at start", () => {
     expect((await stored(t.factory)).map((e) => e.commandId)).toEqual(["y"]);
   });
 
-  it("a send discarded while storage is loading is not taken back from the load", async () => {
+  it("a send discarded after the load's read has run is not taken back from the load", async () => {
     const t = setup();
+    t.world.canPost = false; // nothing is posted: what the load hands back stays in view
     await (await openOutboxStorage(t.factory)).put(handedOver("x"));
-    const held = await holding(t, "load");
-    const outbox = t.build(held.storage, { initial: [handedOver("x")] });
+    // Every call waits for the open, in call order (as IndexedDB's own open does): the load reads first, the
+    // discard's removal after it, so the load's answer still holds x.
+    let open: (s: OutboxStorage) => void = () => {};
+    const outbox = t.build(new DeferredStorage(new Promise<OutboxStorage>((resolve) => (open = resolve))), { initial: [handedOver("x")] });
     const loading = outbox.init();
-    await drain(); // the load's read has run; its answer still holds x
-    await outbox.discard("x");
-    held.release();
-    await loading;
+    const discarding = outbox.discard("x");
+    open(await openOutboxStorage(t.factory));
+    await Promise.all([loading, discarding]);
     await drain();
-    expect(t.hub.received).toEqual([]);
     expect(t.view().entries).toEqual([]);
     expect(await stored(t.factory)).toEqual([]);
+    t.world.canPost = true;
+    outbox.wake();
+    await drain();
+    expect(t.hub.received).toEqual([]);
+  });
+
+  it("loading that fails ends loading, keeps what was handed over, and sends it", async () => {
+    const t = setup();
+    const broken: OutboxStorage = {
+      kind: "memory",
+      note: "",
+      load: async () => {
+        throw new Error("the database went away");
+      },
+      put: async () => {},
+      remove: async () => {},
+      claim: async (entry, owner, now) => ({ kind: "claimed", entry: { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } } }),
+      abandon: async (entry) => entry,
+      close: () => {},
+    };
+    const outbox = t.build(broken, { initial: [handedOver("x")] });
+    await outbox.init();
+    await drain();
+    expect(t.view().loading).toBe(false);
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual(["x"]);
   });
 
   it("where storage has the entry, its copy wins over the one handed over", async () => {
@@ -1217,5 +1245,88 @@ describe("init(): storage is the truth at start", () => {
     await drain();
     expect(t.view().entries).toEqual([]);
     expect(await stored(t.factory)).toEqual([]);
+  });
+});
+
+describe("two copies of one send: the one further along wins", () => {
+  const copy = (over: Partial<OutboxEntry>): OutboxEntry => ({
+    commandId: "x", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 0, ...over,
+  });
+  const claim = { owner: "p", at: 0 };
+
+  it("orders copies by stage, then attempts, then a released claim, then ambiguity", () => {
+    // Each pair is [older, newer]: one step of the lifecycle, or two copies a step apart.
+    const steps: [string, OutboxEntry, OutboxEntry][] = [
+      ["claimed", copy({}), copy({ attempts: 1, claim })],
+      ["answered 2xx", copy({ attempts: 1, claim }), copy({ attempts: 1, status: "sent", path: "legacy" })],
+      ["released by its answer (429, 5xx, 401)", copy({ attempts: 1, claim }), copy({ attempts: 1, lastError: "busy" })],
+      ["a stale claim abandoned", copy({ attempts: 1, claim }), copy({ attempts: 1, ambiguous: true })],
+      ["claimed again", copy({ attempts: 1, ambiguous: true }), copy({ attempts: 2, ambiguous: true, claim })],
+      ["ended while waiting", copy({ attempts: 2, claim }), copy({ attempts: 2, status: "failed", error: "no" })],
+      ["ended after it was sent", copy({ attempts: 1, status: "sent" }), copy({ attempts: 1, status: "unconfirmed" })],
+      ["a released copy marked ambiguous", copy({ attempts: 1 }), copy({ attempts: 1, ambiguous: true })],
+    ];
+    for (const [step, older, newer] of steps) {
+      expect([step, furtherAlong(newer, older) > 0]).toEqual([step, true]);
+      expect([step, furtherAlong(older, newer) < 0]).toEqual([step, true]);
+    }
+    // Copies the order cannot tell apart: the stored one is kept (see the spec for why that is safe).
+    expect(furtherAlong(copy({ attempts: 1, status: "failed" }), copy({ attempts: 1, status: "unconfirmed" }))).toBe(0);
+  });
+
+  it("a claim is always written with one more attempt (the order depends on it)", async () => {
+    const owner = "me";
+    for (const stored of [copy({}), copy({ attempts: 3, ambiguous: true }), copy({ attempts: 2, claim: { owner: "other", at: 0 } })]) {
+      const decided = decideClaim(stored, owner, CLAIM_STALE_MS + 1, CLAIM_STALE_MS);
+      expect(decided.claim.kind).toBe("claimed");
+      expect(decided.write).toMatchObject({ attempts: stored.attempts + 1, claim: { owner, at: CLAIM_STALE_MS + 1 } });
+      // And through each storage, which must use `decideClaim`.
+      for (const storage of [new MemoryStorage("m"), await openOutboxStorage(new IDBFactory())]) {
+        await storage.put(stored);
+        const claimed = await storage.claim(stored, owner, CLAIM_STALE_MS + 1, CLAIM_STALE_MS);
+        expect(claimed).toMatchObject({ kind: "claimed", entry: { attempts: stored.attempts + 1, claim: { owner } } });
+        // A memory storage keeps nothing (the outbox's own list is the copy); a database keeps the claimed copy.
+        if (storage.kind === "indexeddb") expect((await storage.load(KEY))[0]).toMatchObject({ attempts: stored.attempts + 1, claim: { owner } });
+      }
+    }
+  });
+
+  it("an older copy on disk (a claim write that fell back to memory) does not get a sent legacy send posted again", async () => {
+    const t = setup();
+    legacy(t);
+    // The first outbox's database fails at its claim: the claim and the post go on in memory, the disk keeps the first write.
+    const real = await openOutboxStorage(t.factory);
+    const flaky = new FallbackStorage({
+      get kind() {
+        return real.kind;
+      },
+      get note() {
+        return real.note;
+      },
+      load: (session) => real.load(session),
+      put: (entry) => real.put(entry),
+      remove: (id) => real.remove(id),
+      claim: async () => {
+        throw new Error("Connection to Indexed Database server lost");
+      },
+      abandon: (...args) => real.abandon(...args),
+      close: () => real.close(),
+    });
+    const first = await t.make(flaky);
+    await first.send({ text: "rm -rf build" });
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "legacy" }]);
+    expect(await stored(t.factory)).toMatchObject([{ status: "waiting", attempts: 0 }]);
+    const handed = first.carry();
+    first.close();
+    // The view remounts; the new database opens fine.
+    const second = await t.make(await openOutboxStorage(t.factory), handed);
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "legacy" }]);
+    // Storage is corrected, so a later start does not depend on what is handed over.
+    expect(await stored(t.factory)).toMatchObject([{ status: "sent", path: "legacy" }]);
+    second.close();
   });
 });

@@ -317,14 +317,14 @@ Other rules:
   deliverable, only after its first write. A store stopped and started
   again hands its entries, the ones still being written included, to the
   new outbox.
-- **Storage is the truth at start.** `init()` loads storage first. Where
-  storage has an entry, its copy wins over the one handed over (an answer
-  written after `stop()` is newer than the copy taken at `stop()`); a
-  handed-over entry storage lacks is written once. The outbox remembers
-  every id it removed (discarded, retried, settled) and never takes one
-  back from a load or writes it again. Until `init()` ends nothing is
-  posted or aged, and results, late answers and a gone session are held
-  and applied once loading ends.
+- **Two copies of one send at start.** `init()` loads storage first. Where
+  storage and the handed-over list both hold a send, the copy further along
+  wins (`furtherAlong`, below), and when that is the handed-over copy it is
+  written to storage at once. A handed-over entry storage lacks is written
+  once. The outbox remembers every id it removed while loading (discarded,
+  retried, settled) and never takes one back from the load or writes it
+  again. Until `init()` ends nothing is posted or aged, and results, late
+  answers and a gone session are held and applied once loading ends.
 - **Nothing to act on while loading.** `start()` publishes the new
   outbox's view at once, with `outbox.loading` true, and while it is true
   every `SendView` has `canDiscard` and `canRetry` false ("Loading the
@@ -354,6 +354,32 @@ Other rules:
   says why: `outbox.persistent` is false and `outbox.note` reads "IndexedDB
   is not available (...); sends are kept in memory and will not survive a
   reload". A view should show that note beside the composer.
+
+### Two copies of one send
+
+A send can have two copies: the one in storage and the one an earlier
+outbox of this page handed over at `stop()`. Either can be further along:
+storage, when a post's answer was written after `stop()`; memory, when a
+claim write failed and the storage fell back to memory, so the disk kept
+the first write while the post went on. `furtherAlong(a, b)` compares them
+step by step, and the first step that tells them apart decides:
+
+| Step | Further along | Why it only moves forward |
+|---|---|---|
+| 1. Stage | `failed`, `unconfirmed` over `sent` over `waiting` | `waiting` becomes `sent` on a 2xx; `waiting` or `sent` ends terminal; nothing leaves a terminal state except removal (a new id for a retry) |
+| 2. `attempts` | more | only a claim changes it, and always by +1 |
+| 3. The claim | no claim over a claim | a claim is only ever written together with attempts+1 (`decideClaim`, tested), so at the same count a copy without one is the later, released one: its answer (429, 425, 408, 5xx, 401) or `abandon` removed it |
+| 4. `ambiguous` | set over not | within `waiting` it is only ever set (an unsure answer, an abandoned claim, a stale claim taken over), never cleared; `sent` drops it, but stage 1 already decided |
+
+The two known cases: an answer stored by `late()` after `stop()` (disk
+`sent`, memory `waiting` with the old claim) wins on stage, and so does a
+sent legacy send whose claim write fell back to memory (memory `sent`,
+disk `waiting` at 0 attempts). Copies equal on all four steps keep the
+stored copy. What they can still differ in cannot cause a post:
+`text`, `attachments`, `mode` and `createdAt` never change; `lastError`,
+`error` and `endedAt` are only shown; two terminal copies (`failed` and
+`unconfirmed`) can only be retried as a new id or dismissed; and two
+`sent` copies at the same count come from the one answer.
 
 ### What a view reads: `sends`
 
@@ -493,7 +519,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 285 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 291 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -552,6 +578,14 @@ They are not fixed in G11; G13 should know them.
    `failed` in one tab and `sent` in the other. No second post goes out.
 4. **The reducer never trims.** Every item, turn and index entry stays for
    the life of the view.
+5. **An IndexedDB open that never answers leaves the outbox loading.**
+   Safari has a known bug where `indexedDB.open` fires neither `success`
+   nor `error`. The `DeferredStorage` then never resolves: the view stays
+   on "Loading the sends kept on this device.", with no Discard or Retry,
+   and a `send()` made then never resolves, so that message is not shown
+   at all. Suggested fix (G18): a timeout on the open in
+   `openOutboxStorage` (a few seconds) that falls back to a memory storage
+   with the usual note, as it does when the open fails.
 
 ## What G12 and G13 must know
 
