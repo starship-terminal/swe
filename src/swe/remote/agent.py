@@ -1247,6 +1247,7 @@ class RemoteAgent:
             self._slash_digest = digest
         if self._refresh_launchable():
             self._register()
+            self._note_machine()
         return status == 200
 
     def _fit_rows(self, rows: list[dict]) -> list[dict]:
@@ -1286,6 +1287,18 @@ class RemoteAgent:
             {"machine_id": self.machine_id, **body},
         )
         return status == 200
+
+    def _note_machine(self) -> None:
+        """Save this machine's own row on this machine, as a hub does
+        for itself when it starts: the loopback API's ``/v1/machines``
+        and ``/v1/sessions`` list it, and the new-session picker reads
+        what it can launch from there."""
+        try:
+            catalog_mod.upsert_machine(self.home, {
+                **self.machine, "online": True,
+                "last_seen_at": time.time()})
+        except Exception:
+            logger.exception("saving this machine's row")
 
     def _refresh_launchable(self) -> bool:
         """Re-read what this machine can launch; True when it changed, so
@@ -2066,6 +2079,7 @@ class RemoteAgent:
 
     def run(self) -> int:
         supervise.reconcile_kept(self.home)
+        self._note_machine()
         if self.local_port is not None:
             try:
                 self.api.start(self.local_port)

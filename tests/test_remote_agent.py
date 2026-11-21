@@ -4314,6 +4314,33 @@ class TestLocalApi(SatelliteCase):
         self.assertEqual(status, 202, out)
         self.sat.event("message.completed", text="fresh")
 
+    def test_this_machine_is_listed_with_what_it_can_launch(self):
+        # A fresh satellite: nothing has saved a machine row here yet.
+        status, out = self.local("GET", "/v1/machines", token=self.token)
+        self.assertEqual(out["machines"], [])
+        # ``run`` saves it before it binds the API.
+        self.agent._stop.set()
+        self.agent._usage_loop = lambda: None
+        with patch.object(agent_mod, "_post", return_value=(0, {})):
+            self.agent.run()
+        self.agents.remove(self.agent)
+        self.agent.ended = True
+        self.agent = self.satellite()
+        self.port = self.agent.api.start(0)
+        for path in ("/v1/machines", "/v1/sessions"):
+            status, out = self.local("GET", path, token=self.token)
+            rows = out["machines"]
+            self.assertEqual([(m["id"], m["online"]) for m in rows],
+                             [(self.mid, True)], path)
+            self.assertIn("launchable", rows[0])
+        # A change in what it can launch is saved with the next push.
+        self.agent.machine["launchable"] = ["claude"]
+        with patch.object(self.agent, "_refresh_launchable",
+                          return_value=True):
+            self.agent._push_catalog()
+        status, out = self.local("GET", "/v1/machines", token=self.token)
+        self.assertEqual(out["machines"][0]["launchable"], ["claude"])
+
     def test_only_the_session_routes_are_served(self):
         for method, path in (
                 ("GET", "/v1/devices"), ("GET", "/v1/ssh"),
