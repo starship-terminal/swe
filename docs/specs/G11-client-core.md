@@ -516,6 +516,31 @@ changed here.
 - **No v2 event lists an ACP agent's modes or models**
   ([G1-session-runtime-redesign.md](G1-session-runtime-redesign.md), G20).
 
+## Limits
+
+These are known and left for later. None of them posts a message twice or
+hammers the hub, but each can show the wrong end state or hold a resource.
+They are not fixed in G11; G13 should know them.
+
+1. **A delivered legacy send can end `failed` after `stop()` mid-post.**
+   `init()` in [outbox.ts](../../app/web-session/src/core/outbox.ts)
+   writes the carried in-memory copy back over what `late()` stored. If a
+   202 arrives on a legacy row while the store is stopped, it is stored as
+   `sent`. Then `start()` writes back `waiting` with the old claim, and
+   60 s later the entry ends `failed` with "may or may not have been
+   sent", although it was delivered once. Only one POST goes out, and a
+   later `command.result` ok still removes the entry.
+2. **`stop()` during the claim transaction leaves a claim for a send that
+   was never posted.** On a legacy row that entry ends "may or may not
+   have been sent" after 60 s.
+3. **A recheck post that is out at `close()` keeps its IndexedDB
+   connection open.** `close()` sets `closeAfterLate`, but `ask()` never
+   calls `late()`, so the connection stays open until the page unloads.
+4. **Two tabs can disagree after a device sleep.** One send can show
+   `failed` in one tab and `sent` in the other. No second post goes out.
+5. **The reducer never trims.** Every item, turn and index entry stays for
+   the life of the view.
+
 ## What G12 and G13 must know
 
 - **Import `src/core/index.ts` only.** Create one store per open session
