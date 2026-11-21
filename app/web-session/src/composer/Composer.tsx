@@ -1,12 +1,14 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import "./composer.css";
+
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 
 import { readOnlyReason, useSessionStore, type SessionStore } from "../core";
 import { asArrived } from "../session/format";
-import { cx, Icon, Spinner, StateArrow } from "../ui";
-import { AnswerButton } from "./AnswerButton";
+import { cx, Icon, Spinner, StateArrow, type IconName } from "../ui";
 import { FILES_KEPT, type StagedFile } from "./draft";
 import { Guard } from "./Guard";
 import { enterAction, touchScreen } from "./keys";
+import { Menu, type MenuItem } from "./Menu";
 import { QueueTray } from "./QueueTray";
 import { RequestDock } from "./RequestDock";
 import { MAX_MESSAGE_CHARS, submitMessage } from "./submit";
@@ -14,13 +16,15 @@ import { cut, plural } from "./text";
 import { httpUpload, type Upload } from "./upload";
 import { useDraft } from "./useDraft";
 
-export const COMPOSER_PLACEHOLDER = "Message the agent";
-const QUEUE_PLACEHOLDER = "Queue a message for when the reply ends";
+export const COMPOSER_PLACEHOLDER = "Ask anything";
+const QUEUE_PLACEHOLDER = "Queue a message";
 
 /** The tallest the box grows before it scrolls. */
-const MAX_BOX_PX = 240;
+const MAX_BOX_PX = 200;
 /** What the file picker offers; the hub's own list decides (it answers 422 with its reason for anything else). */
 const ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.heic,.pdf,.txt,.md,.csv,.json,.log,.diff,.patch";
+/** How long the primary button is held, while a reply runs, before its menu opens. */
+export const HOLD_MS = 450;
 
 export interface ComposerProps {
   store: SessionStore;
@@ -29,6 +33,13 @@ export interface ComposerProps {
   upload?: Upload;
   /** How long a request's answers stay off when it replaces the one being read. */
   settleMs?: number;
+  /** How long the primary button is held before its menu opens. */
+  holdMs?: number;
+  /**
+   * The slot between the box and the buttons, for the model chip a later milestone brings (the store has no
+   * action to set a model yet, so nothing is drawn there now; see the spec).
+   */
+  chip?: ReactNode;
 }
 
 type Uploading = { id: number; name: string; error: string | null };
@@ -42,32 +53,96 @@ function connectionNote(state: string, loaded: boolean): string | null {
   return state === "connecting" && !loaded ? "Not connected to the hub yet. A message is kept on this device and sent once it is." : null;
 }
 
+/**
+ * Where the composer sits: over the bottom of the view, not in its flow. Reports its height as
+ * `--sv-composer-h` on the view's host (its parent), which the timeline leaves as padding at its end.
+ */
+function useFloating(): { host: RefObject<HTMLDivElement | null>; stack: RefObject<HTMLDivElement | null> } {
+  const host = useRef<HTMLDivElement>(null);
+  const stack = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const stackEl = stack.current;
+    const parent = host.current?.parentElement;
+    if (stackEl === null || parent === null || parent === undefined) return;
+    const report = (): void => parent.style.setProperty("--sv-composer-h", `${Math.ceil(stackEl.getBoundingClientRect().height)}px`);
+    report();
+    if (typeof ResizeObserver === "undefined") return () => parent.style.removeProperty("--sv-composer-h");
+    const watcher = new ResizeObserver(report);
+    watcher.observe(stackEl);
+    return () => {
+      watcher.disconnect();
+      parent.style.removeProperty("--sv-composer-h");
+    };
+  }, []);
+  return { host, stack };
+}
+
 function ReadOnlyBar({ reason }: { reason: string }) {
+  const { host, stack } = useFloating();
   return (
-    <footer className="shrink-0 pr-safe-right pb-safe-bottom pl-safe-left" data-composer="read-only">
-      <div className="mx-auto max-w-3xl px-4 pt-2 pb-4">
-        <p className="flex items-start gap-2 rounded-card border border-border bg-subtle px-3 py-2.5 text-sm text-secondary" role="status">
+    <div ref={host} className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="read-only" data-composer-host>
+      <div ref={stack} className="sv-composer mx-auto flex w-full max-w-3xl flex-col">
+        <p className="sv-glass pointer-events-auto flex items-start gap-2 rounded-glass px-3.5 py-2.5 text-sm text-secondary shadow-sm" role="status">
           <StateArrow className="mt-1" colour="grey" />
           <span>{asArrived(reason)}</span>
         </p>
       </div>
-    </footer>
+    </div>
   );
 }
 
-function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) {
+/** A round button with a picture and a name: the bar has no visible words. */
+function RoundButton({
+  label,
+  icon,
+  tone = "ghost",
+  className,
+  children,
+  ...rest
+}: {
+  label: string;
+  icon?: IconName;
+  tone?: "ghost" | "primary" | "danger";
+} & ComponentProps<"button">) {
+  return (
+    <button
+      aria-label={label}
+      className={cx(
+        "sv-press grid size-9 shrink-0 place-items-center rounded-full motion-safe:transition-colors focus-visible:outline-2 focus-visible:outline-interactive disabled:cursor-not-allowed disabled:opacity-40",
+        tone === "ghost" && "text-secondary hover:bg-hover hover:text-primary",
+        tone === "primary" && "bg-primary text-card",
+        tone === "danger" && "bg-danger text-card",
+        className,
+      )}
+      title={rest.title ?? label}
+      type="button"
+      {...rest}
+    >
+      {children ?? (icon !== undefined ? <Icon className="size-4.5" name={icon} /> : null)}
+    </button>
+  );
+}
+
+function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Omit<ComposerProps, "chip">> & { chip: ReactNode }) {
   const { draft, latest, update, clear, kept } = useDraft(sessionKey);
+  const { host, stack } = useFloating();
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [uploads, setUploads] = useState<Uploading[]>([]);
   const [stopState, setStopState] = useState<"idle" | "sending" | "sent">("idle");
+  const [menu, setMenu] = useState<"attach" | "send" | null>(null);
   const guard = useRef(false);
   const stopGuard = useRef(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const primary = useRef<HTMLButtonElement>(null);
+  const plus = useRef<HTMLButtonElement>(null);
   const composing = useRef(false);
   const uploadCount = useRef(0);
+  const openUploads = useRef(0);
   const aborts = useRef(new Set<AbortController>());
+  const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const swallowClick = useRef(false);
   const reasonId = useId();
 
   const busyTurn = useSessionStore(store, (s) => s.session.openTurn !== null || s.session.phase === "running" || s.session.phase === "waiting");
@@ -85,7 +160,7 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
   const uploading = uploads.some((u) => u.error === null);
   const hasContent = text.trim() !== "" || files.length > 0;
 
-  // Why the message cannot go now, for the person: shown beside the box and tied to it for a screen reader.
+  // Why the message cannot go now, for the person: shown above the bar and tied to it for a screen reader.
   let blockedBy: string | null = null;
   if (refusalReason === "gone" || refusalReason === "outdated") blockedBy = refusalMessage;
   else if (loading) blockedBy = "Loading the sends kept on this device.";
@@ -104,6 +179,7 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
     const open = aborts.current;
     return () => {
       for (const controller of open) controller.abort();
+      if (hold.current !== null) clearTimeout(hold.current);
     };
   }, []);
 
@@ -117,6 +193,11 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
     const timer = setTimeout(() => setStopState("idle"), 5000);
     return () => clearTimeout(timer);
   }, [stopState, busyTurn]);
+
+  // A reply that ends while the menu for it is open takes the menu away.
+  useEffect(() => {
+    if (!busyTurn && menu === "send") setMenu(null);
+  }, [busyTurn, menu]);
 
   const submit = async (mode: "queue" | "steer"): Promise<void> => {
     // A second press, a held key or a second render gets here before `submitting` is drawn: this is the guard.
@@ -177,13 +258,39 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
     if (action === "send" && !blockedBy && hasContent) void submit("queue");
   };
 
+  // The primary button: a press sends (or queues). While a reply runs, holding it, a right click, or the
+  // arrow-up key opens a menu with the other way to send. The press that opened the menu never also sends.
+  const stopHold = (): void => {
+    if (hold.current !== null) clearTimeout(hold.current);
+    hold.current = null;
+  };
+  const openSendMenu = (): void => {
+    stopHold();
+    swallowClick.current = true;
+    setMenu("send");
+  };
+  const onPrimaryDown = (event: PointerEvent<HTMLButtonElement>): void => {
+    swallowClick.current = false;
+    if (!busyTurn || event.button !== 0) return;
+    stopHold();
+    hold.current = setTimeout(openSendMenu, holdMs);
+  };
+  const onPrimaryUp = (): void => {
+    stopHold();
+    // The click that follows this release belongs to the hold that opened the menu: it is left unanswered, then forgotten.
+    if (swallowClick.current) setTimeout(() => (swallowClick.current = false), 80);
+  };
+
   const addFiles = (list: FileList | null): void => {
     if (list === null) return;
     for (const file of Array.from(list)) {
-      if (latest.current.files.length + uploadsOpen() >= FILES_KEPT) {
+      // Slots are taken here, one file at a time, not read back from state: a pick of many files would
+      // otherwise all see the same count.
+      if (latest.current.files.length + openUploads.current >= FILES_KEPT) {
         setNotice(`A message takes at most ${plural(FILES_KEPT, "attachment")}.`);
         break;
       }
+      openUploads.current++;
       const id = ++uploadCount.current;
       const controller = new AbortController();
       aborts.current.add(controller);
@@ -198,11 +305,20 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
           const why = error instanceof Error && error.message !== "" ? error.message : "The upload failed.";
           setUploads((now) => now.map((entry) => (entry.id === id ? { ...entry, error: why } : entry)));
         })
-        .finally(() => aborts.current.delete(controller));
+        .finally(() => {
+          openUploads.current--;
+          aborts.current.delete(controller);
+        });
     }
     if (picker.current !== null) picker.current.value = "";
   };
-  const uploadsOpen = (): number => uploads.filter((u) => u.error === null).length;
+
+  const choose = (kind: "files" | "photos"): void => {
+    const input = picker.current;
+    if (input === null) return;
+    input.accept = kind === "photos" ? "image/*" : ACCEPT;
+    input.click();
+  };
 
   const keep = (words: string): void => {
     update((now) => ({ ...now, text: now.text === "" ? words : `${now.text}\n\n${words}` }));
@@ -213,40 +329,81 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
   const steerReason = busyTurn && !steerOk ? "This agent cannot take a message while it is replying. Queue it to send when the reply ends." : null;
   const reason = notice ?? blockedBy ?? (hasContent ? steerReason : null) ?? note;
   const stopDisabled = refusalMessage !== null || stopState !== "idle";
+  const canSend = !submitting && hasContent && blockedBy === null;
+
+  const attachItems: MenuItem[] = [{ id: "files", label: "Choose files", icon: "folder", onSelect: () => choose("files") }];
+  // A photo library is something a phone or a tablet has; a desktop browser's file picker already shows pictures.
+  if (touchScreen()) attachItems.push({ id: "photos", label: "Photo library", icon: "photo", onSelect: () => choose("photos") });
+  // The safe item first: the menu opens on it, and the one that stops the reply is never the one it opens on.
+  const sendItems: MenuItem[] = [
+    { id: "queue", label: "Queue", icon: "queue", hint: "Sent when the current reply ends.", disabled: !canSend, reason: "Write a message first.", onSelect: () => void submit("queue") },
+    {
+      id: "steer",
+      label: "Stop and send",
+      icon: "stop",
+      hint: "Stops the current reply, then sends this message now.",
+      disabled: !canSend || !steerOk,
+      reason: !steerOk ? "This agent cannot be steered." : "Write a message first.",
+      onSelect: () => void submit("steer"),
+    },
+  ];
+  const closeMenu = useMemo(
+    () => () => {
+      setMenu((now) => {
+        // The focus goes back to what opened the menu.
+        queueMicrotask(() => (now === "attach" ? plus.current : primary.current)?.focus());
+        return null;
+      });
+    },
+    [],
+  );
 
   return (
-    // The footer takes at most two thirds of the view, so the timeline always keeps a third. The dock and the
-    // tray scroll inside what is left over, and the box and its buttons never leave the screen.
-    <footer className="flex max-h-2/3 shrink-0 flex-col pr-safe-right pb-safe-bottom pl-safe-left" data-composer="form">
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col gap-2 px-4 pt-2 pb-4">
+    <div ref={host} className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="form" data-composer-host>
+      <div ref={stack} className="sv-composer mx-auto flex max-h-1/2 w-full max-w-3xl flex-col gap-2">
         <div className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
-          <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-            <RequestDock settleMs={settleMs} store={store} />
-          </Guard>
+          {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null ? (
+            <div className="flex flex-col gap-1.5">
+              {!persistent && outboxNote !== "" ? (
+                <p className="sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs text-secondary" data-outbox-note role="status">
+                  {asArrived(outboxNote)}
+                </p>
+              ) : null}
+              {kept === "memory" && text !== "" ? (
+                <p className="sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs text-secondary" data-draft-note role="status">
+                  This draft cannot be kept on this device, so it will not survive a reload.
+                </p>
+              ) : null}
+              {reason !== null ? (
+                <p
+                  aria-live="polite"
+                  className={cx("sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs", notice !== null ? "text-danger-text" : "text-secondary")}
+                  data-composer-reason={notice !== null ? "error" : blockedBy !== null ? "blocked" : note !== null ? "connection" : "none"}
+                  id={reasonId}
+                  role={notice !== null ? "alert" : "status"}
+                >
+                  {reason}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <Guard message="The queue could not be shown. Queued messages are still sent when the reply ends." part="tray">
             <QueueTray onKeep={keep} store={store} />
           </Guard>
+          <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
+            <RequestDock settleMs={settleMs} store={store} />
+          </Guard>
         </div>
-        {!persistent && outboxNote !== "" ? (
-          <p className="text-xs text-secondary" data-outbox-note role="status">
-            {asArrived(outboxNote)}
-          </p>
-        ) : null}
-        {kept === "memory" && text !== "" ? (
-          <p className="text-xs text-secondary" data-draft-note role="status">
-            This draft cannot be kept on this device, so it will not survive a reload.
-          </p>
-        ) : null}
         <form
           aria-label="Composer"
-          className="flex shrink-0 flex-col gap-1.5 rounded-card border border-border bg-card p-2 focus-within:border-border-strong"
+          className="sv-glass pointer-events-auto relative flex shrink-0 flex-col gap-1 rounded-bar px-1.5 py-1.5 shadow-sm focus-within:border-border-strong"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
-            if (!blockedBy && hasContent) void submit("queue");
+            if (canSend) void submit("queue");
           }}
         >
           {files.length > 0 || uploads.length > 0 ? (
-            <ul aria-label="Attachments" className="flex flex-wrap gap-1.5 px-1">
+            <ul aria-label="Attachments" className="flex flex-wrap gap-1.5 px-2 pt-1">
               {files.map((file) => {
                 const name = cut(file.name, 60);
                 return (
@@ -286,91 +443,108 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
               ))}
             </ul>
           ) : null}
-          <textarea
-            ref={box}
-            aria-busy={submitting}
-            aria-describedby={reason === null ? undefined : reasonId}
-            aria-label="Message"
-            className="max-h-60 min-h-10 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 placeholder:text-muted focus:outline-none"
-            onChange={(event) => {
-              const value = event.currentTarget.value;
-              update((now) => ({ ...now, text: value }));
-            }}
-            onCompositionEnd={() => {
-              composing.current = false;
-            }}
-            onCompositionStart={() => {
-              composing.current = true;
-            }}
-            onKeyDown={onKeyDown}
-            placeholder={busyTurn ? QUEUE_PLACEHOLDER : COMPOSER_PLACEHOLDER}
-            readOnly={submitting}
-            rows={1}
-            value={text}
-          />
-          <div className="flex flex-nowrap items-center gap-1.5">
-            <input ref={picker} accept={ACCEPT} aria-label="Attach files" className="hidden" multiple onChange={(event) => addFiles(event.currentTarget.files)} tabIndex={-1} type="file" />
-            <AnswerButton aria-label="Attach files" disabled={submitting} onClick={() => picker.current?.click()} variant="plain">
-              <Icon className="size-4" name="attach" />
-              <span className="hidden sm:inline">Attach</span>
-            </AnswerButton>
-            <span className="min-w-0 flex-1" />
+          <div className="flex items-end gap-1">
+            <input ref={picker} accept={ACCEPT} aria-label="Choose files to attach" className="hidden" multiple onChange={(event) => addFiles(event.currentTarget.files)} tabIndex={-1} type="file" />
+            <div className="relative">
+              <RoundButton
+                ref={plus}
+                aria-expanded={menu === "attach"}
+                aria-haspopup="menu"
+                disabled={submitting}
+                icon="plus"
+                label="Attach"
+                onClick={() => setMenu((now) => (now === "attach" ? null : "attach"))}
+                title="Attach files"
+              />
+              {menu === "attach" ? <Menu items={attachItems} label="Attach" onClose={closeMenu} placement="above-start" /> : null}
+            </div>
+            <textarea
+              ref={box}
+              aria-busy={submitting}
+              aria-describedby={reason === null ? undefined : reasonId}
+              aria-label="Message"
+              className="max-h-50 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm leading-6 placeholder:text-muted focus:outline-none"
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                update((now) => ({ ...now, text: value }));
+              }}
+              onCompositionEnd={() => {
+                composing.current = false;
+              }}
+              onCompositionStart={() => {
+                composing.current = true;
+              }}
+              onKeyDown={onKeyDown}
+              placeholder={busyTurn ? QUEUE_PLACEHOLDER : COMPOSER_PLACEHOLDER}
+              readOnly={submitting}
+              rows={1}
+              value={text}
+            />
+            {chip !== null && chip !== undefined ? <div data-slot="model-chip">{chip}</div> : null}
             {busyTurn ? (
-              <>
-                <AnswerButton
-                  aria-label="Stop the reply"
-                  disabled={stopDisabled}
-                  onClick={() => void stop()}
-                  title={refusalMessage ?? "Stops the reply in progress."}
-                  variant="danger"
-                >
-                  {stopState === "sending" ? <Spinner /> : <Icon className="size-3.5" name="stop" />}
-                  <span className="hidden sm:inline">{stopState === "sent" ? "Stopping" : "Stop"}</span>
-                </AnswerButton>
-                <AnswerButton
-                  aria-describedby={steerReason === null ? undefined : reasonId}
-                  disabled={submitting || !hasContent || blockedBy !== null || !steerOk}
-                  onClick={() => void submit("steer")}
-                  title={steerOk ? "Stops the current reply, then sends this message now." : "This agent cannot be steered."}
-                  variant="plain"
-                >
-                  Stop and send
-                </AnswerButton>
-              </>
+              <RoundButton
+                aria-describedby={stopDisabled && refusalMessage !== null ? reasonId : undefined}
+                disabled={stopDisabled}
+                label="Stop the reply"
+                onClick={() => void stop()}
+                title={refusalMessage ?? (stopState === "sent" ? "Stopping" : "Stop the reply in progress")}
+                tone="danger"
+              >
+                {stopState === "sending" ? <Spinner className="text-card" /> : <Icon className="size-4" name="stop" />}
+              </RoundButton>
             ) : null}
-            <AnswerButton
-              aria-label={busyTurn ? "Queue message" : "Send message"}
-              disabled={submitting || !hasContent || blockedBy !== null}
-              title={busyTurn ? "Sent when the current reply ends." : undefined}
-              type="submit"
-              variant="primary"
-            >
-              {submitting ? <Spinner className="text-card" /> : <Icon className="size-4" name="send" />}
-              {submitting ? "Sending" : busyTurn ? "Queue" : "Send"}
-            </AnswerButton>
+            <div className="relative">
+              <RoundButton
+                ref={primary}
+                aria-expanded={busyTurn ? menu === "send" : undefined}
+                aria-haspopup={busyTurn ? "menu" : undefined}
+                disabled={submitting || !hasContent || blockedBy !== null}
+                label={busyTurn ? "Queue message" : "Send message"}
+                onClick={(event) => {
+                  if (swallowClick.current) {
+                    // The release of a hold that opened the menu: not a press.
+                    event.preventDefault();
+                    swallowClick.current = false;
+                    return;
+                  }
+                  if (canSend) void submit("queue");
+                }}
+                onContextMenu={(event) => {
+                  if (!busyTurn) return;
+                  event.preventDefault();
+                  openSendMenu();
+                }}
+                onKeyDown={(event) => {
+                  if (busyTurn && (event.key === "ArrowUp" || (event.shiftKey && event.key === "F10"))) {
+                    event.preventDefault();
+                    openSendMenu();
+                  }
+                }}
+                onPointerCancel={onPrimaryUp}
+                onPointerDown={onPrimaryDown}
+                onPointerLeave={stopHold}
+                onPointerUp={onPrimaryUp}
+                title={busyTurn ? "Queue this message (hold for more)" : "Send"}
+                tone="primary"
+              >
+                {submitting ? <Spinner className="text-card" /> : <Icon className="size-4.5" name={busyTurn ? "queue" : "send"} />}
+              </RoundButton>
+              {menu === "send" ? <Menu items={sendItems} label="Send options" onClose={closeMenu} placement="above-end" /> : null}
+            </div>
           </div>
         </form>
-        <p
-          aria-live="polite"
-          className={cx("min-h-4 text-xs", notice !== null ? "text-danger-text" : "text-secondary")}
-          data-composer-reason={notice !== null ? "error" : blockedBy !== null ? "blocked" : note !== null ? "connection" : "none"}
-          id={reasonId}
-          role={notice !== null ? "alert" : "status"}
-        >
-          {reason}
-        </p>
       </div>
-    </footer>
+    </div>
   );
 }
 
 /**
- * The message box, the approval and question dock, and the queued tray: everything under the timeline.
- * A session that cannot be driven gets a bar with the reason in place of all of it.
+ * The message bar, the approval and question dock, and the queued tray: everything over the bottom of the
+ * timeline. A session that cannot be driven gets a bar with the reason in place of all of it.
  */
-export function Composer({ store, sessionKey, upload, settleMs = 350 }: ComposerProps) {
+export function Composer({ store, sessionKey, upload, settleMs = 350, holdMs = HOLD_MS, chip = null }: ComposerProps) {
   const readOnly = useSessionStore(store, (s) => readOnlyReason(s.session.row ?? null));
   const stage = useMemo<Upload>(() => upload ?? httpUpload(sessionKey), [upload, sessionKey]);
   if (readOnly !== null) return <ReadOnlyBar reason={readOnly} />;
-  return <Form key={sessionKey} sessionKey={sessionKey} settleMs={settleMs} store={store} upload={stage} />;
+  return <Form key={sessionKey} chip={chip} holdMs={holdMs} sessionKey={sessionKey} settleMs={settleMs} store={store} upload={stage} />;
 }

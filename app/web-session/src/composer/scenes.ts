@@ -45,6 +45,87 @@ async function press(c: SceneContext, label: string): Promise<void> {
   await c.sleep(40);
 }
 
+/** Press the first button whose text starts with `prefix` (a work group's header says how long it worked). */
+async function pressStarting(c: SceneContext, prefix: string): Promise<void> {
+  await c.sleep(60);
+  Array.from(document.querySelectorAll("button")).find((b) => (b.textContent ?? "").trim().startsWith(prefix))?.click();
+  await c.sleep(80);
+}
+
+/** The strip of the queued tray opens its list upward. */
+async function openTray(c: SceneContext): Promise<void> {
+  await c.sleep(60);
+  document.querySelector<HTMLButtonElement>("[data-tray] button[aria-controls]")?.click();
+  await c.sleep(300);
+}
+
+/** A right click, which opens the primary button's menu while a reply runs. */
+async function rightClick(c: SceneContext, label: string): Promise<void> {
+  await c.sleep(60);
+  const el = Array.from(document.querySelectorAll("button")).find((b) => b.getAttribute("aria-label") === label);
+  el?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  await c.sleep(200);
+}
+
+/** Scroll the timeline so `target` sits under the bar, to see the glass over it. */
+async function putUnderBar(c: SceneContext, target: () => Element | null): Promise<void> {
+  await c.sleep(300);
+  const main = document.querySelector<HTMLElement>('main[aria-label="Timeline"]');
+  const bar = document.querySelector<HTMLElement>("form[aria-label='Composer']");
+  const el = target();
+  if (main === null || bar === null || el === null) return;
+  const barBox = bar.getBoundingClientRect();
+  const box = el.getBoundingClientRect();
+  main.scrollTop += box.top + box.height / 2 - (barBox.top + barBox.height / 2);
+  await c.sleep(300);
+}
+
+/** A turn that edits a file: its work group, opened, shows a diff with a red line. */
+function editTurn(k: string, seq: number): Frame[] {
+  const turn = "td";
+  return [
+    frame(k, "turn.started", seq, {}, turn),
+    frame(k, "message.completed", seq + 1, { id: "du", kind: "user", text: "Change the greeting in src/lib.py" }, turn),
+    frame(k, "tool.started", seq + 2, { call_id: "dc", name: "Edit", summary: "Edit src/lib.py", input: { path: "src/lib.py" } }, turn),
+    frame(k, "tool.completed", seq + 3, { call_id: "dc", status: "ok", name: "Edit", output: "ok", file_edits: [{ path: "src/lib.py", kind: "modify", diff: "@@ -1,3 +1,3 @@\n-print('hi')\n-print('there')\n+print('hello')\n+print('world')\n pass\n" }] }, turn),
+    frame(k, "message.completed", seq + 4, { id: "da", kind: "assistant", text: "Done: both lines changed." }, turn),
+    frame(k, "turn.ended", seq + 5, { status: "completed", duration_s: 4 }, turn),
+  ];
+}
+
+/** Press the last button whose text starts with `prefix`. */
+async function pressLast(c: SceneContext, prefix: string): Promise<void> {
+  await c.sleep(60);
+  Array.from(document.querySelectorAll("button")).filter((b) => (b.textContent ?? "").trim().startsWith(prefix)).at(-1)?.click();
+  await c.sleep(80);
+}
+
+/** A long conversation: `turns` question-and-answer pairs, each answer with a list and a code block. */
+function longHistory(k: string, from: number, turns: number): Frame[] {
+  const out: Frame[] = [];
+  for (let i = 0; i < turns; i++) {
+    const seq = from + i * 4;
+    const turn = `tl${i}`;
+    out.push(
+      frame(k, "turn.started", seq, {}, turn),
+      frame(k, "message.completed", seq + 1, { id: `lu${i}`, kind: "user", text: `Step ${i + 1}: what does the retry helper do when the hub answers 502?` }, turn),
+      frame(
+        k,
+        "message.completed",
+        seq + 2,
+        {
+          id: `la${i}`,
+          kind: "assistant",
+          text: `It tries again after a pause that doubles each time, up to five tries:\n\n- the first pause is one second\n- the cap is thirty seconds\n- a 4xx is never retried\n\n\`\`\`python\ndef retry(call, tries=5):\n    pause = 1\n    for attempt in range(tries):\n        try:\n            return call()\n        except Busy:\n            time.sleep(min(pause, 30))\n            pause *= 2\n\`\`\`\n\nThat is the whole story for step ${i + 1}.`,
+        },
+        turn,
+      ),
+      frame(k, "turn.ended", seq + 3, { status: "completed", duration_s: 3 }, turn),
+    );
+  }
+  return out;
+}
+
 /** What is typed before the page draws, for the scene that shows a draft coming back after a reload. */
 export function seedDraft(scene: string, key: string): void {
   // Drafts live in the browser's storage, so a scene starts from none (the last one's would still be there).
@@ -108,6 +189,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
         }),
       );
       await type(c, "And bump the version");
+      await openTray(c);
       break;
     case "composer-queued-many":
       send(
@@ -125,6 +207,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
         }),
       );
       await type(c, "And bump the version");
+      await openTray(c);
       break;
     case "composer-approval-confirm":
       send(...approval.slice(0, 2));
@@ -137,7 +220,33 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
         frame(k, "session.state", 14, { state: "running" }),
         frame(k, "queue.updated", 15, { items: [{ command_id: "q1", text: "then lint it", by: "device-1", mode: "queue" }] }),
       );
+      await openTray(c);
       await press(c, "Edit queued message");
+      break;
+    case "composer-menu-send":
+      send(...streaming.slice(0, 5));
+      await type(c, "Actually, use the retry helper in utils instead.");
+      await rightClick(c, "Queue message");
+      break;
+    case "composer-menu-attach":
+      send(...base);
+      await press(c, "Attach");
+      break;
+    case "composer-over-code":
+      send(...base, ...longHistory(k, 60, 10));
+      await putUnderBar(c, () => Array.from(document.querySelectorAll("main pre")).at(-3) ?? null);
+      break;
+    case "composer-over-diff":
+      send(...base, ...longHistory(k, 60, 6), ...editTurn(k, 100), ...longHistory(k, 110, 6));
+      await pressLast(c, "Worked");
+      await pressLast(c, "Edit src/lib.py");
+      await putUnderBar(c, () => document.querySelector("main pre .text-danger-text"));
+      await putUnderBar(c, () => document.querySelector("main pre .text-danger-text")); // the opening settled: aim again
+      break;
+    case "composer-keyboard":
+      send(...base);
+      document.documentElement.style.setProperty("--keyboard-inset", "336px");
+      await type(c, "Can you also add a test for the empty-file case?");
       break;
     case "composer-approval":
       send(...approval.slice(0, 2));
@@ -191,6 +300,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
         frame(k, "queue.updated", 31, { items: [{ command_id: "q1", text: "then lint it", by: "device-1", mode: "queue" }] }),
       );
       await type(c, "Also update the README");
+      await openTray(c);
       break;
     case "composer-read-only":
       send(

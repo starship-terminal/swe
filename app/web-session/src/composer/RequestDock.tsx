@@ -45,13 +45,25 @@ function Clipped({ text, className }: { text: string; className?: string }) {
   );
 }
 
-function ToolDetails({ tool }: { tool: ToolItem | undefined }) {
-  const [open, setOpen] = useState(false);
-  if (tool === undefined) return null;
-  const name = cut(tool.name ?? "Tool call", NAME_SHOWN);
+/** The tool's input as one cut text. Made only when the disclosure is open: a hidden input costs nothing. */
+function ToolInput({ tool }: { tool: ToolItem }) {
   const written = inputText(tool.input);
   const body = clip(written !== "" ? written : (tool.summary ?? ""));
   if (body.text === "") return null;
+  return (
+    <>
+      <pre className="mt-1 max-h-48 overflow-auto rounded-block border border-border bg-subtle p-2.5 font-mono text-xs leading-5 whitespace-pre-wrap break-words" data-untrusted="input">
+        <code>{body.text}</code>
+      </pre>
+      {body.hidden > 0 ? <p className="mt-1 text-xs text-muted">{body.hidden.toLocaleString("en-US")} more characters not shown.</p> : null}
+    </>
+  );
+}
+
+function ToolDetails({ tool }: { tool: ToolItem | undefined }) {
+  const [open, setOpen] = useState(false);
+  if (tool === undefined || (tool.input === undefined && (tool.summary === undefined || tool.summary === ""))) return null;
+  const name = cut(tool.name ?? "Tool call", NAME_SHOWN);
   return (
     <Collapsible
       buttonClassName="px-1 py-1 text-xs text-secondary"
@@ -59,10 +71,7 @@ function ToolDetails({ tool }: { tool: ToolItem | undefined }) {
       onToggle={setOpen}
       open={open}
     >
-      <pre className="mt-1 max-h-48 overflow-auto rounded-block border border-border bg-subtle p-2.5 font-mono text-xs leading-5 whitespace-pre-wrap break-words" data-untrusted="input">
-        <code>{body.text}</code>
-      </pre>
-      {body.hidden > 0 ? <p className="mt-1 text-xs text-muted">{body.hidden.toLocaleString("en-US")} more characters not shown.</p> : null}
+      <ToolInput tool={tool} />
     </Collapsible>
   );
 }
@@ -137,7 +146,7 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
   return (
     <section
       aria-label={approval ? "Approval needed" : "Question from the agent"}
-      className="sv-enter max-h-72 overflow-y-auto rounded-card border border-warning bg-card px-3 py-2.5"
+      className="sv-enter sv-glass pointer-events-auto rounded-glass px-3.5 py-3 shadow-sm"
       data-dock={approval ? "approval" : "input"}
       data-request-id={event.data.request_id}
       data-request-seq={event.seq}
@@ -209,11 +218,14 @@ export function RequestDock({ store, settleMs }: { store: SessionStore; settleMs
   const first = useSessionStore(store, (s) => s.session.pending[0]);
   const waiting = useSessionStore(store, (s) => Math.max(0, s.session.pending.length - 1));
   const key = first === undefined ? null : `${first.data.request_id}:${first.seq}`;
-  const last = useRef<{ key: string; at: number } | null>(null);
-  // A request that comes in right after another one was on screen is a replacement, not a first appearance.
-  const replacing = key !== null && last.current !== null && last.current.key !== key && Date.now() - last.current.at < 5000;
+  // The request last on screen, and when it left (null while it is still there).
+  const last = useRef<{ key: string; goneAt: number | null } | null>(null);
+  // A request that comes in while another is on screen, or right after one left, is a replacement: the person
+  // may be about to press an answer that was meant for the old one.
+  const replacing = key !== null && last.current !== null && last.current.key !== key && (last.current.goneAt === null || Date.now() - last.current.goneAt < 5000);
   useEffect(() => {
-    if (key !== null) last.current = { key, at: Date.now() };
+    if (key !== null) last.current = { key, goneAt: null };
+    else if (last.current !== null && last.current.goneAt === null) last.current = { ...last.current, goneAt: Date.now() };
   });
   if (first === undefined || key === null) return null;
   return (

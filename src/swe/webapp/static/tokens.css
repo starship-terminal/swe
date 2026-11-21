@@ -32,6 +32,12 @@
   /* Corner radii, Theme.swift's *Radius tokens by the same names. */
   --card-radius: 10px; --control-radius: 6px; --field-radius: 6px; --select-radius: 5px;
   --icon-button-radius: 8px; --block-radius: 7px; --dialog-radius: 12px;
+  /* Glass: the session view's floating composer bar, and what docks above it. A translucent surface over the
+   * timeline with a hairline border; --glass-solid is what it is without backdrop-filter and under reduced
+   * transparency. --bar-radius makes a pill at one line and a soft rectangle when the box grows. Not in
+   * Theme.swift yet. */
+  --glass: rgba(254,254,254,.86); --glass-solid: #fefefe; --glass-border: rgba(6,6,6,.12);
+  --glass-blur: 20px; --bar-radius: 24px; --glass-radius: 18px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -49,6 +55,7 @@
     --warning-text: #facc15; --danger-text: #f53b3a; --usage-track: rgba(255,255,255,.05);
     --heat-0: #121212; --heat-1: #065f46; --heat-2: #059669; --heat-3: #10b981; --heat-4: #34d399;
     --logo-filter: invert(1);
+    --glass: rgba(37,37,37,.84); --glass-solid: #252525; --glass-border: rgba(255,255,255,.14);
   }
 }
 :root[data-theme="dark"] {
@@ -66,4 +73,5 @@
   --warning-text: #facc15; --danger-text: #f53b3a; --usage-track: rgba(255,255,255,.05);
   --heat-0: #121212; --heat-1: #065f46; --heat-2: #059669; --heat-3: #10b981; --heat-4: #34d399;
   --logo-filter: invert(1);
+  --glass: rgba(37,37,37,.84); --glass-solid: #252525; --glass-border: rgba(255,255,255,.14);
 }

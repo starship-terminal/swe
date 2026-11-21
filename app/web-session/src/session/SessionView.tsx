@@ -38,12 +38,15 @@ export function SessionView({ store, sessionKey, now = Date.now }: { store: Sess
           </p>
         </div>
       ) : null}
-      <TimelineBoundary>
-        <Timeline store={store} />
-      </TimelineBoundary>
-      <Guard message="The message box could not be shown. Reload the page to try again; what you typed is kept." part="composer">
-        <Composer sessionKey={sessionKey} store={store} />
-      </Guard>
+      {/* The composer floats over the bottom of the timeline: it reports its height as --sv-composer-h on this host. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <TimelineBoundary>
+          <Timeline store={store} />
+        </TimelineBoundary>
+        <Guard message="The message box could not be shown. Reload the page to try again; what you typed is kept." part="composer">
+          <Composer sessionKey={sessionKey} store={store} />
+        </Guard>
+      </div>
     </div>
   );
 }

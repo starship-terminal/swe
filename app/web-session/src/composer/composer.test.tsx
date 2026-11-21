@@ -182,6 +182,22 @@ describe("the draft", () => {
     expect(readDraft(KEY).text).toBe("just typed");
   });
 
+  it("is not erased by a send that settles after a newer draft was saved by a later box", async () => {
+    const m = mount();
+    await idle(m);
+    let settleSend: (r: unknown) => void = () => {};
+    m.store.setState({ send: () => new Promise((resolve) => (settleSend = resolve)) as never });
+    typeText(m, "first");
+    await click(btn(m, "Send message"));
+    m.remount(); // the first box goes; a second one reads the draft that is still kept
+    expect(box(m).value).toBe("first");
+    typeText(m, "second, typed later");
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    expect(readDraft(KEY).text).toBe("second, typed later");
+    await settle(() => settleSend({ ok: true, entry: {} })); // the first send is taken by the outbox only now
+    expect(readDraft(KEY).text).toBe("second, typed later");
+  });
+
   it("is written when the box is taken off the page before the pause is over", async () => {
     const m = mount();
     await idle(m);
@@ -217,7 +233,8 @@ describe("the draft", () => {
   it("is gone from storage after a send even when the stored copy was older than the box", async () => {
     const m = mount();
     await idle(m);
-    writeDraft(KEY, { text: "older", files: [] }); // what the pause timer had written so far
+    typeText(m, "older");
+    await wait(SAVE_AFTER_MS + 50); // what the pause timer had written so far
     typeText(m, "newer words"); // not written yet
     await click(btn(m, "Send message"));
     expect(readDraft(KEY).text).toBe("");
@@ -226,45 +243,153 @@ describe("the draft", () => {
   });
 });
 
+const menuItem = (m: ReturnType<typeof mount>, id: string) => q(m.el, `[data-menu-item="${id}"]`) as HTMLButtonElement | null;
+const menuOpen = (m: ReturnType<typeof mount>) => q(m.el, '[role="menu"]');
+const rightClick = (target: Element) => settle(() => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+
 describe("while a reply is in progress", () => {
-  it("offers Stop, Stop and send, and Queue; and nothing of the kind when idle", async () => {
+  it("offers Stop and Queue as icons; nothing of the kind when idle", async () => {
     const idleOne = mount();
     await idle(idleOne);
     expect(btn(idleOne, "Stop the reply")).toBeUndefined();
-    expect(btn(idleOne, "Stop and send")).toBeUndefined();
     expect(btn(idleOne, "Send message")).toBeDefined();
     const m = mount();
     await play(m, "streaming", 0, 3);
     expect(btn(m, "Stop the reply")).toBeDefined();
-    expect(btn(m, "Stop and send")).toBeDefined();
     expect(btn(m, "Queue message")).toBeDefined();
-    expect(box(m).placeholder).toBe("Queue a message for when the reply ends");
+    expect(btn(m, "Send message")).toBeUndefined();
+    expect(box(m).placeholder).toBe("Queue a message");
+    expect(box(idleOne).placeholder).toBe("Ask anything");
   });
 
-  it("queues with the main button and steers with Stop and send, in the mode each says", async () => {
+  it("draws no word in the bar: every button is a picture with a name and a tooltip", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    const form = q(m.el, "form[aria-label='Composer']") as HTMLElement;
+    const buttons = all(form, "button") as HTMLButtonElement[];
+    expect(buttons.length).toBeGreaterThanOrEqual(3);
+    for (const button of buttons) {
+      expect(button.textContent).toBe("");
+      expect(button.getAttribute("aria-label")).toBeTruthy();
+      expect(button.title).toBeTruthy();
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+    // Send and Queue are different pictures.
+    const idleOne = mount();
+    await idle(idleOne);
+    expect(btn(idleOne, "Send message")?.innerHTML).not.toBe(btn(m, "Queue message")?.innerHTML);
+  });
+
+  it("queues with a press on the main button", async () => {
     const m = mount();
     await play(m, "streaming", 0, 3);
     typeText(m, "after");
     await click(btn(m, "Queue message"));
-    typeText(m, "now");
-    await click(btn(m, "Stop and send"));
-    expect(sent(m).map((p) => p["mode"])).toEqual(["queue", "steer"]);
+    expect(sent(m)).toHaveLength(1);
+    expect(sent(m)[0]).toMatchObject({ text: "after", mode: "queue" });
+    expect(menuOpen(m)).toBeNull();
   });
 
-  it("says what Stop and send does", async () => {
+  it("opens a menu with Queue and Stop and send on a right click, Queue first and in focus", async () => {
     const m = mount();
     await play(m, "streaming", 0, 3);
-    expect(btn(m, "Stop and send")?.title).toBe("Stops the current reply, then sends this message now.");
+    typeText(m, "now");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(menuOpen(m)).not.toBeNull();
+    expect(all(m.el, '[role="menuitem"]').map((i) => i.getAttribute("data-menu-item"))).toEqual(["queue", "steer"]);
+    expect(document.activeElement).toBe(menuItem(m, "queue"));
+    expect(text(menuItem(m, "steer"))).toContain("Stops the current reply, then sends this message now.");
+    expect(sent(m)).toHaveLength(0); // the menu opening is not a send
+    await click(menuItem(m, "steer"));
+    expect(sent(m)).toHaveLength(1);
+    expect(sent(m)[0]).toMatchObject({ text: "now", mode: "steer" });
+    expect(menuOpen(m)).toBeNull();
   });
 
-  it("disables Stop and send, with the reason, on an agent that cannot steer", async () => {
+  it("opens the same menu from the keyboard, and Escape closes it with the focus back on the button", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "keys");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    expect(menuOpen(m)).not.toBeNull();
+    expect(document.activeElement).toBe(menuItem(m, "queue"));
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect(document.activeElement).toBe(menuItem(m, "steer"));
+    await settle(() => void menuItem(m, "steer")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(menuOpen(m)).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(main);
+    expect(sent(m)).toHaveLength(0);
+  });
+
+  it("opens the menu on a hold, and the release of that hold does not also queue the message", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "held");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    await wait(60);
+    expect(menuOpen(m)).not.toBeNull();
+    act(() => void main.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })));
+    await click(main); // the click that follows the release
+    expect(sent(m)).toHaveLength(0);
+    await wait(120);
+    // A press after that is a press again.
+    await click(menuItem(m, "queue"));
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("does not open the menu on a short press", async () => {
+    const m = mount({ props: { holdMs: 60 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "short");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    act(() => void main.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })));
+    await click(main);
+    await wait(100);
+    expect(menuOpen(m)).toBeNull();
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("has no menu while idle: a hold or a right click does nothing special", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await idle(m);
+    typeText(m, "idle");
+    const main = btn(m, "Send message") as HTMLButtonElement;
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    await wait(60);
+    const context = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await settle(() => void main.dispatchEvent(context));
+    expect(menuOpen(m)).toBeNull();
+    expect(context.defaultPrevented).toBe(false); // the browser's own menu is left alone
+  });
+
+  it("never makes the stopping item the one the menu opens on, and disables it, with the reason, on an agent that cannot steer", async () => {
     const m = mount();
     await play(m, "streaming", 0, 3);
     await feed(m, frame("session.caps", 40, { caps: { steer: false, plan_mode: false, rollback: false, fork: false, stop_task: false, options: [] } }));
     typeText(m, "hello");
-    expect((btn(m, "Stop and send") as HTMLButtonElement).disabled).toBe(true);
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(document.activeElement).toBe(menuItem(m, "queue"));
+    expect(menuItem(m, "steer")?.getAttribute("aria-disabled")).toBe("true");
+    expect(text(menuItem(m, "steer"))).toContain("This agent cannot be steered.");
+    await click(menuItem(m, "steer"));
+    expect(sent(m)).toHaveLength(0);
     expect(text(q(m.el, "[data-composer-reason]"))).toContain("cannot take a message while it is replying");
-    expect((btn(m, "Queue message") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("closes the menu when the reply ends under it", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "x");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(menuOpen(m)).not.toBeNull();
+    const turn = m.store.getState().session.openTurn ?? "";
+    await feed(m, frame("turn.ended", 30, { status: "completed" }, { turn_id: turn }), frame("session.state", 31, { state: "idle" }));
+    expect(menuOpen(m)).toBeNull();
   });
 
   it("stops once on a double press", async () => {
@@ -278,9 +403,7 @@ describe("while a reply is in progress", () => {
     });
     expect(posts(m, "control")).toHaveLength(1);
     expect(posts(m, "control")[0]).toMatchObject({ op: "interrupt" });
-    expect(text(btn(m, "Stop the reply"))).toBe("Stopping");
-    // At phone width Stop is an icon with the name `aria-label` gives; its word shows from the small breakpoint up.
-    expect(btn(m, "Stop the reply")?.querySelector("span.hidden")).not.toBeNull();
+    expect(btn(m, "Stop the reply")?.title).toBe("Stopping");
   });
 
   it("disables Stop, with the reason, when the connection is down", async () => {
@@ -291,6 +414,32 @@ describe("while a reply is in progress", () => {
     expect(btn(m, "Stop the reply")?.title).toBe("You are offline. Reconnect to do this.");
     await click(btn(m, "Stop the reply"));
     expect(posts(m, "control")).toHaveLength(0);
+  });
+});
+
+describe("the attach menu", () => {
+  it("opens on the plus with the ways this browser offers, and Escape closes it", async () => {
+    const m = mount();
+    await idle(m);
+    await click(btn(m, "Attach"));
+    expect(all(m.el, '[role="menuitem"]').map((i) => text(i))).toEqual(["Choose files"]); // no photo library on a desktop browser
+    expect(document.activeElement).toBe(menuItem(m, "files"));
+    await settle(() => void menuItem(m, "files")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(menuOpen(m)).toBeNull();
+  });
+
+  it("offers the photo library where there is a touch screen, and opens the picker for images", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("coarse"), media: query, addEventListener() {}, removeEventListener() {} }));
+    const m = mount();
+    await idle(m);
+    await click(btn(m, "Attach"));
+    expect(all(m.el, '[role="menuitem"]').map((i) => text(i))).toEqual(["Choose files", "Photo library"]);
+    const input = q(m.el, 'input[type="file"]') as HTMLInputElement;
+    const opened = vi.spyOn(input, "click").mockImplementation(() => {});
+    await click(menuItem(m, "photos"));
+    expect(input.accept).toBe("image/*");
+    expect(opened).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
   });
 });
 
@@ -355,6 +504,21 @@ describe("attachments", () => {
     expect(text(q(m.el, '[data-upload="failed"]'))).toContain("unsupported file type .exe");
     typeText(m, "no file then");
     expect((btn(m, "Send message") as HTMLButtonElement).disabled).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("takes at most ten files, however many are picked at once", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(url);
+      return new Response(JSON.stringify({ ref: `1-a-f${calls.length}.txt`, name: `f${calls.length}.txt`, size: 3 }), { status: 200 });
+    }));
+    const m = mount();
+    await idle(m);
+    await choose(m, ...Array.from({ length: 13 }, (_, i) => `f${i}.txt`));
+    expect(calls).toHaveLength(10);
+    expect(all(m.el, "[data-file]")).toHaveLength(10);
+    expect(text(q(m.el, '[data-composer-reason="error"]'))).toBe("A message takes at most 10 attachments.");
     vi.unstubAllGlobals();
   });
 

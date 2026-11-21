@@ -12,14 +12,21 @@ async function withQueue(): Promise<Mounted> {
   m.transport.on("/queue", ok, "POST");
   await play(m, "queued", 0, 3); // q1 "then lint it" queued behind an open approval
   await feed(m, frame("approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }), frame("session.state", 14, { state: "running" }));
-  return m;
+  return openTray(m);
 }
 const tray = (m: Mounted) => q(m.el, "[data-tray]") as HTMLElement;
+/** The strip above the bar opens the list upward; the list is not made until then. */
+const strip = (m: Mounted) => q(tray(m), "button[aria-controls]") as HTMLButtonElement;
+async function openTray(m: Mounted): Promise<Mounted> {
+  await click(strip(m));
+  return m;
+}
 
 describe("the queued tray", () => {
   it("lists what the hub holds, and is absent when nothing is queued", async () => {
     const m = await withQueue();
-    expect(text(tray(m))).toContain("Queued: 1 message, sent when the reply ends");
+    expect(text(strip(m))).toBe("Queued: 1 message");
+    expect(strip(m).getAttribute("aria-expanded")).toBe("true");
     expect(text(q(m.el, '[data-queued="q1"]'))).toContain("then lint it");
     await feed(m, queue(20));
     expect(q(m.el, "[data-tray]")).toBeNull();
@@ -35,10 +42,13 @@ describe("the queued tray", () => {
     expect(posts(m, "queue")).toEqual([{ client_id: "q1", op: "cancel", command_id: "id1" }]);
   });
 
-  it("sends a queued message now, which stops the reply, once", async () => {
+  it("sends a queued message now, which stops the reply, from its menu and once", async () => {
     const m = await withQueue();
-    const now = btn(m, "Stop the reply and send this now") as HTMLButtonElement;
-    expect(now.title).toBe("Stops the current reply and sends this message now.");
+    expect(q(m.el, '[role="menu"]')).toBeNull(); // not a button of its own
+    await click(btn(m, "More for queued message"));
+    const now = q(m.el, '[data-menu-item="steer"]') as HTMLButtonElement;
+    expect(text(now)).toContain("Stop and send");
+    expect(text(now)).toContain("Stops the current reply, then sends this message now.");
     await settle(() => {
       now.click();
       now.click();
@@ -51,12 +61,12 @@ describe("the queued tray", () => {
     await click(btn(m, "Edit queued message"));
     const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
     expect(editor.value).toBe("then lint it");
-    expect((btn(m, "Save") as HTMLButtonElement).disabled).toBe(true); // nothing changed yet
+    expect((btn(m, "Save the edit") as HTMLButtonElement).disabled).toBe(true); // nothing changed yet
     await settle(() => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint and format it");
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await click(btn(m, "Save"));
+    await click(btn(m, "Save the edit"));
     expect(posts(m, "queue")).toEqual([{ client_id: "q1", op: "edit", command_id: "id1", text: "then lint and format it" }]);
     expect(q(tray(m), "textarea")).toBeNull();
   });
@@ -70,7 +80,7 @@ describe("the queued tray", () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "changed");
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await click(btn(m, "Save"));
+    await click(btn(m, "Save the edit"));
     expect(text(q(tray(m), '[role="alert"]'))).toBe("that message is no longer queued");
     expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("changed");
   });
@@ -109,7 +119,7 @@ describe("the queued tray", () => {
   it("is off, with the reason, while the connection is down", async () => {
     const m = await withQueue();
     await settle(() => m.environment.goOffline());
-    for (const label of ["Edit queued message", "Stop the reply and send this now", "Remove queued message"]) {
+    for (const label of ["Edit queued message", "More for queued message", "Remove queued message"]) {
       expect((btn(m, label) as HTMLButtonElement).disabled).toBe(true);
     }
     expect(text(q(m.el, '[data-tray-note="refusal"]'))).toBe("You are offline. Reconnect to do this.");
@@ -118,7 +128,12 @@ describe("the queued tray", () => {
   it("disables send-now, and says why, on an agent that cannot steer", async () => {
     const m = await withQueue();
     await feed(m, frame("session.caps", 40, { caps: { steer: false, plan_mode: false, rollback: false, fork: false, stop_task: false, options: [] } }));
-    expect((btn(m, "Stop the reply and send this now") as HTMLButtonElement).disabled).toBe(true);
+    await click(btn(m, "More for queued message"));
+    const now = q(m.el, '[data-menu-item="steer"]') as HTMLButtonElement;
+    expect(now.getAttribute("aria-disabled")).toBe("true");
+    expect(text(now)).toContain("This agent cannot be steered.");
+    await click(now);
+    expect(posts(m, "queue")).toHaveLength(0);
     expect(text(q(m.el, '[data-tray-note="no-steer"]'))).toContain("cannot stop a reply to send a message sooner");
     expect((btn(m, "Remove queued message") as HTMLButtonElement).disabled).toBe(false);
   });
@@ -130,28 +145,43 @@ describe("the queued tray", () => {
     expect(text(tray(m))).toContain("5 more queued messages not shown.");
   });
 
-  it("scrolls inside its own box, and the whole composer is held to two thirds of the view, so the timeline keeps a third", async () => {
-    // Layout contract: jsdom has no layout, so this reads the classes; the screens show the result.
+  it("is a strip above the bar that opens upward into a list with its own height and scroll", async () => {
+    // Layout contract: jsdom has no layout, so this reads the classes and the order; the screens show the result.
     const m = await withQueue();
     const list = q(tray(m), "ul") as HTMLElement;
-    expect(list.classList.contains("max-h-48")).toBe(true);
+    expect(list.classList.contains("max-h-44")).toBe(true);
     expect(list.classList.contains("overflow-y-auto")).toBe(true);
-    const footer = q(m.el, "footer") as HTMLElement;
-    expect(footer.classList.contains("max-h-2/3")).toBe(true);
-    expect((q(m.el, "[data-composer-above]") as HTMLElement).classList.contains("overflow-y-auto")).toBe(true);
+    const above = tray(m).compareDocumentPosition(q(m.el, "form[aria-label='Composer']") as HTMLElement);
+    expect(above & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy(); // the tray is before the bar
+    // The strip is below its list, so the list grows upward from it.
+    expect((q(tray(m), "#sv-queue-list") as HTMLElement).compareDocumentPosition(strip(m)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const stack = q(m.el, "[data-composer-above]") as HTMLElement;
+    expect(stack.classList.contains("overflow-y-auto")).toBe(true);
+    expect((stack.parentElement as HTMLElement).classList.contains("max-h-1/2")).toBe(true);
   });
 
-  it("offers Edit and Remove as icons with names at phone width, and as words from the small breakpoint up", async () => {
+  it("starts closed, as a strip, and opens on a press", async () => {
+    const m = mount();
+    m.transport.on("/queue", ok, "POST");
+    await play(m, "queued", 0, 3);
+    expect(strip(m).getAttribute("aria-expanded")).toBe("false");
+    expect(q(tray(m), "[data-queued]")).toBeNull(); // not made until opened
+    await click(strip(m));
+    expect(q(tray(m), "[data-queued]")).not.toBeNull();
+  });
+
+  it("has Edit and Remove as icons with names, and no visible words", async () => {
     const m = await withQueue();
-    for (const label of ["Edit queued message", "Remove queued message"]) {
+    for (const label of ["Edit queued message", "Remove queued message", "More for queued message"]) {
       const button = btn(m, label) as HTMLButtonElement;
       expect(button.querySelector("svg")).not.toBeNull();
-      expect(button.querySelector("span.hidden.sm\\:inline")).not.toBeNull();
+      expect(button.textContent).toBe("");
+      expect(button.title).toBe(label);
     }
   });
 
   it("offers no reorder: the hub has none", async () => {
     const m = await withQueue();
-    expect(all(tray(m), "button").map((b) => b.getAttribute("aria-label") ?? text(b))).toEqual(["Queued: 1 message, sent when the reply ends", "Edit queued message", "Stop the reply and send this now", "Remove queued message"]);
+    expect(all(tray(m), "button").map((b) => b.getAttribute("aria-label") ?? text(b))).toEqual(["Edit queued message", "Remove queued message", "More for queued message", "Queued: 1 message"]);
   });
 });

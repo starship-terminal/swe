@@ -1,0 +1,67 @@
+/* The composer's own rules: what a utility class cannot say. Every rule sits under .swe-sv, colours come
+ * from tokens only, and motion runs only when the person has not asked for less of it.
+ *
+ * The bar floats over the bottom of the timeline. `--sv-composer-h` is the height of everything the
+ * composer draws (set on the view's host by Composer.tsx), which the timeline leaves as padding at its
+ * end and "Jump to latest" sits above. `--keyboard-inset` is the height of the on-screen keyboard, which
+ * the iPhone embed passes in (G1, section 4; G18): the bar rides above it, or above the home indicator
+ * when there is no keyboard. */
+.swe-sv .sv-composer {
+  padding-bottom: calc(max(var(--safe-bottom, 0px), var(--keyboard-inset, 0px)) + 0.5rem);
+  padding-left: max(0.75rem, var(--safe-left, 0px));
+  padding-right: max(0.75rem, var(--safe-right, 0px));
+}
+
+.swe-sv .sv-pad-end {
+  padding-bottom: calc(var(--sv-composer-h, 0px) + 1.25rem);
+}
+
+.swe-sv .sv-jump {
+  bottom: calc(var(--sv-composer-h, 0px) + 0.75rem);
+}
+
+/* Glass: a translucent surface with a blur behind it. Without backdrop-filter, and when the person asked
+ * for reduced transparency, it is the solid token. */
+.swe-sv .sv-glass {
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-border);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .swe-sv .sv-glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .swe-sv .sv-glass {
+    background: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* A button that can be held: no iOS callout or text selection on a long press, no double-tap zoom. */
+.swe-sv .sv-press {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+/* The queued strip's chevron points up while closed (the list opens upward) and down when open. */
+.swe-sv .sv-chev-up {
+  transform: rotate(-90deg);
+}
+
+.swe-sv .sv-chev-up[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .swe-sv .sv-chev-up {
+    transition: transform 160ms ease;
+  }
+}

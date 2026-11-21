@@ -89,6 +89,16 @@ describe("a hostile request", () => {
     expect(all(dock(m), "*").length).toBeLessThan(60);
   });
 
+  it("does not write a tool's input out while Details is closed", async () => {
+    const m = mount();
+    let written = 0;
+    const input = { command: "ls", toJSON() { written++; return { command: "ls" }; } };
+    await ask(m, { prompt: "run it", call_id: "call-9" }, { call_id: "call-9", name: "Bash", summary: "ls", input });
+    expect(written).toBe(0);
+    await click(btn(m, "Details: Bash"));
+    expect(written).toBeGreaterThan(0);
+  });
+
   it("survives an input too deep to write out", async () => {
     const m = mount();
     let deep: unknown = "end";
@@ -130,6 +140,7 @@ describe("a hostile queued message", () => {
       { command_id: "c", text: NASTY.repeat(5000) },
     ];
     await feed(m, frame("queue.updated", 20, { items }));
+    await click(q(m.el, "[data-tray] button[aria-controls]"));
     spy.mockRestore();
     expect(text(q(m.el, '[data-queued="a"]'))).toContain("fine and short");
     expect(text(q(m.el, '[data-composer-failed="queued"]'))).toBe("This queued message could not be shown.");

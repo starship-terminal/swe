@@ -657,6 +657,16 @@ describe("the composer's place", () => {
     expect(q(t.el, "[data-placeholder-note]")).toBeNull();
   });
 
+  it("floats the composer over the bottom of the timeline: it reports its height, and the timeline leaves that much padding", async () => {
+    const t = setup();
+    await play(t, "default");
+    const host = q(t.el, "[data-composer-host]")?.parentElement as HTMLElement;
+    expect(host.style.getPropertyValue("--sv-composer-h")).not.toBe("");
+    expect(q(host, "main")).not.toBeNull(); // the timeline and the composer share the host the height is set on
+    expect(q(t.el, '[role="log"]')?.classList.contains("sv-pad-end")).toBe(true);
+    expect((q(t.el, "[data-composer-host]") as HTMLElement).classList.contains("absolute")).toBe(true);
+  });
+
   it("draws a send the hub holds in its queue once, in the tray, not as a bubble as well", async () => {
     const t = setup();
     await play(t, "queued");
@@ -665,6 +675,7 @@ describe("the composer's place", () => {
     expect(sent?.shown).not.toBe(undefined);
     await settle(() => void t.transport.last.send(frame("queue.updated", 400, { items: [{ command_id: sent?.commandId ?? "", text: "then lint it", mode: "queue" }] })));
     expect(q(t.el, `[data-send][data-command-id="${sent?.commandId}"]`)).toBeNull();
+    await click(q(t.el, "[data-tray] button[aria-controls]"));
     expect(q(t.el, `[data-queued="${sent?.commandId}"]`)).not.toBeNull();
   });
 });

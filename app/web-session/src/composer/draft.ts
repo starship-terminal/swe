@@ -28,6 +28,8 @@ export const DRAFT_KEPT_CHARS = 200_000;
 export const FILES_KEPT = 10;
 
 const memory = new Map<string, Draft>();
+/** Sessions whose latest draft is in `memory` only: storage holds an older one, or none. */
+const unsaved = new Set<string>();
 
 function backing(): Storage | null {
   try {
@@ -56,8 +58,15 @@ function parse(raw: string): Draft | null {
   }
 }
 
-/** The draft kept for a session: storage first, then what this page holds in memory. */
+/**
+ * The draft kept for a session: storage first, then what this page holds in memory. When the latest write
+ * could not reach storage, memory is the newer copy and wins: storage still holds an older one.
+ */
 export function readDraft(session: string): Draft {
+  if (unsaved.has(session)) {
+    const newer = memory.get(session);
+    if (newer !== undefined) return newer;
+  }
   try {
     const raw = backing()?.getItem(PREFIX + session) ?? null;
     if (raw !== null) {
@@ -77,6 +86,7 @@ export function writeDraft(session: string, draft: Draft): Kept {
   const empty = draft.text === "" && draft.files.length === 0;
   if (empty) {
     memory.delete(session);
+    unsaved.delete(session);
     try {
       backing()?.removeItem(PREFIX + session);
     } catch {
@@ -85,13 +95,21 @@ export function writeDraft(session: string, draft: Draft): Kept {
     return "storage";
   }
   memory.set(session, draft);
-  if (draft.text.length > DRAFT_KEPT_CHARS) return "memory";
+  if (draft.text.length > DRAFT_KEPT_CHARS) {
+    unsaved.add(session);
+    return "memory";
+  }
   try {
     const store = backing();
-    if (store === null) return "memory";
+    if (store === null) {
+      unsaved.add(session);
+      return "memory";
+    }
     store.setItem(PREFIX + session, JSON.stringify({ t: draft.text, f: draft.files.slice(0, FILES_KEPT) }));
+    unsaved.delete(session);
     return "storage";
   } catch {
+    unsaved.add(session);
     return "memory";
   }
 }
@@ -99,4 +117,5 @@ export function writeDraft(session: string, draft: Draft): Kept {
 /** Tests only: forget what this page holds in memory. */
 export function forgetMemoryDrafts(): void {
   memory.clear();
+  unsaved.clear();
 }

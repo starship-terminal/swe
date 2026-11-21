@@ -210,7 +210,7 @@ export function Timeline({ store }: { store: SessionStore }) {
     body = <EmptyState />;
   } else {
     body = (
-      <div ref={content} aria-label="Conversation" className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-5" role="log">
+      <div ref={content} aria-label="Conversation" className="sv-pad-end mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pt-5" role="log">
         {hasMore ? (
           <div className="flex justify-center">
             <Button disabled={loadingOlder} onClick={() => void loadOlder()}>
@@ -241,7 +241,7 @@ export function Timeline({ store }: { store: SessionStore }) {
         {body}
       </main>
       {!atEnd ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+        <div className="sv-jump pointer-events-none absolute inset-x-0 flex justify-center">
           <Button
             className="sv-enter pointer-events-auto bg-card shadow-sm"
             onClick={() => {

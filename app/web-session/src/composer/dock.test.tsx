@@ -181,6 +181,16 @@ describe("an answer lands on the request that was shown", () => {
     expect(posts(m, "approval")).toHaveLength(1);
   });
 
+  it("keeps the answers off for a moment too when the request replaces one that left a moment ago", async () => {
+    const m = await withApproval();
+    await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow", by: "device-2" }, { turn_id: "t1" }));
+    expect(dock(m)).toBeNull(); // answered on another device: nothing on screen
+    await feed(m, request(13, "r1", { options: [{ id: "allow", label: "Allow", kind: "allow" }, { id: "deny", label: "Deny", kind: "deny" }] }));
+    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(true);
+    await settle(() => wait(60));
+    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("does not hold back a first request", async () => {
     const m = await withApproval();
     expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(false);

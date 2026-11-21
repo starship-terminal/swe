@@ -13,6 +13,9 @@ export const SAVE_AFTER_MS = 250;
 export function useDraft(session: string) {
   const [draft, setDraft] = useState<Draft>(() => readDraft(session));
   const latest = useRef(draft);
+  // The texts this part has read from storage or written to it (the last few): a draft it owns. A draft in
+  // storage that is none of these was written by another part, newer than anything this one knows of.
+  const owned = useRef<string[]>([draft.text]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [kept, setKept] = useState<Kept>("storage");
 
@@ -23,6 +26,7 @@ export function useDraft(session: string) {
 
   const flush = useCallback(() => {
     cancel();
+    owned.current = [...owned.current.slice(-3), latest.current.text];
     setKept(writeDraft(session, latest.current));
   }, [session, cancel]);
 
@@ -38,8 +42,10 @@ export function useDraft(session: string) {
 
   /**
    * The message the draft held was taken by the outbox: forget it, in the box and in storage, unless more was
-   * typed meanwhile (then storage is brought up to date instead). Storage is written here and not left to
-   * the pause timer: the value stored may be older than the box, and an older draft must not come back.
+   * typed meanwhile (then storage is brought up to date instead). Storage is written here and not left to the
+   * pause timer: the stored copy may be older than the box, and an older draft must not come back. But a copy
+   * this part did not write (another part, mounted since, saved a newer draft for the session) is left alone:
+   * a send that settles late must not erase what was typed after it.
    */
   const clear = useCallback(
     (sentText: string) => {
@@ -48,8 +54,11 @@ export function useDraft(session: string) {
         latest.current = EMPTY_DRAFT;
         setDraft(EMPTY_DRAFT);
       }
-      // Also when this part is gone by now: `latest` still holds what was sent.
-      setKept(writeDraft(session, latest.current));
+      const stored = readDraft(session).text;
+      if (stored === sentText || owned.current.includes(stored)) {
+        owned.current = [...owned.current.slice(-3), latest.current.text];
+        setKept(writeDraft(session, latest.current));
+      }
     },
     [session, cancel],
   );

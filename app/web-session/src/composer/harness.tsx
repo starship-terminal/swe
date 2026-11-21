@@ -20,8 +20,9 @@ beforeAll(() => {
 
 export const KEY = "claude:session-1";
 
-let root: Root | undefined;
-let host: HTMLElement | undefined;
+// Every part a test mounts (some mount two), so cleanup takes all of them down.
+const roots: Root[] = [];
+const hosts: HTMLElement[] = [];
 const stores: SessionStore[] = [];
 
 beforeEach(() => {
@@ -30,11 +31,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  act(() => root?.unmount());
+  act(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
   for (const store of stores.splice(0)) store.getState().stop();
-  host?.remove();
-  root = undefined;
-  host = undefined;
+  for (const host of hosts.splice(0)) host.remove();
 });
 
 export interface Mounted {
@@ -65,12 +66,14 @@ export function mount(over: { online?: boolean; strict?: boolean; props?: Partia
   });
   stores.push(store);
   transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
-  host = document.createElement("div");
+  const host = document.createElement("div");
   document.body.append(host);
-  root = createRoot(host);
+  hosts.push(host);
+  let root = createRoot(host);
+  roots.push(root);
   const render = (extra: Partial<ComposerProps> = {}): void => {
     const tree = <Composer sessionKey={KEY} settleMs={30} store={store} {...over.props} {...extra} />;
-    act(() => root?.render(over.strict === true ? <StrictMode>{tree}</StrictMode> : tree));
+    act(() => root.render(over.strict === true ? <StrictMode>{tree}</StrictMode> : tree));
   };
   render();
   act(() => store.getState().start());
@@ -82,8 +85,10 @@ export function mount(over: { online?: boolean; strict?: boolean; props?: Partia
     el: host,
     render,
     remount(extra = {}) {
-      act(() => root?.unmount());
-      root = createRoot(host as HTMLElement);
+      act(() => root.unmount());
+      roots.splice(roots.indexOf(root), 1);
+      root = createRoot(host);
+      roots.push(root);
       render(extra);
     },
   };
@@ -108,7 +113,7 @@ export async function play(m: Mounted, name: string, from = 0, to?: number): Pro
 export const feed = (m: Mounted, ...list: Frame[]): Promise<void> => settle(() => void m.transport.last.send(...list));
 
 export const frame = (type: string, seq: number | undefined, data: unknown, extra: object = {}): Frame =>
-  ({ v: 2, type, session: KEY, ...(seq === undefined ? {} : { seq }), ts: 1760000200, data }) as unknown as Frame;
+  ({ v: 2, type, session: KEY, ...(seq === undefined ? {} : { seq }), ts: 1760000200, data, ...extra }) as unknown as Frame;
 
 /** A session at rest: the default recording's end, and caught up. */
 export const idle = (m: Mounted): Promise<Fixture> => play(m, "default");

@@ -59,4 +59,18 @@ describe("the draft kept for a session", () => {
     window.localStorage.setItem("swe.sv.draft.v1:s", JSON.stringify({ t: 5 }));
     expect(readDraft("s")).toEqual({ text: "", files: [] });
   });
+
+  it("prefers the newer copy in memory when the latest write could not reach storage", () => {
+    writeDraft("s", { text: "saved", files: [] });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    expect(writeDraft("s", { text: "saved, and then more", files: [] })).toBe("memory");
+    expect(readDraft("s").text).toBe("saved, and then more");
+    vi.restoreAllMocks();
+    // Once storage takes a write again, storage is the truth again.
+    writeDraft("s", { text: "back in storage", files: [] });
+    forgetMemoryDrafts();
+    expect(readDraft("s").text).toBe("back in storage");
+  });
 });
