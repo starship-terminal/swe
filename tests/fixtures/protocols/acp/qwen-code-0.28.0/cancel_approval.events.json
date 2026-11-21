@@ -1,0 +1,215 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.628,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": false,
+    "stop_task": false,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.628,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.839,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch asked.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.839,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.839,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch asked.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.462,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 12825,
+   "output_tokens": 33,
+   "cache_read_tokens": 0,
+   "context_tokens": 12825,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.493,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "name": "execute",
+   "summary": "touch asked.txt (Creating a new text file named asked.txt in the current directory.)",
+   "input": {
+    "command": "touch asked.txt",
+    "description": "Creating a new text file named asked.txt in the current directory."
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.493,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-p1",
+   "kind": "command",
+   "prompt": "touch asked.txt (Creating a new text file named asked.txt in the current directory.)",
+   "options": [
+    {
+     "id": "o1",
+     "label": "Always Allow in project: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o2",
+     "label": "Always Allow for user: touch *",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "o3",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "o4",
+     "label": "Reject",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "call_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.493,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.493,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-p1",
+   "source": "turn_ended"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.493,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.495,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "status": "error",
+   "name": "execute",
+   "output": "Tool call was cancelled before execution."
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.519,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "interrupted",
+   "duration_s": 1.68
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.519,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.519,
+  "data": {
+   "state": "closed"
+  }
+ }
+]
