@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MAYBE_SENT, REPEATING } from "./outbox";
-import { MemoryStorage, openOutboxStorage } from "./outbox-storage";
+import { MemoryStorage, openOutboxStorage, type OutboxEntry } from "./outbox-storage";
 import { createSessionStore } from "./store";
 import { FakeEnvironment, FakeTimers, FakeTransport, drain, snapshotFrame } from "./test-support";
 import type { JsonRequest } from "./transport";
@@ -318,5 +318,69 @@ describe("lookups", () => {
     await t.catchUp();
     expect(t.lookups()).toContain("w-1");
     expect(t.state().outbox.entries).toEqual([]);
+  });
+});
+
+describe("stated failures (final review 2 of G31)", () => {
+  const base: OutboxEntry = {
+    commandId: "id1", session: T, text: "deploy", attachments: [], mode: "queue", createdAt: 0, status: "failed", attempts: 1,
+  };
+
+  it("a definite failure this page made (24 h, never reached the hub) gives way on disk to another tab's stated failure", async () => {
+    const factory = new IDBFactory();
+    const disk = await openOutboxStorage(factory);
+    await disk.put({ ...base, error: "Not sent: the hub could not be reached for 24 hours.", endedAt: 10 });
+    const standing = await disk.reconcile({ ...base, error: "expired", stated: true, endedAt: 20 });
+    expect(standing).toMatchObject({ stated: true, error: "expired" });
+    expect(await disk.load(T)).toMatchObject([{ stated: true, error: "expired" }]);
+    // And never the other way.
+    expect(await disk.reconcile({ ...base, error: "Not sent: the hub could not be reached for 24 hours.", endedAt: 30 })).toMatchObject({ stated: true });
+    disk.close();
+  });
+
+  it("a rejected receipt on the stream ends a sent keeper send failed and stated, on disk", async () => {
+    const factory = new IDBFactory();
+    const t = setup({ factory });
+    t.state().start();
+    await t.catchUp();
+    await t.state().send({ text: "deploy" });
+    await drain();
+    expect(t.state().outbox.entries).toMatchObject([{ status: "sent" }]);
+    t.transport.last.send(env("command.receipt", { status: "rejected", reason: "not_recorded", op: "send" }, { command_id: "id1", seq: 7 }));
+    await drain();
+    const probe = await openOutboxStorage(factory);
+    expect(await probe.load(T)).toMatchObject([{ status: "failed", stated: true, error: "not_recorded" }]);
+    probe.close();
+  });
+
+  it("late() after stop(): a 2xx whose body says receipt rejected is stored failed and stated (G11 stored it sent)", async () => {
+    const factory = new IDBFactory();
+    const t = setup({ factory });
+    let release: (r: { status: number; body: unknown }) => void = () => {};
+    t.answer.next = () => new Promise((r) => { release = r; }) as never;
+    t.state().start();
+    await t.catchUp();
+    void t.state().send({ text: "deploy" });
+    await drain();
+    t.state().stop();
+    t.state().start();
+    await t.catchUp(6);
+    release({ status: 202, body: { ok: true, duplicate: true, command_id: "id1", receipt: "rejected", reason: "machine is too far behind" } });
+    await drain();
+    const probe = await openOutboxStorage(factory);
+    expect(await probe.load(T)).toMatchObject([{ status: "failed", stated: true, error: "machine is too far behind" }]);
+    probe.close();
+    expect(t.hub.posts).toHaveLength(1);
+  });
+
+  it("a definite refusal the hub answered (409 send_rejected) is stated too", async () => {
+    const factory = new IDBFactory();
+    const t = setup({ factory });
+    t.answer.next = () => ({ status: 409, body: { error: { code: "send_rejected", message: "the keeper refused it" } } });
+    t.state().start();
+    await t.catchUp();
+    await t.state().send({ text: "deploy" });
+    await drain();
+    expect(t.state().outbox.entries).toMatchObject([{ status: "failed", stated: true, error: "the keeper refused it" }]);
   });
 });

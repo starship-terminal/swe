@@ -555,7 +555,7 @@ or a `rejected` receipt ends an `ambiguous` send definitely.
 | `WA` | 24 hours since it was made | `FA` |
 | `W` with a stale claim (its post may be out or lost) | abandoned (`decideAbandon`, which keeps `keeperOnlyAt` and `attempts`) | `WA` when the claim's post was keeper-only and `require_keeper` is not F-, repeated by the next pass; else `FA` (as merged) |
 | `WA` with a stale claim | the same | `WA`, or `FA` when F- |
-| `late()` after `stop()` | the answer to a post that was out | as merged for a plain post: storage gets `sent`, a removal, or the entry `waiting` and `ambiguous`. A keeper-only post's 429, 425, 401, 403 or 409 `not_kept` stored nothing, so its entry is left as it was (not made `ambiguous`); a receipt that came while a repeat was out settles it as `sent` whatever the refusal. The next outbox treats a `WA` copy as above |
+| `late()` after `stop()` | the answer to a post that was out | for a plain post: storage gets `sent`, a removal, the entry `waiting` and `ambiguous`, or, for a 2xx whose body says `receipt: rejected`, `failed` and `stated` with the hub's reason (G11 as merged stored that one `sent` with receipt `rejected`). A keeper-only post's 429, 425, 401, 403 or 409 `not_kept` stored nothing, so its entry is left as it was (not made `ambiguous`); a receipt that came while a repeat was out settles it as `sent` whatever the refusal. The next outbox treats a `WA` copy as above |
 
 **What the lookup settles.** With `command_lookup` F+ the outbox asks
 `GET .../commands/{id}` for every `S-K`, `U-K` and `FA` entry, oldest
@@ -579,7 +579,18 @@ receipt ends a send `failed` and `stated`.
 
 A 404 does not make an `FA` send "not sent": its first post may have
 been plain and gone the legacy way, which stores nothing. Neither table
-applies with F- or F?: the outbox does what G11 merged.
+applies with F- or F?: the outbox does what G11 merged, except for three
+changes G31 made to every send, with the features or without them:
+
+- a failure the hub stated (`stated`) is its own stage above
+  `unconfirmed` and above a failure this page made ("Two copies of one
+  send"), so a failed result reaches an `unconfirmed` send and another
+  tab's stated failure replaces this tab's 24-hour "Not sent";
+- a 2xx whose own body says `receipt: rejected` ends the send `failed`
+  and `stated`, also in `late()` (merged: `sent`), and wins over a
+  receipt the stream gave while the post was out;
+- a definite refusal of a first post (409 `send_rejected`, 404, 422 and
+  the like) is `stated` too.
 
 **Two tabs.** Each tab claims before it posts, so two pages posting one
 `WA` send post it one after the other, both keeper-only, and the keeper
@@ -604,7 +615,7 @@ step by step, and the first step that tells them apart decides:
 
 | Step | Further along | Why it only moves forward |
 |---|---|---|
-| 1. Stage | a failure the hub stated (`failed` and `stated`: a failed `command.result` or a `rejected` receipt, from the stream, a post's answer or a lookup), over `failed` (definite, made by this page) and `unconfirmed`, over `sent`, over in doubt (`failed` and `ambiguous`: "may or may not have been sent"), over `waiting` | `waiting` becomes `sent` on a 2xx, or in doubt on an answer that may mean it was applied; in doubt becomes `sent` on its receipt, or a stated `failed` on a failed result; `sent` ends `unconfirmed` or `failed`; an `unconfirmed` end only says a deadline passed without news, so the hub's own word moves it on to a stated `failed`; nothing leaves a definite `failed`, stated or not, except removal (a new id for a retry): the first definite failure stands (`settle()`). A failure this page made (24 hours without reaching the hub, a lost answer, a refusal it read) does not outrank `unconfirmed`, so a stale tab's deadline cannot write over another tab's news (Limit 15 still holds for `sent`) |
+| 1. Stage | a failure the hub stated (`failed` and `stated`: a failed `command.result`, a `rejected` receipt, or a definite refusal of a first post such as 409 `send_rejected` or 404, from the stream, a post's answer or a lookup), over `failed` (definite, made by this page) and `unconfirmed`, over `sent`, over in doubt (`failed` and `ambiguous`: "may or may not have been sent"), over `waiting` | `waiting` becomes `sent` on a 2xx, or in doubt on an answer that may mean it was applied; in doubt becomes `sent` on its receipt, or a stated `failed` on a failed result; `sent` ends `unconfirmed` or `failed`; an `unconfirmed` end only says a deadline passed without news, so the hub's own word moves it on to a stated `failed`; nothing leaves a stated `failed` except removal (a new id for a retry), and a `failed` copy this page made gives way only to a stated one: within one page's memory the first definite failure stands (`settle()`), but across copies `reconcile` lets another tab's stated failure replace this tab's 24-hour "Not sent" on disk. A failure this page made (24 hours without reaching the hub, a lost answer, a refusal it read) does not outrank `unconfirmed`, so a stale tab's deadline cannot write over another tab's news (Limit 15 still holds for `sent`) |
 | 2. `attempts` | more | only a claim changes it, and always by +1 |
 | 3. The claim | no claim over a claim | a claim is only ever written together with attempts+1 (`decideClaim`, tested), so at the same count a copy without one is the later, released one: its answer (429, 425, 401, 403: the answers that stored nothing) or `abandon` removed it |
 | 4. `ambiguous` | set over not | within `waiting` it is only ever set (an abandoned claim, a stale claim taken over), never cleared; leaving `waiting` decides by stage first |

@@ -838,8 +838,8 @@ export class Outbox {
       await this.save({ ...now, lastError: NOT_KEPT });
       return "retry";
     }
-    // The hub looked at it and said no: a repeat gets the same answer.
-    await this.fail(now, status === 404 ? SESSION_GONE : errorText(response));
+    // The hub looked at it and said no: a repeat gets the same answer. Its own word, so `stated`.
+    await this.fail(now, status === 404 ? SESSION_GONE : errorText(response), true);
     return "done";
   }
 

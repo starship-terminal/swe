@@ -59,7 +59,8 @@ export interface OutboxEntry {
   /** Why it failed or is unconfirmed. */
   error?: string;
   /**
-   * On a `failed` entry: the hub stated the failure (a failed `command.result`, a `rejected` receipt), as opposed to
+   * On a `failed` entry: the hub stated the failure (a failed `command.result`, a `rejected` receipt, a definite
+   * refusal of a first post), as opposed to
    * a failure this page made from a deadline or an answer it could not read. Stated failures are further along than
    * `unconfirmed` (`furtherAlong`): an unconfirmed entry only means a deadline passed without news.
    */
