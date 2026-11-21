@@ -4648,6 +4648,60 @@ class TestSatelliteClaimedNotSent(SatelliteCase):
         self.settle(key)
         self.assertEqual(self.sends(), ["hello", "say h1", "say h2"])
 
+    def test_a_failed_write_then_another_entry_still_leaves_it_owed(self):
+        # A write that fails still takes a seq, so the journal's first
+        # entry can be seq 2, stamped after the claim: the look of a
+        # ring that dropped its beginning. The command whose hand-over
+        # failed here is owed all the same.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.hold(hub_key, "h1")
+        state = self.srv.state
+        path = state.journal._file(hub.HubState.sat_journal_key(self.mid))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()
+        with self.assertLogs(agent_mod.logger, "ERROR"):
+            self.back()
+        path.rmdir()
+        state.queue_command(self.mid, "tail", "", {})
+        first = self.stream()[0]
+        self.assertEqual(first["seq"], 2)
+        self.assertGreater(first["ts"],
+                           self.store().get_command("h1").updated_at)
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1"])
+        self.assertEqual((self.side()._unchecked, self.side()._failed),
+                         (set(), {}))
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1"])
+
+    def test_a_refusal_the_store_would_not_record_is_made_again(self):
+        # The machine is too far behind, and the store is busy when
+        # the hub goes to say so: the command is still owed an answer,
+        # and nothing behind it goes first.
+        key, hub_key = self.running(
+            [fake.say("1")], [fake.say("2")], [fake.say("3")])
+        self.hold(hub_key, "h1", "h2")
+        state, store = self.srv.state, self.store()
+        put, move = state.queue_command, store.transition
+        state.queue_command = lambda *args, **kwargs: None
+
+        def busy(command_id, to, **kwargs):
+            if to == "rejected":
+                raise StoreError("database is locked")
+            return move(command_id, to, **kwargs)
+
+        store.transition = busy
+        with self.assertLogs(agent_mod.logger, "ERROR"):
+            self.back()
+        self.assertEqual(
+            [store.get_command(c).status for c in ("h1", "h2")],
+            ["queued", "held"])
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        # The backlog drained: it goes out, first.
+        state.queue_command, store.transition = put, move
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+
     def test_a_rejection_the_store_refused_is_made_again(self):
         key, hub_key = self.running([fake.say("one")])
         self.claimed_and_lost(hub_key, "h1")

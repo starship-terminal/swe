@@ -2224,6 +2224,9 @@ class SatelliteKeepers:
         # read of the store worked: until then every machine counts.
         self._unchecked: set[str] = set()
         self._walked = False
+        # Claimed commands this hub tried to hand over and could not,
+        # by machine: owed whatever the stream's journal looks like.
+        self._failed: dict[str, set[str]] = {}
         self._load()
         self._walk()
         self._thread: threading.Thread | None = None
@@ -2712,16 +2715,24 @@ class SatelliteKeepers:
                 logger.exception("claiming %s", cmd.command_id)
                 continue
             if not self._hand_over(mid, cmd):
-                self._owe(mid)
+                self._owe(mid, cmd.command_id)
                 return
         with self._lock:
             self._unchecked.discard(mid)
+            self._failed.pop(mid, None)
 
-    def _owe(self, mid: str) -> None:
+    def _owe(self, mid: str, command_id: str | None = None) -> None:
         """A flush of ``mid`` ended early: its claimed commands are
-        checked against its stream again on the next one."""
+        checked against its stream again on the next one.
+        ``command_id`` is the one whose hand-over failed. It is owed
+        without asking the stream's journal how far back it reaches: a
+        write that failed leaves a hole in the journal's numbering, and
+        a journal that starts after a hole looks like one that dropped
+        its beginning."""
         with self._lock:
             self._unchecked.add(mid)
+            if command_id:
+                self._failed.setdefault(mid, set()).add(command_id)
 
     def _claimed_not_sent(self, store, mid: str) -> list:
         """``mid``'s commands that were claimed and never handed over:
@@ -2735,7 +2746,8 @@ class SatelliteKeepers:
         ring still reaches back to its claim (nothing was ever dropped,
         or the oldest entry left is older than the claim). One claimed
         before that is left as it is; the machine has most likely had
-        it. Caller holds the machine's lock."""
+        it. A command this hub itself failed to hand over is owed
+        either way (``_owe``). Caller holds the machine's lock."""
         with self._lock:
             if self._walked and mid not in self._unchecked:
                 return []
@@ -2754,13 +2766,16 @@ class SatelliteKeepers:
                 sent.add(data.get("id"))
         whole = not events or events[0].get("seq") == 1
         since = events[0].get("ts") if events else None
+        with self._lock:
+            failed = set(self._failed.get(mid, ()))
         owed = []
         for cmd in claimed:
             if cmd.command_id in sent:
                 continue
-            if whole or (isinstance(since, (int, float))
-                         and not isinstance(since, bool)
-                         and since <= cmd.updated_at):
+            if whole or cmd.command_id in failed or (
+                    isinstance(since, (int, float))
+                    and not isinstance(since, bool)
+                    and since <= cmd.updated_at):
                 owed.append(cmd)
         return owed
 
@@ -2790,9 +2805,10 @@ class SatelliteKeepers:
 
     def _hand_over(self, mid: str, cmd) -> bool:
         """Put one claimed command on ``mid``'s stream. False when it
-        is not there afterwards and is still owed. The journal reports
-        no failed write (``Journal.append`` returns the event either
-        way), so the stream is read back."""
+        is not there afterwards and is still owed, or when the machine
+        is too far behind and the store would not record the refusal.
+        The journal reports no failed write (``Journal.append`` returns
+        the event either way), so the stream is read back."""
         local_key, _mid = protocol.split_remote_key(cmd.session)
         state = self.state
         try:
@@ -2808,8 +2824,7 @@ class SatelliteKeepers:
                              cmd.command_id, mid)
             return False
         if sent is None:
-            self._reject(cmd, f"{mid} is too far behind; not sent")
-            return True
+            return self._reject(cmd, f"{mid} is too far behind; not sent")
         seq = sent.get("seq")
         if isinstance(seq, int) and not isinstance(seq, bool):
             written, _cut = state.journal.read_since(
@@ -2820,7 +2835,10 @@ class SatelliteKeepers:
                      cmd.command_id, mid)
         return False
 
-    def _reject(self, cmd, note: str) -> None:
+    def _reject(self, cmd, note: str) -> bool:
+        """Reject ``cmd`` and tell open streams. False when the store
+        could not record it: the command is as it was, and still owed
+        an answer."""
         from swe.remote.store import StoreError
 
         store = self.store
@@ -2830,6 +2848,8 @@ class SatelliteKeepers:
                 self._announce(cmd, note)
         except (StoreError, ValueError):
             logger.exception("rejecting %s", cmd.command_id)
+            return False
+        return True
 
     def _announce(self, cmd, note: str) -> None:
         """Tell the session's open streams a command will never run.

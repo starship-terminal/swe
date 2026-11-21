@@ -285,7 +285,9 @@ before this check nothing sent it.
   command overtakes it. `Journal.append` returns the event whether or
   not the write worked, so after each put the hub reads the stream
   back (`_hand_over`) and counts a command that is not there as not
-  sent.
+  sent. A machine too far behind is refused as before
+  (`MAX_SAT_PENDING`); if the store will not record that refusal, the
+  flush ends there as well.
 - **At the next flush of a noted machine** (its `hello` upload, a write
   for it, or the 60 second timer once it is online) the hub reads the
   stream's journal and collects the `id` of every `kept` command on it
@@ -316,7 +318,10 @@ command's claim: nothing was ever dropped (the first entry is seq 1,
 or the journal is empty), or the oldest entry left is older than the
 claim. A `queued` command claimed before that is left as it is. The
 machine has most likely read it, and rejecting it could call a
-message that ran expired.
+message that ran expired. A command this hub itself failed to hand
+over is owed without that test (`SatelliteKeepers._failed`): a write
+that fails still takes a seq, so a journal whose first write failed
+starts at seq 2 and looks like a ring that dropped its beginning.
 
 A command put on the stream twice all the same (a stream journal that
 was deleted, a write that reached a connected satellite and not the
@@ -387,7 +392,7 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 | Check | Result |
 |---|---|
 | `tests.test_remote_agent` (222 tests, 50 new) | pass |
-| `tests.test_remote_agent.TestSatelliteClaimedNotSent` (15 tests, added with the check for a command claimed and never sent; 14 fail without it) | pass |
+| `tests.test_remote_agent.TestSatelliteClaimedNotSent` (17 tests, added with the check for a command claimed and never sent) | pass |
 | Full suite against a throwaway HOME | pass (see the PR) |
 | Against an installed `swe` (`pip install -e .` in a fresh venv), two throwaway HOMEs on one Mac, `swe remote serve` in one and `swe remote agent` in the other, harness.json on the satellite pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py` (`FAKE_CLAUDE_MODE=approval`): a launch on the satellite asked for on the hub; an approval and a send from the hub answered by the satellite's keeper; `kill -9` the agent with an approval open, a message sent meanwhile answered `held` (its retry `duplicate`, a Stop 409 `machine_offline`); the agent started again, the approval answered, the held message run once; 55 events, seqs 1..55, the satellite's journal and the hub's copy both equal to the keeper's log; then the hub stopped and the satellite's loopback API listing the session and running one more turn, 401 without the token or with a paired credential, 404 for `/v1/devices`; `local.json` mode 0600 and its token in no other file under either HOME, logs included; detach ends the keeper | pass |
 
@@ -437,6 +442,11 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
   entries (or 8 MB) on that machine's stream before its first flush
   after the restart, and a machine 2,000 commands behind is sent no
   more.
+- **A first write that fails, then a restart.** If the first write ever
+  to a machine's stream fails, another entry is written, and the hub
+  restarts before the next flush of that machine, the new hub takes
+  the journal for a ring that dropped its beginning and leaves the
+  command `queued`.
 - **A command lost before this check existed** is delivered after
   whatever the hub sent later, if it is under 24 hours old.
 - **Clocks.** The ten-minute limit on a late Stop compares the hub's
