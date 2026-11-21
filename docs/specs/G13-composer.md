@@ -156,7 +156,7 @@ device first (G11's outbox) and the timeline draws its bubble and its reason.
 button (450 ms), a right click, or the ArrowUp key (or Shift+F10) opens a glass
 menu above it with two items: **Queue** ("Sent when the current reply ends.") and
 the steer item, which is named and worded from `caps.steer_effect` ("Stop and send"
-only when the session says its steer stops the reply, "Send now" otherwise; see
+only when the session says its steer stops the reply, "Send next" for the two that wait, "Send now" when the field is absent; see
 "What steer does, per agent"). The menu opens on Queue, never on the steer item; the arrow keys move, Escape or Tab or a press elsewhere closes it
 and the focus goes back to the button. The steer item is disabled, with the
 reason in the menu and beside the bar, when `caps.steer` is not true ("This agent
@@ -294,8 +294,8 @@ that is in the queue is drawn by the tray, not also as a bubble in the timeline.
 ## What steer does, per agent
 
 Claude's steer cuts the reply and kills a running tool call, an open approval is withdrawn. Codex's cuts the reply but
-lets a running command finish, and waits behind an open approval. opencode's does not cut the reply being written, and
-its message can show up only in the next turn. ACP has no steer (G16 gap 6; G7). `Caps.steer` is a boolean, true for
+lets a running command finish, and an open approval holds the steer back. opencode's cuts nothing: the steer lands
+when the current step ends, whether that is the reply or a command. ACP has no steer (G16 gap 6; G7). `Caps.steer` is a boolean, true for
 the first three alike, and the view must not branch on a harness name (AGENTS.md: capabilities first), so the hub says
 which it is: `session.caps.steer_effect`, one of `"stops_reply"`, `"after_tool"`, `"next_turn"` (added by G32; read
 here as an optional field, `steer.ts`, and not in the generated types, which the hub's schema owns). The control reads
@@ -303,10 +303,16 @@ it:
 
 | `steer_effect` | Label | Sentence |
 |---|---|---|
-| `"stops_reply"` | Stop and send | Stops the current reply, then sends this message now. |
-| `"after_tool"` | Send now | Sends this message now. The current reply is cut, but a tool call that is running finishes first. |
-| `"next_turn"` | Send now | Sends this message ahead of the queue. The agent reads it in its next turn, and the current reply goes on. |
+| `"stops_reply"` (Claude, Codex) | Stop and send | Stops the reply being written and sends this message now. A command that is already running may keep going. |
+| `"after_tool"` (opencode) | Send next | Sends this message when the current step ends. Nothing is stopped. |
+| `"next_turn"` (no adapter sends it today) | Send next | Sends this message when the reply ends. |
 | absent, or a value this view does not know | Send now | Sends this message ahead of the queue. Some agents stop the current reply to do it. |
+
+While a request (an approval or a question) is waiting, the two sentences that cannot rule it out (`stops_reply` and
+absent) add: "A request waiting for your answer may be withdrawn, or may hold this message back until you answer
+it." That is true of Claude (withdrawn) and of Codex (held back). The store does not stop a steer for a waiting
+request, it posts it and the hub decides; `after_tool` and `next_turn` say nothing about it because nothing known
+says what they do there.
 
 The label and the sentence are the steer item's in the send menu (with its picture: a square for a stopping steer, the
 queue picture otherwise), its tooltip, and the item in a queued message's menu. Only a session that says `stops_reply`
@@ -348,8 +354,7 @@ What each would need, so the next milestone can pick it up. For the model chip: 
    after the post leaves, where an agent that reuses an id between the post and
    its delivery gets the answer. The hub would need to take the `seq` too.
 5. **Steer wording depends on a field the hub adds.** `steer_effect` is read when present (G32); a hub that
-   does not send it gets "Send now" with the sentence that is true of every agent, which undersells a Claude
-   steer that does stop the reply.
+   does not send it gets "Send now" with the sentence that is true of every agent, which undersells a steer that does stop the reply.
 6. **Attachments are not checked for the harness.** The hub stages any file of an
    allowed type; whether the harness can read it is `attachments.capability`'s
    (G8), which the view does not know.
@@ -389,8 +394,8 @@ Run on 2026-11-22, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (35 files, 696 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (35 files, 698 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
 | The built files under `src/swe/webapp/static/session/` equal a fresh build; `tests.test_webapp_session_view` | pass |
-| **Each guard, removed.** 91 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (code spans only, every character kept, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (the last rounds added 5 more edits, for the keyboard-opened menu, the code-span reader and the host's resize watch, all killed) (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
+| **Each guard, removed.** 94 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (code spans only, every character kept, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (the last rounds added 5 more edits, for the keyboard-opened menu, the code-span reader and the host's resize watch, all killed) (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
 | **A real hub.** `swe remote serve` on a throwaway HOME, harness.json pointing Claude's adapter at `tests/fakes/fake_claude.py` in `approval` mode, headless Chrome on the built page (`/session/index.html?key=...`) with the saved credential: the first turn's approval shows in the dock with nothing focused; a real mouse click on Allow answers it; text typed with the keyboard and sent with Enter arrives once; the second turn's approval is answered with a click. The hub's v2 messages hold the typed message once (`["list the build folder","now list it again please"]`) and both approvals as `source user, decision allow` | pass; screenshots `G13-e2e/` in the shared notes folder, script `G13-e2e_view.mjs` (run with `swe` as `PYTHONPATH=src python3 -m swe.cli`, since this was a worktree) |
 | Screenshots, 32 composer scenes x desktop 1280 and phone 390 x light and dark (128 files) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |

@@ -58,6 +58,7 @@ function Item({
   steerEffect: ReturnType<typeof steerEffectOf>;
   refusal: string | null;
 }) {
+  const requestOpen = useSessionStore(store, (s) => s.session.pending.length > 0);
   const [busy, setBusy] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
@@ -110,9 +111,9 @@ function Item({
                 items={[
                   {
                     id: "steer",
-                    label: steerWording(steerEffect).label,
-                    icon: steerWording(steerEffect).stops ? "stop" : "queue",
-                    hint: steerWording(steerEffect).sentence,
+                    label: steerWording(steerEffect, requestOpen).label,
+                    icon: steerWording(steerEffect, requestOpen).stops ? "stop" : "queue",
+                    hint: steerWording(steerEffect, requestOpen).sentence,
                     disabled: !steerOk,
                     reason: "This agent cannot be steered.",
                     onSelect: () => void run("steer"),

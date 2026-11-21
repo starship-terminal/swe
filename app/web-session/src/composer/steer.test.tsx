@@ -17,9 +17,9 @@ async function busy(extra: object): Promise<Mounted> {
 }
 
 const CASES: [string, object, string, string, string][] = [
-  ["stops_reply", { steer_effect: "stops_reply" }, "Stop and send", "Stops the current reply, then sends this message now.", "stop"],
-  ["after_tool", { steer_effect: "after_tool" }, "Send now", "Sends this message now. The current reply is cut, but a tool call that is running finishes first.", "queue"],
-  ["next_turn", { steer_effect: "next_turn" }, "Send now", "Sends this message ahead of the queue. The agent reads it in its next turn, and the current reply goes on.", "queue"],
+  ["stops_reply", { steer_effect: "stops_reply" }, "Stop and send", "Stops the reply being written and sends this message now. A command that is already running may keep going.", "stop"],
+  ["after_tool", { steer_effect: "after_tool" }, "Send next", "Sends this message when the current step ends. Nothing is stopped.", "queue"],
+  ["next_turn", { steer_effect: "next_turn" }, "Send next", "Sends this message when the reply ends.", "queue"],
   ["absent", {}, "Send now", "Sends this message ahead of the queue. Some agents stop the current reply to do it.", "queue"],
 ];
 
@@ -29,6 +29,8 @@ describe("the steer item in the send menu", () => {
       const m = await busy(extra);
       expect(text(sendItem(m).querySelector("span > span:first-child"))).toBe(label);
       expect(text(sendItem(m))).toContain(sentence);
+      // The tooltip says the same.
+      expect(sendItem(m).title).toBe(sentence);
     });
   }
 
@@ -54,8 +56,33 @@ describe("the steer item in a queued message's menu", () => {
       await click(btn(m, "More for queued message"));
       expect(text(sendItem(m).querySelector("span > span:first-child"))).toBe(label);
       expect(text(sendItem(m))).toContain(sentence);
+      expect(sendItem(m).title).toBe(sentence);
     });
   }
+
+  it("says what a waiting request does to a steer only where an agent is known to do it", async () => {
+    for (const [effect, said] of [["stops_reply", true], ["after_tool", false], ["next_turn", false], [undefined, true]] as const) {
+      const m = mount();
+      await play(m, "approval", 0, 2);
+      await feed(m, caps(effect === undefined ? {} : { steer_effect: effect }), frame("session.state", 41, { state: "running" }));
+      typeText(m, "hello");
+      await settle(() => void (btn(m, "Queue message") as HTMLButtonElement).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      expect(text(sendItem(m)).includes("waiting for your answer")).toBe(said);
+    }
+  });
+});
+
+describe("the steer item in a queued message's menu while a request waits", () => {
+  it("says what a waiting request may do to it, for an agent that stops the reply, and not for one that waits for the step", async () => {
+    for (const [effect, said] of [["stops_reply", true], ["after_tool", false]] as const) {
+      const m = mount();
+      await play(m, "queued", 0, 3); // the approval r1 is still open
+      await feed(m, caps({ steer_effect: effect }));
+      await click(q(m.el, "[data-tray] button[aria-controls]"));
+      await click(btn(m, "More for queued message"));
+      expect(text(sendItem(m)).includes("waiting for your answer")).toBe(said);
+    }
+  });
 });
 
 describe("steerWording and steerEffectOf", () => {
@@ -64,9 +91,10 @@ describe("steerWording and steerEffectOf", () => {
     for (const effect of ["after_tool", "next_turn", null] as const) {
       const words = steerWording(effect);
       expect(words.stops).toBe(false);
-      expect(words.label).toBe("Send now");
-      expect(words.sentence.startsWith("Stops the current reply")).toBe(false);
+      expect(words.label).toBe(effect === null ? "Send now" : "Send next");
+      expect(words.sentence.startsWith("Stops the")).toBe(false);
     }
+    expect(steerWording("after_tool").sentence).toContain("Nothing is stopped.");
   });
 
   it("reads the field when it is a known string and nothing else", () => {

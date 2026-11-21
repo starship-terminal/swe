@@ -155,7 +155,8 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   const busyTurn = useSessionStore(store, (s) => s.session.openTurn !== null || s.session.phase === "running" || s.session.phase === "waiting");
   const steerOk = useSessionStore(store, (s) => s.session.caps?.steer === true);
   const steerEffect = useSessionStore(store, (s) => steerEffectOf(s.session.caps));
-  const steerWords = steerWording(steerEffect);
+  const requestOpen = useSessionStore(store, (s) => s.session.pending.length > 0);
+  const steerWords = steerWording(steerEffect, requestOpen);
   const connection = useSessionStore(store, (s) => s.connection.state);
   const refusalReason = useSessionStore(store, (s) => s.refusal()?.reason ?? null);
   const refusalMessage = useSessionStore(store, (s) => s.refusal()?.message ?? null);

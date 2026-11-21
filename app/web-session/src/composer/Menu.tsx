@@ -107,6 +107,7 @@ export function Menu({ label, items, onClose, placement = "above-start" }: Props
             item.onSelect();
           }}
           role="menuitem"
+          title={item.disabled === true ? item.reason : item.hint}
           type="button"
         >
           {item.icon !== undefined ? <Icon className="size-4 shrink-0 text-secondary" name={item.icon} /> : null}

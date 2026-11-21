@@ -1,7 +1,7 @@
 // What steer does, as far as the session says. `Caps.steer` is a boolean, true for Claude, Codex and opencode
 // alike, and the three do different things (G16 gap 6): Claude cuts the reply and kills a running tool call, Codex
-// cuts the reply but lets a running command finish and waits behind an open approval, opencode does not cut the
-// reply and may show the message only in the next turn. A hub that knows says so in `caps.steer_effect`; this view
+// cuts the reply but lets a running command finish and holds the steer behind an open approval, opencode cuts
+// nothing and lands the steer when the current step ends. A hub that knows says so in `caps.steer_effect`; this view
 // reads it when it is there and says only what is true of every agent when it is not. The field is read here, not
 // added to the generated types (the hub's schema owns those).
 import type { Caps } from "../core";
@@ -25,15 +25,22 @@ export function steerEffectOf(caps: Caps | null): SteerEffect | null {
   return typeof value === "string" && EFFECTS.has(value) ? (value as SteerEffect) : null;
 }
 
-export function steerWording(effect: SteerEffect | null): SteerWording {
+/** Said when a request is waiting for an answer: what that does to a steer differs by agent, and only a stopping one is known to touch it. */
+const WITH_APPROVAL = " A request waiting for your answer may be withdrawn, or may hold this message back until you answer it.";
+
+export function steerWording(effect: SteerEffect | null, requestOpen = false): SteerWording {
   switch (effect) {
     case "stops_reply":
-      return { label: "Stop and send", sentence: "Stops the current reply, then sends this message now.", stops: true };
+      return {
+        label: "Stop and send",
+        sentence: `Stops the reply being written and sends this message now. A command that is already running may keep going.${requestOpen ? WITH_APPROVAL : ""}`,
+        stops: true,
+      };
     case "after_tool":
-      return { label: "Send now", sentence: "Sends this message now. The current reply is cut, but a tool call that is running finishes first.", stops: false };
+      return { label: "Send next", sentence: "Sends this message when the current step ends. Nothing is stopped.", stops: false };
     case "next_turn":
-      return { label: "Send now", sentence: "Sends this message ahead of the queue. The agent reads it in its next turn, and the current reply goes on.", stops: false };
+      return { label: "Send next", sentence: "Sends this message when the reply ends.", stops: false };
     case null:
-      return { label: "Send now", sentence: "Sends this message ahead of the queue. Some agents stop the current reply to do it.", stops: false };
+      return { label: "Send now", sentence: `Sends this message ahead of the queue. Some agents stop the current reply to do it.${requestOpen ? WITH_APPROVAL : ""}`, stops: false };
   }
 }
