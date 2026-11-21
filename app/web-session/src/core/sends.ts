@@ -1,7 +1,7 @@
 // What each send that is not finished shows: one state and one sentence, so a
 // message bubble always has something to say. The composer and the timeline
 // read this, not `session.commands` (which only holds what the stream said).
-import type { OutboxView } from "./outbox";
+import { STORAGE_DOWN, type OutboxView } from "./outbox";
 import type { OutboxEntry } from "./outbox-storage";
 import type { ConnectionStatus } from "./supervisor";
 
@@ -38,6 +38,8 @@ export interface SendContext {
   /** The session's row has been seen. */
   loaded: boolean;
   online: boolean;
+  /** The row says a keeper holds the session: its sends still go while the database is down. */
+  keeper?: boolean;
 }
 
 function waitingReason(entry: OutboxEntry, context: SendContext): string {
@@ -47,6 +49,7 @@ function waitingReason(entry: OutboxEntry, context: SendContext): string {
   if (!context.online || context.connection.state === "offline") {
     return "Waiting: you are offline. It will be sent when you are back.";
   }
+  if (context.outbox.storageDown && context.keeper !== true) return `${STORAGE_DOWN}. Trying again.`;
   if (!context.loaded) return "Waiting for the hub. It will be sent once the session is loaded.";
   if (entry.claim !== undefined && entry.claim.owner !== context.outbox.owner) {
     return "Being sent from another tab, or from a page that closed while sending. Checked again within a minute.";

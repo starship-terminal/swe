@@ -1346,6 +1346,22 @@ describe("two copies of one send: the one further along wins", () => {
     expect(furtherAlong(copy({ attempts: 1, status: "failed" }), copy({ attempts: 1, status: "unconfirmed" }))).toBe(0);
   });
 
+  it("a send an older build stored as `pending` ends `failed` like any waiting one, on disk and in view", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const old = { ...copy({ commandId: "old" }), status: "pending" } as unknown as OutboxEntry;
+    await (await openOutboxStorage(t.factory)).put(old);
+    const outbox = await t.make();
+    outbox.sessionGone();
+    await drain();
+    expect(t.view().entries).toMatchObject([{ commandId: "old", status: "failed", error: SESSION_GONE }]);
+    expect(await stored(t.factory)).toMatchObject([{ commandId: "old", status: "failed", error: SESSION_GONE }]);
+    // A status this build does not know never decides a comparison by winning it.
+    const unknown = { ...copy({}), status: "archived" } as unknown as OutboxEntry;
+    expect(furtherAlong(copy({}), unknown)).toBeGreaterThan(0);
+    expect(furtherAlong(unknown, copy({}))).toBeLessThan(0);
+  });
+
   it("a claim is always written with one more attempt (the order depends on it)", async () => {
     const owner = "me";
     for (const stored of [copy({}), copy({ attempts: 3, ambiguous: true }), copy({ attempts: 2, claim: { owner: "other", at: 0 } })]) {
@@ -1436,37 +1452,103 @@ describe("when storage fails", () => {
     expect(db.notes).toEqual([expect.stringContaining("not sent until it answers again"), ""]);
   });
 
-  it("first write: a send made while the database is down is claimed and posted from memory, and written once it answers", async () => {
+  it("database down, legacy row: no send is posted, each says why, and they go out once it answers", async () => {
     const t = setup();
     legacy(t);
-    const db = await failing(t, { put: 2 }); // the write and its retry
+    const db = await failing(t, { put: Infinity, claim: Infinity });
     const outbox = await t.make(db.storage);
-    await outbox.send({ text: "x" }); // the first write fails: only memory has it
+    await outbox.send({ text: "x" }); // its first write fails: only memory is sure to have it
+    await outbox.send({ text: "y" });
+    await drain();
+    t.timers.advance(30_000);
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().storageDown).toBe(true);
+    const shown = describeSends({ outbox: t.view(), connection: { state: "live", attempt: 0, since: 0, retryAt: null, detail: "" }, loaded: true, online: true });
+    expect(shown.map((v) => v.reason)).toEqual([`${STORAGE_DOWN}. Trying again.`, `${STORAGE_DOWN}. Trying again.`]);
+    // The database answers again: what was held is written, and each send goes once, under a recorded claim.
+    db.heal();
+    t.timers.advance(30_000);
+    await drain();
+    expect(t.hub.received.map((b) => b["text"])).toEqual(["x", "y"]);
+    expect((await stored(t.factory)).map((e) => [e.text, e.status, e.attempts])).toEqual([
+      ["x", "sent", 1],
+      ["y", "sent", 1],
+    ]);
+    expect(t.view().storageDown).toBe(false);
+  });
+
+  it("database down, legacy row: the deadline still ends a send that never went", async () => {
+    const t = setup();
+    legacy(t);
+    const db = await failing(t, { put: Infinity, claim: Infinity });
+    const outbox = await t.make(db.storage);
+    await outbox.send({ text: "x" });
+    await drain();
+    t.timers.advance(OUTBOX_TTL_MS + 1);
+    await drain();
+    t.timers.advance(60_000); // the next pass, past the deadline
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: NOT_SENT_IN_TIME }]);
+  });
+
+  it("database down, keeper row: sends still go, under a claim only this page knows (the hub de-duplicates)", async () => {
+    const t = setup();
+    const db = await failing(t, { put: Infinity, claim: Infinity });
+    const outbox = await t.make(db.storage);
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.hub.received.map((b) => b["text"])).toEqual(["x"]);
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "keeper", attempts: 1 }]);
+  });
+
+  it("a first write the database took although the page heard an error, then a reload: one post in all", async () => {
+    const t = setup();
+    legacy(t);
+    // Every write lands and then reports an error, as a connection lost mid-commit can; claims fail outright.
+    const real = await openOutboxStorage(t.factory);
+    const lost = () => new Error("Connection to Indexed Database server lost");
+    const landsButFails: OutboxStorage = {
+      kind: "indexeddb",
+      note: "",
+      load: (session) => real.load(session),
+      put: async (entry) => {
+        await real.put(entry);
+        throw lost();
+      },
+      remove: (id) => real.remove(id),
+      claim: async () => {
+        throw lost();
+      },
+      abandon: (...args) => real.abandon(...args),
+      reconcile: async () => {
+        throw lost();
+      },
+      close: () => {},
+    };
+    const a = await t.make(new FallbackStorage(landsButFails));
+    await a.send({ text: "rm -rf build" });
+    await drain();
+    expect(t.hub.received).toEqual([]); // not posted: the claim was not recorded
+    expect(await stored(t.factory)).toMatchObject([{ status: "waiting", attempts: 0 }]);
+    // Reload: a new page whose database answers.
+    a.close();
+    await t.make(await openOutboxStorage(t.factory));
     await drain();
     expect(t.hub.received).toHaveLength(1);
-    expect(t.view().entries).toMatchObject([{ status: "sent" }]);
-    // The answer's write found the database again and took what was held.
     expect(await stored(t.factory)).toMatchObject([{ status: "sent", attempts: 1 }]);
   });
 
-  it("save after an answer: held, then written once the database answers, the copy further along winning", async () => {
+  it("no database at all: memory is the only store, so its claims are the recorded ones and sends post", async () => {
     const t = setup();
     legacy(t);
-    const db = await failing(t, { put: Infinity });
-    const outbox = await t.make(db.storage);
-    // The first write fails too, so the send is only in memory and may go; its answer is held.
+    const outbox = await t.make(new MemoryStorage("IndexedDB is not available here"));
     await outbox.send({ text: "x" });
     await drain();
+    expect(t.view().storageDown).toBe(false);
     expect(t.hub.received).toHaveLength(1);
-    expect(await stored(t.factory)).toEqual([]);
-    db.heal();
-    await outbox.send({ text: "y" }); // the next write reaches the database and replays what was held first
-    await drain();
-    expect((await stored(t.factory)).map((e) => [e.text, e.status])).toEqual([
-      ["x", "sent"],
-      ["y", "sent"],
-    ]);
-    expect(t.hub.received).toHaveLength(2);
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "legacy" }]);
   });
 
   it("remove: held while the database is down, applied once it answers", async () => {

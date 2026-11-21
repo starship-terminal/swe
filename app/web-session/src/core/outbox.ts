@@ -22,7 +22,7 @@
 //   send as failed, "may or may not have been sent".
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
-import { CLAIM_STALE_MS, furtherAlong, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, decideClaim, furtherAlong, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 
 export { furtherAlong };
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
@@ -69,6 +69,8 @@ export interface OutboxView {
   owner: string;
   /** Storage is still being loaded: what `entries` shows may change, so no action should be offered on it. */
   loading: boolean;
+  /** The database has stopped answering: no send on a legacy row is posted until it answers again. */
+  storageDown: boolean;
 }
 
 export interface OutboxOptions {
@@ -141,10 +143,6 @@ function errorCode(response: JsonResponse): string {
   return typeof code === "string" ? code : "";
 }
 
-/** An entry stored by an earlier build of this file, where `waiting` was called `pending`. */
-function normalize(entry: OutboxEntry): OutboxEntry {
-  return (entry.status as string) === "pending" ? { ...entry, status: "waiting" } : entry;
-}
 
 export class Outbox {
   private readonly options: OutboxOptions;
@@ -185,7 +183,7 @@ export class Outbox {
     this.options = options;
     this.owner = options.owner ?? randomOwner();
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
-    this.list = (options.initial ?? []).map(normalize);
+    this.list = (options.initial ?? []).map(normalizeEntry);
     this.carried = new Set(this.list.map((entry) => entry.commandId));
   }
 
@@ -198,6 +196,7 @@ export class Outbox {
       inFlight: this.inFlight,
       owner: this.owner,
       loading: !this.ready,
+      storageDown: this.options.storage.down === true,
     };
   }
 
@@ -234,7 +233,7 @@ export class Outbox {
   private async load(): Promise<void> {
     const loaded = await this.options.storage.load(this.options.session);
     if (this.closed) return;
-    const stored = loaded.map(normalize).filter((entry) => !this.removed.has(entry.commandId));
+    const stored = loaded.map(normalizeEntry).filter((entry) => !this.removed.has(entry.commandId));
     // Of two copies of one send, the one further along wins, wherever it is: storage can hold an older copy (a write
     // that failed and fell back to memory) as well as a newer one (an answer written after `stop()`). Ties keep the
     // stored copy. A copy only in memory (a handed-over one storage lacks, a send made while loading whose write the
@@ -469,6 +468,11 @@ export class Outbox {
     }
   }
 
+  /** A repeat of this send is harmless: the row says a keeper holds the session, and no answer said otherwise. */
+  private repeatIsHarmless(entry: OutboxEntry | undefined): boolean {
+    return entry !== undefined && this.options.keeperHeld() && entry.path !== "legacy";
+  }
+
   /** The entry is not going to be posted after all: it can be discarded again. */
   private notPosting(): void {
     this.inFlight = null;
@@ -496,6 +500,11 @@ export class Outbox {
       this.notPosting();
       throw error;
     }
+    if (claim.kind === "unrecorded" && this.repeatIsHarmless(this.current(entry.commandId))) {
+      // A keeper row de-duplicates by command id, so a post under a claim only this page knows cannot be applied
+      // twice: it goes now, as it would with no database. (Where a repeat is not harmless, see below.)
+      claim = decideClaim(this.current(entry.commandId) as OutboxEntry, this.owner, this.options.timers.now(), CLAIM_STALE_MS).claim;
+    }
     if (claim.kind !== "claimed" || this.closed) this.notPosting();
     if (this.closed) return "done";
     if (claim.kind === "missing") {
@@ -508,8 +517,9 @@ export class Outbox {
       return "done";
     }
     if (claim.kind === "unrecorded") {
-      // The database did not take the claim, so another page could post this too: not now. Shown, not written
-      // (a write would drop the claim the entry may hold, which other pages rely on), and tried again.
+      // The database did not take the claim. On a legacy row a send is posted only under a claim the database
+      // recorded: not now. Shown, not written (a write would drop the claim the entry may hold, which other pages
+      // rely on), and tried again; its deadline still ends it.
       const now = this.current(entry.commandId);
       if (now !== undefined) this.replace({ ...now, lastError: STORAGE_DOWN });
       return "retry";

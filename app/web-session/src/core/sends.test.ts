@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { OutboxView } from "./outbox";
+import { STORAGE_DOWN, type OutboxView } from "./outbox";
 import type { OutboxEntry } from "./outbox-storage";
 import { describeSends, type SendContext } from "./sends";
 import type { ConnectionStatus } from "./supervisor";
@@ -10,7 +10,7 @@ const entry = (over: Partial<OutboxEntry>): OutboxEntry => ({
 });
 const connection = (state: ConnectionStatus["state"]): ConnectionStatus => ({ state, attempt: 0, since: 0, retryAt: null, detail: "" });
 const outbox = (entries: OutboxEntry[], over: Partial<OutboxView> = {}): OutboxView => ({
-  entries, persistent: true, note: "", paused: null, inFlight: null, owner: "me", loading: false, ...over,
+  entries, persistent: true, note: "", paused: null, inFlight: null, owner: "me", loading: false, storageDown: false, ...over,
 });
 const one = (context: Partial<SendContext> & { entries: OutboxEntry[] }) =>
   describeSends({
@@ -39,6 +39,14 @@ describe("describeSends", () => {
     expect(one({ entries: [entry({ status: "sent", path: "keeper", receipt: "held" })] })?.reason).toContain("Held");
     expect(one({ entries: [entry({ status: "failed", error: "no" })] })).toMatchObject({ shown: "failed", reason: "no", canRetry: true, canDiscard: true });
     expect(one({ entries: [entry({ status: "unconfirmed", error: "maybe" })] })).toMatchObject({ shown: "unconfirmed", reason: "maybe", canRetry: true });
+  });
+
+  it("says the database is down for a legacy row's waiting send, and not for a keeper row's", () => {
+    const view = outbox([entry({})], { storageDown: true, persistent: false });
+    const at = (keeper: boolean) =>
+      describeSends({ outbox: view, connection: connection("live"), loaded: true, online: true, keeper })[0]?.reason;
+    expect(at(false)).toBe(`${STORAGE_DOWN}. Trying again.`);
+    expect(at(true)).toBe("Waiting to be sent.");
   });
 
   it("offers nothing while the outbox is loading what storage holds", () => {

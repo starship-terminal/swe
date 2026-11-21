@@ -88,6 +88,7 @@ export function decideAbandon(
   now: number,
   staleMs: number,
 ): { entry: OutboxEntry | undefined; write?: OutboxEntry } {
+  if (stored !== undefined) stored = normalizeEntry(stored);
   if (stored === undefined || stored.status !== "waiting" || stored.claim === undefined) return { entry: stored };
   if (now - stored.claim.at < staleMs) return { entry: stored };
   const { claim: _stale, ...rest } = stored;
@@ -97,6 +98,16 @@ export function decideAbandon(
 
 const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 1, failed: 2, unconfirmed: 2 };
 
+/** An entry as an earlier build of the outbox stored it, in today's terms: `waiting` was called `pending`. */
+export function normalizeEntry(entry: OutboxEntry): OutboxEntry {
+  return (entry.status as string) === "pending" ? { ...entry, status: "waiting" } : entry;
+}
+
+/** A copy's stage; one whose status this build does not know is below every known one, so it never wins. */
+function stageOf(entry: OutboxEntry): number {
+  return STAGE[entry.status] ?? -1;
+}
+
 /**
  * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
  * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
@@ -105,7 +116,7 @@ const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 1, fail
  */
 export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
   return (
-    STAGE[a.status] - STAGE[b.status] ||
+    stageOf(a) - stageOf(b) ||
     a.attempts - b.attempts ||
     Number(a.claim === undefined) - Number(b.claim === undefined) ||
     Number(a.ambiguous === true) - Number(b.ambiguous === true)
@@ -124,8 +135,7 @@ export function decideClaim(
   staleMs: number,
 ): { claim: Claim; write?: OutboxEntry } {
   if (stored === undefined) return { claim: { kind: "missing" } };
-  // `pending` is what an earlier build of the outbox called `waiting`.
-  if ((stored.status as string) === "pending") stored = { ...stored, status: "waiting" };
+  stored = normalizeEntry(stored);
   if (stored.status !== "waiting") return { claim: { kind: "settled", entry: stored } };
   let entry = stored;
   if (entry.claim !== undefined) {
@@ -142,6 +152,8 @@ export interface OutboxStorage {
   readonly kind: "indexeddb" | "memory";
   /** Why the database is not in use, when it is not. */
   readonly note: string;
+  /** A database exists but has stopped answering (only a fallback storage says so). */
+  readonly down?: boolean;
   load(session: string): Promise<OutboxEntry[]>;
   put(entry: OutboxEntry): Promise<void>;
   remove(commandId: string): Promise<void>;
@@ -181,7 +193,7 @@ export class MemoryStorage implements OutboxStorage {
     return decideAbandon(entry, now, staleMs).entry;
   }
   async reconcile(entry: OutboxEntry): Promise<OutboxEntry> {
-    return entry;
+    return normalizeEntry(entry);
   }
   close(): void {}
 }
@@ -206,6 +218,10 @@ export class DeferredStorage implements OutboxStorage {
 
   get note(): string {
     return this.inner.note;
+  }
+
+  get down(): boolean {
+    return this.inner.down === true;
   }
 
   async load(session: string): Promise<OutboxEntry[]> {
@@ -265,7 +281,7 @@ class IndexedDbStorage implements OutboxStorage {
   async load(session: string): Promise<OutboxEntry[]> {
     const tx = this.db.transaction(STORE, "readonly");
     const all = await request(tx.objectStore(STORE).index("session").getAll(session));
-    return (all as OutboxEntry[]).sort((a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId));
+    return (all as OutboxEntry[]).map(normalizeEntry).sort((a, b) => a.createdAt - b.createdAt || a.commandId.localeCompare(b.commandId));
   }
 
   async put(entry: OutboxEntry): Promise<void> {
@@ -323,7 +339,8 @@ class IndexedDbStorage implements OutboxStorage {
       const read = store.get(entry.commandId);
       read.onerror = () => reject(read.error ?? new Error("IndexedDB read failed"));
       read.onsuccess = () => {
-        const stored = read.result as OutboxEntry | undefined;
+        const raw = read.result as OutboxEntry | undefined;
+        const stored = raw === undefined ? undefined : normalizeEntry(raw);
         if (stored === undefined || furtherAlong(entry, stored) > 0) {
           store.put(entry);
           resolve(entry);
@@ -347,17 +364,13 @@ class IndexedDbStorage implements OutboxStorage {
  * held in memory, and every later operation tries the database first. The first one that succeeds replays what was
  * held (the copy further along wins, see `furtherAlong`) and the storage is the database again.
  *
- * While in fallback a claim is made in memory only for a send the database cannot know (first written in fallback,
- * after a load that did not hold it). Any other claim is `unrecorded`: another page reading the database would
- * not see it, so posting now could post the send twice.
+ * While in fallback every claim is `unrecorded`: another page reading the database would not see a claim made
+ * here, and a page can never know that a write it heard fail did not land, so no id is certain to be only in
+ * memory. (The outbox posts a keeper-row send under a claim of its own then: that hub de-duplicates.)
  */
 export class FallbackStorage implements OutboxStorage {
   private inner: OutboxStorage;
   private failure = "";
-  /** Ids the database has (from a load or a write it took). */
-  private readonly known = new Set<string>();
-  /** Sessions a load from the database has answered for: an id it did not hold then is not the database's. */
-  private readonly loaded = new Set<string>();
   /** Writes and removals the database has not taken yet, in the order asked. */
   private readonly held = new Map<string, OutboxEntry>();
   private readonly heldRemovals = new Set<string>();
@@ -379,6 +392,11 @@ export class FallbackStorage implements OutboxStorage {
 
   get note(): string {
     return this.failure || this.inner.note;
+  }
+
+  /** A database exists but has stopped answering: claims cannot be recorded. */
+  get down(): boolean {
+    return this.failure !== "";
   }
 
   /** Run `op` on the database: on the current connection, then once on a fresh one. Undefined when neither answers. */
@@ -422,12 +440,10 @@ export class FallbackStorage implements OutboxStorage {
     for (const entry of [...this.held.values()]) {
       await db.reconcile(entry);
       this.held.delete(entry.commandId);
-      this.known.add(entry.commandId);
     }
     for (const id of [...this.heldRemovals]) {
       await db.remove(id);
       this.heldRemovals.delete(id);
-      this.known.delete(id);
     }
   }
 
@@ -462,50 +478,28 @@ export class FallbackStorage implements OutboxStorage {
   async load(session: string): Promise<OutboxEntry[]> {
     const answer = await this.disk((db) => db.load(session));
     if (answer === undefined) return [...this.held.values()].filter((entry) => entry.session === session);
-    this.loaded.add(session);
-    for (const entry of answer.value) this.known.add(entry.commandId);
     return answer.value;
   }
 
   async put(entry: OutboxEntry): Promise<void> {
     const answer = await this.disk((db) => db.put(entry));
-    if (answer !== undefined) {
-      this.known.add(entry.commandId);
-      return;
-    }
+    if (answer !== undefined) return;
     this.heldRemovals.delete(entry.commandId);
     this.held.set(entry.commandId, entry);
   }
 
   async remove(commandId: string): Promise<void> {
-    const onDisk = this.mayBeOnDisk(this.held.get(commandId) ?? commandId);
     const answer = await this.disk((db) => db.remove(commandId));
     this.held.delete(commandId);
-    if (answer !== undefined) {
-      this.known.delete(commandId);
-      return;
-    }
-    // A removal the database never takes is a Limit: a later page still finds the entry there.
-    if (onDisk) this.heldRemovals.add(commandId);
-  }
-
-  /** Whether the database may hold this id: it said so, or no load of its session has answered yet. */
-  private mayBeOnDisk(entry: OutboxEntry | string): boolean {
-    if (typeof entry === "string") return this.known.has(entry) || this.loaded.size === 0;
-    return this.known.has(entry.commandId) || !this.loaded.has(entry.session);
+    // Held even for an id the database may never have had: a write heard failing may have landed. A removal the
+    // database never takes is a Limit: a later page still finds the entry there.
+    if (answer === undefined) this.heldRemovals.add(commandId);
   }
 
   async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
     const answer = await this.disk((db) => db.claim(entry, owner, now, staleMs));
-    if (answer !== undefined) {
-      if (answer.value.kind !== "missing") this.known.add(entry.commandId);
-      return answer.value;
-    }
-    if (this.mayBeOnDisk(entry)) return { kind: "unrecorded", entry: this.held.get(entry.commandId) ?? entry };
-    // Only memory has it: no other page can see it, so the claim made here is the only one.
-    const decided = decideClaim(this.held.get(entry.commandId) ?? entry, owner, now, staleMs);
-    if (decided.write !== undefined) this.held.set(entry.commandId, decided.write);
-    return decided.claim;
+    if (answer !== undefined) return answer.value;
+    return { kind: "unrecorded", entry: this.held.get(entry.commandId) ?? entry };
   }
 
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
@@ -518,10 +512,7 @@ export class FallbackStorage implements OutboxStorage {
 
   async reconcile(entry: OutboxEntry): Promise<OutboxEntry> {
     const answer = await this.disk((db) => db.reconcile(entry));
-    if (answer !== undefined) {
-      this.known.add(entry.commandId);
-      return answer.value;
-    }
+    if (answer !== undefined) return answer.value;
     const held = this.held.get(entry.commandId);
     const standing = held !== undefined && furtherAlong(held, entry) >= 0 ? held : entry;
     this.heldRemovals.delete(entry.commandId);

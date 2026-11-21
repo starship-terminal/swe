@@ -163,6 +163,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           connection: state.connection,
           loaded: state.session.loaded,
           online: environment.online(),
+          keeper: state.session.row?.["mode"] === "keeper",
         }),
       });
     };
@@ -292,7 +293,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     return {
       session: emptySession(),
       connection: { state: "connecting", attempt: 0, since: timers.now(), retryAt: null, detail: "" },
-      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null, owner: "", loading: false },
+      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null, owner: "", loading: false, storageDown: false },
       sends: [],
       started: false,
 
