@@ -185,7 +185,7 @@
 
 - id: G15
   title: Satellite keepers and the loopback local API
-  status: todo
+  status: done
   depends_on: [G8]
   owns: ["src/swe/remote/agent.py", "src/swe/remote/journal.py"]
   questions: []

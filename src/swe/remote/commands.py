@@ -277,12 +277,18 @@ def _cmd_serve(flags: dict) -> int:
     if public_url:
         print(f"phones reach it at {c('cyan', public_url)}", flush=True)
     print(c("dim", f"state: {remote_dir_for()}"), flush=True)
+    # This machine's loopback API (G15): the same session routes for a
+    # local client that holds the token in local.json.
+    local_api = agent_mod.serve_local(state)
     try:
         rc = serve(state, host, port, public_url)
     except OSError as exc:
         print(c("red", f"{_stamp()}  cannot bind {host}:{port} — {exc}"),
               file=sys.stderr, flush=True)
         return 1
+    finally:
+        if local_api is not None:
+            local_api.close()
     print(f"{_stamp()}  remote hub stopped", flush=True)
     return rc
 
