@@ -13,9 +13,12 @@
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 
 /* Components only: test files name classes (lint:tokens' own bad
- * examples among them) that must never reach the bundle. */
+ * examples among them) that must never reach the bundle, and core/ holds
+ * no markup, only words such as "visible" and "fixed" that Tailwind would
+ * take for utilities and ship as global class names. */
 @source "./";
 @source not "./**/*.test.{ts,tsx}";
+@source not "./core";
 
 @theme inline {
   --color-*: initial;
