@@ -351,7 +351,9 @@ class TestStatusWithoutTheRuntime(HubBase):
         status, data = self.srv.request("GET", "/v1/status")
         body = json.loads(data)
         self.assertEqual(schema.validate(body, "Status"), [])
-        self.assertEqual(body["features"], list(protocol.FEATURES))
+        self.assertEqual(body["features"], [
+            f for f in protocol.FEATURES
+            if f not in protocol.STORE_FEATURES])
         self.assertNotIn("session_runtime", body["features"])
 
 
@@ -1597,6 +1599,7 @@ class TestSchema(unittest.TestCase):
             "snapshot_messages": 200,
             "features": ["sync_v2", "snapshot", "live_resume",
                          "delta_offset", "ping", "command_id",
+                         "require_keeper", "command_lookup",
                          "session_runtime"]})
 
     def test_the_validator(self):

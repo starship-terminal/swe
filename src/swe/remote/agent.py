@@ -1553,6 +1553,12 @@ class RemoteAgent:
         if refused is not None:
             status, reply = refused
         else:
+            if route == "message":
+                # The hub stored it as a keeper command: should the
+                # keeper let the session go between the check above and
+                # the route, the route refuses it (409 not_kept) instead
+                # of typing it into a pane (G31).
+                body = {**body, "require_keeper": True}
             status, reply = self._local_post(
                 key, route, body, str(data.get("device") or "") or None)
         if self._report_kept(command_id, str(data.get("command_id") or ""),

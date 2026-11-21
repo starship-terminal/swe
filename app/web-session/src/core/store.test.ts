@@ -32,8 +32,8 @@ function boot(
   return { store, transport, timers, environment, factory, state: () => store.getState() };
 }
 
-/** The calls the store made to the hub. */
-const api = (t: { transport: FakeTransport }) => t.transport.calls;
+/** The calls the store made to the session's routes (not the `/v1/status` read each time the stream goes live). */
+const api = (t: { transport: FakeTransport }) => t.transport.calls.filter((call) => call.path !== "/v1/status");
 
 const frames = (fixture: Fixture, connection = 0, from = 0, to?: number): Frame[] =>
   (fixture.connections[connection] as Fixture["connections"][number]).frames.slice(from, to);

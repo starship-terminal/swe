@@ -140,7 +140,9 @@ class TestAuth(HubBase):
         self.assertEqual(
             body,
             {"ok": True, "v": protocol.PROTOCOL_VERSION,
-             "protocols": [1, 2], "features": list(protocol.FEATURES),
+             "protocols": [1, 2], "features": [
+                 f for f in protocol.FEATURES
+                 if f not in protocol.STORE_FEATURES],
              "boot_id": self.srv.state.boot_id},
         )
         self.assertNotIn(self.srv.state.machine_id, data.decode())

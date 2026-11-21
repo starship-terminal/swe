@@ -43,12 +43,28 @@ export interface OutboxEntry {
   receipt?: string;
   /** When the hub's 2xx answer came. */
   sentAt?: number;
-  /** An earlier post may have been applied (an abandoned claim): it is never posted again. */
+  /**
+   * An earlier post may have been applied (no answer, a 5xx, an abandoned claim). It is posted again only when it is
+   * keeper-only (`isKeeperOnly`) and the hub lists `require_keeper`, and then only with `require_keeper: true`.
+   */
   ambiguous?: boolean;
+  /**
+   * The `attempts` count of the claim whose post carried `require_keeper: true` (G31), written in that claim's
+   * transaction. It counts only while it equals `attempts` (`isKeeperOnly`): a claim by a build that does not know
+   * the field counts an attempt without moving it, so its plain post leaves the entry not keeper-only.
+   */
+  keeperOnlyAt?: number;
   /** Why the last attempt did not land, while it waits to be tried again. */
   lastError?: string;
   /** Why it failed or is unconfirmed. */
   error?: string;
+  /**
+   * On a `failed` entry: the hub stated the failure (a failed `command.result`, a `rejected` receipt, a definite
+   * refusal of a first post), as opposed to
+   * a failure this page made from a deadline or an answer it could not read. Stated failures are further along than
+   * `unconfirmed` (`furtherAlong`): an unconfirmed entry only means a deadline passed without news.
+   */
+  stated?: boolean;
   /** When it reached `failed` or `unconfirmed`. */
   endedAt?: number;
   /**
@@ -57,6 +73,14 @@ export interface OutboxEntry {
    * `CLAIM_STALE_MS` means "another tab is sending"; an older one was abandoned (the page closed mid-post).
    */
   claim?: { owner: string; at: number };
+}
+
+/**
+ * Whether the entry's latest claim was keeper-only, and so (on an `ambiguous` entry) every post of it that may have
+ * been applied carried `require_keeper: true`.
+ */
+export function isKeeperOnly(entry: OutboxEntry): boolean {
+  return entry.keeperOnlyAt !== undefined && entry.keeperOnlyAt === entry.attempts;
 }
 
 /** How long a claim stands before it counts as abandoned: longer than a request may take (30 s). */
@@ -105,18 +129,21 @@ export function normalizeEntry(entry: OutboxEntry): OutboxEntry {
 
 /**
  * A copy's stage. `failed` and `ambiguous` (ended as "may or may not have been sent") is its own stage, between
- * `waiting` and `sent`: evidence that it arrived (a receipt) moves it on to `sent`. One whose status this build
+ * `waiting` and `sent`: evidence that it arrived (a receipt) moves it on to `sent`. `failed` and `stated` (the hub's
+ * own failed result or rejected receipt) is the last stage, above `unconfirmed` and every other end. One whose status this build
  * does not know is below every known one, so it never wins.
  */
 function stageOf(entry: OutboxEntry): number {
   if (entry.status === "failed" && entry.ambiguous === true) return 1;
+  // What the hub said became of it is the last word: above `unconfirmed` and a failure this page made itself.
+  if (entry.status === "failed" && entry.stated === true) return 4;
   return STAGE[entry.status] ?? -1;
 }
 
 /**
  * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
- * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
- * `sent` over "may or may not have been sent" over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
+ * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: a failure the
+ * hub stated over every other terminal end, over "may or may not have been sent" over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
  * with attempts+1, so a claim-free copy at the same count is the released one); `ambiguous` over not.
  */
 export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
@@ -131,17 +158,24 @@ export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
 /**
  * The claim rule, the same for every storage: given the entry as stored, may `owner` post it now? An
  * abandoned claim (another page's, older than `staleMs`, or this page's own) means an earlier post may have
- * reached the hub, so the entry comes back `ambiguous` and the outbox ends it instead of posting it.
+ * reached the hub, so the entry comes back `ambiguous`: the outbox posts it again only keeper-only, or ends it.
+ *
+ * `keeperOnly` says whether this post will carry `require_keeper: true`. It is recorded with the claim
+ * (`keeperOnlyAt`), except on an `ambiguous` entry, which stays keeper-only only if its latest claim was (the outbox
+ * posts such an entry only then): every post of it that may have been applied must have gone keeper-only.
  */
 export function decideClaim(
   stored: OutboxEntry | undefined,
   owner: string,
   now: number,
   staleMs: number,
+  keeperOnly = false,
 ): { claim: Claim; write?: OutboxEntry } {
   if (stored === undefined) return { claim: { kind: "missing" } };
   stored = normalizeEntry(stored);
   if (stored.status !== "waiting") return { claim: { kind: "settled", entry: stored } };
+  // Read before a takeover: a stale claim's post was keeper-only when its claim recorded it.
+  const wasKeeperOnly = isKeeperOnly(stored);
   let entry = stored;
   if (entry.claim !== undefined) {
     // A fresh claim is a post on its way: another tab's, or this page's from before its outbox restarted.
@@ -149,6 +183,8 @@ export function decideClaim(
     entry = { ...entry, ambiguous: true };
   }
   const claimed: OutboxEntry = { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } };
+  if (claimed.ambiguous === true ? wasKeeperOnly : keeperOnly) claimed.keeperOnlyAt = claimed.attempts;
+  else delete claimed.keeperOnlyAt;
   return { claim: { kind: "claimed", entry: claimed }, write: claimed };
 }
 
@@ -163,11 +199,11 @@ export interface OutboxStorage {
   put(entry: OutboxEntry): Promise<void>;
   remove(commandId: string): Promise<void>;
   /**
-   * Claim an entry for posting, atomically: read it as stored and, by `decideClaim`, write the claim and the
-   * counted attempt in the same transaction. `entry` is the outbox's own copy, which a storage with nothing
-   * stored (memory) decides on.
+   * Claim an entry for posting, atomically: read it as stored and, by `decideClaim`, write the claim, the
+   * counted attempt and `keeperOnlyAt` in the same transaction. `entry` is the outbox's own copy, which a storage
+   * with nothing stored (memory) decides on.
    */
-  claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim>;
+  claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly?: boolean): Promise<Claim>;
   /** Resolve a stale claim on an entry, atomically, by `decideAbandon`. Answers the entry as it now stands. */
   abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined>;
   /**
@@ -191,8 +227,8 @@ export class MemoryStorage implements OutboxStorage {
   async put(): Promise<void> {}
   async remove(): Promise<void> {}
   /** In memory there are no other pages to coordinate with: the outbox's own copy decides. */
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    return decideClaim(entry, owner, now, staleMs).claim;
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
+    return decideClaim(entry, owner, now, staleMs, keeperOnly).claim;
   }
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
     return decideAbandon(entry, now, staleMs).entry;
@@ -241,8 +277,8 @@ export class DeferredStorage implements OutboxStorage {
     await (await this.ready).remove(commandId);
   }
 
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    return (await this.ready).claim(entry, owner, now, staleMs);
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
+    return (await this.ready).claim(entry, owner, now, staleMs, keeperOnly);
   }
 
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
@@ -302,7 +338,7 @@ class IndexedDbStorage implements OutboxStorage {
   }
 
   /** One read-write transaction: IndexedDB runs them one at a time across every tab, so two pages cannot both claim. */
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
     const tx = this.db.transaction(STORE, "readwrite");
     const finished = done(tx);
     const store = tx.objectStore(STORE);
@@ -310,7 +346,7 @@ class IndexedDbStorage implements OutboxStorage {
       const read = store.get(entry.commandId);
       read.onerror = () => reject(read.error ?? new Error("IndexedDB read failed"));
       read.onsuccess = () => {
-        const decided = decideClaim(read.result as OutboxEntry | undefined, owner, now, staleMs);
+        const decided = decideClaim(read.result as OutboxEntry | undefined, owner, now, staleMs, keeperOnly);
         if (decided.write !== undefined) store.put(decided.write);
         resolve(decided.claim);
       };
@@ -501,8 +537,8 @@ export class FallbackStorage implements OutboxStorage {
     if (answer === undefined) this.heldRemovals.add(commandId);
   }
 
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    const answer = await this.disk((db) => db.claim(entry, owner, now, staleMs));
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
+    const answer = await this.disk((db) => db.claim(entry, owner, now, staleMs, keeperOnly));
     if (answer !== undefined) return answer.value;
     return { kind: "unrecorded", entry: this.held.get(entry.commandId) ?? entry };
   }

@@ -422,3 +422,27 @@
     - "screens: the G28 and G29 states at desktop and phone width, light and dark"
   tier: implement-standard
   est_runtime: 150m
+
+- id: G31
+  title: "Keeper-only sends and command lookup: the outbox repeats and rechecks again"
+  status: done
+  depends_on: [G11]
+  owns:
+    - "src/swe/remote/hub.py"
+    - "src/swe/remote/agent.py"
+    - "src/swe/remote/protocol.py"
+    - "src/swe/remote/schema/**"
+    - "app/web-session/src/core/outbox.ts"
+    - "app/web-session/src/core/outbox-storage.ts"
+    - "app/web-session/src/core/sends.ts"
+    - "app/web-session/src/core/store.ts"
+    - "app/web-session/src/core/outbox-keeper.test.ts"
+    - "app/web-session/src/core/store-keeper.test.ts"
+    - "tests/test_remote_keeper_only.py"
+  questions: []
+  verify:
+    - "python3 -m unittest tests.test_remote_keeper_only tests.test_remote_hub_keeper tests.test_remote_agent"
+    - "pnpm typecheck && pnpm lint:tokens && pnpm test && pnpm build"
+    - "50 runs of the outbox and store tests under load"
+  tier: implement-hard
+  est_runtime: 180m

@@ -34,9 +34,18 @@ PROTOCOLS = (PROTOCOL_VERSION, SYNC_VERSION)
 VERSION_HEADER = "X-SWE-Protocol"
 # What ``GET /v1/status`` lists as ``features``, for a client that
 # checks before it relies on one. ``session_runtime`` joins the list
-# when the hub runs sessions through keepers.
+# when the hub runs sessions through keepers; ``STORE_FEATURES`` are
+# listed only then too. ``require_keeper``: a message post with
+# ``require_keeper: true`` is refused with 409 ``not_kept`` instead of
+# taking the legacy route. ``command_lookup``:
+# ``GET /v1/sessions/{key}/commands/{id}`` reads a stored command.
+FEATURE_REQUIRE_KEEPER = "require_keeper"
+FEATURE_COMMAND_LOOKUP = "command_lookup"
 FEATURES = ("sync_v2", "snapshot", "live_resume", "delta_offset", "ping",
-            "command_id")
+            "command_id", FEATURE_REQUIRE_KEEPER, FEATURE_COMMAND_LOOKUP)
+# Listed only while the session runtime's store is open, like
+# ``session_runtime``.
+STORE_FEATURES = (FEATURE_REQUIRE_KEEPER, FEATURE_COMMAND_LOOKUP)
 FEATURE_RUNTIME = "session_runtime"
 # A v2 stream sends ``ping {ts, head}`` this often; a client treats
 # ``SILENCE_S`` with no frame at all as a dead connection.
