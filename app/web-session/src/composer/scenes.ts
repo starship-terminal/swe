@@ -272,6 +272,11 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       await putUnderBar(c, () => document.querySelector("main pre .text-danger-text"));
       await putUnderBar(c, () => document.querySelector("main pre .text-danger-text")); // the opening settled: aim again
       break;
+    case "composer-keyboard-approval":
+      send(...approval.slice(0, 2));
+      document.documentElement.style.setProperty("--keyboard-inset", "336px");
+      await type(c, "Thanks, go ahead");
+      break;
     case "composer-keyboard":
       send(...base);
       document.documentElement.style.setProperty("--keyboard-inset", "336px");

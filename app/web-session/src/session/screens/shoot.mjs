@@ -47,6 +47,7 @@ const SCENES = {
   "composer-over-code": "scene=composer-over-code",
   "composer-over-diff": "scene=composer-over-diff",
   "composer-keyboard": "scene=composer-keyboard",
+  "composer-keyboard-approval": "scene=composer-keyboard-approval",
   "composer-approval": "scene=composer-approval",
   "composer-approval-offline": "scene=composer-approval-offline",
   "composer-input-text": "scene=composer-input-text",

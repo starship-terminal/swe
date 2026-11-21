@@ -325,6 +325,43 @@ describe("while a reply is in progress", () => {
     expect(sent(m)).toHaveLength(0);
   });
 
+  it("does not swallow the next press after a menu opened from the keyboard is closed", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "after the keys");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(menuOpen(m)).toBeNull();
+    await click(main); // Enter or Space on the focused button arrives as a click, with no pointer before it
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("does not swallow a press made while a keyboard-opened menu is still open", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "open and pressed");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    expect(menuOpen(m)).not.toBeNull();
+    await click(main);
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("does not swallow the next press after the menu key opened the menu with no pointer down", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "menu key");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    await rightClick(main);
+    expect(menuOpen(m)).not.toBeNull();
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await click(main);
+    expect(sent(m)).toHaveLength(1);
+  });
+
   it("opens the menu on a hold, and the release of that hold does not also queue the message", async () => {
     const m = mount({ props: { holdMs: 20 } });
     await play(m, "streaming", 0, 3);

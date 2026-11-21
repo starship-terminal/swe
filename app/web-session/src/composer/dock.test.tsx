@@ -21,8 +21,8 @@ describe("the approval dock", () => {
   it("shows the request with its answers, and takes no focus", async () => {
     const m = await withApproval();
     expect(dock(m).getAttribute("data-dock")).toBe("approval");
-    expect(text(dock(m))).toContain("Run rm -rf build?");
-    expect(text(q(dock(m), "code"))).toBe("rm -rf build");
+    expect(text(dock(m))).toContain("Run `rm -rf build`?"); // every character, backticks included
+    expect(text(q(dock(m), "code"))).toBe("`rm -rf build`");
     expect(all(dock(m), "button").map((b) => text(b))).toEqual(["Allow", "Always allow", "Deny"]);
     expect(dock(m).contains(document.activeElement)).toBe(false);
     expect(dock(m).querySelector("[autofocus]")).toBeNull();
@@ -68,18 +68,25 @@ describe("the approval dock", () => {
     expect(posts(m, "approval")[0]).toMatchObject({ decision: "always" });
   });
 
-  it("shows code in a request as code, and nothing else of Markdown: no link, no heading, no table", async () => {
+  it("shows code spans in a request as code and changes no character: no bold, no italic, no link, no heading, no table", async () => {
     const m = mount();
     await play(m, "approval", 0, 4);
-    await feed(m, request(15, "r7", { prompt: "Run `rm -rf build` **now**, see [docs](https://example.com) and [x](javascript:alert(1))\n# not a heading\n|a|b|\n|-|-|" }));
+    const prompt = "Run `rm -rf build` **now**, see [docs](https://example.com) and [x](javascript:alert(1))\n# not a heading\n|a|b|\n|-|-|";
+    await feed(m, request(15, "r7", { prompt }));
     const shown = q(dock(m), '[data-untrusted="prompt"]') as HTMLElement;
-    expect(text(q(shown, "code"))).toBe("rm -rf build");
-    expect(text(q(shown, "strong"))).toBe("now");
-    expect(q(shown, "a")).toBeNull();
-    expect(q(shown, "h1, h2, table")).toBeNull();
-    expect(shown.textContent).toContain("docs");
-    expect(shown.textContent).toContain("# not a heading");
-    expect(shown.textContent).toContain("|a|b|");
+    expect(shown.textContent).toBe(prompt); // every character that arrived
+    expect(text(q(shown, "code"))).toBe("`rm -rf build`");
+    expect(q(shown, "strong, em, a, h1, h2, table")).toBeNull();
+  });
+
+  it("does not read stars in a command as italics: what is approved is what is shown", async () => {
+    const m = mount();
+    await play(m, "approval", 0, 4);
+    await feed(m, request(15, "r7", { prompt: "Bash: rm *.log *.txt" }));
+    const shown = q(dock(m), '[data-untrusted="prompt"]') as HTMLElement;
+    expect(shown.textContent).toBe("Bash: rm *.log *.txt");
+    expect(q(shown, "em")).toBeNull();
+    expect(q(shown, "code")).toBeNull(); // no span was read out of the stars
   });
 
   it("names the tool when a standing grant asks to be confirmed", async () => {

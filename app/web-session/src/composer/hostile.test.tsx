@@ -29,8 +29,8 @@ describe("a hostile request", () => {
     const prompt = NASTY.repeat(15_000);
     await ask(m, { prompt });
     const shown = q(dock(m), '[data-untrusted="prompt"]') as HTMLElement;
-    // The part past the inline reader's reach is the text as it arrived, every letter of it.
-    expect(shown.textContent?.endsWith(prompt.slice(2000, 6000))).toBe(true);
+    // Every character that arrived (up to the cut) is drawn: nothing is read away.
+    expect(shown.textContent).toBe(prompt.slice(0, 6000));
     expect(text(dock(m))).toContain(`${(prompt.length - 6000).toLocaleString("en-US")} more characters not shown.`);
     expect(all(dock(m), "*").length).toBeLessThan(200);
     expect(q(dock(m), "img")).toBeNull();

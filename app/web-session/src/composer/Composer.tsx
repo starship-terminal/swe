@@ -66,7 +66,8 @@ function useFloating(): { host: RefObject<HTMLDivElement | null>; stack: RefObje
     const stackEl = stack.current;
     const parent = host.current?.parentElement;
     if (stackEl === null || parent === null || parent === undefined) return;
-    const report = (): void => parent.style.setProperty("--sv-composer-h", `${Math.ceil(stackEl.getBoundingClientRect().height)}px`);
+    // From the top of the stack to the bottom of the view: the stack, and the keyboard or home indicator it rides above.
+    const report = (): void => parent.style.setProperty("--sv-composer-h", `${Math.max(0, Math.ceil(parent.getBoundingClientRect().bottom - stackEl.getBoundingClientRect().top))}px`);
     report();
     if (typeof ResizeObserver === "undefined") return () => parent.style.removeProperty("--sv-composer-h");
     const watcher = new ResizeObserver(report);
@@ -82,7 +83,7 @@ function useFloating(): { host: RefObject<HTMLDivElement | null>; stack: RefObje
 function ReadOnlyBar({ reason }: { reason: string }) {
   const { host, stack } = useFloating();
   return (
-    <div ref={host} className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="read-only" data-composer-host>
+    <div ref={host} className="sv-composer-host pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="read-only" data-composer-host>
       <div ref={stack} className="sv-composer mx-auto flex w-full max-w-3xl flex-col">
         <p className="sv-glass pointer-events-auto flex items-start gap-2 rounded-glass px-3.5 py-2.5 text-sm text-secondary shadow-sm" role="status">
           <StateArrow className="mt-1" colour="grey" />
@@ -145,6 +146,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   const aborts = useRef(new Set<AbortController>());
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swallowClick = useRef(false);
+  const pointerDown = useRef(false);
   const reasonId = useId();
 
   const busyTurn = useSessionStore(store, (s) => s.session.openTurn !== null || s.session.phase === "running" || s.session.phase === "waiting");
@@ -268,18 +270,22 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
     if (hold.current !== null) clearTimeout(hold.current);
     hold.current = null;
   };
+  // Only a menu opened by a pointer that is still down has a release to swallow. One opened by the keyboard (the
+  // arrow key, the menu key) has none, and a flag left set would swallow the next real press.
   const openSendMenu = (): void => {
     stopHold();
-    swallowClick.current = true;
+    swallowClick.current = pointerDown.current;
     setMenu("send");
   };
   const onPrimaryDown = (event: PointerEvent<HTMLButtonElement>): void => {
     swallowClick.current = false;
+    pointerDown.current = true;
     if (!busyTurn || event.button !== 0) return;
     stopHold();
     hold.current = setTimeout(openSendMenu, holdMs);
   };
   const onPrimaryUp = (): void => {
+    pointerDown.current = false;
     stopHold();
     // The click that follows this release belongs to the hold that opened the menu: it is left unanswered, then forgotten.
     if (swallowClick.current) setTimeout(() => (swallowClick.current = false), 80);
@@ -363,7 +369,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   );
 
   return (
-    <div ref={host} className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="form" data-composer-host>
+    <div ref={host} className="sv-composer-host pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="form" data-composer-host>
       <div ref={stack} className="sv-composer mx-auto flex max-h-1/2 w-full max-w-3xl flex-col gap-2">
         <div className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
           {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null ? (
@@ -530,7 +536,9 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
                 }}
                 onPointerCancel={onPrimaryUp}
                 onPointerDown={onPrimaryDown}
-                onPointerLeave={stopHold}
+                onPointerLeave={() => {
+                  stopHold();
+                }}
                 onPointerUp={onPrimaryUp}
                 title={busyTurn ? "Queue this message (hold for more)" : "Send"}
                 tone="primary"

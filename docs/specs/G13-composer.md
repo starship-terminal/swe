@@ -35,7 +35,7 @@ Edits outside `src/composer/`, each the smallest that mounts the composer:
 | `src/ui/Icon.tsx` | eight icons: `attach`, `stop`, `edit`, `plus`, `queue`, `more`, `folder`, `photo` |
 | `src/swe/webapp/static/tokens.css`, `src/index.css` | the glass tokens (below), and their names for Tailwind (`rounded-bar`, `rounded-glass`, `border-glass-border`) |
 | `src/session/Timeline.tsx` (again) | the timeline's content leaves `--sv-composer-h` of padding at its end, and "Jump to latest" sits that far above the bottom (two class names: `sv-pad-end`, `sv-jump`) |
-| `src/ui/Prose.tsx`, `src/ui/index.ts` | `InlineText`: one run of text with the timeline's inline reader (code, bold, italic) and nothing else |
+| `src/ui/Prose.tsx`, `src/ui/index.ts` | `InlineText`: one run of text with code spans drawn as code and every character kept (nothing else is read) |
 | `src/session/Rows.tsx` | the timeline's request row draws its prompt through `InlineText`, so a prompt shows the same in the row and in the dock |
 | `src/session/screens/main.tsx`, `shoot.mjs` | the composer's scenes (`composer-*`) |
 | `SessionShell.test.tsx`, `SessionView.test.tsx` | the tests that described the placeholder now describe the composer |
@@ -57,8 +57,9 @@ the view's host, the timeline's content ends with that much padding (so the last
 line is never hidden, and a dock that appears moves the content, which keeps
 following the end if the person was there), and "Jump to latest" sits above it.
 The same bar on desktop, centred at the timeline's width (`max-w-3xl`).
-Everything the composer draws is held to half the view (`max-h-1/2`); the notes,
-tray and dock scroll inside what is left, and the bar never leaves the screen.
+Everything the composer draws is held to half of the space above the keyboard or the home
+indicator (`max-h-1/2` on the stack; the bottom padding is the host's, so the keyboard is not counted in
+the half); the notes, tray and dock scroll inside what is left, and the bar never leaves the screen.
 
 **Measurements.** t3code's source is not on this machine (the same as for G12),
 so nothing was read from it. The numbers below are estimated from Kai's
@@ -174,7 +175,7 @@ a copy of the code with that guard removed and fails there (see Verification).
 | Case | Guard |
 |---|---|
 | Double click, or two presses in one task | `Composer.submit` takes a ref (set before the first `await`) and returns while it is held; the button's `disabled` waits for the next render and would not stop it |
-| A hold that opens the menu, then its release | the click after the release is swallowed (`swallowClick`, forgotten 80 ms after the release); a right click and the key open the menu without a press at all |
+| A hold that opens the menu, then its release | the click after the release is swallowed (`swallowClick`, set only while a pointer is down and forgotten 80 ms after its release); a right click and the key open the menu without a press at all |
 | A second press by any other route (a held key, a form `requestSubmit`, a re-render's replay, a second composer on the same store) | `submitMessage` keeps a `WeakSet` of stores with a send in flight and answers `busy` ("Still sending your last message.") without touching the store |
 | Enter held down | `enterAction` returns `swallow` for `repeat`: the first Enter sent, the rest neither send nor type blank lines into the next draft |
 | IME composition | Enter does nothing while `isComposing`, while `keyCode` is 229 (Safari fires `compositionend` before the key press that ended the composition), or while `compositionstart` has no `compositionend` yet |
@@ -256,12 +257,10 @@ offers **Skip this question**, which sends `deny`. Nothing pretends to send word
 
 **Text from an agent** (the prompt, the tool name, the tool input, the options'
 labels, a queued message) is drawn as text in a bounded number of nodes, never as
-HTML. The prompt goes through the timeline's inline reader (`InlineText`): code
-spans show as code, bold and italic as such, and nothing else: no block, no
-heading, no table, and no link (the words of a link stay, the anchor does not, so
-nothing in a request can carry the person off the page, `safeHref` or not). Only
-the first 2000 characters of the prompt are read for formatting, which caps its
-nodes at about 1300; the rest is one text node. The other texts are plain. The prompt is cut at 6000 characters or
+HTML. The prompt goes through `InlineText`: a run of backticks and what it encloses is drawn as code, with the
+backticks kept, and nothing else is read: no bold, no italic (`rm *.log *.txt` is not italics: an approval must show
+what will run), no link, no heading, no table. Every character that arrived is drawn. Only the first 2000
+characters of the prompt are looked at for code spans, which caps its nodes at about 700; the rest is one text node. The other texts are plain. The prompt is cut at 6000 characters or
 300 lines, whichever comes first, with "N more characters not shown."; the tool
 input is JSON in one `pre` cut the same way, only once opened; the tool name at
 120 characters; an option label at 300 (with an ellipsis); at most 20 options with
@@ -375,7 +374,7 @@ What each would need, so the next milestone can pick it up. For the model chip: 
 `composer-empty`, `-typing`, `-multiline`, `-sending`, `-busy`, `-queued`,
 `-queued-edit`, `-queued-many`, `-approval`, `-approval-confirm`, `-approval-offline`, `-input-text`, `-input-choice`,
 `-offline`, `-storage-down`, `-loading`, `-no-steer`, `-read-only`,
-`-attachments`, `-hostile`, `-menu-send` (steer_effect absent), `-menu-steer-stops`, `-menu-steer-after-tool`, `-menu-steer-next-turn`, `-queued-menu`, `-error-note`, `-approval-error`, `-menu-attach`, `-over-code` and `-over-diff` (the bar over a long scrolled timeline, under a code block and under a red diff line), `-keyboard` (the phone with `--keyboard-inset` at 336 px); each at 1280x800 and a 390x844 phone, light and dark.
+`-attachments`, `-hostile`, `-menu-send` (steer_effect absent), `-menu-steer-stops`, `-menu-steer-after-tool`, `-menu-steer-next-turn`, `-queued-menu`, `-error-note`, `-approval-error`, `-menu-attach`, `-over-code` and `-over-diff` (the bar over a long scrolled timeline, under a code block and under a red diff line), `-keyboard` and `-keyboard-approval` (the phone with `--keyboard-inset` at 336 px, without and with a dock); each at 1280x800 and a 390x844 phone, light and dark.
 `scenes.ts` scripts each over the recorded fixtures plus a few hand-built frames,
 and clears the stored draft first so one scene does not show another's.
 
@@ -389,8 +388,8 @@ Run on 2026-11-22, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (35 files, 691 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (35 files, 695 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
 | The built files under `src/swe/webapp/static/session/` equal a fresh build; `tests.test_webapp_session_view` | pass |
-| **Each guard, removed.** 86 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (no links, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
+| **Each guard, removed.** 90 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (code spans only, every character kept, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (the last round added 4 more edits, for the keyboard-opened menu and the code-span reader, all killed) (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
 | **A real hub.** `swe remote serve` on a throwaway HOME, harness.json pointing Claude's adapter at `tests/fakes/fake_claude.py` in `approval` mode, headless Chrome on the built page (`/session/index.html?key=...`) with the saved credential: the first turn's approval shows in the dock with nothing focused; a real mouse click on Allow answers it; text typed with the keyboard and sent with Enter arrives once; the second turn's approval is answered with a click. The hub's v2 messages hold the typed message once (`["list the build folder","now list it again please"]`) and both approvals as `source user, decision allow` | pass; screenshots `G13-e2e/` in the shared notes folder, script `G13-e2e_view.mjs` (run with `swe` as `PYTHONPATH=src python3 -m swe.cli`, since this was a worktree) |
-| Screenshots, 31 composer scenes x desktop 1280 and phone 390 x light and dark (124 files) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |
+| Screenshots, 32 composer scenes x desktop 1280 and phone 390 x light and dark (128 files) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |

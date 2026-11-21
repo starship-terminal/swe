@@ -48,8 +48,11 @@ describe("the glass", () => {
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
   });
 
-  it("rides the keyboard and the home indicator, and leaves its height to the timeline", () => {
-    expect(css).toContain("max(var(--safe-bottom, 0px), var(--keyboard-inset, 0px))");
+  it("rides the keyboard and the home indicator by padding on the host, so the stack's height limit is a share of the space above them", () => {
+    const host = css.slice(css.indexOf(".swe-sv .sv-composer-host {"), css.indexOf("}", css.indexOf(".swe-sv .sv-composer-host {")));
+    expect(host).toContain("padding-bottom: calc(max(var(--safe-bottom, 0px), var(--keyboard-inset, 0px))");
+    const stack = css.slice(css.indexOf(".swe-sv .sv-composer {"), css.indexOf("}", css.indexOf(".swe-sv .sv-composer {")));
+    expect(stack).not.toContain("padding-bottom");
     expect(css).toContain("var(--sv-composer-h, 0px)");
   });
 });
