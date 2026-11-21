@@ -14,7 +14,7 @@ import {
   type OutboxFeatures,
   type OutboxView,
 } from "./outbox";
-import { CLAIM_STALE_MS, decideClaim, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, decideClaim, isKeeperOnly, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { describeSends } from "./sends";
 import { PROTOCOL } from "./generated/session-v2";
 import { FakeTimers, FakeTransport, drain } from "./test-support";
@@ -155,8 +155,8 @@ describe("what a claim posts", () => {
     const sent = await outbox.send({ text: "hi" });
     await drain();
     expect(t.hub.posts).toEqual([expect.objectContaining({ command_id: sent.commandId, require_keeper: true })]);
-    expect(t.entry(sent.commandId)).toMatchObject({ status: "sent", path: "keeper", keeperOnly: true });
-    expect(await t.disk()).toMatchObject([{ status: "sent", keeperOnly: true }]);
+    expect(t.entry(sent.commandId)).toMatchObject({ status: "sent", path: "keeper", attempts: 1, keeperOnlyAt: 1 });
+    expect(await t.disk()).toMatchObject([{ status: "sent", attempts: 1, keeperOnlyAt: 1 }]);
   });
 
   it("W on a keeper row with the features not known: posted plain, as merged", async () => {
@@ -166,7 +166,7 @@ describe("what a claim posts", () => {
     await outbox.send({ text: "hi" });
     await drain();
     expect(t.hub.posts[0]).not.toHaveProperty("require_keeper");
-    expect(t.view().entries[0]?.keeperOnly).toBeUndefined();
+    expect(t.view().entries[0]?.keeperOnlyAt).toBeUndefined();
   });
 
   it("W on a keeper row with require_keeper not listed: posted plain", async () => {
@@ -192,7 +192,7 @@ describe("what a claim posts", () => {
   it("WA with require_keeper listed: posted again keeper-only, and the keeper answers the stored receipt", async () => {
     const t = setup();
     t.hub.store.set("old", { receipt: "accepted" });
-    await t.leave({ ambiguous: true, keeperOnly: true });
+    await t.leave({ ambiguous: true, keeperOnlyAt: 1 });
     await t.make();
     await drain();
     expect(t.hub.posts).toEqual([expect.objectContaining({ command_id: "old", require_keeper: true })]);
@@ -204,7 +204,7 @@ describe("what a claim posts", () => {
   it("WA with the features not known: not claimed, not posted, holding back the sends behind it, until they are", async () => {
     const t = setup();
     t.world.features = null;
-    await t.leave({ ambiguous: true, keeperOnly: true, createdAt: t.timers.now() - 1000 });
+    await t.leave({ ambiguous: true, keeperOnlyAt: 1, createdAt: t.timers.now() - 1000 });
     const outbox = await t.make();
     await outbox.send({ text: "behind" });
     await drain();
@@ -223,7 +223,7 @@ describe("what a claim posts", () => {
   it("WA with require_keeper not listed: ends may-or-may-not, never posted", async () => {
     const t = setup();
     t.world.features = NEITHER;
-    await t.leave({ ambiguous: true, keeperOnly: true });
+    await t.leave({ ambiguous: true, keeperOnlyAt: 1 });
     await t.make();
     await drain();
     expect(t.hub.posts).toEqual([]);
@@ -239,7 +239,7 @@ describe("what a claim posts", () => {
     expect(t.entry("old")).toMatchObject({ status: "failed", error: MAYBE_SENT });
   });
 
-  it("a stale claim taken over in the claim decides by the stored copy's keeperOnly", async () => {
+  it("a stale claim taken over in the claim decides by whether the stored copy is keeper-only", async () => {
     for (const [features, end] of [
       [BOTH, "sent"],
       [null, "waiting"],
@@ -248,8 +248,8 @@ describe("what a claim posts", () => {
       const t = setup();
       t.world.features = features;
       // Another page's claim, fresh when the age pass looks and stale by the time the claim's transaction reads
-      // it: the claim takes it over, and the stored copy comes back ambiguous with its own keeperOnly.
-      await t.leave({ keeperOnly: true, claim: { owner: "gone", at: t.timers.now() - 1 } });
+      // it: the claim takes it over, and the stored copy comes back ambiguous, keeper-only as its claim was.
+      await t.leave({ keeperOnlyAt: 1, claim: { owner: "gone", at: t.timers.now() - 1 } });
       const inner = await openOutboxStorage(t.factory);
       const late: OutboxStorage = {
         kind: inner.kind,
@@ -268,22 +268,28 @@ describe("what a claim posts", () => {
       expect(t.entry("old")?.status).toBe(end);
       expect(t.hub.posts.filter((p) => p.require_keeper !== true)).toEqual([]);
       expect(t.hub.posts).toHaveLength(end === "sent" ? 1 : 0);
-      if (end === "waiting") expect((await t.disk())[0]).toMatchObject({ ambiguous: true, keeperOnly: true, attempts: 2 });
+      if (end === "waiting") expect((await t.disk())[0]).toMatchObject({ ambiguous: true, keeperOnlyAt: 2, attempts: 2 });
       if (end === "waiting") expect((await t.disk())[0]?.claim).toBeUndefined();
       outbox.close();
     }
   });
 
-  it("decideClaim records keeperOnly with the claim, and an ambiguous entry keeps its own", () => {
+  it("decideClaim records keeperOnlyAt with the claim, and an ambiguous entry stays keeper-only only if its latest claim was", () => {
     const base: OutboxEntry = { commandId: "x", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 1 };
     const claimed = (stored: OutboxEntry, keeperOnly: boolean) => decideClaim(stored, "me", 10 * CLAIM_STALE_MS, CLAIM_STALE_MS, keeperOnly).write;
-    expect(claimed(base, true)).toMatchObject({ keeperOnly: true, attempts: 2 });
-    expect(claimed({ ...base, keeperOnly: true }, false)?.keeperOnly).toBeUndefined();
-    expect(claimed({ ...base, ambiguous: true, keeperOnly: true }, false)).toMatchObject({ keeperOnly: true });
-    expect(claimed({ ...base, ambiguous: true }, true)?.keeperOnly).toBeUndefined();
-    // A stale claim taken over: ambiguous now, and the claim's post's keeperOnly stands.
-    expect(claimed({ ...base, keeperOnly: true, claim: { owner: "gone", at: 0 } }, false)).toMatchObject({ ambiguous: true, keeperOnly: true });
-    expect(claimed({ ...base, claim: { owner: "gone", at: 0 } }, true)?.keeperOnly).toBeUndefined();
+    expect(claimed(base, true)).toMatchObject({ keeperOnlyAt: 2, attempts: 2 });
+    expect(claimed({ ...base, keeperOnlyAt: 1 }, false)?.keeperOnlyAt).toBeUndefined();
+    expect(claimed({ ...base, ambiguous: true, keeperOnlyAt: 1 }, false)).toMatchObject({ keeperOnlyAt: 2 });
+    expect(claimed({ ...base, ambiguous: true }, true)?.keeperOnlyAt).toBeUndefined();
+    // A stale claim taken over: ambiguous now, and the claim's post's keeper-only stands.
+    expect(claimed({ ...base, keeperOnlyAt: 1, claim: { owner: "gone", at: 0 } }, false)).toMatchObject({ ambiguous: true, keeperOnlyAt: 2 });
+    expect(claimed({ ...base, claim: { owner: "gone", at: 0 } }, true)?.keeperOnlyAt).toBeUndefined();
+    // A claim by a build that does not know the field counted an attempt without moving it: its post was plain,
+    // so the entry is not keeper-only any more, whatever this claim asks.
+    expect(isKeeperOnly({ ...base, attempts: 2, keeperOnlyAt: 1 })).toBe(false);
+    expect(claimed({ ...base, attempts: 2, keeperOnlyAt: 1, ambiguous: true }, true)?.keeperOnlyAt).toBeUndefined();
+    expect(claimed({ ...base, attempts: 2, keeperOnlyAt: 1, claim: { owner: "old", at: 0 } }, true)).toMatchObject({ ambiguous: true });
+    expect(claimed({ ...base, attempts: 2, keeperOnlyAt: 1, claim: { owner: "old", at: 0 } }, true)?.keeperOnlyAt).toBeUndefined();
   });
 });
 
@@ -322,7 +328,7 @@ describe("what an answer does", () => {
       const outbox = await t.make();
       const sent = await outbox.send({ text: "hi" });
       await drain();
-      expect(t.entry(sent.commandId)).toMatchObject({ status: "waiting", ambiguous: true, keeperOnly: true, lastError: REPEATING });
+      expect(t.entry(sent.commandId)).toMatchObject({ status: "waiting", ambiguous: true, attempts: 1, keeperOnlyAt: 1, lastError: REPEATING });
       await t.later();
       expect(t.hub.posts.map((p) => p.require_keeper)).toEqual([true, true]);
       expect(t.entry(sent.commandId)).toMatchObject({ status: "sent", path: "keeper" });
@@ -394,7 +400,7 @@ describe("what an answer does", () => {
     await t.later();
     expect(t.hub.posts.map((p) => p.require_keeper)).toEqual([true, undefined]);
     expect(t.entry(sent.commandId)).toMatchObject({ status: "sent", path: "legacy" });
-    expect(t.entry(sent.commandId)?.keeperOnly).toBeUndefined();
+    expect(t.entry(sent.commandId)?.keeperOnlyAt).toBeUndefined();
     expect(t.hub.typed).toEqual([{ id: sent.commandId, route: "legacy" }]);
   });
 
@@ -479,12 +485,12 @@ describe("deadlines and abandoned claims", () => {
       const t = setup();
       t.world.features = features;
       t.world.canPost = false; // the age pass resolves it on its own
-      await t.leave({ attempts: 1, keeperOnly: true, claim: { owner: "gone", at: t.timers.now() } });
+      await t.leave({ attempts: 1, keeperOnlyAt: 1, claim: { owner: "gone", at: t.timers.now() } });
       const outbox = await t.make();
       await t.later(CLAIM_STALE_MS);
       const left = t.entry("old");
       if (features === BOTH) {
-        expect(left).toMatchObject({ status: "waiting", ambiguous: true, keeperOnly: true });
+        expect(left).toMatchObject({ status: "waiting", ambiguous: true, attempts: 1, keeperOnlyAt: 1 });
         t.world.canPost = true;
         outbox.wake();
         await drain();
@@ -685,7 +691,7 @@ describe("two tabs and older builds", () => {
   it("two pages repeating one WA send post it one after the other, and it is typed in once", async () => {
     const t = setup();
     t.hub.store.set("old", { receipt: "accepted" });
-    await t.leave({ ambiguous: true, keeperOnly: true });
+    await t.leave({ ambiguous: true, keeperOnlyAt: 1 });
     const a = t.build(await openOutboxStorage(t.factory));
     const b = t.build(await openOutboxStorage(t.factory));
     await Promise.all([a.init(), b.init()]);
@@ -698,10 +704,10 @@ describe("two tabs and older builds", () => {
   });
 
   it("an outbox with no way to know the features never posts a WA send, and its deadline ends it", async () => {
-    // An older build never reads `keeperOnly`: it claims the send, finds it ambiguous and ends it (the merged
+    // An older build never reads `keeperOnlyAt`: it claims the send, finds it ambiguous and ends it (the merged
     // code, covered by outbox.test.ts). This build without a features source holds it instead.
     const t = setup();
-    await t.leave({ ambiguous: true, keeperOnly: true });
+    await t.leave({ ambiguous: true, keeperOnlyAt: 1 });
     const outbox = t.build(await openOutboxStorage(t.factory), { features: () => null, keeperRow: () => false });
     await outbox.init();
     await drain();
@@ -713,12 +719,105 @@ describe("two tabs and older builds", () => {
 
   it("a W send after a keeper-only 429 is posted plain by an outbox without the features: nothing was stored", async () => {
     const t = setup();
-    await t.leave({ keeperOnly: true, lastError: "too many" });
+    await t.leave({ keeperOnlyAt: 1, lastError: "too many" });
     const outbox = t.build(await openOutboxStorage(t.factory), { features: () => null, keeperRow: () => false });
     await outbox.init();
     await drain();
     expect(t.hub.posts).toEqual([expect.not.objectContaining({ require_keeper: true })]);
     expect(t.hub.timesTyped("old")).toBe(1);
+  });
+});
+
+describe("review findings (G31)", () => {
+  it("an older build's plain post of a keeper-only send leaves it not keeper-only: never repeated after", async () => {
+    // A new page posted it keeper-only (409 not_kept: attempts 1, keeperOnlyAt 1). An older build then claimed it
+    // (attempts 2, keeperOnlyAt untouched), posted it plain (the legacy route may have typed it in) and closed.
+    const t = setup();
+    t.world.canPost = false;
+    await t.leave({ attempts: 2, keeperOnlyAt: 1, claim: { owner: "old-build", at: t.timers.now() } });
+    const outbox = await t.make();
+    await t.later(CLAIM_STALE_MS);
+    t.world.canPost = true;
+    outbox.wake();
+    await drain();
+    expect(t.hub.posts).toEqual([]);
+    expect(t.entry("old")).toMatchObject({ status: "failed", ambiguous: true, error: MAYBE_SENT });
+  });
+
+  it("a keeper-only post waits when the hub answering now does not confirm require_keeper, and goes once it does", async () => {
+    const t = setup();
+    let confirm = false;
+    let asked = 0;
+    const outbox = await t.make({
+      confirmKeeperOnly: async () => {
+        asked++;
+        return confirm;
+      },
+    });
+    const sent = await outbox.send({ text: "hi" });
+    await drain();
+    expect(asked).toBe(1);
+    expect(t.hub.posts).toEqual([]);
+    expect(t.entry(sent.commandId)).toMatchObject({ status: "waiting", attempts: 1 });
+    expect((await t.disk())[0]?.claim).toBeUndefined();
+    expect(t.view().inFlight).toBeNull();
+    confirm = true;
+    outbox.featuresChanged();
+    await drain();
+    expect(t.hub.posts).toEqual([expect.objectContaining({ require_keeper: true })]);
+    // A plain post is never held for it.
+    t.world.keeperRow = false;
+    t.hub.owns = false;
+    confirm = false;
+    await outbox.send({ text: "plain" });
+    await drain();
+    expect(t.hub.posts).toHaveLength(2);
+    expect(t.hub.posts[1]).not.toHaveProperty("require_keeper");
+  });
+
+  for (const answer of [429, 401, 409]) {
+    it(`late() after stop(): a keeper-only post answered ${answer} stored nothing, and stays out of doubt`, async () => {
+      const t = setup();
+      let reply: (value: JsonResponse) => void = () => {};
+      t.transport.on(
+        "/message",
+        (path, request) =>
+          t.hub.posts.length === 0
+            ? new Promise((resolve) => {
+                t.hub.posts.push(request.body as Record<string, unknown>);
+                reply = resolve;
+              })
+            : Promise.resolve(t.hub.post(path, request)),
+        "POST",
+      );
+      const first = await t.make();
+      const sent = await first.send({ text: "hi" });
+      await drain();
+      first.close();
+      reply({ status: answer, body: { error: { code: answer === 409 ? "not_kept" : "x", message: "no" } } });
+      await drain();
+      const [left] = await t.disk();
+      expect(left).toMatchObject({ commandId: sent.commandId, status: "waiting", attempts: 1, keeperOnlyAt: 1 });
+      expect(left?.ambiguous).toBeUndefined();
+      expect(left?.claim).toBeUndefined();
+    });
+  }
+
+  it("late() after stop(): a keeper-only post that got no answer is in doubt, as before", async () => {
+    const t = setup();
+    let refuse: (error: Error) => void = () => {};
+    t.transport.on(
+      "/message",
+      () => new Promise((_resolve, reject) => (refuse = reject)),
+      "POST",
+    );
+    const first = await t.make();
+    await first.send({ text: "hi" });
+    await drain();
+    first.close();
+    refuse(new TypeError("dropped"));
+    await drain();
+    expect(await t.disk()).toMatchObject([{ status: "waiting", ambiguous: true, keeperOnlyAt: 1 }]);
   });
 });
 

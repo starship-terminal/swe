@@ -1761,7 +1761,7 @@ types are made from that file.
 
 | What | In v2 |
 |---|---|
-| `GET /v1/status` | adds `protocols` (`[1, 2]`), `features` and `boot_id` (new for every hub process). `features` names `require_keeper` and `command_lookup` (G31) |
+| `GET /v1/status` | adds `protocols` (`[1, 2]`), `features` and `boot_id` (new for every hub process). `features` names `require_keeper` and `command_lookup` (G31) when the session runtime is on |
 | The events | the v2 events of `adapters/events.py`, as a keeper logged them. A journal of v1 events (a terminal session, a satellite's, the earlier history of one continued in SWE) is converted on the way out (`protocol_compat.to_v2`) |
 | `seq` | above 0: the event's place in the journal, and the only frames with an SSE `id:` line. 0: a frame the hub made for the stream. A delta and the stream's own frames have none |
 | Catch-up | `?v=2&last=<seq>&epoch=<E>`. On the session's epoch and at most 500 seqs behind: the events after `last`, then `session.row`. Otherwise one `session.snapshot`. Either way it ends with a `session.state` frame |

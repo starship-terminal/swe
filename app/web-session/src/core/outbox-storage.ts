@@ -44,15 +44,16 @@ export interface OutboxEntry {
   /** When the hub's 2xx answer came. */
   sentAt?: number;
   /**
-   * An earlier post may have been applied (no answer, a 5xx, an abandoned claim). It is posted again only when
-   * `keeperOnly` is set and the hub lists `require_keeper`, and then only with `require_keeper: true`.
+   * An earlier post may have been applied (no answer, a 5xx, an abandoned claim). It is posted again only when it is
+   * keeper-only (`isKeeperOnly`) and the hub lists `require_keeper`, and then only with `require_keeper: true`.
    */
   ambiguous?: boolean;
   /**
-   * Its last post carried `require_keeper: true` (G31): set or cleared by each claim, in the claim's transaction,
-   * and kept as it is while the entry is `ambiguous`, so every post of it that may have been applied went keeper-only.
+   * The `attempts` count of the claim whose post carried `require_keeper: true` (G31), written in that claim's
+   * transaction. It counts only while it equals `attempts` (`isKeeperOnly`): a claim by a build that does not know
+   * the field counts an attempt without moving it, so its plain post leaves the entry not keeper-only.
    */
-  keeperOnly?: boolean;
+  keeperOnlyAt?: number;
   /** Why the last attempt did not land, while it waits to be tried again. */
   lastError?: string;
   /** Why it failed or is unconfirmed. */
@@ -65,6 +66,14 @@ export interface OutboxEntry {
    * `CLAIM_STALE_MS` means "another tab is sending"; an older one was abandoned (the page closed mid-post).
    */
   claim?: { owner: string; at: number };
+}
+
+/**
+ * Whether the entry's latest claim was keeper-only, and so (on an `ambiguous` entry) every post of it that may have
+ * been applied carried `require_keeper: true`.
+ */
+export function isKeeperOnly(entry: OutboxEntry): boolean {
+  return entry.keeperOnlyAt !== undefined && entry.keeperOnlyAt === entry.attempts;
 }
 
 /** How long a claim stands before it counts as abandoned: longer than a request may take (30 s). */
@@ -141,9 +150,9 @@ export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
  * abandoned claim (another page's, older than `staleMs`, or this page's own) means an earlier post may have
  * reached the hub, so the entry comes back `ambiguous`: the outbox posts it again only keeper-only, or ends it.
  *
- * `keeperOnly` says whether this post will carry `require_keeper: true`. It is recorded with the claim, except on
- * an `ambiguous` entry, which keeps the value its earlier posts had (the outbox posts such an entry only when that
- * value is true).
+ * `keeperOnly` says whether this post will carry `require_keeper: true`. It is recorded with the claim
+ * (`keeperOnlyAt`), except on an `ambiguous` entry, which stays keeper-only only if its latest claim was (the outbox
+ * posts such an entry only then): every post of it that may have been applied must have gone keeper-only.
  */
 export function decideClaim(
   stored: OutboxEntry | undefined,
@@ -155,6 +164,8 @@ export function decideClaim(
   if (stored === undefined) return { claim: { kind: "missing" } };
   stored = normalizeEntry(stored);
   if (stored.status !== "waiting") return { claim: { kind: "settled", entry: stored } };
+  // Read before a takeover: a stale claim's post was keeper-only when its claim recorded it.
+  const wasKeeperOnly = isKeeperOnly(stored);
   let entry = stored;
   if (entry.claim !== undefined) {
     // A fresh claim is a post on its way: another tab's, or this page's from before its outbox restarted.
@@ -162,10 +173,8 @@ export function decideClaim(
     entry = { ...entry, ambiguous: true };
   }
   const claimed: OutboxEntry = { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } };
-  if (claimed.ambiguous !== true) {
-    if (keeperOnly) claimed.keeperOnly = true;
-    else delete claimed.keeperOnly;
-  }
+  if (claimed.ambiguous === true ? wasKeeperOnly : keeperOnly) claimed.keeperOnlyAt = claimed.attempts;
+  else delete claimed.keeperOnlyAt;
   return { claim: { kind: "claimed", entry: claimed }, write: claimed };
 }
 
@@ -181,7 +190,7 @@ export interface OutboxStorage {
   remove(commandId: string): Promise<void>;
   /**
    * Claim an entry for posting, atomically: read it as stored and, by `decideClaim`, write the claim, the
-   * counted attempt and `keeperOnly` in the same transaction. `entry` is the outbox's own copy, which a storage
+   * counted attempt and `keeperOnlyAt` in the same transaction. `entry` is the outbox's own copy, which a storage
    * with nothing stored (memory) decides on.
    */
   claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly?: boolean): Promise<Claim>;

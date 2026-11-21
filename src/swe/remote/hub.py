@@ -525,6 +525,12 @@ class HubState:
         features = list(protocol.FEATURES)
         if self.runtime.active:
             features.append(protocol.FEATURE_RUNTIME)
+        else:
+            # No store: no session is kept and none can be looked up.
+            # A satellite keeper's row would still say ``keeper`` while
+            # every keeper-only post to it was refused (G31).
+            features = [f for f in features
+                        if f not in protocol.STORE_FEATURES]
         return {
             "ok": True,
             "v": protocol.PROTOCOL_VERSION,

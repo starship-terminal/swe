@@ -163,6 +163,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   // What `/v1/status` lists, read each time the stream goes live and forgotten when it leaves live (G31): a hub
   // that restarts as an older version drops the stream first. Null while not known.
   let features: OutboxFeatures | null = null;
+  let featuresBoot = "";
   let liveStretch = 0;
   let statusTimer: unknown = null;
 
@@ -274,19 +275,26 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       if (statusTimer !== null) timers.clearTimeout(statusTimer);
       statusTimer = null;
       features = null;
+      featuresBoot = "";
     };
 
     const fetchFeatures = async (attempt: number): Promise<void> => {
       const stretch = liveStretch;
       let listed: unknown;
+      let boot = "";
       try {
         const response = await transport.json("/v1/status");
-        if (response.status >= 200 && response.status < 300) listed = (response.body as { features?: unknown } | undefined)?.features;
+        if (response.status >= 200 && response.status < 300) {
+          const body = response.body as { features?: unknown; boot_id?: unknown } | undefined;
+          listed = body?.features;
+          boot = typeof body?.boot_id === "string" ? body.boot_id : "";
+        }
       } catch {
         // Tried again below.
       }
       if (stretch !== liveStretch) return; // the stream left live meanwhile: this answer may be another hub's
       if (Array.isArray(listed)) {
+        featuresBoot = boot;
         features = { requireKeeper: listed.includes(FEATURE_REQUIRE_KEEPER), lookup: listed.includes(FEATURE_COMMAND_LOOKUP) };
         outbox?.featuresChanged();
         return;
@@ -296,6 +304,34 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         statusTimer = null;
         if (stretch === liveStretch) void fetchFeatures(attempt + 1);
       }, backoffDelay(attempt, random, options.backoff));
+    };
+
+    /**
+     * Right before a keeper-only post: the hub answering now still lists `require_keeper` and is the process the
+     * features were read from (same `boot_id`). Otherwise they are read again, and the post waits for them.
+     */
+    const confirmKeeperOnly = async (): Promise<boolean> => {
+      const stretch = liveStretch;
+      if (features === null || !features.requireKeeper) return false;
+      let ok = false;
+      try {
+        const response = await transport.json("/v1/status");
+        const body = response.body as { features?: unknown; boot_id?: unknown } | undefined;
+        ok =
+          response.status >= 200 &&
+          response.status < 300 &&
+          Array.isArray(body?.features) &&
+          body.features.includes(FEATURE_REQUIRE_KEEPER) &&
+          body.boot_id === featuresBoot;
+      } catch {
+        ok = false;
+      }
+      if (stretch !== liveStretch) return false;
+      if (!ok) {
+        forgetFeatures();
+        void fetchFeatures(1);
+      }
+      return ok;
     };
 
     // -- the connection --------------------------------------------------
@@ -389,6 +425,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
             return result === undefined ? undefined : sendResult(result);
           },
           features: () => features,
+          confirmKeeperOnly,
           keeperRow: () => get().session.row?.mode === "keeper",
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
           onChange: (view) => setOutbox(view),

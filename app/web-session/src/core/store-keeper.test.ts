@@ -123,7 +123,7 @@ describe("the hub's features", () => {
     await t.catchUp();
     await t.state().send({ text: "hi" });
     await drain();
-    expect(t.state().outbox.entries).toMatchObject([{ status: "waiting", ambiguous: true, keeperOnly: true, lastError: REPEATING }]);
+    expect(t.state().outbox.entries).toMatchObject([{ status: "waiting", ambiguous: true, attempts: 1, keeperOnlyAt: 1, lastError: REPEATING }]);
     // The stream drops before the backoff runs out: the features are not known while it reconnects.
     t.hub.features = null; // and /v1/status fails for a while
     await t.drop();
@@ -172,6 +172,27 @@ describe("the hub's features", () => {
     t.timers.advance(1000);
     await drain();
     // Posted while reconnecting, with the features not known: plain.
+    expect(t.hub.posts[0]).not.toHaveProperty("require_keeper");
+  });
+
+  it("a hub that restarted (another boot_id) between the features and the post: not posted keeper-only until read again", async () => {
+    const t = setup();
+    let boot = "b1";
+    t.transport.on("/v1/status", () => {
+      t.hub.statusCalls++;
+      return { status: 200, body: { ok: true, v: 1, protocols: [1, 2], features: t.hub.features, boot_id: boot } };
+    });
+    t.state().start();
+    await t.catchUp();
+    expect(t.hub.statusCalls).toBe(1);
+    boot = "b2";
+    t.hub.features = OLD; // an older version, the stream not dropped yet
+    await t.state().send({ text: "hi" });
+    await drain();
+    // Asked before the post: another process. The features are read again (it no longer lists require_keeper),
+    // and the send goes plain, as merged.
+    expect(t.hub.statusCalls).toBeGreaterThanOrEqual(3);
+    expect(t.hub.posts).toHaveLength(1);
     expect(t.hub.posts[0]).not.toHaveProperty("require_keeper");
   });
 

@@ -30,7 +30,7 @@
 //   catch-up, and settled from what the hub stored.
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
-import { CLAIM_STALE_MS, furtherAlong, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, furtherAlong, isKeeperOnly, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 
 export { furtherAlong };
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
@@ -129,6 +129,11 @@ export interface OutboxOptions {
   features?(): OutboxFeatures | null;
   /** Whether the session's row says `mode: keeper`: a post then asks for the keeper path. */
   keeperRow?(): boolean;
+  /**
+   * Asked right before every keeper-only post: whether the hub answering now still lists `require_keeper` (and is
+   * the process the features were read from). False holds the send until the features are known again.
+   */
+  confirmKeeperOnly?(): Promise<boolean>;
   onChange(view: OutboxView): void;
 }
 
@@ -610,7 +615,7 @@ export class Outbox {
           command_id: entry.commandId,
           client_id: entry.commandId,
           // The keeper path or nothing (G31): set on every post of a send claimed as keeper-only.
-          ...(entry.keeperOnly === true ? { require_keeper: true } : {}),
+          ...(isKeeperOnly(entry) ? { require_keeper: true } : {}),
         },
       });
     } catch {
@@ -654,7 +659,7 @@ export class Outbox {
   private async deliver(entry: OutboxEntry): Promise<Outcome> {
     // A keeper-only send in doubt is posted again only once the hub is known to list `require_keeper`: it waits,
     // unclaimed, until then (its deadline still runs).
-    if (entry.ambiguous === true && entry.keeperOnly === true && this.requireKeeper() === null) return "held";
+    if (entry.ambiguous === true && isKeeperOnly(entry) && this.requireKeeper() === null) return "held";
     // Claim it first: the counted attempt and this page's claim are on disk before the request leaves, in one
     // transaction, so a reload or a second tab never makes a "first" post of something already posted.
     // It is in flight from here: the view offers no Discard while the claim is being written.
@@ -712,9 +717,9 @@ export class Outbox {
       return "done";
     }
     const repeat = attempted.ambiguous === true;
-    if (repeat && !(attempted.keeperOnly === true && this.requireKeeper() === true)) {
+    if (repeat && !(isKeeperOnly(attempted) && this.requireKeeper() === true)) {
       this.notPosting();
-      if (attempted.keeperOnly === true && this.requireKeeper() === null) {
+      if (isKeeperOnly(attempted) && this.requireKeeper() === null) {
         // Not known yet whether this hub takes `require_keeper`: the claim is released, and it waits.
         await this.save(attempted);
         return "held";
@@ -723,6 +728,23 @@ export class Outbox {
       // de-duplicate: the hub picks the route when the post arrives, and a session can leave its keeper.
       await this.fail(attempted, MAYBE_SENT);
       return "done";
+    }
+    if (isKeeperOnly(attempted) && this.options.confirmKeeperOnly !== undefined) {
+      // A hub that restarted as an older version would ignore the field and could take the legacy route: the
+      // hub that answers now is asked first. Its claim is released if it does not confirm, and the send waits.
+      let confirmed = false;
+      try {
+        confirmed = await this.options.confirmKeeperOnly();
+      } catch {
+        confirmed = false;
+      }
+      if (this.closed) return "done";
+      if (!confirmed || this.current(entry.commandId)?.status !== "waiting") {
+        this.notPosting();
+        const still = this.current(entry.commandId);
+        if (still?.status === "waiting") await this.save(still);
+        return "held";
+      }
     }
     const response = await this.post(attempted);
     const receipt = this.takeReceipt(entry.commandId);
@@ -741,7 +763,7 @@ export class Outbox {
       return "done";
     }
     if (response === null) return this.unsure(now);
-    const askedKeeper = attempted.keeperOnly === true;
+    const askedKeeper = isKeeperOnly(attempted);
     const { status } = response;
     if (status >= 200 && status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData; reason?: unknown };
@@ -811,8 +833,14 @@ export class Outbox {
     receipt: { receipt: string; reason?: string } | null = null,
   ): Promise<void> {
     const { claim: _released, ...entry } = attempted;
-    let outcome: OutboxEntry | null = { ...entry, ambiguous: true };
-    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response))) {
+    // A keeper-only post's answer that says nothing was stored leaves it as it was (G31); for a plain post every
+    // answer that is not 2xx reads as "may have been applied", as merged.
+    const storedNothing =
+      response !== null &&
+      ([401, 403, 425, 429].includes(response.status) || (response.status === 409 && errorCode(response) === "not_kept"));
+    let outcome: OutboxEntry | null = isKeeperOnly(entry) && storedNothing ? { ...entry } : { ...entry, ambiguous: true };
+    const repeat = attempted.ambiguous === true;
+    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response) || repeat)) {
       outcome = receiptOutcome(entry, receipt, this.options.timers.now());
     } else if (response !== null && response.status >= 200 && response.status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData };
@@ -873,7 +901,7 @@ export class Outbox {
    * A keeper-only one waits, `ambiguous`, to be posted again keeper-only under the same id on the backoff.
    */
   private async unsure(entry: OutboxEntry): Promise<Outcome> {
-    if (entry.keeperOnly === true) {
+    if (isKeeperOnly(entry)) {
       await this.save({ ...entry, ambiguous: true, lastError: REPEATING });
       return "retry";
     }
@@ -915,7 +943,7 @@ export class Outbox {
             // Its post may have reached the hub. A keeper-only one is posted again by the next pass (unless the hub
             // is known not to take `require_keeper`); any other is never posted again: it ends here.
             const standing = this.current(resolved.commandId);
-            const again = standing?.keeperOnly === true && this.requireKeeper() !== false;
+            const again = standing !== undefined && isKeeperOnly(standing) && this.requireKeeper() !== false;
             if (standing?.status === "waiting" && standing.ambiguous === true && !again) await this.fail(standing, MAYBE_SENT);
           }
         }

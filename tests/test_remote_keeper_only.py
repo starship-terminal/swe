@@ -52,6 +52,18 @@ class TestStatus(KeeperHubCase):
         self.assertEqual(protocol.FEATURE_REQUIRE_KEEPER, "require_keeper")
         self.assertEqual(protocol.FEATURE_COMMAND_LOOKUP, "command_lookup")
 
+    def test_neither_is_listed_with_the_runtime_off(self):
+        # No store: nothing is kept or can be looked up, and a satellite
+        # keeper's row saying ``keeper`` must not make a client post
+        # keeper-only into refusals for a day.
+        self.end(self.srv)
+        self.srv = self.hub(sessions=[_session()], on=False)
+        status, out = self.call("GET", "/v1/status")
+        self.assertEqual(status, 200)
+        self.assertNotIn("require_keeper", out["features"])
+        self.assertNotIn("command_lookup", out["features"])
+        self.assertIn("command_id", out["features"])
+
 
 class TestRequireKeeperLocal(KeeperHubCase):
     def test_a_kept_session_takes_it_and_a_repeat_is_not_applied_again(self):
