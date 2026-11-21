@@ -634,7 +634,8 @@ GET  /v1/sessions/{id}/events        SSE stream; ?last=seq replays journal. ?v=2
 GET  /v1/sessions/{id}/messages      journal backfill {session, messages, next_before, has_more}; ?before=seq&limit=N (default 500, at most 2000); ?v=2 pages the timeline as v2 events
 GET  /v1/sessions/{id}/snapshot      v2: everything needed to draw the session from nothing (Sync v2 below)
 GET  /v1/sessions/{id}/commands      the "/" menu: commands this session's harness will run
-POST /v1/sessions/{id}/message       {text, mode: queue|steer, attachments[]}
+GET  /v1/sessions/{id}/commands/{cid} one stored command: receipt and result (read-only; feature command_lookup)
+POST /v1/sessions/{id}/message       {text, mode: queue|steer, attachments[], command_id?, require_keeper?}; require_keeper: true → 409 not_kept unless a keeper holds it
 GET  /v1/sessions/{id}/queue         queue-mode sends still waiting for idle
 POST /v1/sessions/{id}/queue         {client_id, op: steer|cancel|edit, text?, command_id?} on one waiting send
 POST /v1/sessions/{id}/attachments   multipart upload → staged file, returns ref
@@ -1692,6 +1693,8 @@ opencode 2.x session started in a terminal cannot be written to.
 | Attach (`control {op: attach}`, no `mode`) | Continue in SWE: the session is resumed by its own id under a keeper. Refused (409) while it is mid-turn, its transcript moved in the last 5 seconds, or a harness process still has it open (`session_in_use`). An explicit `mode` still asks for that channel |
 | The row | `ownership: attached`, `mode: "keeper"`, `control: "full"`, `state` (the keeper's), `status`, `adapter`, `caps` |
 | `message`, `approval`, `control`, `queue` | stored under `command_id` (or `client_id`) in `remote.sqlite` before delivery. A retry answers the stored receipt (`duplicate: true`) and is not applied again. `message` answers 202 with `receipt` (`accepted` or `queued`) and `waiting` |
+| `require_keeper: true` on a `message` | the keeper path or nothing: a session no keeper holds answers 409 `not_kept` before anything is stored or queued, so a client's repeat never reaches the old path, which does not de-duplicate |
+| `GET /v1/sessions/{key}/commands/{id}` | what `remote.sqlite` holds for one command of the session: `receipt` (the stored status), `reason`, `result`. Read-only; 404 `unknown_command` |
 | Two devices answer one approval | the first wins; the second gets 409 `approval_failed` |
 | The queue | lives in the keeper. `GET .../queue` lists it; `edit`, `cancel` and `steer` act on it. `client_id` names the queued message; an optional `command_id` is the action's own id, and a retry under it is not applied again. Send now sends the text as last edited |
 | The timeline | the keeper's log. The hub journals each event under the keeper's seq and does not tail the CLI's transcript for that session. Today's clients get the same v1 frames as before (`protocol_compat.to_v1`); a question with choices arrives as an approval card |
@@ -1720,7 +1723,7 @@ commands for them.
 |---|---|
 | Launch, attach | the satellite's agent starts the keeper, the way the hub does for its own machine. The hub sends the same `launch` and `attach` commands as before |
 | The timeline | the satellite journals the keeper's events, and uploads them with `POST /v1/agent/kept`. The hub's journal for `key@machine` is a copy: same events, same seqs, stored with `Journal.append_at`, so an upload sent twice lands once. The hub numbers nothing in that journal while it copies it |
-| `message`, `approval`, `control`, `queue`, `command` | stored in the hub's `remote.sqlite` under `command_id`, sent to the satellite as a `kept` command, and given there to the same route the hub runs for its own sessions. Answers 202 with `receipt` (`queued` or `held`) and `command_id` |
+| `message`, `approval`, `control`, `queue`, `command` | stored in the hub's `remote.sqlite` under `command_id`, sent to the satellite as a `kept` command, and given there to the same route the hub runs for its own sessions (a `kept` message with `require_keeper: true`, so a session let go meanwhile refuses it instead of typing it into a pane). Answers 202 with `receipt` (`queued` or `held`) and `command_id`. A `require_keeper` message to a satellite session no keeper holds answers 409 `not_kept`; the hub's `GET .../commands/{id}` answers for these commands too |
 | The machine is asleep | a message or an approval answer is `held` for 24 hours and delivered, in order and once, when the machine's command stream comes back. A hold that runs out is rejected (`expired`) and never delivered. `control`, `queue` and `command` answer 409 `machine_offline` |
 | Hub restart | a message or an answer the hub had claimed and not yet put on the machine's command stream is put there once at the machine's next flush (its reconnect, or within 60 seconds of it), in arrival order with what is still held. One that arrived 24 hours ago or more is rejected instead |
 | Agent restart | the keepers run on. The new agent reconnects to them, asks the hub how far each copy reaches, and uploads from there |
@@ -1758,7 +1761,7 @@ types are made from that file.
 
 | What | In v2 |
 |---|---|
-| `GET /v1/status` | adds `protocols` (`[1, 2]`), `features` and `boot_id` (new for every hub process) |
+| `GET /v1/status` | adds `protocols` (`[1, 2]`), `features` and `boot_id` (new for every hub process). `features` names `require_keeper` and `command_lookup` (G31) when the session runtime is on |
 | The events | the v2 events of `adapters/events.py`, as a keeper logged them. A journal of v1 events (a terminal session, a satellite's, the earlier history of one continued in SWE) is converted on the way out (`protocol_compat.to_v2`) |
 | `seq` | above 0: the event's place in the journal, and the only frames with an SSE `id:` line. 0: a frame the hub made for the stream. A delta and the stream's own frames have none |
 | Catch-up | `?v=2&last=<seq>&epoch=<E>`. On the session's epoch and at most 500 seqs behind: the events after `last`, then `session.row`. Otherwise one `session.snapshot`. Either way it ends with a `session.state` frame |

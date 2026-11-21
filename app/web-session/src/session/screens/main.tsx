@@ -196,6 +196,7 @@ async function run(): Promise<void> {
           entry({ commandId: "w-3", text: "And update the changelog", status: "sent", path: "keeper", receipt: "queued", createdAt: now - 3000 }),
           entry({ commandId: "w-4", text: "Delete the build folder", status: "failed", error: "the session cannot take a message now", createdAt: now - 2000 }),
           entry({ commandId: "w-5", text: "Push the branch", status: "failed", ambiguous: true, error: MAYBE_SENT, createdAt: now - 1500 }),
+          entry({ commandId: "w-7", text: "Merge it when the checks pass", status: "waiting", attempts: 1, ambiguous: true, keeperOnlyAt: 1, createdAt: now - 1200 }),
           entry({ commandId: "w-6", text: "Open the pull request", status: "unconfirmed", error: "The hub took this message, but its result was not seen on this device. Check the session before sending it again.", createdAt: now - 1000 }),
         ],
         { inFlight: "w-2" },

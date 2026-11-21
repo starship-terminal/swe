@@ -17,6 +17,8 @@
       "delta_offset",
       "ping",
       "command_id",
+      "require_keeper",
+      "command_lookup",
       "session_runtime"
     ]
   },
@@ -2571,6 +2573,59 @@
         "boot_id"
       ],
       "additionalProperties": true
+    },
+    "CommandLookup": {
+      "description": "GET /v1/sessions/{id}/commands/{command_id}: one stored command, when /v1/status lists command_lookup. `receipt` is the stored status; `result` is there once the command finished. 404 unknown_command when the hub does not hold the id for the session.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "op": {
+          "type": "string",
+          "minLength": 1
+        },
+        "receipt": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "held",
+            "queued",
+            "rejected"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "received_at": {
+          "type": "number"
+        },
+        "updated_at": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ok",
+        "session",
+        "command_id",
+        "op",
+        "receipt",
+        "received_at",
+        "updated_at"
+      ],
+      "additionalProperties": false
     }
   }
 }

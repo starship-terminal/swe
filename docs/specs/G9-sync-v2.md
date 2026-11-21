@@ -26,7 +26,8 @@ core (G11) is its first reader.
 GET /v1/status
   {"ok": true, "v": 1, "protocols": [1, 2],
    "features": ["sync_v2", "snapshot", "live_resume", "delta_offset",
-                "ping", "command_id", "session_runtime"],
+                "ping", "command_id", "require_keeper", "command_lookup",
+                "session_runtime"],
    "boot_id": "9f2c41d07ab35e18"}
 ```
 
@@ -34,8 +35,9 @@ GET /v1/status
 - `features` names what a client may rely on. `session_runtime` is
   listed only when the hub runs sessions through keepers.
 - `boot_id` is new for every hub process. A client that sees it change
-  knows the hub restarted, and asks again about what it sent (a retry
-  under the same `command_id` answers the stored receipt).
+  knows the hub restarted, and asks again about what it sent with
+  `GET .../commands/{id}` (`command_lookup`, G31), never by posting it
+  again: the legacy route does not de-duplicate.
 - The route is still unauthenticated and still names nothing about the
   machine.
 
@@ -445,9 +447,13 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 - **Restart.** A changed `boot_id` (status, or a snapshot's) means the
   hub restarted. A frame the hub made for the stream (`seq` 0) is not
   replayed after a reconnect or an overflow, so a command still waiting
-  for its result is asked about again: send it again under the same
-  `command_id`, and the hub answers the stored receipt and result
-  without applying it twice.
+  for its result is asked about again with `GET .../commands/{id}`
+  (G31). A message is posted again after an answer that may mean it
+  was applied only with `require_keeper: true`, and only when its
+  earlier posts carried it too (after an answer that stored nothing,
+  such as a 429, it is posted again as it was): the keeper path answers the stored receipt and result without
+  applying it twice, and the legacy route, which would type it in
+  again, refuses such a post (409 `not_kept`).
 - **Read-only sessions** use the same frames. `row.control` and
   `row.control_reason` say why there is no composer; `caps` is null.
 - **Fixtures.** `Client` in `tests/test_remote_sse_v2.py` is a reference

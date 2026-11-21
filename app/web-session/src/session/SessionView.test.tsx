@@ -283,6 +283,50 @@ describe("sends from the outbox", () => {
     expect(q(bubble, '[data-arrow="red"]')).toBeNull();
   });
 
+  it("shows a keeper-only repeat as waiting, not as failed: the hub may have it, and it goes again under the same id (G31)", async () => {
+    const t = await ready();
+    const entry = {
+      commandId: "w-3",
+      session: KEY,
+      text: "ship it",
+      attachments: [],
+      mode: "queue" as const,
+      createdAt: 1,
+      status: "waiting" as const,
+      attempts: 1,
+      ambiguous: true,
+      keeperOnlyAt: 1,
+    };
+    const show = async (over: object) => {
+      const outbox = { entries: [{ ...entry, ...over }], persistent: true, note: "", paused: null, inFlight: null, owner: "me", loading: false, storageDown: false };
+      await settle(() => t.store.setState({ outbox, sends: describeSends({ outbox, connection: t.store.getState().connection, loaded: true, online: true }) }));
+      return q(t.el, '[data-send="waiting"]') as HTMLElement;
+    };
+    const quiet = await show({});
+    expect(text(quiet)).toContain("The hub may have this message already. It will be sent again under the same id, which the hub never delivers twice.");
+    expect(q(quiet, '[data-arrow="yellow"]')).not.toBeNull();
+    // Posted once already: nothing to discard, nothing to retry while it waits.
+    expect(all(quiet, "button")).toHaveLength(0);
+
+    const dropped = await show({ lastError: "The connection dropped before the hub answered. Sending it again under the same id, which the hub never delivers twice" });
+    expect(text(dropped)).toContain("The connection dropped before the hub answered.");
+    expect(text(dropped)).toContain("Trying again.");
+    expect(all(dropped, "button")).toHaveLength(0);
+  });
+
+  it("shows a send that was not run by a keeper as failed, with the hub's reason and the two actions (G31)", async () => {
+    const t = await ready();
+    const outbox = {
+      entries: [{ commandId: "w-4", session: KEY, text: "ship it", attachments: [], mode: "queue" as const, createdAt: 1, status: "failed" as const, attempts: 1, ambiguous: true, error: "The session was not run by a session keeper when this was sent" }],
+      persistent: true, note: "", paused: null, inFlight: null, owner: "me", loading: false, storageDown: false,
+    };
+    await settle(() => t.store.setState({ outbox, sends: describeSends({ outbox, connection: t.store.getState().connection, loaded: true, online: true }) }));
+    const bubble = q(t.el, '[data-send="failed"]') as HTMLElement;
+    expect(text(bubble)).toContain("The session was not run by a session keeper when this was sent.");
+    expect(button(bubble, "Retry")).toBeDefined();
+    expect(button(bubble, "Discard")).toBeDefined();
+  });
+
   it("says when the device's storage does not answer, and that nothing is sent meanwhile", async () => {
     const t = await ready();
     const entry = {
