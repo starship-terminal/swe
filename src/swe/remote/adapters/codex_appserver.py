@@ -50,6 +50,9 @@ from swe.remote.adapters.core import (
 # How long each handshake request, any later request, one stdin write
 # and the kill steps get.
 INIT_TIMEOUT_S = 60.0
+# The model list asked at start feeds only the picker (G32): a slow one is
+# given up on, and the start goes on without it.
+MODEL_LIST_TIMEOUT_S = 5.0
 CALL_TIMEOUT_S = 15.0
 WRITE_TIMEOUT_S = 10.0
 _KILL_WAIT_S = 3.0
@@ -317,8 +320,8 @@ class CodexAppServerAdapter:
             # The server's own list for the picker (G32); a server that
             # refuses it leaves the value alone.
             try:
-                listed = self._call(wire.model_list(self._rpc_id()),
-                                    self._init_timeout)
+                listed = self._call(wire.model_list(self._rpc_id()), min(
+                    self._init_timeout, MODEL_LIST_TIMEOUT_S))
             except AdapterError as exc:
                 if exc.code == "agent_down":
                     raise

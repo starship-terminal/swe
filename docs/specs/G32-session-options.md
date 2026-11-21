@@ -256,7 +256,9 @@ then sort them first. `recent_models` could stand in for "recent".
 ## Limits
 
 - Each list is fetched once, at the agent's start (Codex's first page
-  only); a model the server adds later shows after the next start.
+  only), and given up on after 5 s (`MODEL_LIST_TIMEOUT_S`): a slow or
+  refused list leaves the value alone and the start goes on. A model
+  the server adds later shows after the next start.
 - opencode's list is every model of every provider the server knows
   (88 in the recording, about 5 KB per `session.options`).
 - Efforts are listed nowhere: the lists' per-model efforts and variants
@@ -299,8 +301,8 @@ then sort them first. `recent_models` could stand in for "recent".
 - G11: `SessionState.options`, `sessionOptions` and `setOption` in the
   store.
 - Codex asks `model/list` after `thread/start`, and opencode `GET
-  /api/model` after the session opens, each bounded by the start's
-  timeout; a refusal leaves the value alone.
+  /api/model` after the session opens, each bounded at 5 s; a refusal
+  or a timeout leaves the value alone.
 - `scripts/record_protocol.py`, `record_acp.py`, `record_codex.py`,
   `record_opencode.py`: the G32 scenarios above.
 - `tests/fakes/fake_codex.py` answers `thread/start` with the model and

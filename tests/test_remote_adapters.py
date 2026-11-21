@@ -4785,7 +4785,8 @@ class TestOpencodeAdapterStart(_OpencodeCase):
             [(r["method"], r["path"]) for r in self.sent()],
             [("POST", "/api/session/ses_older00000000000000001/fork"),
              ("POST", f"/api/session/{OC_FORKED}/model"),
-             ("POST", f"/api/session/{OC_FORKED}/agent")])
+             ("POST", f"/api/session/{OC_FORKED}/agent"),
+             ("GET", "/api/model")])
         self.assertEqual(self.sent()[1]["body"], {"model": {
             "providerID": "prov", "id": "m2", "variant": "high"}})
         self.assertEqual(self.sent()[2]["body"], {"agent": "plan"})

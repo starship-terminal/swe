@@ -60,6 +60,9 @@ from swe.remote.adapters.core import close_quietly, redact
 
 # How long each handshake step, any later request and the kill steps get.
 INIT_TIMEOUT_S = 60.0
+# The model list asked at start feeds only the picker (G32): a slow one is
+# given up on, and the start goes on without it.
+MODEL_LIST_TIMEOUT_S = 5.0
 CALL_TIMEOUT_S = 15.0
 _KILL_WAIT_S = 3.0
 # How long a server whose event stream ended gets to exit by itself.
@@ -378,10 +381,17 @@ class OpencodeServeAdapter:
             if spec.plan_mode and self._caps.plan_mode:
                 self._plan(True, self._init_timeout)
             if self._caps.can_set("model"):
-                # The server's own list for the picker (G32); a server
-                # that does not serve it leaves the value alone.
-                listed = self._call(wire.list_models(), self._init_timeout)
-                if listed.ok:
+                # The server's own list for the picker (G32). It only
+                # feeds the picker: a server that refuses it, or is slow
+                # to answer, leaves the value alone and the start goes on.
+                try:
+                    listed = self._call(wire.list_models(), min(
+                        self._init_timeout, MODEL_LIST_TIMEOUT_S))
+                except AdapterError as exc:
+                    if exc.code == "agent_down":
+                        raise
+                    listed = None
+                if listed is not None and listed.ok:
                     state.model_choices = wire.model_choices(listed.body)
             if state.done:
                 raise AdapterError("opencode exited", code="agent_down")

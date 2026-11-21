@@ -21,6 +21,7 @@ from swe.remote.adapters import fake, options as opts
 from swe.remote.adapters.base import AdapterError, Caps
 from swe.remote.adapters.core import ALL_CAPS
 
+from tests.test_remote_adapters import _OpencodeCase
 from tests.test_remote_keeper import KeeperCase, S, kill
 from tests.test_remote_sse_v2 import V2Case
 
@@ -381,6 +382,32 @@ class TestModelLists(unittest.TestCase):
         self.assertEqual(opencode_wire.model_choices({"data": [
             {"id": "x"}, {"providerID": "p", "id": "y", "name": "Y"}]}),
             [{"id": "p/y", "label": "Y"}])
+
+
+class TestListsAtStart(_OpencodeCase):
+    """The adapters ask for the list at start; it only feeds the picker,
+    so a slow one never stops the start."""
+
+    def opencode(self, mode: str):
+        from unittest import mock
+        from swe.remote.adapters import opencode_serve
+
+        with mock.patch.object(opencode_serve, "MODEL_LIST_TIMEOUT_S", 0.5):
+            adapter, sink, _sid = self.started(mode)
+        return adapter, sink
+
+    def test_opencode_lists_the_servers_models(self):
+        _adapter, sink = self.opencode("models")
+        shown = _options(sink.events)[0]["model"]
+        self.assertEqual(shown["choices"], [
+            {"id": "fake/model-1", "label": "One"},
+            {"id": "fake/model-2", "label": "Two"}])
+
+    def test_a_slow_opencode_list_leaves_the_value_alone(self):
+        adapter, sink = self.opencode("slow-models")
+        self.assertEqual(sink.types()[:2], ["session.caps", "session.state"])
+        self.assertNotIn("choices", _options(sink.events)[0]["model"])
+        self.assertTrue(adapter.capabilities.can_set("model"))
 
 
 class TestSteerEffect(unittest.TestCase):
