@@ -426,6 +426,139 @@ Other rules:
   answers again, and new ones are kept in memory and will not survive a
   reload until then". A view should show the note beside the composer.
 
+### Keeper-only posts and command lookups (G31)
+
+Two hub features, each listed in `GET /v1/status` `features` by a hub
+that has it, let the outbox repeat a keeper send safely and read what
+became of one:
+
+| Feature | The hub | Where |
+|---|---|---|
+| `require_keeper` | a message post whose body has `require_keeper: true` goes to the keeper path or is refused with 409 `not_kept`, before anything is stored or queued. It never reaches the legacy route: not the local `_send_message`, not a satellite's `queue_command` forward, and not the satellite's own legacy route (a `kept` message is posted to the satellite's local route with the field set) | `hub.py` `do_POST`, `agent.py` `_run_kept` |
+| `command_lookup` | `GET /v1/sessions/{key}/commands/{id}` answers the stored command: `{ok, session, command_id, op, receipt, reason?, result?, received_at, updated_at}`, where `receipt` is the stored status (`held`, `queued`, `accepted`, `rejected`) and `result` the stored result. 404 `unknown_command` when the hub's store does not hold the id for that session. Reads only: no write, no event, no keeper call. The same credential as every session route | `hub.py` `_command_lookup`; schema `CommandLookup` |
+
+An older hub ignores `require_keeper` and answers the GET with 404
+`not_found`, so the client relies on neither unless the feature is
+listed. **Features are known only while the stream is live**: the store
+reads `/v1/status` each time the connection goes live (asking again on
+the backoff until it answers, while the stream stays live) and forgets
+the answer when it leaves `live` or stops. A
+hub that restarts as an older version drops the stream first, so the
+page never repeats a post to it on stale knowledge. `F+` below means the
+feature is listed, `F?` that it is not known (not live, or not read
+yet), `F-` that `/v1/status` answered without it.
+
+**Keeper-only is decided at the claim.** A post carries
+`require_keeper: true` when `require_keeper` is `F+` and the session's
+row says `mode: keeper`, and the claim records that on the entry
+(`keeperOnly`), in the same transaction as the counted attempt. An
+entry that is not `ambiguous` has only had posts whose answers say
+nothing was stored (below), so each claim decides `keeperOnly` afresh;
+an `ambiguous` entry keeps the value it has, because its earlier post
+may have been applied and the next must go the same way. The first post
+is keeper-only too, not only the repeats: "Continue in SWE" moves a
+terminal session onto a keeper, so a plain first post could reach the
+legacy route and a keeper-only repeat then reach the keeper, which
+holds no record of the first.
+
+**The invariant, in its new form.** Every post happens under a claim the
+database recorded; with the database down nothing is posted, on any
+row. A command id is posted again only:
+
+1. after an answer that says the hub stored nothing (429, 425, 401, 403,
+   and 409 `not_kept` to a keeper-only post), or
+2. with `require_keeper: true`, when every earlier post of it that may
+   have been applied carried `require_keeper: true` as well
+   (`keeperOnly` on an `ambiguous` entry), and `require_keeper` is `F+`.
+
+So a legacy route never receives an id the hub may already have
+applied, and every post that may be a repeat reaches the keeper path,
+whose store answers it with the stored receipt and result instead of
+applying it again. A GET can never type a message in, so it needs no
+claim.
+
+States below: `W` waiting and not `ambiguous`; `WA` waiting, `ambiguous`
+and `keeperOnly`; `WA-` waiting, `ambiguous`, not `keeperOnly`; `S-K`
+and `S-L` sent on the keeper or legacy path; `FA` failed "may or may not
+have been sent" (`ambiguous`); `F` failed definitely; `U-K`, `U-L`
+unconfirmed.
+
+**What a claim posts.**
+
+| State when claimed | `require_keeper` F+ | F? | F- |
+|---|---|---|---|
+| `W`, the row says keeper | posted with `require_keeper: true`; `keeperOnly` set | posted plain; `keeperOnly` cleared | posted plain; `keeperOnly` cleared |
+| `W`, any other row | posted plain; `keeperOnly` cleared | the same | the same |
+| `WA` | posted again with `require_keeper: true` (a repeat) | not claimed and not posted: it waits for the features, holding back the sends behind it; its 24-hour deadline still ends it `FA` | not posted: `FA` (as merged) |
+| `WA-` | not posted: `FA` (as merged) | the same | the same |
+
+A claim that finds the stored copy `ambiguous` when this page's was not
+(another page's stale claim, taken over in the claim's transaction)
+decides by the stored copy's `keeperOnly`: a `WA` copy is posted again
+when F+, released and left waiting when F?, ended `FA` when F-.
+
+**What an answer does.** "Plain" is a post without the field (as merged);
+"keeper-only, first" one whose entry was `W` at the claim; "keeper-only,
+repeat" one whose entry was `WA`.
+
+| Answer | Plain | Keeper-only, first | Keeper-only, repeat |
+|---|---|---|---|
+| 2xx with `result` | settled by the result | the same | the same |
+| 2xx, `receipt: rejected` | `F`, the hub's reason | the same | the same |
+| 2xx with another `receipt` (a repeat's is `duplicate: true` with the stored status) | `S-K` | `S-K` | `S-K` |
+| 2xx without a receipt | `S-L` | `S-L` (only a hub that ignores the field answers this) | `S-L` (the same) |
+| no answer, 408, any 5xx | `FA` | `WA`, tried again on the backoff ("Sending it again under the same id") | `WA`, tried again on the backoff |
+| 429, 425 | `W`, tried again on the backoff | `W`, tried again | `WA`, tried again |
+| 401, 403 | `W`, paused until `wake()` | the same | `WA`, paused |
+| 409 `not_kept` | `F`, the hub's message (no hub sends it to a plain post) | `W`, tried again on the backoff: nothing was stored, and the next claim reads the row again (once the row no longer says keeper, the post is plain) | `FA` |
+| 409 `duplicate_client_id` | `S-L` | `S-L` | `S-L` |
+| 404 | `F`, "this session no longer exists" | the same | `FA`: the earlier post may have been applied |
+| any other 4xx | `F`, the hub's message | the same | `FA` |
+| a receipt or result on the stream while it is out | as "Evidence after a send ended in doubt" | the same | the same |
+
+A refusal of a repeat ends it `FA`, never `F`: the routes refuse before
+they read the store (`_kept` checks attachments, `owns` and the row
+first), so a refusal says nothing about the earlier post. Only a result
+or a `rejected` receipt ends an `ambiguous` send definitely.
+
+**Deadlines and the claim that was abandoned.**
+
+| State | Event | To |
+|---|---|---|
+| `WA` | 24 hours since it was made | `FA` |
+| `W` with a stale claim (its post may be out or lost) | abandoned (`decideAbandon`, which keeps `keeperOnly`) | `WA` when the claim's post was keeper-only and `require_keeper` is not F-, repeated by the next pass; else `FA` (as merged) |
+| `WA` with a stale claim | the same | `WA`, or `FA` when F- |
+| `late()` after `stop()` | the answer to a post that was out | as merged: storage gets `sent`, a removal, or the entry `waiting` and `ambiguous` with its `keeperOnly`; the next outbox treats a `WA` copy as above |
+
+**What the lookup settles.** With `command_lookup` F+ the outbox asks
+`GET .../commands/{id}` for every `S-K`, `U-K` and `FA` entry, oldest
+first, one at a time, when its stored sends are loaded, after each
+catch-up's state frame, and when it learns the feature. A pass started
+while one runs is folded into it. The answer is applied as a stream
+frame would be (`noteResult`, `noteReceipt`), so a send whose claim is
+being written or whose post is out takes it the same way.
+
+| Answer | `S-K` | `U-K` | `FA` |
+|---|---|---|---|
+| 200 with a `result`, ok or cancelled | removed | removed | removed |
+| 200 with a failed `result` | `F`, its note | `F`, its note | `F`, its note |
+| 200, `receipt: rejected`, no result | `F`, its reason | unchanged | `F`, its reason |
+| 200, another receipt, no result | unchanged | unchanged | `S-K`: the hub has it, and its own deadline runs |
+| 404, any other status, no answer | unchanged | unchanged | unchanged |
+
+A 404 does not make an `FA` send "not sent": its first post may have
+been plain and gone the legacy way, which stores nothing. Neither table
+applies with F- or F?: the outbox does what G11 merged.
+
+**Two tabs.** Each tab claims before it posts, so two pages posting one
+`WA` send post it one after the other, both keeper-only, and the keeper
+store answers the second with the first's receipt. A tab that does not
+know the features yet leaves a `WA` send alone; a tab of an older build
+claims it, sees `ambiguous`, and ends it `FA` without posting (it never
+reads `keeperOnly`). A `W` send an older build finds after a keeper-only
+post's 429 or `not_kept` is posted plain, which is a first delivery,
+since nothing was stored.
+
 ### Two copies of one send
 
 A send can have two copies: the one in storage and the one an earlier

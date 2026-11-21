@@ -15,12 +15,19 @@
 //   `client_id`. The hub's answer decides the path: a 2xx with a `receipt`
 //   means the hub stored the command under that id (`keeper`), one without
 //   means it did not (`legacy`).
-// - A post is never repeated, on any row: the hub picks the route when the
-//   post arrives, and the route that is not the keeper does not de-duplicate.
-//   An answer that may mean "applied" (none at all, 408, a 5xx, an abandoned
-//   claim) ends the send as failed, "may or may not have been sent". Only an
-//   answer that says nothing was stored (429, 425; 401 and 403 after the
-//   pause) is tried again.
+// - The hub picks the route when a post arrives, and the route that is not
+//   the keeper does not de-duplicate. So an answer that may mean "applied"
+//   (none at all, 408, a 5xx, an abandoned claim) ends a plain post's send as
+//   failed, "may or may not have been sent". An answer that says nothing was
+//   stored (429, 425; 401 and 403 after the pause) is tried again.
+// - With a hub that lists `require_keeper` (G31), a send on a keeper row is
+//   posted with `require_keeper: true`: the hub takes it on the keeper path
+//   or refuses it (409 `not_kept`), never on the legacy one. Such a send whose
+//   answer may mean "applied" is posted again under the same id, keeper-only,
+//   and the keeper's store answers a repeat with what it did the first time.
+// - With a hub that lists `command_lookup`, sends the hub took and sends in
+//   doubt are looked up (`GET .../commands/{id}`) at start and after each
+//   catch-up, and settled from what the hub stored.
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
 import { CLAIM_STALE_MS, furtherAlong, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
@@ -54,6 +61,23 @@ export const LEGACY_UNCONFIRMED =
 export const KEEPER_UNCONFIRMED =
   "The hub took this message, but its result was not seen on this device. Check the session before sending it again.";
 export const SESSION_GONE = "Not sent: this session no longer exists.";
+/** Why a keeper-only send whose answer was lost waits: it is posted again under the same id. */
+export const REPEATING =
+  "The connection dropped before the hub answered. Sending it again under the same id, which the hub never delivers twice";
+/** Why a keeper-only first post the hub refused with 409 `not_kept` waits: nothing was stored, and it is tried again. */
+export const NOT_KEPT = "The session was not run by a session keeper when this was sent";
+
+/** The `/v1/status` features the outbox relies on (G31). */
+export const FEATURE_REQUIRE_KEEPER = "require_keeper";
+export const FEATURE_COMMAND_LOOKUP = "command_lookup";
+
+/** What the hub serving the live stream lists, read from `/v1/status`. */
+export interface OutboxFeatures {
+  /** A message post with `require_keeper: true` is taken on the keeper path or refused with 409 `not_kept`. */
+  requireKeeper: boolean;
+  /** `GET /v1/sessions/{key}/commands/{id}` answers the stored receipt and result. */
+  lookup: boolean;
+}
 export const UNDELIVERED = "The hub could not deliver this message.";
 
 export interface OutboxView {
@@ -98,6 +122,13 @@ export interface OutboxOptions {
   knownResult?(commandId: string): SendResultData | undefined;
   /** The `command.receipt` the session already holds for an id, if any: evidence that the hub took the send. */
   knownReceipt?(commandId: string): { status: string; reason?: string } | undefined;
+  /**
+   * What the hub lists, or null while it is not known (the stream is not live, or `/v1/status` not read yet).
+   * Default: never known, which is the outbox as G11 merged it.
+   */
+  features?(): OutboxFeatures | null;
+  /** Whether the session's row says `mode: keeper`: a post then asks for the keeper path. */
+  keeperRow?(): boolean;
   onChange(view: OutboxView): void;
 }
 
@@ -161,6 +192,21 @@ function receiptOutcome(entry: OutboxEntry, receipt: { receipt: string; reason?:
   return { ...rest, status: "sent", path: "keeper", receipt: receipt.receipt, sentAt: now };
 }
 
+/** The sends a lookup can settle: taken by the hub on the keeper path, or in doubt. */
+function lookedUp(entry: OutboxEntry): boolean {
+  if (entry.status === "failed") return entry.ambiguous === true;
+  return (entry.status === "sent" || entry.status === "unconfirmed") && entry.path === "keeper";
+}
+
+/** A stored result, in the outbox's terms. */
+function storedResult(result: Record<string, unknown>): SendResultData {
+  return {
+    ok: result.ok === true,
+    ...(typeof result.note === "string" ? { note: result.note } : {}),
+    ...(result.cancelled === true ? { cancelled: true } : {}),
+  };
+}
+
 function errorCode(response: JsonResponse): string {
   const code = (response.body as { error?: { code?: unknown } } | undefined)?.error?.code;
   return typeof code === "string" ? code : "";
@@ -199,6 +245,8 @@ export class Outbox {
   /** A receipt that came for the send this page is claiming or posting: the post's end settles against it. */
   private receiptInFlight: { commandId: string; receipt: string; reason?: string } | null = null;
   private lateWhileLoading = new Map<string, { entry: OutboxEntry; settled: boolean }>();
+  private checking: Promise<void> | null = null;
+  private checkAgain = false;
   /** Ids this outbox removed while loading (discarded, retried, settled): never taken back from the load or written again. */
   private removed = new Set<string>();
   /** Ids an earlier outbox of this page handed over. */
@@ -250,6 +298,7 @@ export class Outbox {
     if (this.gone !== null) this.sessionGone(this.gone);
     this.changed();
     void this.flush();
+    void this.recheck();
   }
 
   /** `init()`'s merge, then what was held while loading. */
@@ -440,6 +489,68 @@ export class Outbox {
     this.changed();
   }
 
+  /** The hub's features became known, or changed: a send waiting on them may go, and lookups may run. */
+  featuresChanged(): void {
+    void this.flush();
+    void this.recheck();
+  }
+
+  /** A catch-up's state frame arrived: a result it did not replay can be looked up now. */
+  caughtUp(): void {
+    void this.recheck();
+  }
+
+  // -- lookups (G31) ------------------------------------------------------
+
+  /**
+   * Ask the hub what became of every send it took (`sent` or `unconfirmed` on the keeper path) and every send in
+   * doubt (`failed`, `ambiguous`), oldest first, one at a time, when it lists `command_lookup`. An answer is
+   * applied as the stream's frame would be. A call while one runs is folded into it. Never a message post.
+   */
+  recheck(): Promise<void> {
+    if (this.closed || !this.ready || this.options.features?.()?.lookup !== true) return Promise.resolve();
+    if (this.checking !== null) {
+      this.checkAgain = true;
+      return this.checking;
+    }
+    this.checking = (async () => {
+      try {
+        do {
+          this.checkAgain = false;
+          await this.lookups();
+        } while (this.checkAgain && !this.closed);
+      } finally {
+        this.checking = null;
+      }
+    })();
+    return this.checking;
+  }
+
+  private async lookups(): Promise<void> {
+    for (const { commandId } of [...this.list]) {
+      if (this.closed || this.options.features?.()?.lookup !== true) return;
+      const entry = this.list.find((e) => e.commandId === commandId);
+      if (entry === undefined || !lookedUp(entry)) continue;
+      let response: JsonResponse;
+      try {
+        response = await this.options.transport.json(sessionPath(entry.session, `commands/${encodeURIComponent(commandId)}`));
+      } catch {
+        continue; // asked again after the next catch-up
+      }
+      if (this.closed) return;
+      if (response.status !== 200) continue; // 404: the store does not have it, which proves nothing
+      const body = (response.body ?? {}) as { command_id?: unknown; receipt?: unknown; reason?: unknown; result?: unknown };
+      if (body.command_id !== commandId) continue;
+      const result = body.result;
+      if (result !== undefined && result !== null && typeof result === "object") {
+        const now = this.list.find((e) => e.commandId === commandId);
+        if (now !== undefined) await this.settle(now, storedResult(result as Record<string, unknown>));
+      } else if (typeof body.receipt === "string" && body.receipt !== "") {
+        await this.received(commandId, body.receipt, typeof body.reason === "string" ? body.reason : undefined);
+      }
+    }
+  }
+
   // -- delivery ---------------------------------------------------------
 
   /** Age what is held, then send what may go, oldest first. A second call while one runs is folded into it. */
@@ -498,6 +609,8 @@ export class Outbox {
           // reads only `client_id`, which is also the id its `command.result` is filed under.
           command_id: entry.commandId,
           client_id: entry.commandId,
+          // The keeper path or nothing (G31): set on every post of a send claimed as keeper-only.
+          ...(entry.keeperOnly === true ? { require_keeper: true } : {}),
         },
       });
     } catch {
@@ -528,16 +641,30 @@ export class Outbox {
     return entry === undefined || TERMINAL.has(entry.status) ? undefined : entry;
   }
 
-  /** A waiting entry's post: its first, or again after an answer that said nothing was stored (429, 425). */
+  /** `require_keeper` as the hub lists it: true, false, or null while not known. */
+  private requireKeeper(): boolean | null {
+    const features = this.options.features?.() ?? null;
+    return features === null ? null : features.requireKeeper;
+  }
+
+  /**
+   * A waiting entry's post: its first, again after an answer that said nothing was stored (429, 425, 409
+   * `not_kept`), or again keeper-only after an answer that may mean it was applied (G31).
+   */
   private async deliver(entry: OutboxEntry): Promise<Outcome> {
+    // A keeper-only send in doubt is posted again only once the hub is known to list `require_keeper`: it waits,
+    // unclaimed, until then (its deadline still runs).
+    if (entry.ambiguous === true && entry.keeperOnly === true && this.requireKeeper() === null) return "held";
     // Claim it first: the counted attempt and this page's claim are on disk before the request leaves, in one
     // transaction, so a reload or a second tab never makes a "first" post of something already posted.
     // It is in flight from here: the view offers no Discard while the claim is being written.
     this.inFlight = entry.commandId;
     this.changed();
+    // Whether this post asks for the keeper path: recorded with the claim (an ambiguous entry keeps its own).
+    const keeperOnly = this.requireKeeper() === true && this.options.keeperRow?.() === true;
     let claim: Claim;
     try {
-      claim = await this.options.storage.claim(entry, this.owner, this.options.timers.now(), CLAIM_STALE_MS);
+      claim = await this.options.storage.claim(entry, this.owner, this.options.timers.now(), CLAIM_STALE_MS, keeperOnly);
     } catch (error) {
       this.notPosting();
       throw error;
@@ -584,10 +711,16 @@ export class Outbox {
       await this.byReceipt(attempted, before);
       return "done";
     }
-    if (attempted.ambiguous) {
+    const repeat = attempted.ambiguous === true;
+    if (repeat && !(attempted.keeperOnly === true && this.requireKeeper() === true)) {
       this.notPosting();
-      // An earlier post may have been applied. No row is sure to de-duplicate a repeat: the hub picks the route
-      // when the post arrives, and a session can leave its keeper after this page last saw the row.
+      if (attempted.keeperOnly === true && this.requireKeeper() === null) {
+        // Not known yet whether this hub takes `require_keeper`: the claim is released, and it waits.
+        await this.save(attempted);
+        return "held";
+      }
+      // An earlier post may have been applied, and a plain repeat could reach the route that does not
+      // de-duplicate: the hub picks the route when the post arrives, and a session can leave its keeper.
       await this.fail(attempted, MAYBE_SENT);
       return "done";
     }
@@ -599,14 +732,16 @@ export class Outbox {
     }
     const now = this.current(entry.commandId);
     if (now === undefined) return "done"; // a result came first
-    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response))) {
+    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response) || repeat)) {
       // The stream said the hub took it (or refused it) while the post was out: that settles it when the HTTP
       // answer leaves the outcome open (lost, 408, a 5xx), says "not now" (425, 429, 401, 403), or is a 2xx.
-      // A definite refusal (another 4xx) keeps its own outcome below.
+      // A definite refusal (another 4xx) keeps its own outcome below, except on a repeat, where a refusal says
+      // nothing about the earlier post that the receipt is for.
       await this.byReceipt(now, receipt);
       return "done";
     }
     if (response === null) return this.unsure(now);
+    const askedKeeper = attempted.keeperOnly === true;
     const { status } = response;
     if (status >= 200 && status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData; reason?: unknown };
@@ -648,6 +783,17 @@ export class Outbox {
       // The legacy path still holds a send under this id: an earlier post of ours got there. It is sent.
       await this.save({ ...now, status: "sent", path: "legacy", sentAt: this.options.timers.now() });
       return "done";
+    }
+    if (repeat) {
+      // A refusal of a repeat says nothing about the earlier post: the routes refuse before they read the store.
+      await this.fail(now, MAYBE_SENT);
+      return "done";
+    }
+    if (askedKeeper && status === 409 && errorCode(response) === "not_kept") {
+      // No keeper holds the session, and nothing was stored or queued: tried again, and the next claim reads the
+      // row again (a plain post once the row no longer says keeper).
+      await this.save({ ...now, lastError: NOT_KEPT });
+      return "retry";
     }
     // The hub looked at it and said no: a repeat gets the same answer.
     await this.fail(now, status === 404 ? SESSION_GONE : errorText(response));
@@ -722,8 +868,15 @@ export class Outbox {
     void this.flush();
   }
 
-  /** An answer that may mean the hub applied the send: it ends there, and is never posted again. */
+  /**
+   * An answer that may mean the hub applied the send. A plain post's send ends there, and is never posted again.
+   * A keeper-only one waits, `ambiguous`, to be posted again keeper-only under the same id on the backoff.
+   */
   private async unsure(entry: OutboxEntry): Promise<Outcome> {
+    if (entry.keeperOnly === true) {
+      await this.save({ ...entry, ambiguous: true, lastError: REPEATING });
+      return "retry";
+    }
     await this.fail(entry, MAYBE_SENT);
     return "done";
   }
@@ -759,9 +912,11 @@ export class Outbox {
             this.changed();
           } else {
             this.adopt(resolved);
-            // Its post may have reached the hub, and it is never posted again: it ends here.
+            // Its post may have reached the hub. A keeper-only one is posted again by the next pass (unless the hub
+            // is known not to take `require_keeper`); any other is never posted again: it ends here.
             const standing = this.current(resolved.commandId);
-            if (standing?.status === "waiting" && standing.ambiguous === true) await this.fail(standing, MAYBE_SENT);
+            const again = standing?.keeperOnly === true && this.requireKeeper() !== false;
+            if (standing?.status === "waiting" && standing.ambiguous === true && !again) await this.fail(standing, MAYBE_SENT);
           }
         }
       } else if (entry.path === "legacy") {

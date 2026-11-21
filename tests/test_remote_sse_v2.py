@@ -1597,6 +1597,7 @@ class TestSchema(unittest.TestCase):
             "snapshot_messages": 200,
             "features": ["sync_v2", "snapshot", "live_resume",
                          "delta_offset", "ping", "command_id",
+                         "require_keeper", "command_lookup",
                          "session_runtime"]})
 
     def test_the_validator(self):

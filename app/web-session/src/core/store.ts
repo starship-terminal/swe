@@ -12,7 +12,17 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
 
 import { gate, gateSend, type Refusal } from "./gate";
-import { Outbox, randomOwner, SESSION_GONE, type OutboxView, type SendInput, type SendResultData } from "./outbox";
+import {
+  FEATURE_COMMAND_LOOKUP,
+  FEATURE_REQUIRE_KEEPER,
+  Outbox,
+  randomOwner,
+  SESSION_GONE,
+  type OutboxFeatures,
+  type OutboxView,
+  type SendInput,
+  type SendResultData,
+} from "./outbox";
 import { describeSends, type SendView } from "./sends";
 import { DeferredStorage, MemoryStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
@@ -150,6 +160,11 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   let snapshotTimer: unknown = null;
   // Messages the stream ended while a snapshot was on its way: the snapshot's text for them is old.
   let endedMeanwhile = new Set<string>();
+  // What `/v1/status` lists, read each time the stream goes live and forgotten when it leaves live (G31): a hub
+  // that restarts as an older version drops the stream first. Null while not known.
+  let features: OutboxFeatures | null = null;
+  let liveStretch = 0;
+  let statusTimer: unknown = null;
 
   const store = createStore<SessionStoreState>()((set, get) => {
     const setSession = (session: SessionState) => set({ session });
@@ -176,6 +191,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const before = get().session;
       const { state, effects } = reduce(before, frame);
       set({ session: state });
+      // A catch-up ended: a result it did not replay (a snapshot carries none) can be looked up now.
+      if (!before.caughtUp && state.caughtUp) outbox?.caughtUp();
       // The session's row is known now: sends that waited for that may go.
       if (!before.loaded && state.loaded) {
         refreshSends();
@@ -250,6 +267,37 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       }, backoffDelay(attempt, random, options.backoff));
     };
 
+    // -- the hub's features (G31) -----------------------------------------
+
+    const forgetFeatures = (): void => {
+      liveStretch++;
+      if (statusTimer !== null) timers.clearTimeout(statusTimer);
+      statusTimer = null;
+      features = null;
+    };
+
+    const fetchFeatures = async (attempt: number): Promise<void> => {
+      const stretch = liveStretch;
+      let listed: unknown;
+      try {
+        const response = await transport.json("/v1/status");
+        if (response.status >= 200 && response.status < 300) listed = (response.body as { features?: unknown } | undefined)?.features;
+      } catch {
+        // Tried again below.
+      }
+      if (stretch !== liveStretch) return; // the stream left live meanwhile: this answer may be another hub's
+      if (Array.isArray(listed)) {
+        features = { requireKeeper: listed.includes(FEATURE_REQUIRE_KEEPER), lookup: listed.includes(FEATURE_COMMAND_LOOKUP) };
+        outbox?.featuresChanged();
+        return;
+      }
+      // Asked again on the backoff for as long as the stream stays live: a send in doubt waits on the answer.
+      statusTimer = timers.setTimeout(() => {
+        statusTimer = null;
+        if (stretch === liveStretch) void fetchFeatures(attempt + 1);
+      }, backoffDelay(attempt, random, options.backoff));
+    };
+
     // -- the connection --------------------------------------------------
 
     const onStatus = (connection: ConnectionStatus): void => {
@@ -257,7 +305,13 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       set({ connection });
       refreshSends();
       const live = connection.state === "live";
-      if (live && !wasLive) outbox?.wake();
+      if (live && !wasLive) {
+        forgetFeatures();
+        void fetchFeatures(1);
+        outbox?.wake();
+      } else if (!live && wasLive) {
+        forgetFeatures();
+      }
       wasLive = live;
       // States nothing will send out of: every send still open ends now, with the reason.
       if (connection.state !== before) {
@@ -334,6 +388,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
             const result = get().session.commands[commandId]?.result;
             return result === undefined ? undefined : sendResult(result);
           },
+          features: () => features,
+          keeperRow: () => get().session.row?.mode === "keeper",
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
           onChange: (view) => setOutbox(view),
         });
@@ -373,6 +429,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         snapshotBusy = false;
         snapshotWanted = null;
         wasLive = false;
+        forgetFeatures();
         set({ started: false });
       },
 

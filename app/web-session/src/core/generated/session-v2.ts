@@ -16,6 +16,8 @@ export const PROTOCOL = {
     "delta_offset",
     "ping",
     "command_id",
+    "require_keeper",
+    "command_lookup",
     "session_runtime"
   ]
 } as const;
@@ -609,4 +611,19 @@ export type Status = {
   features: string[];
   boot_id: string;
   [key: string]: unknown;
+};
+
+/** GET /v1/sessions/{id}/commands/{command_id}: one stored command, when /v1/status lists command_lookup. `receipt` is the stored status; `result` is there once the command finished. 404 unknown_command when the hub does not hold the id for the session. */
+export type CommandLookup = {
+  ok: boolean;
+  session: string;
+  command_id: string;
+  op: string;
+  receipt: "accepted" | "held" | "queued" | "rejected";
+  reason?: string;
+  result?: {
+    [key: string]: unknown;
+  };
+  received_at: number;
+  updated_at: number;
 };

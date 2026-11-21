@@ -43,8 +43,16 @@ export interface OutboxEntry {
   receipt?: string;
   /** When the hub's 2xx answer came. */
   sentAt?: number;
-  /** An earlier post may have been applied (an abandoned claim): it is never posted again. */
+  /**
+   * An earlier post may have been applied (no answer, a 5xx, an abandoned claim). It is posted again only when
+   * `keeperOnly` is set and the hub lists `require_keeper`, and then only with `require_keeper: true`.
+   */
   ambiguous?: boolean;
+  /**
+   * Its last post carried `require_keeper: true` (G31): set or cleared by each claim, in the claim's transaction,
+   * and kept as it is while the entry is `ambiguous`, so every post of it that may have been applied went keeper-only.
+   */
+  keeperOnly?: boolean;
   /** Why the last attempt did not land, while it waits to be tried again. */
   lastError?: string;
   /** Why it failed or is unconfirmed. */
@@ -131,13 +139,18 @@ export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
 /**
  * The claim rule, the same for every storage: given the entry as stored, may `owner` post it now? An
  * abandoned claim (another page's, older than `staleMs`, or this page's own) means an earlier post may have
- * reached the hub, so the entry comes back `ambiguous` and the outbox ends it instead of posting it.
+ * reached the hub, so the entry comes back `ambiguous`: the outbox posts it again only keeper-only, or ends it.
+ *
+ * `keeperOnly` says whether this post will carry `require_keeper: true`. It is recorded with the claim, except on
+ * an `ambiguous` entry, which keeps the value its earlier posts had (the outbox posts such an entry only when that
+ * value is true).
  */
 export function decideClaim(
   stored: OutboxEntry | undefined,
   owner: string,
   now: number,
   staleMs: number,
+  keeperOnly = false,
 ): { claim: Claim; write?: OutboxEntry } {
   if (stored === undefined) return { claim: { kind: "missing" } };
   stored = normalizeEntry(stored);
@@ -149,6 +162,10 @@ export function decideClaim(
     entry = { ...entry, ambiguous: true };
   }
   const claimed: OutboxEntry = { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } };
+  if (claimed.ambiguous !== true) {
+    if (keeperOnly) claimed.keeperOnly = true;
+    else delete claimed.keeperOnly;
+  }
   return { claim: { kind: "claimed", entry: claimed }, write: claimed };
 }
 
@@ -163,11 +180,11 @@ export interface OutboxStorage {
   put(entry: OutboxEntry): Promise<void>;
   remove(commandId: string): Promise<void>;
   /**
-   * Claim an entry for posting, atomically: read it as stored and, by `decideClaim`, write the claim and the
-   * counted attempt in the same transaction. `entry` is the outbox's own copy, which a storage with nothing
-   * stored (memory) decides on.
+   * Claim an entry for posting, atomically: read it as stored and, by `decideClaim`, write the claim, the
+   * counted attempt and `keeperOnly` in the same transaction. `entry` is the outbox's own copy, which a storage
+   * with nothing stored (memory) decides on.
    */
-  claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim>;
+  claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly?: boolean): Promise<Claim>;
   /** Resolve a stale claim on an entry, atomically, by `decideAbandon`. Answers the entry as it now stands. */
   abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined>;
   /**
@@ -191,8 +208,8 @@ export class MemoryStorage implements OutboxStorage {
   async put(): Promise<void> {}
   async remove(): Promise<void> {}
   /** In memory there are no other pages to coordinate with: the outbox's own copy decides. */
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    return decideClaim(entry, owner, now, staleMs).claim;
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
+    return decideClaim(entry, owner, now, staleMs, keeperOnly).claim;
   }
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
     return decideAbandon(entry, now, staleMs).entry;
@@ -241,8 +258,8 @@ export class DeferredStorage implements OutboxStorage {
     await (await this.ready).remove(commandId);
   }
 
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    return (await this.ready).claim(entry, owner, now, staleMs);
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
+    return (await this.ready).claim(entry, owner, now, staleMs, keeperOnly);
   }
 
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
@@ -302,7 +319,7 @@ class IndexedDbStorage implements OutboxStorage {
   }
 
   /** One read-write transaction: IndexedDB runs them one at a time across every tab, so two pages cannot both claim. */
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
     const tx = this.db.transaction(STORE, "readwrite");
     const finished = done(tx);
     const store = tx.objectStore(STORE);
@@ -310,7 +327,7 @@ class IndexedDbStorage implements OutboxStorage {
       const read = store.get(entry.commandId);
       read.onerror = () => reject(read.error ?? new Error("IndexedDB read failed"));
       read.onsuccess = () => {
-        const decided = decideClaim(read.result as OutboxEntry | undefined, owner, now, staleMs);
+        const decided = decideClaim(read.result as OutboxEntry | undefined, owner, now, staleMs, keeperOnly);
         if (decided.write !== undefined) store.put(decided.write);
         resolve(decided.claim);
       };
@@ -501,8 +518,8 @@ export class FallbackStorage implements OutboxStorage {
     if (answer === undefined) this.heldRemovals.add(commandId);
   }
 
-  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    const answer = await this.disk((db) => db.claim(entry, owner, now, staleMs));
+  async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number, keeperOnly = false): Promise<Claim> {
+    const answer = await this.disk((db) => db.claim(entry, owner, now, staleMs, keeperOnly));
     if (answer !== undefined) return answer.value;
     return { kind: "unrecorded", entry: this.held.get(entry.commandId) ?? entry };
   }

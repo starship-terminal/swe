@@ -41,8 +41,9 @@ export interface SendContext {
 }
 
 function waitingReason(entry: OutboxEntry, context: SendContext): string {
-  // An earlier post may have reached the hub: it is never posted again, so "it will be sent" would be untrue.
-  if (entry.ambiguous === true) return "This may or may not have been sent. It will not be sent again.";
+  // An earlier post may have reached the hub. Unless it went keeper-only (G31) it is never posted again, so "it
+  // will be sent" would be untrue.
+  if (entry.ambiguous === true && entry.keeperOnly !== true) return "This may or may not have been sent. It will not be sent again.";
   if (context.outbox.paused === "unauthorized" || context.connection.state === "unauthorized") {
     return "Waiting: this device is not signed in to the hub. It will be sent once it is.";
   }
@@ -55,6 +56,9 @@ function waitingReason(entry: OutboxEntry, context: SendContext): string {
     return "Being sent from another tab, or from a page that closed while sending. Checked again within a minute.";
   }
   if (entry.lastError !== undefined) return `${entry.lastError}. Trying again.`;
+  if (entry.ambiguous === true) {
+    return "The hub may have this message already. It will be sent again under the same id, which the hub never delivers twice.";
+  }
   if (context.connection.state === "hub_down") return "Waiting: the hub is not answering. It will be sent once it does.";
   return "Waiting to be sent.";
 }

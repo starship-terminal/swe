@@ -1435,6 +1435,50 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_error(self, status: int, code: str, message: str) -> None:
         self._send_json(status, protocol.error(code, message))
 
+    def _refuse_unless_kept(self, body: dict) -> bool:
+        """Answer 409 ``not_kept`` for a message whose body says
+        ``require_keeper: true`` that reached a route other than the
+        keeper's (G31): the client may be repeating a message the
+        keeper may already have, and only the keeper path
+        de-duplicates. Called by the legacy routes (``_send_message``
+        and the satellite forward) before they queue anything, so
+        nothing is stored or queued. True when it refused."""
+        if body.get("require_keeper") is not True:
+            return False
+        self._send_error(409, "not_kept", (
+            "this session is not run by a session keeper; the message "
+            "was not sent"))
+        return True
+
+    def _command_lookup(self, key: str, command_id: str) -> None:
+        """``GET /v1/sessions/{key}/commands/{id}``: one stored command,
+        its receipt (the stored status) and result, from the commands
+        table (kept 7 days after it finished). Reads only: nothing is
+        written, published or delivered. 404 ``unknown_command`` when
+        the store does not hold the id for this session."""
+        store = self._state.runtime.store
+        cmd = None
+        if store is not None and store_mod._COMMAND_ID_RE.fullmatch(
+                command_id):
+            try:
+                cmd = store.get_command(command_id)
+            except store_mod.StoreError as exc:
+                self._send_error(503, "store_failed", str(exc))
+                return
+        if cmd is None or cmd.session != key:
+            self._send_error(404, "unknown_command",
+                             "this session has no command with that id")
+            return
+        body = {"ok": True, "session": key, "command_id": cmd.command_id,
+                "op": cmd.op, "receipt": cmd.status,
+                "received_at": cmd.received_at,
+                "updated_at": cmd.updated_at}
+        if cmd.reason:
+            body["reason"] = cmd.reason
+        if cmd.result is not None:
+            body["result"] = cmd.result
+        self._send_json(200, body)
+
     def _refuse_unless_attached(self, row: dict) -> bool:
         """Answer 409 not_attached for a session the hub only observes.
 
@@ -2587,6 +2631,11 @@ class _Handler(BaseHTTPRequestHandler):
         if path.startswith("/v1/sessions/"):
             stem = path[len("/v1/sessions/"):]
             key_part, sep, action = stem.rpartition("/")
+            # ``{key}/commands/{id}``: one stored command (G31).
+            owner_part, sep2, middle = key_part.rpartition("/")
+            if sep and sep2 and middle == "commands":
+                self._command_lookup(unquote(owner_part), unquote(action))
+                return
             key = unquote(key_part if sep else stem)
             if sep and action == "commands":
                 self._slash_commands(key)
@@ -3511,6 +3560,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_error(400, "bad_body", "unreadable JSON body")
             return
         if action == "message":
+            if self._refuse_unless_kept(body):
+                return
             try:
                 cmd = protocol.parse_message_command(body)
             except ValueError as exc:
@@ -3651,6 +3702,8 @@ class _Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             self._send_error(400, "bad_body", "unreadable JSON body")
+            return
+        if self._refuse_unless_kept(body):
             return
         try:
             cmd = protocol.parse_message_command(body)

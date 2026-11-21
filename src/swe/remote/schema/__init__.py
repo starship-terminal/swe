@@ -288,6 +288,31 @@ def build() -> dict:
         "required": ["ok", "v", "protocols", "features", "boot_id"],
         "additionalProperties": True,
     }
+    defs["CommandLookup"] = {
+        "description": "GET /v1/sessions/{id}/commands/{command_id}: one "
+                       "stored command, when /v1/status lists "
+                       "command_lookup. `receipt` is the stored status; "
+                       "`result` is there once the command finished. "
+                       "404 unknown_command when the hub does not hold "
+                       "the id for the session.",
+        "type": "object",
+        "properties": {
+            "ok": {"type": "boolean"},
+            "session": {"type": "string", "minLength": 1},
+            "command_id": {"type": "string", "minLength": 1},
+            "op": {"type": "string", "minLength": 1},
+            "receipt": {"type": "string",
+                        "enum": sorted(ev.RECEIPT_STATUSES
+                                       - {"duplicate"})},
+            "reason": {"type": "string"},
+            "result": {"type": "object", "additionalProperties": True},
+            "received_at": {"type": "number"},
+            "updated_at": {"type": "number"},
+        },
+        "required": ["ok", "session", "command_id", "op", "receipt",
+                     "received_at", "updated_at"],
+        "additionalProperties": False,
+    }
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": SCHEMA_ID,
