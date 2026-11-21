@@ -12,7 +12,8 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
 
 import { gate, gateSend, type Refusal } from "./gate";
-import { Outbox, type OutboxView, type SendInput } from "./outbox";
+import { Outbox, SESSION_GONE, type OutboxView, type SendInput } from "./outbox";
+import { describeSends, type SendView } from "./sends";
 import { DeferredStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
 import { emptySession, type SessionState } from "./state";
@@ -57,8 +58,10 @@ export interface SessionStoreState {
   session: SessionState;
   /** The state of the connection. */
   connection: ConnectionStatus;
-  /** Sends not yet delivered, and whether they survive a reload. */
+  /** Sends not yet finished, and whether they survive a reload. */
   outbox: OutboxView;
+  /** What each unfinished send shows, with its reason: what a message bubble reads. */
+  sends: SendView[];
   /** `start` has run and not been stopped. */
   started: boolean;
 
@@ -141,6 +144,24 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   const store = createStore<SessionStoreState>()((set, get) => {
     const setSession = (session: SessionState) => set({ session });
 
+    /** Each unfinished send with what its bubble shows (`sends`): recomputed whenever what it reads changes. */
+    const refreshSends = (): void => {
+      const state = get();
+      set({
+        sends: describeSends({
+          outbox: state.outbox,
+          connection: state.connection,
+          loaded: state.session.loaded,
+          online: environment.online(),
+        }),
+      });
+    };
+
+    const setOutbox = (view: OutboxView): void => {
+      set({ outbox: view });
+      refreshSends();
+    };
+
     const ingest = (frame: Frame): void => {
       const before = get().session;
       const { state, effects } = reduce(before, frame);
@@ -150,7 +171,10 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       // session, so this is when sends acknowledged earlier are asked about again.
       if (frame.type === "session.state" && frame.data.live !== undefined) outbox?.recheckSent();
       // The session's row is known now: sends that waited for that may go.
-      if (!before.loaded && state.loaded) outbox?.wake();
+      if (!before.loaded && state.loaded) {
+        refreshSends();
+        outbox?.wake();
+      }
       if (snapshotBusy) {
         const still = new Set(state.live.map((entry) => entry.id));
         for (const entry of before.live) if (!still.has(entry.id)) endedMeanwhile.add(entry.id);
@@ -224,12 +248,17 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     // -- the connection --------------------------------------------------
 
     const onStatus = (connection: ConnectionStatus): void => {
+      const before = get().connection.state;
       set({ connection });
+      refreshSends();
       const live = connection.state === "live";
-      if (live && !wasLive) {
-        outbox?.wake();
-      }
+      if (live && !wasLive) outbox?.wake();
       wasLive = live;
+      // States nothing will send out of: every send still open ends now, with the reason.
+      if (connection.state !== before) {
+        if (connection.state === "gone") outbox?.sessionGone(SESSION_GONE);
+        else if (connection.state === "outdated") outbox?.sessionGone("Not sent: the hub is too old for this view.");
+      }
     };
 
     const gated = async (
@@ -257,7 +286,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     return {
       session: emptySession(),
       connection: { state: "connecting", attempt: 0, since: timers.now(), retryAt: null, detail: "" },
-      outbox: { entries: [], persistent: false, note: "", paused: null },
+      outbox: { entries: [], persistent: false, note: "", paused: null, inFlight: null },
+      sends: [],
       started: false,
 
       start() {
@@ -275,15 +305,15 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           timers,
           random,
           newId,
-          ready: () => environment.online() && get().session.loaded,
-          route: () => {
-            // A keeper holds the session when its row says so and its capabilities are known (they are
-            // null for a session no keeper holds). Not yet loaded counts as not held.
-            const { row, caps } = get().session;
-            return row?.["mode"] === "keeper" && caps !== null ? "keeper" : "legacy";
-          },
+          // Nothing is posted before the session's row is known, while offline, or while the hub refuses.
+          canPost: () =>
+            environment.online() &&
+            get().session.loaded &&
+            !["unauthorized", "gone", "outdated", "offline"].includes(get().connection.state),
+          // A repeat is safe only where the hub de-duplicates by id: a session a keeper holds.
+          keeperHeld: () => get().session.row?.["mode"] === "keeper",
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
-          onChange: (view) => set({ outbox: view }),
+          onChange: (view) => setOutbox(view),
         });
         void outbox.init();
         supervisor = new Supervisor({

@@ -198,63 +198,96 @@ handler, so they pass none.
 
 ## The outbox
 
-Only sends go through it. An entry
-(`{commandId, session, text, attachments, mode, createdAt, status,
-attempts, receipt?, error?}`) is made when the person sends, with a
-`command_id` that never changes, and written to IndexedDB before the
-first attempt.
+Only sends go through it. Approvals, Stop, Restore and the queue edits
+are never queued (see "Gated actions").
 
-| Status | Means |
-|---|---|
-| `pending` | no receipt yet; retried with backoff, oldest first, one at a time (a send that cannot go holds back the ones behind it) |
-| `sent` | the hub gave a receipt (accepted, queued, duplicate, held); waits for its `command.result` |
-| `failed` | the hub refused it (409, 422, 404 ...) or it expired; kept with `error` until the person dismisses it or sends it again as a new message |
+### What the hub does with a send
 
-- **When a send is repeated, and when it never is.** The hub de-duplicates
-  on `command_id` only for a session a keeper holds (it stores a receipt and
-  a result and answers a repeat with them). For any other session
-  (`hub.py` `_send_message`) it reads only `client_id`, does not
-  de-duplicate, and files the result under an id it may leave empty, so a
-  repeat types the message into the session again. The outbox therefore
-  keeps two paths, told apart by the row and state the client holds at the
-  time (`row.mode` is `keeper` and `caps` is not null: `route()`):
+The hub has two paths behind `POST /v1/sessions/{key}/message`, and they
+promise different things:
 
-  | | Keeper-held session | Any other session |
-  |---|---|---|
-  | Body | `command_id` and `client_id`, the same id | the same |
-  | A 2xx answer | with a `receipt`: the entry becomes `sent`, `path: "keeper"`, and waits for its `command.result`. Without one it is settled like the other path | settles it: the entry is removed. It is never kept for a result |
-  | No answer (network error, timeout), 408, 500, 502, 504 | retried under the same id with backoff (safe: the hub answers `duplicate`) | **failed**, with "may or may not have been sent ... send it again if it did not arrive". Never retried |
-  | 429, 503, 425 | retried | retried |
-  | Asked again after a reconnect or a restart | yes, each `sent` entry with `path: "keeper"` | never |
+| | Keeper path (a session a keeper holds) | Legacy path (any other session: `hub.py` `_send_message`, and a satellite's `queue_command`) |
+|---|---|---|
+| Reads the id from | `command_id` (or `client_id`, its old name) | `client_id` only |
+| 2xx answer | 202 with a `receipt` (`accepted`, `queued`, `held`); a repeat gets the stored receipt again, and the stored `result` once there is one | 202 `{ok, queued, client_id, waiting}`, no receipt |
+| De-duplicates a repeat | yes: never applied twice | no: a repeat types the message in again (a repeat while the first is still queued is a 409) |
+| Its `command.result` | journaled under the `command_id` | a v1 `command.result` with `client_id` set, which the v2 stream serves under `command_id`: on delivery (`ok`), "session stayed busy for 30 min; message not sent", "hub restarted; message not sent", a failed injection, or `cancelled` from a queue action. The message is typed in only once the session is idle, for up to 30 minutes (`protocol.IDLE_WAIT_MAX_S`) |
+| After a catch-up by replay | results journaled while away are replayed | the same |
+| After a catch-up by snapshot | not in the snapshot (results are bookkeeping); asking again under the id returns the stored result | not in the snapshot, and there is no way to ask: the result is lost to this client |
+| A result the hub made for the stream (`seq` 0) | not replayed; asking again returns it | not replayed and not askable |
 
-  A retry of a `pending` entry that is no longer on the keeper path (the
-  session was detached between attempts) fails the same way instead of
-  posting, and a `sent` keeper entry is not asked about again once the
-  session is no longer keeper-held. Nothing is posted before the session's
-  row has been seen and the device is online: before that `route()` would be
-  a guess, so an early send waits on disk. A send to a session whose row has
-  `control` other than `full` is refused (`read_only`, with
-  `control_reason`).
+### The send lifecycle
+
+An entry is `{commandId, session, text, attachments, mode, createdAt,
+status, attempts, path?, receipt?, sentAt?, ambiguous?, lastError?,
+error?, endedAt?}` (`OutboxEntry`). Its `commandId` is made once and sent
+as both `command_id` and `client_id` on every post. Statuses:
+
+| Status | Terminal | Means |
+|---|---|---|
+| `waiting` | no | kept on this device; not posted yet (`attempts` 0), or due to be tried again (`lastError`) |
+| `sent` | no | the hub answered 2xx. `path` is `keeper` when that answer had a `receipt`, `legacy` when it did not. Waits for its `command.result` |
+| `failed` | yes | not delivered, or may or may not have been; `error` says which |
+| `unconfirmed` | yes | the hub took it, but no result came in the time one should have; `error` says so |
+
+**One invariant.** An entry leaves the outbox in exactly two ways: a
+`command.result` for its id that says ok (or that a queue action cancelled
+it: the person removed it, or steered it and its text went on as a new
+message), or the person dismissing it (`discardSend`, or `retrySend`,
+which replaces it with a new send). A 2xx answer never removes an entry.
+Nothing still open is dropped by age: deadlines end it in a terminal state
+with a reason. A terminal entry nobody dismisses is removed 7 days after it
+ended (`TERMINAL_KEPT_MS`), so a session that no longer exists does not
+bring it back on every reload for ever.
+
+Every transition:
+
+| From | Event | To |
+|---|---|---|
+| (new) | `send()` | `waiting`, written to storage before anything else happens |
+| `waiting` | may not post (offline, row not seen yet, unauthorized, gone, outdated) | stays `waiting`; `sends[]` says why |
+| `waiting` | post answered 2xx with a `receipt` | `sent`, `path: keeper` |
+| `waiting` | post answered 2xx without one | `sent`, `path: legacy` |
+| `waiting` | post answered 2xx with the stored `result` | removed if ok or cancelled, else `failed` with its note |
+| `waiting` | no answer, 408, or a 5xx other than 503, and the row says `mode: keeper` | `waiting`, `ambiguous`, tried again with backoff under the same id |
+| `waiting` | the same, and the row does not say keeper | `failed`: "may or may not have been sent: check the session, and send it again if it did not arrive" |
+| `waiting` (`ambiguous`) | its retry comes and the row no longer says keeper | `failed`, the same reason; nothing is posted |
+| `waiting` | 429, 425, 503 (the hub said not now, before it queued anything) | `waiting`, tried again with backoff, on any path |
+| `waiting` | 401, 403 | `waiting`; the outbox pauses until `wake()` |
+| `waiting` | 404 | `failed`: "this session no longer exists" |
+| `waiting` | another 4xx (409, 422 ...) | `failed`, with the hub's message |
+| `waiting` | 24 hours since it was made (`OUTBOX_TTL_MS`) | `failed`: "the hub could not be reached for 24 hours" |
+| `sent` (keeper) | a catch-up ends (the state frame with `live[]`) and the row still says keeper | asked again under the same id: a stored result settles it, else it stays `sent` |
+| `sent` (keeper) | 24 hours since it was made | `unconfirmed` |
+| `sent` (legacy) | 45 minutes since the hub took it (`LEGACY_CONFIRM_MS`, longer than the hub's 30 minute busy limit) | `unconfirmed`: "the hub took this message but never said whether it reached the session" |
+| `waiting`, `sent` | `command.result` ok or cancelled | removed |
+| `waiting`, `sent` | `command.result` not ok | `failed`, with its note |
+| `unconfirmed`, `failed` (may or may not) | `command.result` ok | removed: it did arrive |
+| any open | the connection reaches `gone` or `outdated` | `failed`, with that reason |
+| `failed`, `unconfirmed` | dismissed, retried, or 7 days since it ended | removed |
+
+Where a repeat is allowed: only where the hub de-duplicates by id. The
+entry's path is `keeper`, or it has no path yet and the row says `mode:
+keeper` (whatever `caps` says: a just-launched session has none yet), and
+in both cases the row still says so at the moment of the repeat. A legacy
+send is never posted twice. A `command.result` with an empty or unknown id
+changes nothing.
+
+When posting starts: the first post needs no guess about the path, but it
+waits until the device is online, the session's row has been seen (so a
+read-only session is refused, not posted), and the connection is not
+unauthorized, gone or outdated. A send made before the row is known is
+accepted and shown as waiting ("Waiting for the hub"); the deadlines above
+run on their own timer from the injected clock, so it cannot wait for ever.
+
+Other rules:
+
 - **On disk first.** `send()` resolves, and the entry becomes visible and
-  deliverable, only after its first write. A page that closes after the hub
-  took the message but before the write would lose the id a retry needs.
-- **A result ends it.** An ok result, or a cancelled one (taken out of the
-  queue, or steered), removes the entry. Any other result marks it failed
-  with the hub's note.
-- **After every catch-up** (a replay, a snapshot, an overflow recovery: each
-  ends with the state frame that carries `live[]`), and after a reload,
-  every `sent` entry on the keeper path is asked about again under its own
-  id. A catch-up by snapshot carries no `command.result`, and a failed
-  result the hub made for the stream has `seq` 0 and is not replayed, so a
-  result could have been missed whatever the `boot_id` says. It is asked
-  after the catch-up, not at the first frame, because the catch-up is what
-  says whether a keeper still holds the session. A `401` pauses the outbox
-  until `wake()`. A `command.result` with an empty id changes nothing.
-- **24 hours.** A `pending` entry older than that fails ("Not sent"), and a
-  `sent` one fails too ("No result from the hub in 24 hours: this message
-  may not have been delivered"): the hub holds a message for a sleeping
-  machine for the same time. Nothing is dropped without a reason a view
-  can show.
+  deliverable, only after its first write. A store stopped and started
+  again hands its entries, the ones still being written included, to the
+  new outbox.
+- **Order.** Sends go oldest first, one at a time: one that cannot go holds
+  back the ones behind it.
 - **No IndexedDB.** It can be missing, or throw (a private window, blocked
   site data, a sandboxed frame), when it opens or later. The outbox always
   keeps its entries in memory and treats the database as a write-through
@@ -262,8 +295,18 @@ first attempt.
   says why: `outbox.persistent` is false and `outbox.note` reads "IndexedDB
   is not available (...); sends are kept in memory and will not survive a
   reload". A view should show that note beside the composer.
-- **Not here.** Approvals, Stop, Restore and the queue edits are never
-  queued. See "Gated actions".
+
+### What a view reads: `sends`
+
+`store.getState().sends` (`describeSends`) is one `SendView` per entry,
+oldest first: `{commandId, text, attachments, mode, createdAt, shown,
+reason, canRetry, canDiscard}`. `shown` is `waiting`, `sending` (its post is
+on its way), `sent`, `failed` or `unconfirmed`, and `reason` is always one
+sentence for the person ("Waiting: you are offline. It will be sent when you
+are back.", "Queued: it will be sent when the current turn ends.", the
+hub's note for a failure). A message bubble reads this, not
+`session.commands`, which only holds what the stream said and misses what a
+snapshot catch-up leaves out.
 
 ## Gated actions
 
@@ -391,7 +434,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 236 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 245 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -459,9 +502,13 @@ changed here.
   wins; "Allowed on iPhone" is `resolution.by` (a device id: map it through
   the devices list).
 - **Composer.** `send()` is accepted at once and keeps the message
-  through a reload: show it as pending from `outbox.entries` until its
-  user message (same `commandId`) or its `queue[]` entry appears, and show
-  `failed` ones with `error` and the dismiss and resend actions. Show
+  through a reload. Draw each unfinished send from `sends` (one `shown` and
+  one `reason` each, see "What a view reads"), never from
+  `session.commands`. When a send's user message (same `commandId`) or its
+  `queue[]` entry appears, draw that instead of the pending bubble; a `sent`
+  send is still in `sends` until its result, so hide the bubble whose
+  message is already in the timeline. `failed` and `unconfirmed` ones get
+  the dismiss and send-again actions (`canDiscard`, `canRetry`). Show
   `outbox.note` when `outbox.persistent` is false. Steer is
   `send({text, mode: "steer"})`; **say that it stops the reply in progress**
   with one wording for every harness ([G1](G1-session-runtime-redesign.md),

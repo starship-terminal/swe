@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { createSessionStore, type SessionStore } from "./store";
 import { openOutboxStorage, MemoryStorage } from "./outbox-storage";
+import { NOT_SENT_IN_TIME, SESSION_GONE, TERMINAL_KEPT_MS } from "./outbox";
 import { FakeEnvironment, FakeTimers, FakeTransport, loadFixture, snapshotFrame, type Fixture } from "./test-support";
 import type { Frame, Snapshot } from "./types";
 
@@ -305,7 +306,7 @@ describe("sends", () => {
     t.state().start();
     expect(t.state().connection.state).toBe("offline");
     const sent = await t.state().send({ text: "typed on the train" });
-    expect(sent).toMatchObject({ ok: true, entry: { commandId: "id1", status: "pending" } });
+    expect(sent).toMatchObject({ ok: true, entry: { commandId: "id1", status: "waiting" } });
     expect(t.state().outbox.entries).toHaveLength(1);
     t.transport.down = true;
     await drain();
@@ -408,7 +409,8 @@ describe("sends", () => {
     expect(t.transport.posts("/message")).toEqual([
       { text: "rm -rf build", mode: "queue", attachments: [], command_id: "id1", client_id: "id1" },
     ]);
-    expect(t.state().outbox.entries).toEqual([]);
+    // Kept until its result: the 2xx only says the hub took it.
+    expect(t.state().outbox.entries).toMatchObject([{ status: "sent", path: "legacy" }]);
   });
 
   it("a send acknowledged by a keeper is not asked about again once the session is no longer keeper-held", async () => {
@@ -488,7 +490,7 @@ describe("sends", () => {
     t.state().stop();
     t.state().start();
     await drain();
-    expect(t.state().outbox.entries).toMatchObject([{ text: "typed offline", status: "pending" }]);
+    expect(t.state().outbox.entries).toMatchObject([{ text: "typed offline", status: "waiting" }]);
   });
 
   it("a failed send is not sent again once the session is read-only", async () => {
@@ -521,6 +523,151 @@ describe("sends", () => {
     transport.last.send(...frames(loadFixture("default"), 0, 0, 2));
     await drain();
     expect(transport.posts("/message").map((b) => [b["text"], b["command_id"]])).toContainEqual(["before the reload", "id1"]);
+  });
+});
+
+describe("the send lifecycle through the store (review 3)", () => {
+  const T = "local:term-1";
+  const env = (type: string, data: unknown, extra: Record<string, unknown> = {}): Frame =>
+    ({ v: 2, type, session: T, ts: 1, ...extra, data }) as unknown as Frame;
+  const snap = (head: number, row: Record<string, unknown>, caps: unknown): Snapshot =>
+    ({
+      session: T, epoch: 0, head, boot_id: "b1", row: { key: T, ...row }, state: "idle", caps, open_turn: null,
+      pending: [], queue: [], live: [], plan: null, tasks: [], checkpoints: [], changes: null, usage: null,
+      messages: [], has_more: false, next_before: null,
+    }) as Snapshot;
+  const start = (timers = new FakeTimers()) => {
+    const transport = new FakeTransport();
+    let n = 0;
+    const store = createSessionStore({
+      sessionKey: T, transport, timers, random: () => 0, environment: new FakeEnvironment(),
+      openStorage: async () => new MemoryStorage("mem"), newId: () => `id${++n}`,
+    });
+    store.getState().start();
+    return { store, transport, timers };
+  };
+  const catchUp = (transport: FakeTransport, snapshot: Snapshot, state = "idle") =>
+    transport.last.send(
+      snapshotFrame(snapshot),
+      env("session.state", { state, live: [], pending: [], head: snapshot.head, epoch: 0 }, { seq: 0 }),
+    );
+
+  it("legacy path: a failure the hub reports later, under the client_id, is shown on the send", async () => {
+    const { store, transport } = start();
+    transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true, client_id: "id1", waiting: true } }), "POST");
+    catchUp(transport, snap(5, {}, null), "running");
+    await drain();
+    await store.getState().send({ text: "hello" });
+    await drain();
+    expect(transport.posts("/message")).toHaveLength(1);
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "sent", path: "legacy" }]);
+    // hub.py _queue_job: filed under client_id, which the v2 stream gives as command_id.
+    transport.last.send(env("command.result", { op: "send", ok: false, note: "session stayed busy for 30 min; message not sent" }, { seq: 6, command_id: "id1" }));
+    await drain();
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "failed", error: "session stayed busy for 30 min; message not sent" }]);
+    expect(store.getState().sends).toMatchObject([{ shown: "failed", reason: "session stayed busy for 30 min; message not sent", canRetry: true }]);
+    store.getState().stop();
+  });
+
+  it("a keeper-held session whose caps are still null: the receipt makes it the keeper path, kept until its result", async () => {
+    const { store, transport } = start();
+    transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true, command_id: "id1", receipt: "accepted", waiting: false } }), "POST");
+    catchUp(transport, snap(5, { mode: "keeper" }, null), "starting");
+    await drain();
+    await store.getState().send({ text: "hello" });
+    await drain();
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "sent", path: "keeper", receipt: "accepted" }]);
+    store.getState().stop();
+  });
+
+  it("a keeper-held session whose caps are still null: a lost answer is tried again, because the row says keeper", async () => {
+    const { store, transport, timers } = start();
+    let answered = 0;
+    transport.on("/message", () => {
+      answered++;
+      if (answered === 1) throw new TypeError("lost");
+      return { status: 202, body: { receipt: "duplicate" } };
+    }, "POST");
+    catchUp(transport, snap(5, { mode: "keeper" }, null), "starting");
+    await drain();
+    await store.getState().send({ text: "hello" });
+    await drain();
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "waiting", ambiguous: true }]);
+    timers.advance(500);
+    await drain();
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "sent", path: "keeper" }]);
+    store.getState().stop();
+  });
+
+  it("a send made before the row arrives waits, visibly, and fails after 24 hours if the hub keeps refusing", async () => {
+    const timers = new FakeTimers();
+    const { store, transport } = start(timers);
+    transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    expect(await store.getState().send({ text: "hello" })).toMatchObject({ ok: true });
+    await drain();
+    expect(store.getState().sends).toMatchObject([{ shown: "waiting", reason: expect.stringContaining("Waiting for the hub") }]);
+    transport.last.end({ kind: "http", status: 401 });
+    await drain();
+    expect(store.getState().connection.state).toBe("unauthorized");
+    expect(store.getState().sends).toMatchObject([{ shown: "waiting", reason: expect.stringContaining("not signed in") }]);
+    timers.advance(25 * 3600 * 1000);
+    store.getState().wake();
+    transport.last.end({ kind: "http", status: 401 });
+    await drain();
+    expect(transport.posts("/message")).toHaveLength(0);
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "failed", error: NOT_SENT_IN_TIME }]);
+    store.getState().stop();
+  });
+
+  it("a session that is gone fails every open send, and a reloaded entry does not come back for ever", async () => {
+    const timers = new FakeTimers();
+    const factory = new IDBFactory();
+    const run = () => {
+      const transport = new FakeTransport();
+      const store = createSessionStore({
+        sessionKey: T, transport, timers, random: () => 0, environment: new FakeEnvironment(),
+        openStorage: () => openOutboxStorage(factory), newId: () => "id1",
+      });
+      store.getState().start();
+      return { store, transport };
+    };
+    const first = run();
+    await first.store.getState().send({ text: "hello" });
+    await drain();
+    first.transport.last.end({ kind: "http", status: 404 });
+    await drain();
+    expect(first.store.getState().outbox.entries).toMatchObject([{ status: "failed", error: SESSION_GONE }]);
+    first.store.getState().stop();
+    // Reloaded: still shown as failed, until it is dismissed or a week has passed.
+    timers.advance(TERMINAL_KEPT_MS);
+    const second = run();
+    await drain();
+    expect(second.store.getState().outbox.entries).toEqual([]);
+    second.store.getState().stop();
+  });
+
+  it("a hub too old for this view fails every open send", async () => {
+    const { store, transport } = start();
+    await store.getState().send({ text: "hello" });
+    await drain();
+    transport.last.send({ type: "session.status", data: {} });
+    await drain();
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "failed", error: expect.stringContaining("too old") }]);
+  });
+
+  it("the sends selector gives every state a reason", async () => {
+    const { store, transport } = start();
+    let answer: (r: { status: number; body: unknown }) => void = () => {};
+    transport.on("/message", () => new Promise((resolve) => (answer = resolve)), "POST");
+    catchUp(transport, snap(5, { mode: "keeper" }, null));
+    await drain();
+    await store.getState().send({ text: "hello" });
+    await drain();
+    expect(store.getState().sends).toMatchObject([{ shown: "sending", reason: "Sending.", canDiscard: false }]);
+    answer({ status: 202, body: { receipt: "queued" } });
+    await drain();
+    expect(store.getState().sends).toMatchObject([{ shown: "sent", reason: expect.stringContaining("Queued") }]);
+    store.getState().stop();
   });
 });
 

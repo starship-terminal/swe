@@ -6,33 +6,51 @@
 // when a call fails the storage turns itself off, says why, and the outbox
 // carries on in memory.
 
+/**
+ * Where a send is in its life (docs/specs/G11-client-core.md, "The send lifecycle").
+ *
+ * - `waiting`: not delivered to the hub yet. Never posted (`attempts` 0), or posted and due to be tried
+ *   again (`lastError` says why).
+ * - `sent`: the hub answered 2xx; `path` says which kind of hub path took it. Waits for its `command.result`.
+ * - `failed`: terminal. The hub refused it, or it could not be delivered, or it may or may not have been
+ *   sent; `error` says which.
+ * - `unconfirmed`: terminal. The hub took it but no result came in the time one should have; `error` says so.
+ *
+ * An entry leaves the outbox only on a `command.result` that says ok (or that a queue action cancelled it),
+ * or when the person dismisses it. Terminal entries are kept for `TERMINAL_KEPT_MS` after they end.
+ */
+export type SendStatus = "waiting" | "sent" | "failed" | "unconfirmed";
+
 /** One send, as it is stored. */
 export interface OutboxEntry {
-  /** Made once, when the send is typed, and kept through every retry. The hub applies it once. */
+  /** Made once, when the send is typed, and kept through every attempt: sent as `command_id` and as `client_id`. */
   commandId: string;
   session: string;
   text: string;
   attachments: string[];
   mode: "queue" | "steer";
   createdAt: number;
-  /**
-   * `pending`: no receipt yet, retried until there is one.
-   * `sent`: the hub gave a receipt; waiting for the command's result.
-   * `failed`: the hub refused it, or it expired; kept so the person can see why.
-   */
-  status: "pending" | "sent" | "failed";
+  status: SendStatus;
   /** Posts made so far. */
   attempts: number;
   /**
-   * Which kind of path took it. `keeper`: a keeper-held session, whose hub stores a receipt and a result under
-   * the `command_id`, so asking again is safe. A send to a session no keeper holds is settled by its 2xx
-   * response and never has this entry, because the hub does not de-duplicate on that path.
+   * Which kind of hub path took it, from the hub's 2xx answer: `keeper` when the answer carried a receipt
+   * (the hub stored the command under its id and answers a repeat with the stored receipt and result),
+   * `legacy` when it did not (a session no keeper holds: the hub does not de-duplicate).
    */
-  path?: "keeper";
-  /** The hub's receipt (accepted, queued, duplicate, held), once there is one. */
+  path?: "keeper" | "legacy";
+  /** The hub's receipt (accepted, queued, duplicate, held), on the keeper path. */
   receipt?: string;
-  /** Why it failed. */
+  /** When the hub's 2xx answer came. */
+  sentAt?: number;
+  /** The last attempt got no answer, or one that may mean the hub applied it: a repeat is safe only where the hub de-duplicates. */
+  ambiguous?: boolean;
+  /** Why the last attempt did not land, while it waits to be tried again. */
+  lastError?: string;
+  /** Why it failed or is unconfirmed. */
   error?: string;
+  /** When it reached `failed` or `unconfirmed`. */
+  endedAt?: number;
 }
 
 export interface OutboxStorage {

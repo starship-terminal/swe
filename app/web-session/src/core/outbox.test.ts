@@ -1,7 +1,19 @@
+// The send lifecycle, row by row (docs/specs/G11-client-core.md, "The send lifecycle").
 import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
-import { MAYBE_SENT, Outbox, OUTBOX_TTL_MS, type OutboxView } from "./outbox";
+import {
+  KEEPER_UNCONFIRMED,
+  LEGACY_CONFIRM_MS,
+  LEGACY_UNCONFIRMED,
+  MAYBE_SENT,
+  NOT_SENT_IN_TIME,
+  Outbox,
+  OUTBOX_TTL_MS,
+  SESSION_GONE,
+  TERMINAL_KEPT_MS,
+  type OutboxView,
+} from "./outbox";
 import {
   DeferredStorage,
   FallbackStorage,
@@ -16,453 +28,593 @@ import type { JsonRequest, JsonResponse } from "./transport";
 const KEY = "claude:t1";
 const MESSAGE = "/v1/sessions/claude%3At1/message";
 
-/** A hub that applies a command once and answers a repeat with the stored receipt. */
+/**
+ * A hub with both of its paths. `keeper`: applies a command once, answers a repeat with the stored
+ * receipt and (once there is one) the result. `legacy`: answers 202 with no receipt and types the
+ * message in again for every post (hub.py `_send_message`).
+ */
 class FakeHub {
+  path: "keeper" | "legacy" = "keeper";
   applied: string[] = [];
-  received: string[] = [];
+  received: Record<string, unknown>[] = [];
   results = new Map<string, { ok: boolean; note?: string; cancelled?: boolean }>();
-  /** Lose the response of the next n POSTs after applying them. */
-  loseResponses = 0;
+  /** Apply the next n posts and lose their answer. */
+  loseAnswers = 0;
   status: number | null = null;
 
   handler = (_path: string, request: JsonRequest): JsonResponse => {
-    const body = request.body as { command_id: string; text: string };
-    this.received.push(body.command_id);
+    const body = request.body as { command_id: string; client_id: string };
+    this.received.push(body);
     if (this.status !== null) return { status: this.status, body: { error: { code: "x", message: `refused ${this.status}` } } };
-    const duplicate = this.applied.includes(body.command_id);
-    if (!duplicate) this.applied.push(body.command_id);
-    if (this.loseResponses > 0) {
-      this.loseResponses--;
-      throw new TypeError("the response never arrived");
+    const repeat = this.applied.includes(body.command_id);
+    if (this.path === "legacy" || !repeat) this.applied.push(body.client_id);
+    if (this.loseAnswers > 0) {
+      this.loseAnswers--;
+      throw new TypeError("the answer never arrived");
     }
+    if (this.path === "legacy") return { status: 202, body: { ok: true, queued: true, client_id: body.client_id, waiting: false } };
     const result = this.results.get(body.command_id);
     return {
       status: 202,
-      body: {
-        ok: true,
-        queued: true,
-        command_id: body.command_id,
-        receipt: duplicate ? "queued" : "accepted",
-        waiting: false,
-        ...(result === undefined ? {} : { result }),
-      },
+      body: { ok: true, queued: true, command_id: body.command_id, receipt: repeat ? "queued" : "accepted", ...(result ? { result } : {}) },
     };
   };
 }
 
-function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; hub?: FakeHub; random?: () => number } = {}) {
-  const route = { now: "keeper" as "keeper" | "legacy" };
+function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; random?: () => number } = {}) {
   const timers = new FakeTimers();
   const transport = new FakeTransport();
-  const hub = over.hub ?? new FakeHub();
+  const hub = new FakeHub();
   transport.on("/message", async (path, request) => hub.handler(path, request), "POST");
   const factory = over.factory ?? new IDBFactory();
+  const world = { keeper: true, canPost: true };
   let ids = 0;
   const views: OutboxView[] = [];
-  const make = async (storage?: OutboxStorage, newId?: () => string) => {
+  const make = async (storage?: OutboxStorage, initial?: OutboxEntry[]) => {
     const outbox = new Outbox({
       session: KEY,
       storage: storage ?? over.storage ?? (await openOutboxStorage(factory)),
       transport,
       timers,
       random: over.random ?? (() => 0.5),
-      newId: newId ?? (() => `c${++ids}`),
-      route: () => route.now,
+      newId: () => `c${++ids}`,
+      canPost: () => world.canPost,
+      keeperHeld: () => world.keeper,
+      ...(initial ? { initial } : {}),
       onChange: (view) => views.push(view),
     });
     await outbox.init();
     return outbox;
   };
-  return { timers, transport, hub, factory, views, make, route, view: () => views[views.length - 1] as OutboxView };
+  return { timers, transport, hub, factory, world, views, make, view: () => views[views.length - 1] as OutboxView };
 }
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-/** Let the outbox's promises run: nothing waits on a clock here, only on the microtask queue. */
-async function drain(_outbox?: Outbox) {
-  for (let i = 0; i < 4; i++) await settle();
+async function drain() {
+  for (let i = 0; i < 5; i++) await settle();
+}
+const stored = async (factory: IDBFactory): Promise<OutboxEntry[]> => (await openOutboxStorage(factory)).load(KEY);
+const statuses = (t: ReturnType<typeof setup>) => t.view().entries.map((e) => e.status);
+
+/** A legacy hub: no receipt, no de-duplication, and a row that says no keeper holds the session. */
+function legacy(t: ReturnType<typeof setup>) {
+  t.hub.path = "legacy";
+  t.world.keeper = false;
 }
 
-const stored = async (factory: IDBFactory): Promise<OutboxEntry[]> => (await openOutboxStorage(factory)).load(KEY);
+describe("a new send", () => {
+  it("is waiting, on disk, before anything is posted", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "typed" });
+    expect(entry).toMatchObject({ status: "waiting", attempts: 0 });
+    expect(await stored(t.factory)).toMatchObject([{ commandId: entry.commandId, status: "waiting" }]);
+    expect(t.transport.calls).toEqual([]);
+  });
 
-describe("sending", () => {
-  it("gives a send its command id once, posts it with that id, and keeps it as sent after the receipt", async () => {
+  it("is posted once, with one id as command_id and as client_id", async () => {
     const t = setup();
     const outbox = await t.make();
     const entry = await outbox.send({ text: "hello", attachments: ["a.png"], mode: "steer" });
-    await drain(outbox);
+    await drain();
     expect(t.transport.posts("/message")).toEqual([
       { text: "hello", mode: "steer", attachments: ["a.png"], command_id: entry.commandId, client_id: entry.commandId },
     ]);
     expect(t.transport.calls[0]?.path).toBe(MESSAGE);
-    expect(t.view().entries).toMatchObject([{ commandId: entry.commandId, status: "sent", receipt: "accepted", attempts: 1 }]);
-    expect(await stored(t.factory)).toMatchObject([{ commandId: entry.commandId, status: "sent" }]);
   });
 
-  it("writes the entry to the database before the first attempt", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    // The hub never answers: the entry is on disk anyway.
-    t.transport.on("/message", () => new Promise<JsonResponse>(() => {}), "POST");
-    const entry = await outbox.send({ text: "typed" });
-    expect(await stored(t.factory)).toMatchObject([{ commandId: entry.commandId, status: "pending", text: "typed" }]);
-  });
-
-  it("sends in the order typed", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    await outbox.send({ text: "one" });
-    await outbox.send({ text: "two" });
-    await outbox.send({ text: "three" });
-    await drain(outbox);
-    expect(t.transport.posts("/message").map((b) => b["text"])).toEqual(["one", "two", "three"]);
-  });
-
-  it("folds a second flush into the one running: one post per send", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    await outbox.send({ text: "one" });
-    await Promise.all([outbox.flush(), outbox.flush(), outbox.flush()]);
-    await settle();
-    expect(t.hub.received).toEqual(["c1"]);
-  });
-});
-
-describe("retrying until a receipt arrives", () => {
-  it("retries with backoff under the same command id", async () => {
-    const t = setup({ random: () => 0 });
-    const outbox = await t.make();
-    t.transport.down = true;
-    const entry = await outbox.send({ text: "hello" });
-    await drain(outbox);
-    expect(t.view().entries[0]).toMatchObject({ status: "pending", attempts: 1 });
-    // First wait 500 ms, then 1 s, then 2 s.
-    for (const wait of [500, 1000, 2000]) {
-      t.timers.advance(wait - 1);
-      await settle();
-      const before = t.transport.calls.length;
-      t.timers.advance(1);
-      await settle();
-      expect(t.transport.calls.length).toBe(before + 1);
-    }
-    expect(t.view().entries[0]?.attempts).toBe(4);
-    t.transport.down = false;
-    t.timers.advance(4000);
-    await settle();
-    await settle();
-    expect(t.view().entries[0]).toMatchObject({ status: "sent", receipt: "accepted", attempts: 5 });
-    expect(new Set(t.hub.received)).toEqual(new Set([entry.commandId]));
-    expect(t.timers.pending).toBe(0);
-  });
-
-  it("retries a server error and a throttle, and stops at once on a refusal", async () => {
-    for (const status of [500, 502, 503, 429, 408]) {
-      const t = setup();
-      const outbox = await t.make();
-      t.hub.status = status;
-      await outbox.send({ text: "x" });
-      await drain(outbox);
-      expect(t.view().entries[0]?.status, String(status)).toBe("pending");
-      expect(t.timers.pending, String(status)).toBe(1);
-    }
-    for (const status of [400, 409, 422]) {
-      const t = setup();
-      const outbox = await t.make();
-      t.hub.status = status;
-      await outbox.send({ text: "x" });
-      await drain(outbox);
-      expect(t.view().entries[0], String(status)).toMatchObject({ status: "failed", error: `refused ${status}` });
-      expect(t.timers.pending).toBe(0);
-    }
-  });
-
-  it("fails a send to a session that is gone", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    t.hub.status = 404;
-    await outbox.send({ text: "x" });
-    await drain(outbox);
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "This session no longer exists" });
-  });
-
-  it("does not let a send behind it jump the queue while the first cannot go", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    t.transport.down = true;
-    await outbox.send({ text: "first" });
-    await outbox.send({ text: "second" });
-    await drain(outbox);
-    expect(t.transport.calls.map((c) => (c.request.body as { text: string }).text)).toEqual(["first"]);
-    t.transport.down = false;
-    t.timers.advance(60_000);
-    await settle();
-    await settle();
-    expect(t.transport.posts("/message").map((b) => b["text"])).toEqual(["first", "first", "second"]);
-  });
-
-  it("pauses on 401 and sends nothing until wake()", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    t.hub.status = 401;
-    await outbox.send({ text: "x" });
-    await drain(outbox);
-    expect(t.view().paused).toBe("unauthorized");
-    expect(t.view().entries[0]?.status).toBe("pending");
-    expect(t.timers.pending).toBe(0);
-    await outbox.send({ text: "y" });
-    await drain(outbox);
-    expect(t.hub.received).toEqual(["c1"]);
-    t.hub.status = null;
-    outbox.wake();
-    await settle();
-    await settle();
-    expect(t.view().paused).toBeNull();
-    expect(t.view().entries.map((e) => e.status)).toEqual(["sent", "sent"]);
-  });
-
-  it("wake() skips the wait", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    t.transport.down = true;
-    await outbox.send({ text: "x" });
-    await drain(outbox);
-    t.transport.down = false;
-    outbox.wake();
-    await settle();
-    await settle();
-    expect(t.view().entries[0]?.status).toBe("sent");
-    expect(t.timers.pending).toBe(0);
-  });
-});
-
-describe("never applied twice", () => {
-  it("answers a retry with the stored receipt when the first response was lost", async () => {
-    const t = setup({ random: () => 0 });
-    const outbox = await t.make();
-    t.hub.loseResponses = 1;
-    const entry = await outbox.send({ text: "once" });
-    await drain(outbox);
-    expect(t.view().entries[0]?.status).toBe("pending");
-    t.timers.advance(500);
-    await settle();
-    await settle();
-    // Two posts reached the hub; it applied the command once and answered the second with its receipt.
-    expect(t.hub.received).toEqual([entry.commandId, entry.commandId]);
-    expect(t.hub.applied).toEqual([entry.commandId]);
-    expect(t.view().entries[0]).toMatchObject({ status: "sent", receipt: "queued" });
-  });
-
-  it("takes a duplicate answer that carries the stored result as the end of the send", async () => {
-    const t = setup({ random: () => 0 });
-    const outbox = await t.make();
-    t.hub.loseResponses = 1;
-    t.hub.results.set("c1", { ok: true });
-    await outbox.send({ text: "done already" });
-    await drain(outbox);
-    t.timers.advance(500);
-    await settle();
-    await settle();
-    expect(t.view().entries).toEqual([]);
-    expect(await stored(t.factory)).toEqual([]);
-  });
-
-  it("fails the send when the stored result says the hub could not deliver it", async () => {
-    const t = setup({ random: () => 0 });
-    const outbox = await t.make();
-    t.hub.results.set("c1", { ok: false, note: "the session is not running" });
-    await outbox.send({ text: "x" });
-    await drain(outbox);
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "the session is not running" });
-  });
-});
-
-describe("surviving a reload", () => {
-  it("sends what an earlier page left in IndexedDB, under the id it had", async () => {
-    const t = setup();
-    const before = await t.make();
-    t.transport.down = true;
-    const entry = await before.send({ text: "typed offline" });
-    await drain(before);
-    before.close(); // the page goes away
-
-    t.transport.down = false;
-    t.transport.calls.length = 0;
-    const after = await t.make();
-    await settle();
-    await settle();
-    expect(t.transport.posts("/message")).toEqual([
-      { text: "typed offline", mode: "queue", attachments: [], command_id: entry.commandId, client_id: entry.commandId },
-    ]);
-    expect(t.view().entries[0]).toMatchObject({ commandId: entry.commandId, status: "sent" });
-    after.close();
-  });
-
-  it("asks again about a send the hub had acknowledged, and takes the stored result", async () => {
-    const t = setup();
-    const before = await t.make();
-    const entry = await before.send({ text: "acknowledged" });
-    await drain(before);
-    expect(t.view().entries[0]?.status).toBe("sent");
-    before.close();
-
-    t.hub.results.set(entry.commandId, { ok: true });
-    await t.make();
-    await settle();
-    await settle();
-    expect(t.hub.received).toEqual([entry.commandId, entry.commandId]);
-    expect(t.hub.applied).toEqual([entry.commandId]);
-    expect(t.view().entries).toEqual([]);
-    expect(await stored(t.factory)).toEqual([]);
-  });
-
-  it("keeps another session's sends out of this one", async () => {
-    const t = setup();
-    const storage = await openOutboxStorage(t.factory);
-    await storage.put({ commandId: "other", session: "codex:x", text: "no", attachments: [], mode: "queue", createdAt: 1, status: "pending", attempts: 0 });
-    await t.make();
-    expect(t.view().entries).toEqual([]);
-  });
-});
-
-describe("results", () => {
-  const sent = async () => {
-    const t = setup();
-    const outbox = await t.make();
-    const entry = await outbox.send({ text: "x" });
-    await drain(outbox);
-    return { t, outbox, entry };
-  };
-
-  it("removes a send whose result is ok, from memory and from disk", async () => {
-    const { t, outbox, entry } = await sent();
-    outbox.noteResult(entry.commandId, { ok: true });
-    await settle();
-    expect(t.view().entries).toEqual([]);
-    expect(await stored(t.factory)).toEqual([]);
-  });
-
-  it("removes a send that was cancelled (taken out of the queue, or steered)", async () => {
-    const { t, outbox, entry } = await sent();
-    outbox.noteResult(entry.commandId, { ok: false, cancelled: true, note: "removed from the queue" });
-    await settle();
-    expect(t.view().entries).toEqual([]);
-  });
-
-  it("keeps a send the hub could not deliver, with the reason", async () => {
-    const { t, outbox, entry } = await sent();
-    outbox.noteResult(entry.commandId, { ok: false, note: "the hub restarted before this was delivered" });
-    await settle();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "the hub restarted before this was delivered" });
-    expect(await stored(t.factory)).toMatchObject([{ status: "failed" }]);
-  });
-
-  it("ignores a result for a command it does not hold", async () => {
-    const { t, outbox } = await sent();
-    outbox.noteResult("someone-else", { ok: false });
-    expect(t.view().entries).toHaveLength(1);
-  });
-
-  it("when the result beats the response, the entry is not written back", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    let answer: (r: JsonResponse) => void = () => {};
-    t.transport.on("/message", () => new Promise<JsonResponse>((r) => (answer = r)), "POST");
-    const entry = await outbox.send({ text: "x" });
-    await settle();
-    outbox.noteResult(entry.commandId, { ok: true });
-    await settle();
-    answer({ status: 202, body: { receipt: "accepted" } });
-    await settle();
-    await settle();
-    expect(t.view().entries).toEqual([]);
-    expect(await stored(t.factory)).toEqual([]);
-  });
-
-  it("asks again about every acknowledged send, under the same ids", async () => {
-    const { t, outbox, entry } = await sent();
-    const second = await outbox.send({ text: "y" });
-    await drain(outbox);
-    t.hub.received.length = 0;
-    outbox.recheckSent();
-    await settle();
-    await settle();
-    expect(t.hub.received).toEqual([entry.commandId, second.commandId]);
-    expect(t.hub.applied).toEqual([entry.commandId, second.commandId]);
-  });
-});
-
-describe("races the outbox must win", () => {
-  it("does not post a send before its first write has finished", async () => {
+  it("is not posted until its first write has finished", async () => {
     const t = setup();
     const inner = await openOutboxStorage(t.factory);
     let finish: () => void = () => {};
     const slow: OutboxStorage = {
-      get kind() { return inner.kind; },
-      get note() { return inner.note; },
+      get kind() {
+        return inner.kind;
+      },
+      get note() {
+        return inner.note;
+      },
       load: (session) => inner.load(session),
-      put: (entry) => new Promise<void>((resolve) => { finish = () => void inner.put(entry).then(resolve); }),
+      put: (entry) => new Promise<void>((resolve) => (finish = () => void inner.put(entry).then(resolve))),
       remove: (id) => inner.remove(id),
       close: () => inner.close(),
     };
     const outbox = await t.make(slow);
     const sending = outbox.send({ text: "x" });
-    outbox.wake(); // the connection goes live while the database is still writing
+    outbox.wake();
     await drain();
     expect(t.transport.calls).toEqual([]);
-    expect(t.view().entries).toEqual([]);
     finish();
     await sending;
     await drain();
-    expect(t.hub.received).toEqual(["c1"]);
-    expect(await stored(t.factory)).toMatchObject([{ commandId: "c1" }]);
+    expect(t.hub.received).toHaveLength(1);
   });
 
-  it("keeps a send failed when its failed result came before its receipt", async () => {
+  it("goes in the order typed, one at a time", async () => {
     const t = setup();
     const outbox = await t.make();
-    let answer: (r: JsonResponse) => void = () => {};
-    t.transport.on("/message", () => new Promise<JsonResponse>((r) => (answer = r)), "POST");
-    const entry = await outbox.send({ text: "x" });
-    await settle();
-    outbox.noteResult(entry.commandId, { ok: false, note: "the session is not running" });
-    await settle();
-    answer({ status: 202, body: { receipt: "accepted" } });
+    await outbox.send({ text: "one" });
+    await outbox.send({ text: "two" });
+    await outbox.send({ text: "three" });
+    await drain();
+    expect(t.transport.posts("/message").map((b) => b["text"])).toEqual(["one", "two", "three"]);
+    await Promise.all([outbox.flush(), outbox.flush()]);
+    expect(t.hub.received).toHaveLength(3);
+  });
+});
+
+describe("the hub's answer decides the path", () => {
+  it("a 2xx with a receipt: sent on the keeper path", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "accepted", sentAt: t.timers.now() });
+  });
+
+  it("a 2xx without a receipt: sent on the legacy path, and not removed", async () => {
+    const t = setup();
+    legacy(t);
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+    expect(await stored(t.factory)).toMatchObject([{ status: "sent", path: "legacy" }]);
+  });
+
+  it("a keeper receipt on a session whose caps are not known yet is still the keeper path", async () => {
+    // The route is the hub's answer, not a guess: here the row says nothing about a keeper.
+    const t = setup();
+    t.world.keeper = false;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper" });
+  });
+
+  it("a 2xx carrying the stored result settles it at once", async () => {
+    const t = setup();
+    t.hub.results.set("c1", { ok: true });
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries).toEqual([]);
+    t.hub.results.set("c2", { ok: false, note: "the session is not running" });
+    await outbox.send({ text: "y" });
     await drain();
     expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "the session is not running" });
   });
+});
 
-  it("asks about an acknowledged send after sign-in when the first ask was refused", async () => {
+describe("results", () => {
+  const sentOn = async (path: "keeper" | "legacy") => {
+    const t = setup();
+    if (path === "legacy") legacy(t);
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    return { t, outbox, entry };
+  };
+
+  for (const path of ["keeper", "legacy"] as const) {
+    it(`${path}: an ok result removes it, from memory and disk`, async () => {
+      const { t, outbox, entry } = await sentOn(path);
+      outbox.noteResult(entry.commandId, { ok: true });
+      await drain();
+      expect(t.view().entries).toEqual([]);
+      expect(await stored(t.factory)).toEqual([]);
+    });
+
+    it(`${path}: a failed result fails it with the hub's note`, async () => {
+      const { t, outbox, entry } = await sentOn(path);
+      outbox.noteResult(entry.commandId, { ok: false, note: "session stayed busy for 30 min; message not sent" });
+      await drain();
+      expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "session stayed busy for 30 min; message not sent" });
+    });
+  }
+
+  it("a result cancelled by a queue action (removed, or steered) removes it", async () => {
+    const { t, outbox, entry } = await sentOn("keeper");
+    outbox.noteResult(entry.commandId, { ok: false, cancelled: true, note: "removed from the queue" });
+    await drain();
+    expect(t.view().entries).toEqual([]);
+  });
+
+  it("an empty or unknown id changes nothing", async () => {
+    const { t, outbox } = await sentOn("keeper");
+    outbox.noteResult("", { ok: true });
+    outbox.noteResult("someone-else", { ok: false });
+    await drain();
+    expect(statuses(t)).toEqual(["sent"]);
+  });
+
+  it("a result that comes before the answer wins over it", async () => {
+    for (const result of [{ ok: true }, { ok: false, note: "no" }]) {
+      const t = setup();
+      let answer: (r: JsonResponse) => void = () => {};
+      t.transport.on("/message", () => new Promise<JsonResponse>((r) => (answer = r)), "POST");
+      const outbox = await t.make();
+      const entry = await outbox.send({ text: "x" });
+      await settle();
+      outbox.noteResult(entry.commandId, result);
+      await drain();
+      answer({ status: 202, body: { receipt: "accepted" } });
+      await drain();
+      if (result.ok) expect(t.view().entries).toEqual([]);
+      else expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "no" });
+      expect((await stored(t.factory)).length).toBe(result.ok ? 0 : 1);
+    }
+  });
+
+  it("an ok result for a send that ended unconfirmed or may-not-have-been-sent removes it: it did arrive", async () => {
+    const { t, outbox, entry } = await sentOn("legacy");
+    t.timers.advance(LEGACY_CONFIRM_MS);
+    await drain();
+    expect(statuses(t)).toEqual(["unconfirmed"]);
+    outbox.noteResult(entry.commandId, { ok: true });
+    await drain();
+    expect(t.view().entries).toEqual([]);
+  });
+});
+
+describe("answers that are not 2xx", () => {
+  it("no answer, keeper session: tried again under the same id, and the hub applies it once", async () => {
+    const t = setup({ random: () => 0 });
+    t.hub.loseAnswers = 1;
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "once" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "waiting", ambiguous: true, attempts: 1 });
+    t.timers.advance(500);
+    await drain();
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual([entry.commandId, entry.commandId]);
+    expect(t.hub.applied).toEqual([entry.commandId]);
+    expect(t.view().entries[0]).toMatchObject({ status: "sent", receipt: "queued" });
+  });
+
+  it("no answer, any other session: failed, may or may not have been sent, never tried again", async () => {
+    const t = setup();
+    legacy(t);
+    t.transport.down = true;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+    t.transport.down = false;
+    t.timers.advance(60_000);
+    await drain();
+    expect(t.transport.calls).toHaveLength(1);
+  });
+
+  it("408 and a 5xx that may have been applied: the same as no answer", async () => {
+    for (const status of [408, 500, 502, 504]) {
+      const t = setup();
+      legacy(t);
+      t.hub.status = status;
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await drain();
+      expect(t.view().entries[0], String(status)).toMatchObject({ status: "failed", error: MAYBE_SENT });
+
+      const k = setup();
+      k.hub.status = status;
+      const kept = await k.make();
+      await kept.send({ text: "x" });
+      await drain();
+      expect(k.view().entries[0], String(status)).toMatchObject({ status: "waiting", ambiguous: true });
+    }
+  });
+
+  it("429, 425 and 503 say not now before anything is queued: tried again on any path", async () => {
+    for (const status of [429, 425, 503]) {
+      const t = setup();
+      legacy(t);
+      t.hub.status = status;
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await drain();
+      expect(t.view().entries[0], String(status)).toMatchObject({ status: "waiting", lastError: `refused ${status}` });
+      expect(t.view().entries[0]?.ambiguous).toBeUndefined();
+      expect(t.timers.pending).toBeGreaterThan(0);
+    }
+  });
+
+  it("a repeat after an unanswered post fails instead once the row no longer says keeper", async () => {
+    const t = setup({ random: () => 0 });
+    t.transport.down = true;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "waiting", ambiguous: true });
+    t.world.keeper = false; // detached meanwhile
+    t.transport.down = false;
+    t.timers.advance(500);
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+    expect(t.transport.calls).toHaveLength(1);
+  });
+
+  it("401 and 403: kept waiting and paused until wake()", async () => {
+    for (const status of [401, 403]) {
+      const t = setup();
+      t.hub.status = status;
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await outbox.send({ text: "y" });
+      await drain();
+      expect(t.view().paused).toBe("unauthorized");
+      expect(statuses(t)).toEqual(["waiting", "waiting"]);
+      expect(t.hub.received).toHaveLength(1);
+      t.hub.status = null;
+      outbox.wake();
+      await drain();
+      expect(statuses(t)).toEqual(["sent", "sent"]);
+    }
+  });
+
+  it("404: failed, the session no longer exists; another 4xx: failed with the hub's words", async () => {
+    for (const [status, error] of [
+      [404, SESSION_GONE],
+      [409, "refused 409"],
+      [422, "refused 422"],
+    ] as const) {
+      const t = setup();
+      t.hub.status = status;
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await drain();
+      expect(t.view().entries[0], String(status)).toMatchObject({ status: "failed", error });
+      expect(t.timers.pending).toBe(1); // only the deadline timer
+    }
+  });
+
+  it("backs off between repeats, and holds the sends behind the one that cannot go", async () => {
+    const t = setup({ random: () => 0 });
+    t.hub.status = 503;
+    const outbox = await t.make();
+    await outbox.send({ text: "first" });
+    await outbox.send({ text: "second" });
+    await drain();
+    for (const wait of [500, 1000, 2000]) {
+      const before = t.hub.received.length;
+      t.timers.advance(wait - 1);
+      await drain();
+      expect(t.hub.received.length).toBe(before);
+      t.timers.advance(1);
+      await drain();
+      expect(t.hub.received.length).toBe(before + 1);
+    }
+    expect(new Set(t.hub.received.map((b) => b["text"]))).toEqual(new Set(["first"]));
+    t.hub.status = null;
+    t.timers.advance(4000);
+    await drain();
+    expect(statuses(t)).toEqual(["sent", "sent"]);
+  });
+});
+
+describe("asking again after a catch-up", () => {
+  it("re-posts every keeper-path send while the row says keeper, and the stored result settles it", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    outbox.recheckSent();
+    await drain();
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual([entry.commandId, entry.commandId]);
+    expect(t.hub.applied).toEqual([entry.commandId]);
+    t.hub.results.set(entry.commandId, { ok: false, note: "the hub restarted before this was delivered" });
+    outbox.recheckSent();
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "the hub restarted before this was delivered" });
+  });
+
+  it("never re-posts a legacy send", async () => {
+    const t = setup();
+    legacy(t);
+    const outbox = await t.make();
+    await outbox.send({ text: "rm -rf build" });
+    await drain();
+    for (let i = 0; i < 3; i++) {
+      outbox.recheckSent();
+      outbox.wake();
+      await drain();
+    }
+    expect(t.hub.applied).toHaveLength(1);
+    expect(statuses(t)).toEqual(["sent"]);
+  });
+
+  it("does not re-post a keeper send once the session is no longer keeper-held", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    t.world.keeper = false;
+    outbox.recheckSent();
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    expect(statuses(t)).toEqual(["sent"]);
+  });
+
+  it("asks again after sign-in when the ask was refused", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    t.hub.status = 401;
+    outbox.recheckSent();
+    await drain();
+    expect(t.view().paused).toBe("unauthorized");
+    t.hub.status = null;
+    t.hub.results.set(entry.commandId, { ok: true });
+    outbox.wake();
+    await drain();
+    expect(t.view().entries).toEqual([]);
+  });
+});
+
+describe("deadlines run whether or not anything can be posted", () => {
+  it("waiting for 24 hours: failed, not sent", async () => {
+    const t = setup();
+    t.world.canPost = false; // the row never arrived, or the device stayed offline
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    t.timers.advance(OUTBOX_TTL_MS);
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: NOT_SENT_IN_TIME });
+    expect(t.transport.calls).toEqual([]);
+  });
+
+  it("paused by a 401 for 24 hours: failed", async () => {
+    const t = setup();
+    t.hub.status = 401;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    t.timers.advance(OUTBOX_TTL_MS);
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: NOT_SENT_IN_TIME });
+  });
+
+  it("legacy sent and no result in 45 minutes: unconfirmed, with a reason", async () => {
+    const t = setup();
+    legacy(t);
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    t.timers.advance(LEGACY_CONFIRM_MS - 1);
+    await drain();
+    expect(statuses(t)).toEqual(["sent"]);
+    t.timers.advance(1);
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "unconfirmed", error: LEGACY_UNCONFIRMED });
+    expect(LEGACY_CONFIRM_MS).toBeGreaterThan(30 * 60 * 1000); // longer than the hub's own busy limit
+  });
+
+  it("keeper sent and no result in 24 hours: unconfirmed", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    t.timers.advance(OUTBOX_TTL_MS);
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "unconfirmed", error: KEEPER_UNCONFIRMED });
+  });
+
+  it("a terminal entry nobody dismisses is kept 7 days, then removed", async () => {
+    const t = setup();
+    t.hub.status = 422;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(statuses(t)).toEqual(["failed"]);
+    t.timers.advance(TERMINAL_KEPT_MS - 1);
+    await drain();
+    expect(statuses(t)).toEqual(["failed"]);
+    t.timers.advance(1);
+    await drain();
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
+  });
+
+  it("an entry reloaded long after it was made is aged at once", async () => {
+    const t = setup();
+    const storage = await openOutboxStorage(t.factory);
+    const old = (status: OutboxEntry["status"], extra: Partial<OutboxEntry> = {}): OutboxEntry => ({
+      commandId: `old-${status}`, session: KEY, text: status, attachments: [], mode: "queue",
+      createdAt: t.timers.now() - OUTBOX_TTL_MS - 1, status, attempts: 0, ...extra,
+    });
+    await storage.put(old("waiting"));
+    await storage.put(old("sent", { path: "legacy", sentAt: t.timers.now() - LEGACY_CONFIRM_MS }));
+    t.world.canPost = false;
+    await t.make();
+    await drain();
+    expect(t.view().entries.map((e) => [e.text, e.status]).sort()).toEqual([
+      ["sent", "unconfirmed"],
+      ["waiting", "failed"],
+    ]);
+  });
+
+  it("a session that is gone ends every open send at once", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const outbox = await t.make();
+    await outbox.send({ text: "waiting" });
+    t.world.canPost = true;
+    outbox.sessionGone();
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: SESSION_GONE });
+  });
+});
+
+describe("waiting", () => {
+  it("posts nothing while it may not, and everything once it may", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.transport.calls).toEqual([]);
+    t.world.canPost = true;
+    outbox.wake();
+    await drain();
+    expect(statuses(t)).toEqual(["sent"]);
+  });
+});
+
+describe("surviving a reload, a restart and a broken database", () => {
+  it("sends what an earlier page left, under the id it had", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const before = await t.make();
+    const entry = await before.send({ text: "typed offline" });
+    before.close();
+    t.world.canPost = true;
+    await t.make();
+    await drain();
+    expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual([entry.commandId]);
+  });
+
+  it("reads an entry an earlier build stored as pending as waiting", async () => {
+    const t = setup();
+    const storage = await openOutboxStorage(t.factory);
+    await storage.put({ commandId: "old", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: t.timers.now(), status: "pending" as never, attempts: 0 });
+    await t.make();
+    await drain();
+    expect(t.view().entries[0]).toMatchObject({ commandId: "old", status: "sent" });
+  });
+
+  it("asks again about an acknowledged keeper send after a reload", async () => {
     const t = setup();
     const before = await t.make();
     const entry = await before.send({ text: "x" });
     await drain();
     before.close();
-    t.hub.status = 401;
-    const after = await t.make();
-    await drain();
-    expect(t.view().paused).toBe("unauthorized");
-    t.hub.status = null;
     t.hub.results.set(entry.commandId, { ok: true });
-    t.hub.received.length = 0;
-    after.wake();
+    await t.make();
     await drain();
-    expect(t.hub.received).toEqual([entry.commandId]);
+    expect(t.hub.applied).toEqual([entry.commandId]);
     expect(t.view().entries).toEqual([]);
-  });
-
-  it("tells the view when a write turns the storage into memory", async () => {
-    const broken: OutboxStorage = {
-      kind: "indexeddb",
-      note: "",
-      load: async () => [],
-      put: async () => { throw new Error("quota"); },
-      remove: async () => {},
-      close: () => {},
-    };
-    const t = setup({ storage: new FallbackStorage(broken) });
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
-    expect(t.view()).toMatchObject({ persistent: false, note: expect.stringContaining("quota") });
   });
 
   it("hands a send that is still being written to the outbox that replaces it", async () => {
@@ -470,10 +622,14 @@ describe("races the outbox must win", () => {
     const inner = await openOutboxStorage(t.factory);
     let finish: () => void = () => {};
     const slow: OutboxStorage = {
-      get kind() { return inner.kind; },
-      get note() { return inner.note; },
+      get kind() {
+        return inner.kind;
+      },
+      get note() {
+        return inner.note;
+      },
       load: (session) => inner.load(session),
-      put: (entry) => new Promise<void>((resolve) => { finish = () => void inner.put(entry).then(resolve); }),
+      put: (entry) => new Promise<void>((resolve) => (finish = () => void inner.put(entry).then(resolve))),
       remove: (id) => inner.remove(id),
       close: () => {},
     };
@@ -481,236 +637,33 @@ describe("races the outbox must win", () => {
     const sending = first.send({ text: "mid-write" });
     await drain();
     const carried = first.carry();
-    expect(carried.map((e) => e.text)).toEqual(["mid-write"]);
     first.close();
     finish();
     await sending;
-    const second = new Outbox({
-      session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers,
-      random: () => 0.5, newId: () => "n", route: () => "keeper", initial: carried, onChange: () => {},
-    });
-    await second.init();
+    const second = await t.make(undefined, carried);
     await drain();
-    expect(t.hub.received).toEqual(["c1"]);
+    expect(t.hub.received).toHaveLength(1);
     expect(second.view.entries.map((e) => [e.text, e.status])).toEqual([["mid-write", "sent"]]);
   });
 
-  it("starts from the entries it is given", async () => {
-    const t = setup({ storage: new MemoryStorage("none") });
-    const carried: OutboxEntry = { commandId: "old", session: KEY, text: "kept", attachments: [], mode: "queue", createdAt: 1, status: "pending", attempts: 0 };
-    const outbox = new Outbox({
-      session: KEY, storage: new MemoryStorage("none"), transport: t.transport, timers: t.timers, random: () => 0.5, newId: () => "n1", route: () => "keeper",
-      initial: [carried], onChange: () => {},
-    });
-    await outbox.init();
-    await drain();
-    expect(t.hub.received).toEqual(["old"]);
-  });
-});
-
-describe("a session no keeper holds", () => {
-  /** What the hub's other path answers: 202 and no receipt; it reads only `client_id` and does not de-duplicate. */
-  const legacy = (t: ReturnType<typeof setup>) => {
-    t.route.now = "legacy";
-    t.transport.on("/message", () => ({ status: 202, body: { ok: true, queued: true, client_id: "c1", waiting: false } }), "POST");
-  };
-
-  it("posts the id as command_id and as client_id, and is settled by the 2xx answer", async () => {
+  it("keeps another session's sends out of this one", async () => {
     const t = setup();
-    legacy(t);
-    const outbox = await t.make();
-    await outbox.send({ text: "rm -rf build" });
-    await drain();
-    expect(t.transport.posts("/message")).toEqual([
-      { text: "rm -rf build", mode: "queue", attachments: [], command_id: "c1", client_id: "c1" },
-    ]);
-    expect(t.view().entries).toEqual([]);
-    expect(await stored(t.factory)).toEqual([]);
-  });
-
-  it("is never posted again: not after a reconnect, a restart or a reload", async () => {
-    const t = setup();
-    legacy(t);
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
-    for (let i = 0; i < 3; i++) {
-      outbox.recheckSent();
-      await drain();
-    }
-    outbox.wake();
-    await drain();
-    expect(t.transport.posts("/message")).toHaveLength(1);
-  });
-
-  it("fails, saying it may or may not have been sent, when no answer comes, and is not retried", async () => {
-    const t = setup();
-    legacy(t);
-    t.transport.down = true;
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
-    expect(t.timers.pending).toBe(0);
-    t.transport.down = false;
-    t.timers.advance(60_000);
-    await drain();
-    expect(t.transport.calls).toHaveLength(1);
-  });
-
-  it("fails on an unsure server error, and retries one that says to wait", async () => {
-    for (const status of [408, 500, 502, 504]) {
-      const t = setup();
-      legacy(t);
-      t.hub.status = status;
-      t.transport.on("/message", (path, request) => t.hub.handler(path, request), "POST");
-      const outbox = await t.make();
-      await outbox.send({ text: "x" });
-      await drain();
-      expect(t.view().entries[0], String(status)).toMatchObject({ status: "failed", error: MAYBE_SENT });
-    }
-    for (const status of [429, 503]) {
-      const t = setup();
-      legacy(t);
-      t.hub.status = status;
-      t.transport.on("/message", (path, request) => t.hub.handler(path, request), "POST");
-      const outbox = await t.make();
-      await outbox.send({ text: "x" });
-      await drain();
-      expect(t.view().entries[0]?.status, String(status)).toBe("pending");
-      expect(t.timers.pending).toBe(1);
-    }
-  });
-
-  it("is not retried on that path once an earlier attempt may have reached a keeper", async () => {
-    const t = setup({ random: () => 0 });
-    t.transport.down = true;
-    const outbox = await t.make();
-    await outbox.send({ text: "x" }); // keeper path: a retry is safe
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "pending", attempts: 1 });
-    t.route.now = "legacy"; // the session was detached meanwhile
-    t.transport.down = false;
-    t.timers.advance(500);
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
-    expect(t.transport.calls).toHaveLength(1);
-  });
-
-  it("is settled, not kept for a result, when a keeper path answers with no receipt", async () => {
-    const t = setup();
-    t.transport.on("/message", () => ({ status: 202, body: { ok: true } }), "POST");
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
+    const storage = await openOutboxStorage(t.factory);
+    await storage.put({ commandId: "other", session: "codex:x", text: "no", attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 0 });
+    await t.make();
     expect(t.view().entries).toEqual([]);
   });
-});
 
-describe("a keeper-held session", () => {
-  it("records the path that took the send and asks again only while a keeper still holds the session", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "accepted" });
-    outbox.recheckSent();
-    await drain();
-    expect(t.hub.received).toEqual(["c1", "c1"]);
-    t.route.now = "legacy"; // detached: no keeper holds it now
-    outbox.recheckSent();
-    await drain();
-    expect(t.hub.received).toEqual(["c1", "c1"]);
-    expect(t.view().entries[0]?.status).toBe("sent");
-  });
-});
-
-describe("failed sends", () => {
-  it("can be dismissed, or sent again as a new message", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    t.hub.status = 409;
-    const entry = await outbox.send({ text: "again please", attachments: ["f"], mode: "steer" });
-    await drain(outbox);
-    expect(t.view().entries[0]?.status).toBe("failed");
-    t.hub.status = null;
-    const again = await outbox.retry(entry.commandId);
-    await drain(outbox);
-    expect(again?.commandId).not.toBe(entry.commandId);
-    expect(t.hub.applied).toEqual([again?.commandId]);
-    expect(t.view().entries.map((e) => [e.text, e.mode, e.attachments])).toEqual([["again please", "steer", ["f"]]]);
-    expect(await outbox.retry("nope")).toBeUndefined();
-    await outbox.discard(again?.commandId ?? "");
-    expect(t.view().entries).toEqual([]);
-    expect(await stored(t.factory)).toEqual([]);
-  });
-});
-
-describe("a send the hub never took", () => {
-  it("is failed after 24 hours, the time the hub holds a message for a sleeping machine", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    t.transport.down = true;
-    await outbox.send({ text: "old" });
-    await drain(outbox);
-    t.timers.skip(OUTBOX_TTL_MS + 1000);
-    outbox.wake();
-    await settle();
-    await settle();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: expect.stringContaining("24 hours") });
-  });
-
-  it("ends an acknowledged send whose result never came, after 24 hours, as failed with a reason", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    await outbox.send({ text: "old" });
-    await drain(outbox);
-    t.timers.skip(OUTBOX_TTL_MS + 1000);
-    outbox.wake();
-    await settle();
-    await settle();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: expect.stringContaining("24 hours") });
-    expect(await stored(t.factory)).toMatchObject([{ status: "failed" }]);
-  });
-});
-
-describe("without IndexedDB", () => {
-  it("works in memory and says so when it is missing", async () => {
-    const notes: string[] = [];
-    const storage = await openOutboxStorage(undefined, (note) => notes.push(note));
-    expect(storage.kind).toBe("memory");
-    expect(storage.note).toMatch(/not available.*memory.*reload/);
-    expect(notes).toEqual([storage.note]);
-
-    const t = setup({ storage });
-    const outbox = await t.make();
-    const entry = await outbox.send({ text: "hi" });
-    await drain(outbox);
-    expect(t.view()).toMatchObject({ persistent: false, note: storage.note });
-    expect(t.view().entries[0]).toMatchObject({ commandId: entry.commandId, status: "sent" });
-    // And a reload has nothing: that is what the note says.
-    expect(await storage.load(KEY)).toEqual([]);
-  });
-
-  it("works in memory when opening the database throws", async () => {
-    const throwing = {
+  it("works in memory, and says so, when IndexedDB is missing, throws, fails to open or fails later", async () => {
+    const missing = await openOutboxStorage(undefined);
+    expect([missing.kind, missing.note]).toEqual(["memory", expect.stringMatching(/not available.*memory.*reload/)]);
+    const throwing = await openOutboxStorage({
       open() {
         throw new DOMException("The operation is insecure.", "SecurityError");
       },
-    } as unknown as IDBFactory;
-    const storage = await openOutboxStorage(throwing);
-    expect(storage.kind).toBe("memory");
-    expect(storage.note).toContain("The operation is insecure.");
-    const t = setup({ storage });
-    const outbox = await t.make();
-    await outbox.send({ text: "hi" });
-    await drain(outbox);
-    expect(t.view().entries[0]?.status).toBe("sent");
-    expect(t.view().persistent).toBe(false);
-  });
-
-  it("works in memory when opening the database fails", async () => {
-    const failing = {
+    } as unknown as IDBFactory);
+    expect(throwing.note).toContain("The operation is insecure.");
+    const failing = await openOutboxStorage({
       open() {
         const request = {} as { error: Error; onerror?: (event: Event) => void };
         queueMicrotask(() => {
@@ -719,41 +672,31 @@ describe("without IndexedDB", () => {
         });
         return request as unknown as IDBOpenDBRequest;
       },
-    } as unknown as IDBFactory;
-    const storage = await openOutboxStorage(failing);
-    expect(storage.kind).toBe("memory");
-    expect(storage.note).toContain("QuotaExceededError");
-  });
+    } as unknown as IDBFactory);
+    expect(failing.note).toContain("QuotaExceededError");
 
-  it("turns to memory when the database fails after it opened, and says why", async () => {
+    const notes: string[] = [];
     const broken: OutboxStorage = {
       kind: "indexeddb",
       note: "",
-      async load() {
-        return [];
-      },
-      async put() {
+      load: async () => [],
+      put: async () => {
         throw new Error("the disk is full");
       },
-      async remove() {},
-      close() {},
+      remove: async () => {},
+      close: () => {},
     };
-    const notes: string[] = [];
-    const storage = new FallbackStorage(broken, (note) => notes.push(note));
-    const t = setup({ storage });
+    const t = setup({ storage: new FallbackStorage(broken, (note) => notes.push(note)) });
     const outbox = await t.make();
     expect(t.view().persistent).toBe(true);
     await outbox.send({ text: "hi" });
-    await drain(outbox);
-    expect(storage.kind).toBe("memory");
-    expect(notes).toHaveLength(1);
+    await drain();
     expect(notes[0]).toContain("the disk is full");
     expect(t.view()).toMatchObject({ persistent: false, note: notes[0] });
-    // The send still went.
-    expect(t.view().entries[0]?.status).toBe("sent");
+    expect(statuses(t)).toEqual(["sent"]);
   });
 
-  it("a deferred storage reports memory until the database is open, then IndexedDB", async () => {
+  it("a deferred storage reports memory until the database is open", async () => {
     let open: (s: OutboxStorage) => void = () => {};
     const storage = new DeferredStorage(new Promise<OutboxStorage>((resolve) => (open = resolve)));
     expect(storage.kind).toBe("memory");
@@ -762,12 +705,25 @@ describe("without IndexedDB", () => {
     expect(await loading).toEqual([]);
     expect(storage.kind).toBe("indexeddb");
     storage.close();
+    expect(await new MemoryStorage("because").load()).toEqual([]);
   });
+});
 
-  it("MemoryStorage keeps nothing", async () => {
-    const memory = new MemoryStorage("because");
-    await memory.put();
-    expect(await memory.load()).toEqual([]);
-    expect(memory.note).toBe("because");
+describe("the person's actions", () => {
+  it("a failed or unconfirmed send can be sent again as a new message, or dismissed", async () => {
+    const t = setup();
+    t.hub.status = 409;
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "again please", attachments: ["f"], mode: "steer" });
+    await drain();
+    t.hub.status = null;
+    const again = await outbox.retry(entry.commandId);
+    await drain();
+    expect(again?.commandId).not.toBe(entry.commandId);
+    expect(t.view().entries.map((e) => [e.text, e.mode, e.attachments, e.status])).toEqual([["again please", "steer", ["f"], "sent"]]);
+    expect(await outbox.retry(again?.commandId ?? "")).toBeUndefined(); // not terminal
+    await outbox.discard(again?.commandId ?? "");
+    expect(t.view().entries).toEqual([]);
+    expect(await stored(t.factory)).toEqual([]);
   });
 });
