@@ -290,7 +290,7 @@ describe("while a reply is in progress", () => {
     expect(menuOpen(m)).toBeNull();
   });
 
-  it("opens a menu with Queue and Stop and send on a right click, Queue first and in focus", async () => {
+  it("opens a menu with Queue and Send now on a right click, Queue first and in focus", async () => {
     const m = mount();
     await play(m, "streaming", 0, 3);
     typeText(m, "now");
@@ -298,7 +298,8 @@ describe("while a reply is in progress", () => {
     expect(menuOpen(m)).not.toBeNull();
     expect(all(m.el, '[role="menuitem"]').map((i) => i.getAttribute("data-menu-item"))).toEqual(["queue", "steer"]);
     expect(document.activeElement).toBe(menuItem(m, "queue"));
-    expect(text(menuItem(m, "steer"))).toContain("Stops the current reply, then sends this message now.");
+    expect(text(menuItem(m, "steer"))).toContain("Send now");
+    expect(text(menuItem(m, "steer"))).toContain("Sends this message ahead of the queue. Some agents stop the current reply to do it.");
     expect(sent(m)).toHaveLength(0); // the menu opening is not a send
     await click(menuItem(m, "steer"));
     expect(sent(m)).toHaveLength(1);

@@ -47,8 +47,8 @@ describe("the queued tray", () => {
     expect(q(m.el, '[role="menu"]')).toBeNull(); // not a button of its own
     await click(btn(m, "More for queued message"));
     const now = q(m.el, '[data-menu-item="steer"]') as HTMLButtonElement;
-    expect(text(now)).toContain("Stop and send");
-    expect(text(now)).toContain("Stops the current reply, then sends this message now.");
+    expect(text(now)).toContain("Send now");
+    expect(text(now)).toContain("Sends this message ahead of the queue.");
     await settle(() => {
       now.click();
       now.click();
@@ -134,7 +134,7 @@ describe("the queued tray", () => {
     expect(text(now)).toContain("This agent cannot be steered.");
     await click(now);
     expect(posts(m, "queue")).toHaveLength(0);
-    expect(text(q(m.el, '[data-tray-note="no-steer"]'))).toContain("cannot stop a reply to send a message sooner");
+    expect(text(q(m.el, '[data-tray-note="no-steer"]'))).toContain("cannot send a message ahead of the queue");
     expect((btn(m, "Remove queued message") as HTMLButtonElement).disabled).toBe(false);
   });
 

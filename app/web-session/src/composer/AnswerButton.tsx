@@ -20,7 +20,7 @@ export function AnswerButton({ variant, className, type = "button", ...rest }: P
         "focus-visible:outline-2 focus-visible:outline-interactive disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "border-transparent bg-primary text-card",
         variant === "plain" && "border-border text-primary hover:bg-hover disabled:hover:bg-transparent",
-        variant === "danger" && "border-border text-danger-text hover:bg-hover disabled:hover:bg-transparent",
+        variant === "danger" && "border-danger text-primary hover:bg-hover disabled:hover:bg-transparent",
         className,
       )}
       type={type}

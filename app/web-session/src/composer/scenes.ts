@@ -228,6 +228,35 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       await type(c, "Actually, use the retry helper in utils instead.");
       await rightClick(c, "Queue message");
       break;
+    case "composer-menu-steer-stops":
+    case "composer-menu-steer-after-tool":
+    case "composer-menu-steer-next-turn": {
+      const effect = scene.endsWith("stops") ? "stops_reply" : scene.endsWith("after-tool") ? "after_tool" : "next_turn";
+      send(...streaming.slice(0, 5), frame(k, "session.caps", 50, { caps: { steer: true, plan_mode: true, rollback: false, fork: true, stop_task: true, options: [], steer_effect: effect } }));
+      await type(c, "Actually, use the retry helper in utils instead.");
+      await rightClick(c, "Queue message");
+      break;
+    }
+    case "composer-queued-menu":
+      send(
+        ...queued.slice(0, 3),
+        frame(k, "approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow", by: "device-1" }),
+        frame(k, "session.state", 14, { state: "running" }),
+        frame(k, "queue.updated", 15, { items: [{ command_id: "q1", text: "then lint it", by: "device-1", mode: "queue" }] }),
+      );
+      await openTray(c);
+      await press(c, "More for queued message");
+      break;
+    case "composer-error-note":
+      send(...base);
+      await type(c, "Run the whole suite and tell me what fails");
+      c.store.setState({ send: () => Promise.resolve({ ok: false, reason: "gone", message: "This session no longer exists." } as never) });
+      await press(c, "Send message");
+      break;
+    case "composer-approval-error":
+      send(...approval.slice(0, 2));
+      await press(c, "Allow");
+      break;
     case "composer-menu-attach":
       send(...base);
       await press(c, "Attach");

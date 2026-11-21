@@ -3,7 +3,7 @@
 Status: built. Everything over the bottom of the session view
 ([G12](G12-timeline.md) drew the timeline and left a disabled box): a floating
 glass bar with icon-only controls (attach, the message box, Send or Queue, Stop),
-the menu behind the primary button ("Stop and send"), the approval and question
+the menu behind the primary button (the steer item, "Stop and send" or "Send now"), the approval and question
 dock, and the queued tray. The data layer is [G11](G11-client-core.md) and is
 unchanged: the composer imports `src/core/index.ts` and nothing else from the
 core. The view is still behind `remote.session_view`, which is off by default.
@@ -17,6 +17,8 @@ core. The view is still behind `remote.session_view`, which is off by default.
 | `draft.ts`, `useDraft.ts` | the draft kept in storage, and the hook that writes it |
 | `RequestDock.tsx`, `answer.ts` | the approval and question dock, and `answer`: a press that lands on the request shown |
 | `QueueTray.tsx` | the tray: a strip that opens upward into a list; edit, remove, and send now in each item's menu |
+| `steer.ts` | what steer is called and says, from `caps.steer_effect` |
+| `ErrorNote.tsx` | a message that must be read: its own solid backing, full ink, a red border and arrow |
 | `AnswerButton.tsx`, `Guard.tsx`, `text.ts` | the button for answers, the error boundary, the cut and clip rules for text from an agent |
 | `upload.ts` | staging a file on the hub (`POST .../attachments`) |
 | `scenes.ts` | the composer's scenes for the screens page (dev only) |
@@ -87,32 +89,35 @@ rule, `.sv-glass`, in `composer.css`:
 `@media (prefers-reduced-transparency: reduce)` it is solid and unblurred again.
 No arbitrary value is in a class name and `lint:tokens` is clean.
 
-**Contrast** (`WCAG`, computed from the token values: the glass composited over
-a backdrop, then the text over that; `node` script in the run notes):
+**Contrast** (WCAG, computed from the token values by `G13-contrast.mjs` in the shared notes folder: the glass composited over a
+backdrop, then the text over that. Not a measurement of pixels; the screenshots over a code block and over a red diff line were also read by eye):
 
-| Over | Text | Placeholder and icons | Error text |
+| Over | Text | Placeholder and icons | Error message |
 |---|---|---|---|
-| light: plain timeline | 15.1 | 4.4 | 4.8 |
-| light: a code block | 14.9 | 4.4 | 4.7 |
-| light: dense text behind (35% ink) | 13.8 | 4.3 | 4.3 |
-| light: a red diff line | 14.1 | 4.3 | 4.4 |
-| light: worst case (70% ink) | 12.7 | 4.2 | 3.9 |
-| dark: plain timeline | 12.9 | 5.3 | 4.2 |
-| dark: a code block | 12.7 | 5.2 | 4.1 |
-| dark: dense text behind (35% ink) | 11.0 | 4.8 | 3.5 |
-| dark: a red diff line | 12.2 | 5.1 | 3.9 |
-| dark: worst case (70% ink) | 9.2 | 4.3 | 2.9 |
-| solid fallback, light and dark | 15.2, 12.6 | 4.4, 5.2 | |
+| light: plain timeline | 15.1 | 4.4 | 15.2 |
+| light: a code block | 14.9 | 4.4 | 15.2 |
+| light: dense text behind (35% ink) | 13.8 | 4.3 | 15.2 |
+| light: a red diff line | 14.1 | 4.3 | 15.2 |
+| light: worst case (70% ink) | 12.7 | 4.2 | 15.2 |
+| dark: plain timeline | 12.9 | 5.3 | 12.6 |
+| dark: a code block | 12.7 | 5.2 | 12.6 |
+| dark: dense text behind (35% ink) | 11.0 | 4.8 | 12.6 |
+| dark: a red diff line | 12.2 | 5.1 | 12.6 |
+| dark: worst case (70% ink) | 9.2 | 4.3 | 12.6 |
+| solid fallback, light and dark | 15.2, 12.6 | 4.4, 5.2 | 15.2, 12.6 |
 
-Text stays above 9. The placeholder and icon colour is `--text-muted`, whose own
-ratio on the plain card is 4.4 in light, so the glass costs it 0.2 at the most
-over everything but a worst case; the error text is `--danger-text`, 4.8 and
-4.2 on a plain surface, which the dark token already sets, and falls under 4.5
-over dense content (a note's message is also in an alert and in the timeline's
-send bubble). Raising the alpha further buys little (0.9 more at the worst case
-for a surface that stops looking like glass), so the numbers are left as they
-are. This is a computation, not a measurement of pixels; the screenshots over a
-code block and over a red diff line were read by eye.
+How the error column got there. An error message first used `--danger-text` on the glass, which measured 4.8 at best
+and 2.9 over the dark worst case (that token is 4.2 on a plain dark card by itself), and raising the glass alpha bought
+under one point for a surface that stops looking like glass. So no danger- or warning-coloured text goes on the glass
+now (`glass.test.ts` reads the sources and fails on one). A message the person must read (a refused send, a refused
+answer, a failed save, a tray item's error) is an `ErrorNote`: its own opaque backing (the `--card` token), the text in
+full ink, and the red in a border and an arrow. Ink on the card is 15.2 in light and 12.6 in dark whatever is behind
+the bar, so the column holds at 4.5 and above over every backdrop tried. The same went for the dock's "Approval
+needed" line (warning text measured 3.9 over the light worst case; it is ink now, with the yellow arrow), and for
+Deny and Skip (ink with a red border). The red trash icon in a queued message is secondary ink, red only on hover.
+Text is 9.2 or more everywhere. The placeholder and icon colour is `--text-muted`, 4.4 on the plain light card by itself,
+so the glass costs it 0.2 at the most except over a worst case, where it is 4.2 to 4.3; a placeholder is not a message
+the person must read, and it is left as the token has it.
 
 **Controls**, all icon-only, each with an accessible name and a tooltip (`title`),
 none with a visible word:
@@ -148,10 +153,10 @@ device first (G11's outbox) and the timeline draws its bubble and its reason.
 **The menu behind the primary button.** While a reply runs, holding the primary
 button (450 ms), a right click, or the ArrowUp key (or Shift+F10) opens a glass
 menu above it with two items: **Queue** ("Sent when the current reply ends.") and
-**Stop and send** (steer: "Stops the current reply, then sends this message now.";
-see "What steer does, per agent"). The menu opens on Queue, never on the item that
-stops the reply; the arrow keys move, Escape or Tab or a press elsewhere closes it
-and the focus goes back to the button. "Stop and send" is disabled, with the
+the steer item, which is named and worded from `caps.steer_effect` ("Stop and send"
+only when the session says its steer stops the reply, "Send now" otherwise; see
+"What steer does, per agent"). The menu opens on Queue, never on the steer item; the arrow keys move, Escape or Tab or a press elsewhere closes it
+and the focus goes back to the button. The steer item is disabled, with the
 reason in the menu and beside the bar, when `caps.steer` is not true ("This agent
 cannot be steered."), which is also the case of an ACP agent. If the turn ended
 between the menu opening and the item being chosen, the message goes as a plain
@@ -276,7 +281,7 @@ opens upward into the list. The list is not made until the strip is first opened
 (a long queue costs nothing closed), has its own height (`max-h-44`) and its own
 scroll, and stays open under the person's hands while one of its messages is being
 edited. Each item has icon buttons with names and tooltips: **Edit**, **Remove**
-(`cancel`), and **More**, whose menu holds **Stop and send** (`steer`, worded as
+(`cancel`), and **More**, whose menu holds the steer item (`steer`, worded as
 above; disabled, with its reason, when `caps.steer` is not true). Edit opens the
 message in place with **Save the edit** and **Cancel the edit** (icons). All are
 gated actions: off, with the store's reason, while the connection is down. One
@@ -288,29 +293,27 @@ that is in the queue is drawn by the tray, not also as a bubble in the timeline.
 
 ## What steer does, per agent
 
-One label, "Stop and send" (a menu item, and an item in a queued message's menu),
-with the one sentence "Stops the current reply, then sends this message now.", is
-what the first version says on every harness
-(G1, "Carried forward from wave 2"; G16 gap 6). It is exact on Claude (the reply
-is cut, a running tool call is killed, an open approval withdrawn). It is not
-exact on Codex (the reply is cut, but a running command is not stopped, and a
-steer waits behind an open approval) or on opencode (a steer does not even cut the
-reply being written, and its message can show up only in the next turn). ACP has
-no steer.
+Claude's steer cuts the reply and kills a running tool call, an open approval is withdrawn. Codex's cuts the reply but
+lets a running command finish, and waits behind an open approval. opencode's does not cut the reply being written, and
+its message can show up only in the next turn. ACP has no steer (G16 gap 6; G7). `Caps.steer` is a boolean, true for
+the first three alike, and the view must not branch on a harness name (AGENTS.md: capabilities first), so the hub says
+which it is: `session.caps.steer_effect`, one of `"stops_reply"`, `"after_tool"`, `"next_turn"` (added by G32; read
+here as an optional field, `steer.ts`, and not in the generated types, which the hub's schema owns). The control reads
+it:
 
-**The caps cannot tell these apart.** `Caps` is `{steer, plan_mode, rollback,
-fork, stop_task, options}`: `steer` is a boolean, true for Claude, Codex and
-opencode alike. The row names the harness and the adapter, but the view must not
-branch on a harness name (AGENTS.md: capabilities first), so it cannot choose a
-wording from that either. What the hub would need to carry, for a later
-milestone to word the control per agent: a field on `session.caps`, for example
-`steer_effect: "stops_reply" | "after_tool" | "next_turn"` (G16's three cases),
-set by each adapter from what its recordings prove (`claude_wire.PROVEN` is the
-model), and listed in `session_v2.json`. With it the label, the button's `title`
-and the tray's sentence would be chosen from the field; without it they are the
-one sentence above. Until then the cases the view can tell apart, and has a
-screenshot of each, are: steer offered (`composer-busy`, `composer-queued`) and
-steer not offered (`composer-no-steer`: the button is disabled with its reason).
+| `steer_effect` | Label | Sentence |
+|---|---|---|
+| `"stops_reply"` | Stop and send | Stops the current reply, then sends this message now. |
+| `"after_tool"` | Send now | Sends this message now. The current reply is cut, but a tool call that is running finishes first. |
+| `"next_turn"` | Send now | Sends this message ahead of the queue. The agent reads it in its next turn, and the current reply goes on. |
+| absent, or a value this view does not know | Send now | Sends this message ahead of the queue. Some agents stop the current reply to do it. |
+
+The label and the sentence are the steer item's in the send menu (with its picture: a square for a stopping steer, the
+queue picture otherwise), its tooltip, and the item in a queued message's menu. Only a session that says `stops_reply`
+is ever told that the reply is stopped. The sends are the same whatever the words (`mode: "steer"`, `queue {op:
+"steer"}`). `steer.test.tsx` has the four cases for the send menu and for the tray, an unknown value, and the reader;
+the screenshots `composer-menu-send` (absent), `composer-menu-steer-stops`, `-steer-after-tool`, `-steer-next-turn` and
+`composer-queued-menu` show each.
 
 ## Left out, and why
 
@@ -322,7 +325,6 @@ What each would need, so the next milestone can pick it up. For the model chip: 
 | Plan toggle | the same missing action; G20 owns plan mode | `setOption("plan_mode", true|false)` through the same route, shown only when `caps.plan_mode` |
 | Queue reorder | the hub has `edit`, `cancel` and `steer` on a queued message and nothing that moves one | a hub op `queue {op: "move", client_id, before}` in `hub.py`'s queue handler and the keeper's queue, then `queueAction("move", id, ...)` in the store |
 | A typed answer to a question | no route carries the text | `POST .../approval {request_id, text}` reading `text` into the adapter's `Answer.text` (the field exists in `adapters/base.py` and `claude_wire.answer` uses it), and `respond(requestId, decision, text?)` in the store |
-| A steer wording per agent | `Caps.steer` is a boolean | see "What steer does, per agent" |
 | Slash commands and `@` files | not in this milestone; the placeholder no longer promises them | G20/G21's |
 | "Allowed on iPhone" captions | | G21 |
 | t3code's `ComposerPendingApprovalActions` | not copied (no checkout); written from the description in G1 | |
@@ -345,9 +347,9 @@ What each would need, so the next milestone can pick it up. For the model chip: 
    window between what was drawn and the press; it cannot close the round trip
    after the post leaves, where an agent that reuses an id between the post and
    its delivery gets the answer. The hub would need to take the `seq` too.
-5. **Steer's one sentence is a minimum.** On Claude "Stop and send" also cancels a
-   running tool call; the label does not say so, because it is not true of Codex
-   and opencode (G16).
+5. **Steer wording depends on a field the hub adds.** `steer_effect` is read when present (G32); a hub that
+   does not send it gets "Send now" with the sentence that is true of every agent, which undersells a Claude
+   steer that does stop the reply.
 6. **Attachments are not checked for the harness.** The hub stages any file of an
    allowed type; whether the harness can read it is `attachments.capability`'s
    (G8), which the view does not know.
@@ -373,7 +375,7 @@ What each would need, so the next milestone can pick it up. For the model chip: 
 `composer-empty`, `-typing`, `-multiline`, `-sending`, `-busy`, `-queued`,
 `-queued-edit`, `-queued-many`, `-approval`, `-approval-confirm`, `-approval-offline`, `-input-text`, `-input-choice`,
 `-offline`, `-storage-down`, `-loading`, `-no-steer`, `-read-only`,
-`-attachments`, `-hostile`, `-menu-send`, `-menu-attach`, `-over-code` and `-over-diff` (the bar over a long scrolled timeline, under a code block and under a red diff line), `-keyboard` (the phone with `--keyboard-inset` at 336 px); each at 1280x800 and a 390x844 phone, light and dark.
+`-attachments`, `-hostile`, `-menu-send` (steer_effect absent), `-menu-steer-stops`, `-menu-steer-after-tool`, `-menu-steer-next-turn`, `-queued-menu`, `-error-note`, `-approval-error`, `-menu-attach`, `-over-code` and `-over-diff` (the bar over a long scrolled timeline, under a code block and under a red diff line), `-keyboard` (the phone with `--keyboard-inset` at 336 px); each at 1280x800 and a 390x844 phone, light and dark.
 `scenes.ts` scripts each over the recorded fixtures plus a few hand-built frames,
 and clears the stored draft first so one scene does not show another's.
 
@@ -387,8 +389,8 @@ Run on 2026-11-22, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (34 files, 677 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (35 files, 691 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
 | The built files under `src/swe/webapp/static/session/` equal a fresh build; `tests.test_webapp_session_view` | pass |
-| **Each guard, removed.** 76 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (no links, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback). Four edits first survived (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
+| **Each guard, removed.** 86 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (no links, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
 | **A real hub.** `swe remote serve` on a throwaway HOME, harness.json pointing Claude's adapter at `tests/fakes/fake_claude.py` in `approval` mode, headless Chrome on the built page (`/session/index.html?key=...`) with the saved credential: the first turn's approval shows in the dock with nothing focused; a real mouse click on Allow answers it; text typed with the keyboard and sent with Enter arrives once; the second turn's approval is answered with a click. The hub's v2 messages hold the typed message once (`["list the build folder","now list it again please"]`) and both approvals as `source user, decision allow` | pass; screenshots `G13-e2e/` in the shared notes folder, script `G13-e2e_view.mjs` (run with `swe` as `PYTHONPATH=src python3 -m swe.cli`, since this was a worktree) |
-| Screenshots, 25 composer scenes x desktop 1280 and phone 390 x light and dark (100 files) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |
+| Screenshots, 31 composer scenes x desktop 1280 and phone 390 x light and dark (124 files) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |

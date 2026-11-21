@@ -6,11 +6,13 @@ import { readOnlyReason, useSessionStore, type SessionStore } from "../core";
 import { asArrived } from "../session/format";
 import { cx, Icon, Spinner, StateArrow, type IconName } from "../ui";
 import { FILES_KEPT, type StagedFile } from "./draft";
+import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { enterAction, touchScreen } from "./keys";
 import { Menu, type MenuItem } from "./Menu";
 import { QueueTray } from "./QueueTray";
 import { RequestDock } from "./RequestDock";
+import { steerEffectOf, steerWording } from "./steer";
 import { MAX_MESSAGE_CHARS, submitMessage } from "./submit";
 import { cut, plural } from "./text";
 import { httpUpload, type Upload } from "./upload";
@@ -147,6 +149,8 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
 
   const busyTurn = useSessionStore(store, (s) => s.session.openTurn !== null || s.session.phase === "running" || s.session.phase === "waiting");
   const steerOk = useSessionStore(store, (s) => s.session.caps?.steer === true);
+  const steerEffect = useSessionStore(store, (s) => steerEffectOf(s.session.caps));
+  const steerWords = steerWording(steerEffect);
   const connection = useSessionStore(store, (s) => s.connection.state);
   const refusalReason = useSessionStore(store, (s) => s.refusal()?.reason ?? null);
   const refusalMessage = useSessionStore(store, (s) => s.refusal()?.message ?? null);
@@ -339,9 +343,9 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
     { id: "queue", label: "Queue", icon: "queue", hint: "Sent when the current reply ends.", disabled: !canSend, reason: "Write a message first.", onSelect: () => void submit("queue") },
     {
       id: "steer",
-      label: "Stop and send",
-      icon: "stop",
-      hint: "Stops the current reply, then sends this message now.",
+      label: steerWords.label,
+      icon: steerWords.stops ? "stop" : "queue",
+      hint: steerWords.sentence,
       disabled: !canSend || !steerOk,
       reason: !steerOk ? "This agent cannot be steered." : "Write a message first.",
       onSelect: () => void submit("steer"),
@@ -374,13 +378,17 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
                   This draft cannot be kept on this device, so it will not survive a reload.
                 </p>
               ) : null}
-              {reason !== null ? (
+              {reason !== null && notice !== null ? (
+                <ErrorNote aria-live="polite" data-composer-reason="error" id={reasonId}>
+                  {reason}
+                </ErrorNote>
+              ) : reason !== null ? (
                 <p
                   aria-live="polite"
-                  className={cx("sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs", notice !== null ? "text-danger-text" : "text-secondary")}
-                  data-composer-reason={notice !== null ? "error" : blockedBy !== null ? "blocked" : note !== null ? "connection" : "none"}
+                  className="sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs text-secondary"
+                  data-composer-reason={blockedBy !== null ? "blocked" : note !== null ? "connection" : "none"}
                   id={reasonId}
-                  role={notice !== null ? "alert" : "status"}
+                  role="status"
                 >
                   {reason}
                 </p>
@@ -428,7 +436,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
                   <span className="max-w-40 truncate">{cut(entry.name, 60).text}</span>
                   {entry.error !== null ? (
                     <>
-                      <span className="text-danger-text">{entry.error}</span>
+                      <span>{entry.error}</span>
                       <button
                         aria-label={`Dismiss ${cut(entry.name, 60).text}`}
                         className="grid size-5 place-items-center rounded-full hover:bg-hover focus-visible:outline-2 focus-visible:outline-interactive"

@@ -3,8 +3,10 @@ import { useRef, useState, type ComponentProps } from "react";
 import { useSessionStore, type SessionStore } from "../core";
 import { cx, Icon, Spinner } from "../ui";
 import { AnswerButton } from "./AnswerButton";
+import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { Menu } from "./Menu";
+import { steerEffectOf, steerWording } from "./steer";
 import { clip, plural } from "./text";
 
 type Queued = { command_id: string; text: string; by?: string; mode?: "queue" | "steer"; attachments?: string[] };
@@ -28,7 +30,7 @@ function IconButton({ label, icon, danger = false, ...rest }: { label: string; i
       aria-label={label}
       className={cx(
         "sv-press grid size-8 shrink-0 place-items-center rounded-full motion-safe:transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-interactive disabled:cursor-not-allowed disabled:opacity-40",
-        danger ? "text-danger-text" : "text-secondary hover:text-primary",
+        danger ? "text-secondary hover:text-danger-text" : "text-secondary hover:text-primary",
       )}
       title={label}
       type="button"
@@ -45,6 +47,7 @@ function Item({
   edit,
   setEdit,
   steerOk,
+  steerEffect,
   refusal,
 }: {
   store: SessionStore;
@@ -52,6 +55,7 @@ function Item({
   edit: Edit | undefined;
   setEdit(id: string, edit: Edit | undefined): void;
   steerOk: boolean;
+  steerEffect: ReturnType<typeof steerEffectOf>;
   refusal: string | null;
 }) {
   const [busy, setBusy] = useState<Action | null>(null);
@@ -106,9 +110,9 @@ function Item({
                 items={[
                   {
                     id: "steer",
-                    label: "Stop and send",
-                    icon: "stop",
-                    hint: "Stops the current reply, then sends this message now.",
+                    label: steerWording(steerEffect).label,
+                    icon: steerWording(steerEffect).stops ? "stop" : "queue",
+                    hint: steerWording(steerEffect).sentence,
                     disabled: !steerOk,
                     reason: "This agent cannot be steered.",
                     onSelect: () => void run("steer"),
@@ -147,9 +151,7 @@ function Item({
         </>
       )}
       {error !== null ? (
-        <p className="mt-1 px-1 text-xs text-danger-text" role="alert">
-          {error}
-        </p>
+        <ErrorNote className="mt-1">{error}</ErrorNote>
       ) : null}
     </li>
   );
@@ -165,6 +167,7 @@ function Item({
 export function QueueTray({ store, onKeep }: { store: SessionStore; onKeep(text: string): void }) {
   const queue = useSessionStore(store, (s) => s.session.queue);
   const steerOk = useSessionStore(store, (s) => s.session.caps?.steer === true);
+  const steerEffect = useSessionStore(store, (s) => steerEffectOf(s.session.caps));
   const refusal = useSessionStore(store, (s) => s.refusal()?.message ?? null);
   const [open, setOpen] = useState(false);
   const [made, setMade] = useState(false);
@@ -223,13 +226,13 @@ export function QueueTray({ store, onKeep }: { store: SessionStore; onKeep(text:
                     </p>
                   ) : !steerOk ? (
                     <p className="px-1.5 pb-1 text-xs text-secondary" data-tray-note="no-steer">
-                      This agent cannot stop a reply to send a message sooner. Queued messages are sent when the reply ends.
+                      This agent cannot send a message ahead of the queue. Queued messages are sent when the reply ends.
                     </p>
                   ) : null}
                   <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto pb-1">
                     {shown.map((item) => (
                       <Guard key={item.command_id} message="This queued message could not be shown." part="queued">
-                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} steerOk={steerOk} store={store} />
+                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} steerEffect={steerEffect} steerOk={steerOk} store={store} />
                       </Guard>
                     ))}
                   </ul>

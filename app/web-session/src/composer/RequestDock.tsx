@@ -4,6 +4,7 @@ import { useSessionStore, type RequestEvent, type SessionStore, type TimelineIte
 import { Collapsible, cx, InlineText, Spinner, StateArrow } from "../ui";
 import { AnswerButton } from "./AnswerButton";
 import { answer, decisionFor } from "./answer";
+import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { clip, cut, inputText, label, NAME_SHOWN, OPTIONS_SHOWN } from "./text";
 
@@ -152,7 +153,7 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
       data-request-seq={event.seq}
       role="group"
     >
-      <p aria-live="polite" className="flex items-center gap-1.5 text-xs font-medium text-warning-text">
+      <p aria-live="polite" className="flex items-center gap-1.5 text-xs font-medium text-primary">
         <StateArrow colour="yellow" />
         {approval ? "Approval needed" : "The agent has a question"}
         {approval || waiting > 0 ? <span className="font-normal text-muted">{`${approval ? ` · ${kind}` : ""}${waiting > 0 ? ` · ${waiting} more waiting` : ""}`}</span> : null}
@@ -200,8 +201,12 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
           {`Always allow ${tool?.name !== undefined && tool.name !== "" ? cut(tool.name, NAME_SHOWN).text : "this kind of call"}? Pressing again turns off later questions of the same kind for this session. Cancel to go back.`}
         </p>
       ) : null}
-      {status !== null ? (
-        <p aria-live="polite" className={cx("mt-1.5 text-xs", message !== null ? "text-danger-text" : "text-secondary")} data-dock-status role="status">
+      {message !== null ? (
+        <ErrorNote aria-live="polite" className="mt-1.5" data-dock-status>
+          {message}
+        </ErrorNote>
+      ) : status !== null ? (
+        <p aria-live="polite" className="mt-1.5 text-xs text-secondary" data-dock-status role="status">
           {status}
         </p>
       ) : null}

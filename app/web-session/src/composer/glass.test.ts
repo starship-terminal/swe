@@ -81,3 +81,26 @@ describe("reduced motion in the composer", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("text that must be read on the glass", () => {
+  it("has no danger- or warning-coloured text on the glass: a message of that kind has its own solid backing and full ink", () => {
+    const bad: string[] = [];
+    for (const name of readdirSync(here)) {
+      if (!/\.tsx$/.test(name) || /\.test\.|harness/.test(name)) continue;
+      readFileSync(join(here, name), "utf8")
+        .split("\n")
+        .forEach((line, index) => {
+          if (/(?<![:\w-])text-(?:danger|warning)-text/.test(line)) bad.push(`${name}:${index + 1}`);
+        });
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("draws an error message on the card token with ink, a red border and an arrow", () => {
+    const note = readFileSync(join(here, "ErrorNote.tsx"), "utf8");
+    expect(note).toContain("bg-card");
+    expect(note).toContain("text-primary");
+    expect(note).toContain("border-danger");
+    expect(note).toContain('colour="red"');
+  });
+});
