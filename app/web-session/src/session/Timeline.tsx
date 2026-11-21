@@ -72,9 +72,16 @@ export function Timeline({ store }: { store: SessionStore }) {
   const loaded = useSessionStore(store, (s) => s.session.loaded);
   const hasMore = useSessionStore(store, (s) => s.session.hasMore);
   const caughtUp = useSessionStore(store, (s) => s.session.caughtUp);
-  const sends = useSessionStore(store, (s) => s.sends);
+  const allSends = useSessionStore(store, (s) => s.sends);
+  const queue = useSessionStore(store, (s) => s.session.queue);
   const connection = useSessionStore(store, (s) => s.connection);
 
+  // A send the hub holds in its queue is drawn by the composer's queued tray (G13), not twice.
+  const sends = useMemo(() => {
+    if (queue.length === 0) return allSends;
+    const held = new Set(queue.map((item) => item.command_id));
+    return allSends.filter((send) => !held.has(send.commandId));
+  }, [allSends, queue]);
   const rows = useMemo(
     () => buildRows({ items, live, turns, stopped, openTurn, phase }, sends),
     [items, live, turns, stopped, openTurn, phase, sends],

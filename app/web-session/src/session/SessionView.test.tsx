@@ -650,10 +650,21 @@ describe("a reply that finishes", () => {
 });
 
 describe("the composer's place", () => {
-  it("says in words that sending from this view is not available yet", async () => {
+  it("holds the composer (G13's tests are in src/composer), not the placeholder", async () => {
     const t = setup();
     await play(t, "default");
-    expect(text(q(t.el, "[data-placeholder-note]"))).toBe("Sending from this view is not available yet.");
-    expect(q(t.el, "form[aria-label='Composer']")?.getAttribute("title")).toBe("Sending from this view is not available yet.");
+    expect(q(t.el, "form[aria-label='Composer']")).not.toBeNull();
+    expect(q(t.el, "[data-placeholder-note]")).toBeNull();
+  });
+
+  it("draws a send the hub holds in its queue once, in the tray, not as a bubble as well", async () => {
+    const t = setup();
+    await play(t, "queued");
+    await settle(() => void t.store.getState().send({ text: "then lint it" }));
+    const sent = t.store.getState().sends[0];
+    expect(sent?.shown).not.toBe(undefined);
+    await settle(() => void t.transport.last.send(frame("queue.updated", 400, { items: [{ command_id: sent?.commandId ?? "", text: "then lint it", mode: "queue" }] })));
+    expect(q(t.el, `[data-send][data-command-id="${sent?.commandId}"]`)).toBeNull();
+    expect(q(t.el, `[data-queued="${sent?.commandId}"]`)).not.toBeNull();
   });
 });

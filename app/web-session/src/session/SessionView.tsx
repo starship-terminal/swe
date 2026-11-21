@@ -1,8 +1,8 @@
 import "./session.css";
 
+import { Composer, Guard } from "../composer";
 import { useSessionStore, type SessionStore } from "../core";
 import { describeKey } from "../session-key";
-import { ComposerPlaceholder } from "./ComposerPlaceholder";
 import { describeConnection } from "./connection";
 import { Header } from "./Header";
 import { rowLabels } from "./model";
@@ -11,7 +11,7 @@ import { TimelineBoundary } from "./RowBoundary";
 import { StateArrow } from "../ui";
 
 /**
- * The session view over a store: header, connection banner, timeline, and the composer's place. The
+ * The session view over a store: header, connection banner, timeline and the composer (G13). The
  * caller owns the store's life (`start()` when it mounts, `stop()` when it goes: SessionShell does).
  */
 export function SessionView({ store, sessionKey, now = Date.now }: { store: SessionStore; sessionKey: string; now?: () => number }) {
@@ -41,7 +41,9 @@ export function SessionView({ store, sessionKey, now = Date.now }: { store: Sess
       <TimelineBoundary>
         <Timeline store={store} />
       </TimelineBoundary>
-      <ComposerPlaceholder store={store} />
+      <Guard message="The message box could not be shown. Reload the page to try again; what you typed is kept." part="composer">
+        <Composer sessionKey={sessionKey} store={store} />
+      </Guard>
     </div>
   );
 }

@@ -46,7 +46,7 @@ async function render(key: string): Promise<HTMLElement> {
 }
 
 describe("the session shell", () => {
-  it("connects to the session's stream with the saved credential, and shows the breadcrumb, a loading timeline and a disabled composer", async () => {
+  it("connects to the session's stream with the saved credential, and shows the breadcrumb, a loading timeline and the composer", async () => {
     window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "sk-test" }));
     const el = await render("claude:3f2a");
 
@@ -62,10 +62,10 @@ describe("the session shell", () => {
 
     const box = el.querySelector("textarea");
     expect(box?.placeholder).toBe(COMPOSER_PLACEHOLDER);
-    expect(box?.disabled).toBe(true);
-    expect(el.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(true);
-    // The composer's place says so: G13 replaces it.
-    expect(el.querySelector('[data-placeholder="composer"]')).not.toBeNull();
+    // A message can be typed while the session loads: it is kept and sent once the hub has been heard from.
+    expect(box?.disabled).toBe(false);
+    expect(el.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled).toBe(true); // nothing typed yet
+    expect(el.querySelector('[data-composer="form"]')).not.toBeNull();
   });
 
   it("sends no credential header when none is saved (the native shells add theirs)", async () => {
