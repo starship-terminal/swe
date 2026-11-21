@@ -448,9 +448,10 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
   hub restarted. A frame the hub made for the stream (`seq` 0) is not
   replayed after a reconnect or an overflow, so a command still waiting
   for its result is asked about again with `GET .../commands/{id}`
-  (G31). A message is posted again under its `command_id` only with
-  `require_keeper: true`, and only when its earlier posts carried it
-  too: the keeper path answers the stored receipt and result without
+  (G31). A message is posted again after an answer that may mean it
+  was applied only with `require_keeper: true`, and only when its
+  earlier posts carried it too (after an answer that stored nothing,
+  such as a 429, it is posted again as it was): the keeper path answers the stored receipt and result without
   applying it twice, and the legacy route, which would type it in
   again, refuses such a post (409 `not_kept`).
 - **Read-only sessions** use the same frames. `row.control` and

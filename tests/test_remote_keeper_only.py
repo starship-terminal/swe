@@ -100,6 +100,26 @@ class TestRequireKeeperLocal(KeeperHubCase):
                               {"text": "x", "client_id": "m2"})
         self.assertEqual((status, len(legacy.calls)), (202, 1))
 
+    def test_a_keeper_that_let_go_before_the_send_looked_refuses_it_as_not_kept(self):
+        # Owned when do_POST picked the route, gone before ``_owned``:
+        # nothing is stored or typed in, and a keeper-only message is
+        # answered as the legacy routes answer it.
+        self.end(self.srv)
+        self.srv = self.hub(sessions=[_session()])
+        legacy = LegacyRoute(self, self.srv.state)
+        rt = self.srv.state.runtime
+        with mock.patch.object(rt, "owns", lambda key: True):
+            status, out = self.post("claude:s1", "message", {
+                "text": "x", "command_id": "m1", "require_keeper": True})
+            self.assertEqual((status, out["error"]["code"]),
+                             (409, "not_kept"))
+            status, out = self.post("claude:s1", "message", {
+                "text": "x", "command_id": "m2"})
+            self.assertEqual((status, out["error"]["code"]),
+                             (404, "unknown_session"))
+        self.assertEqual(legacy.calls, [])
+        self.assertEqual(self.commands(), [])
+
     def test_only_true_asks_for_a_keeper(self):
         self.end(self.srv)
         self.srv = self.hub(sessions=[_session()])

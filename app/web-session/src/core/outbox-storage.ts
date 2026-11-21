@@ -58,6 +58,12 @@ export interface OutboxEntry {
   lastError?: string;
   /** Why it failed or is unconfirmed. */
   error?: string;
+  /**
+   * On a `failed` entry: the hub stated the failure (a failed `command.result`, a `rejected` receipt), as opposed to
+   * a failure this page made from a deadline or an answer it could not read. Stated failures are further along than
+   * `unconfirmed` (`furtherAlong`): an unconfirmed entry only means a deadline passed without news.
+   */
+  stated?: boolean;
   /** When it reached `failed` or `unconfirmed`. */
   endedAt?: number;
   /**
@@ -122,18 +128,21 @@ export function normalizeEntry(entry: OutboxEntry): OutboxEntry {
 
 /**
  * A copy's stage. `failed` and `ambiguous` (ended as "may or may not have been sent") is its own stage, between
- * `waiting` and `sent`: evidence that it arrived (a receipt) moves it on to `sent`. One whose status this build
+ * `waiting` and `sent`: evidence that it arrived (a receipt) moves it on to `sent`. `failed` and `stated` (the hub's
+ * own failed result or rejected receipt) is the last stage, above `unconfirmed` and every other end. One whose status this build
  * does not know is below every known one, so it never wins.
  */
 function stageOf(entry: OutboxEntry): number {
   if (entry.status === "failed" && entry.ambiguous === true) return 1;
+  // What the hub said became of it is the last word: above `unconfirmed` and a failure this page made itself.
+  if (entry.status === "failed" && entry.stated === true) return 4;
   return STAGE[entry.status] ?? -1;
 }
 
 /**
  * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
- * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
- * `sent` over "may or may not have been sent" over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
+ * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: a failure the
+ * hub stated over every other terminal end, over "may or may not have been sent" over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
  * with attempts+1, so a claim-free copy at the same count is the released one); `ambiguous` over not.
  */
 export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {

@@ -192,7 +192,7 @@ function carriesResult(response: JsonResponse | null): boolean {
 function receiptOutcome(entry: OutboxEntry, receipt: { receipt: string; reason?: string }, now: number): OutboxEntry {
   const { claim: _claim, error: _error, endedAt: _ended, lastError: _last, ambiguous: _ambiguous, ...rest } = entry;
   if (receipt.receipt === "rejected") {
-    return { ...rest, status: "failed", error: receipt.reason !== undefined && receipt.reason !== "" ? receipt.reason : UNDELIVERED, endedAt: now };
+    return { ...rest, status: "failed", stated: true, error: receipt.reason !== undefined && receipt.reason !== "" ? receipt.reason : UNDELIVERED, endedAt: now };
   }
   return { ...rest, status: "sent", path: "keeper", receipt: receipt.receipt, sentAt: now };
 }
@@ -210,6 +210,12 @@ function storedResult(result: Record<string, unknown>): SendResultData {
     ...(typeof result.note === "string" ? { note: result.note } : {}),
     ...(result.cancelled === true ? { cancelled: true } : {}),
   };
+}
+
+/** A 2xx whose own body says `receipt: rejected`: the hub's definite answer, which no receipt held meanwhile overrides. */
+function rejectedInBody(response: JsonResponse | null): boolean {
+  if (response === null || response.status < 200 || response.status >= 300) return false;
+  return (response.body as { receipt?: unknown } | undefined)?.receipt === "rejected";
 }
 
 function errorCode(response: JsonResponse): string {
@@ -769,7 +775,7 @@ export class Outbox {
     }
     const now = this.current(entry.commandId);
     if (now === undefined) return "done"; // a result came first
-    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response) || repeat)) {
+    if (receipt !== null && !carriesResult(response) && !rejectedInBody(response) && (receipt.receipt === "rejected" || !refuses(response) || repeat)) {
       // The stream said the hub took it (or refused it) while the post was out: that settles it when the HTTP
       // answer leaves the outcome open (lost, 408, a 5xx), says "not now" (425, 429, 401, 403), or is a 2xx.
       // A definite refusal (another 4xx) keeps its own outcome below, except on a repeat, where a refusal says
@@ -788,7 +794,7 @@ export class Outbox {
       }
       if (body.receipt === "rejected") {
         // A keeper stored it as refused (a satellite's 429 backlog_full, answered again to a repeat): not taken.
-        await this.fail(now, typeof body.reason === "string" && body.reason !== "" ? body.reason : UNDELIVERED);
+        await this.fail(now, typeof body.reason === "string" && body.reason !== "" ? body.reason : UNDELIVERED, true);
         return "done";
       }
       const keeper = typeof body.receipt === "string";
@@ -855,13 +861,17 @@ export class Outbox {
       ([401, 403, 425, 429].includes(response.status) || (response.status === 409 && errorCode(response) === "not_kept"));
     let outcome: OutboxEntry | null = isKeeperOnly(entry) && storedNothing ? { ...entry } : { ...entry, ambiguous: true };
     const repeat = attempted.ambiguous === true;
-    if (receipt !== null && !carriesResult(response) && (receipt.receipt === "rejected" || !refuses(response) || repeat)) {
+    if (receipt !== null && !carriesResult(response) && !rejectedInBody(response) && (receipt.receipt === "rejected" || !refuses(response) || repeat)) {
       outcome = receiptOutcome(entry, receipt, this.options.timers.now());
     } else if (response !== null && response.status >= 200 && response.status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData };
       const result = body.result;
       if (result !== undefined && result !== null && typeof result === "object" && (result.ok === true || result.cancelled === true)) {
         outcome = null;
+      } else if (body.receipt === "rejected") {
+        // The hub stored it as refused: what it said stands, here as in `deliver`.
+        const reason = (body as { reason?: unknown }).reason;
+        outcome = receiptOutcome(entry, { receipt: "rejected", ...(typeof reason === "string" ? { reason } : {}) }, this.options.timers.now());
       } else {
         const keeper = typeof body.receipt === "string";
         outcome = { ...entry, status: "sent", path: keeper ? "keeper" : "legacy", sentAt: this.options.timers.now() };
@@ -890,7 +900,7 @@ export class Outbox {
   /** A receipt settles the send: `sent` on the keeper path, or `failed` with the hub's reason when it was refused. */
   private async byReceipt(entry: OutboxEntry, receipt: { receipt: string; reason?: string }): Promise<void> {
     const outcome = receiptOutcome(entry, receipt, this.options.timers.now());
-    if (outcome.status === "failed") await this.fail(entry, outcome.error ?? UNDELIVERED);
+    if (outcome.status === "failed") await this.fail(entry, outcome.error ?? UNDELIVERED, true);
     else await this.save(outcome);
   }
 
@@ -933,7 +943,7 @@ export class Outbox {
       return;
     }
     if (entry.status === "failed" && entry.ambiguous !== true) return; // the first definite failure stands
-    await this.fail(entry, typeof result.note === "string" && result.note !== "" ? result.note : UNDELIVERED);
+    await this.fail(entry, typeof result.note === "string" && result.note !== "" ? result.note : UNDELIVERED, true);
   }
 
   /** Every deadline, checked on every pass and on its own timer, whether or not anything can be posted. */
@@ -1018,13 +1028,16 @@ export class Outbox {
     this.changed();
   }
 
-  private async fail(entry: OutboxEntry, error: string): Promise<void> {
-    await this.end(entry, "failed", error);
+  /** End it `failed`. `stated`: the hub said so (a failed result, a rejected receipt), not a deadline or a lost answer. */
+  private async fail(entry: OutboxEntry, error: string, stated = false): Promise<void> {
+    await this.end(entry, "failed", error, stated);
   }
 
-  private async end(entry: OutboxEntry, status: "failed" | "unconfirmed", error: string): Promise<void> {
+  private async end(entry: OutboxEntry, status: "failed" | "unconfirmed", error: string, stated = false): Promise<void> {
     const ended: OutboxEntry = { ...entry, status, error, endedAt: this.options.timers.now() };
     delete ended.lastError;
+    if (stated && status === "failed") ended.stated = true;
+    else delete ended.stated;
     // "May or may not have been sent" is the one end evidence can still move on (see `furtherAlong`).
     if (error === MAYBE_SENT) ended.ambiguous = true;
     else delete ended.ambiguous;

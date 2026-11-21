@@ -192,8 +192,9 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const before = get().session;
       const { state, effects } = reduce(before, frame);
       set({ session: state });
-      // A catch-up ended: a result it did not replay (a snapshot carries none) can be looked up now.
-      if (!before.caughtUp && state.caughtUp) outbox?.caughtUp();
+      // A catch-up ended: a result it did not replay (a snapshot carries none) can be looked up now. So can one a
+      // snapshot taken on an epoch change inside a connection left out.
+      if ((!before.caughtUp && state.caughtUp) || (frame.type === "session.snapshot" && state.caughtUp)) outbox?.caughtUp();
       // The session's row is known now: sends that waited for that may go.
       if (!before.loaded && state.loaded) {
         refreshSends();

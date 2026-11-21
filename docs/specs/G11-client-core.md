@@ -220,8 +220,9 @@ promise different things:
 
 An entry is `{commandId, session, text, attachments, mode, createdAt,
 status, attempts, path?, receipt?, sentAt?, ambiguous?, keeperOnlyAt?,
-lastError?, error?, endedAt?, claim?}` (`OutboxEntry`); `keeperOnlyAt`
-is G31's (below). Its `commandId` is made once and sent
+lastError?, error?, stated?, endedAt?, claim?}` (`OutboxEntry`);
+`keeperOnlyAt` and `stated` are G31's (below, and "Two copies of one
+send"). Its `commandId` is made once and sent
 as both `command_id` and `client_id` on every post. Statuses:
 
 | Status | Terminal | Means |
@@ -351,9 +352,10 @@ page saw it through) is dropped, and nothing is written. An accepted send
 whose receipt reaches this page does not end in doubt because its HTTP
 answer was lost. This fits
 the order as its own stage: in doubt is below `sent` and below a definite
-end, so a receipt's `sent` and a result's `failed` both move forward, and
-the two copies of a definite `failed` and an `unconfirmed` entry still
-compare equal (Limit 10 is unchanged).
+end, so a receipt's `sent` and a result's `failed` both move forward. A
+failure the hub stated (`stated`, below) is further along than
+`unconfirmed`, so a failed result reaches an `unconfirmed` entry too
+(G31; this was Limit 10).
 
 What settles a `sent` keeper entry: its `command.result`, live on the
 stream or in a catch-up's replay, and `knownResult`, the results this
@@ -446,7 +448,7 @@ became of one:
 
 | Feature | The hub | Where |
 |---|---|---|
-| `require_keeper` | a message post whose body has `require_keeper: true` goes to the keeper path or is refused with 409 `not_kept`, before anything is stored or queued. It never reaches the legacy route: not the local `_send_message`, not a satellite's `queue_command` forward, and not the satellite's own legacy route (a `kept` message is posted to the satellite's local route with the field set) | `hub.py` `do_POST`, `agent.py` `_run_kept` |
+| `require_keeper` | a message post whose body has `require_keeper: true` goes to the keeper path or is refused with 409 `not_kept`, before anything is stored or queued: by the local `_send_message`, by a satellite's `queue_command` forward, and by `_kept` when the keeper let the session go between the route's choice and `_owned` (which would otherwise answer 404 `unknown_session`). On a satellite of this build a `kept` message is posted to its local route with the field set, so its own legacy route refuses it too. A satellite of an older build posts it plain: if its keeper let the session go between `_kept_refusal`'s check and the route, its legacy route types the message in, once only, since the hub's store answers any repeat of the id | `hub.py` `_refuse_unless_kept`, `_kept`; `agent.py` `_run_kept` |
 | `command_lookup` | `GET /v1/sessions/{key}/commands/{id}` answers the stored command: `{ok, session, command_id, op, receipt, reason?, result?, received_at, updated_at}`, where `receipt` is the stored status (`held`, `queued`, `accepted`, `rejected`) and `result` the stored result. 404 `unknown_command` when the hub's store does not hold the id for that session. Reads only: no write, no event, no keeper call. The same credential as every session route | `hub.py` `_command_lookup`; schema `CommandLookup` |
 
 An older hub ignores `require_keeper` and answers the GET with 404
@@ -529,7 +531,7 @@ repeat" one whose entry was `WA`.
 | Answer | Plain | Keeper-only, first | Keeper-only, repeat |
 |---|---|---|---|
 | 2xx with `result` | settled by the result | the same | the same |
-| 2xx, `receipt: rejected` | `F`, the hub's reason | the same | the same |
+| 2xx, `receipt: rejected` | `F`, the hub's reason (`stated`); it wins over a receipt the stream gave while the post was out | the same | the same |
 | 2xx with another `receipt` (a repeat's is `duplicate: true` with the stored status) | `S-K` | `S-K` | `S-K` |
 | 2xx without a receipt | `S-L` | `S-L` (only a hub that ignores the field answers this) | `S-L` (the same) |
 | no answer, 408, any 5xx | `FA` | `WA`, tried again on the backoff ("Sending it again under the same id") | `WA`, tried again on the backoff |
@@ -558,10 +560,14 @@ or a `rejected` receipt ends an `ambiguous` send definitely.
 **What the lookup settles.** With `command_lookup` F+ the outbox asks
 `GET .../commands/{id}` for every `S-K`, `U-K` and `FA` entry, oldest
 first, one at a time, when its stored sends are loaded, after each
-catch-up's state frame, and when it learns the feature. A pass started
-while one runs is folded into it. The answer is applied as a stream
-frame would be (`noteResult`, `noteReceipt`), so a send whose claim is
-being written or whose post is out takes it the same way.
+catch-up's state frame, after a whole snapshot a connection takes on an
+epoch change, and when it learns the feature. A pass started while one
+runs is folded into it. A stored result is applied with `settle()` and a
+receipt with `received()`, the same steps a stream frame reaches; no
+looked-up entry is ever claimed or in flight (only `waiting` sends are),
+and each step reads the entry again when it runs, so one that a stream
+frame settled meanwhile is left alone. A failed result or a `rejected`
+receipt ends a send `failed` and `stated`.
 
 | Answer | `S-K` | `U-K` | `FA` |
 |---|---|---|---|
@@ -598,7 +604,7 @@ step by step, and the first step that tells them apart decides:
 
 | Step | Further along | Why it only moves forward |
 |---|---|---|
-| 1. Stage | `failed` (definite) and `unconfirmed`, over `sent`, over in doubt (`failed` and `ambiguous`: "may or may not have been sent"), over `waiting` | `waiting` becomes `sent` on a 2xx, or in doubt on an answer that may mean it was applied; in doubt becomes `sent` on its receipt, or a definite `failed` on a failed result; `sent` ends `unconfirmed` or `failed`; nothing leaves a definite end except removal (a new id for a retry) |
+| 1. Stage | a failure the hub stated (`failed` and `stated`: a failed `command.result` or a `rejected` receipt, from the stream, a post's answer or a lookup), over `failed` (definite, made by this page) and `unconfirmed`, over `sent`, over in doubt (`failed` and `ambiguous`: "may or may not have been sent"), over `waiting` | `waiting` becomes `sent` on a 2xx, or in doubt on an answer that may mean it was applied; in doubt becomes `sent` on its receipt, or a stated `failed` on a failed result; `sent` ends `unconfirmed` or `failed`; an `unconfirmed` end only says a deadline passed without news, so the hub's own word moves it on to a stated `failed`; nothing leaves a definite `failed`, stated or not, except removal (a new id for a retry): the first definite failure stands (`settle()`). A failure this page made (24 hours without reaching the hub, a lost answer, a refusal it read) does not outrank `unconfirmed`, so a stale tab's deadline cannot write over another tab's news (Limit 15 still holds for `sent`) |
 | 2. `attempts` | more | only a claim changes it, and always by +1 |
 | 3. The claim | no claim over a claim | a claim is only ever written together with attempts+1 (`decideClaim`, tested), so at the same count a copy without one is the later, released one: its answer (429, 425, 401, 403: the answers that stored nothing) or `abandon` removed it |
 | 4. `ambiguous` | set over not | within `waiting` it is only ever set (an abandoned claim, a stale claim taken over), never cleared; leaving `waiting` decides by stage first |
@@ -878,11 +884,13 @@ changed here.
 
 ## Limits
 
-These are known and left for later. None of them posts a message twice or
-hammers the hub. Only one posts something the person did not expect:
-Limit 5, on both paths, posts once a message the person discarded. The
-others show a wrong end state, leave the view waiting, or hold a resource.
-They are not fixed in G11; G13 should know them.
+These are known and left for later. Two post something the person did
+not expect: Limit 5, on both paths, posts once a message the person
+discarded, and Limit 18 can type a message in twice (an older hub
+swapped in within one round trip takes a keeper-only repeat on its
+legacy route). None of the others posts a message twice or hammers the
+hub: they show a wrong end state, leave the view waiting, or hold a
+resource. They are not fixed in G11; G13 should know them.
 
 1. **`stop()` during the claim transaction leaves a claim for a send that
    was never posted.** That entry ends "may or may not have been sent"
@@ -936,10 +944,11 @@ They are not fixed in G11; G13 should know them.
    may not have been sent", although it never left. A wrong display; the
    person can retry it. A keeper-only claim's send is posted again
    keeper-only instead (G31), which delivers it once.
-10. **`save()` on a full tie keeps the stored copy.** A failed result on
-   an `unconfirmed` entry (both terminal, the same attempts, no claim)
-   leaves the stored copy, here and after a reload: the entry keeps the
-   `unconfirmed` reason instead of the hub's note. A wrong display.
+10. **Gone in G31.** A failed result on an `unconfirmed` entry used to
+   tie with it (both terminal, the same attempts, no claim), so `save()`
+   kept the `unconfirmed` reason. A failure the hub stated is now its own
+   stage above `unconfirmed` ("Two copies of one send"), and the entry
+   ends `failed` with the hub's note, here, on disk and after a reload.
 11. **A keeper send's result can be missed, only where the lookup cannot
    run.** G31's lookup settles a `sent` keeper send from the hub's store at
    every start and catch-up. What remains: a hub that does not list
@@ -982,8 +991,10 @@ They are not fixed in G11; G13 should know them.
    in order). Its 24-hour deadline still ends it.
 17. **A keeper-only send in doubt is posted again for up to 24 hours.**
    While the hub answers each repeat with a 5xx or no answer at all, the
-   repeat goes out on the outbox's backoff (at most every 30 s). Each is
-   one request the keeper store answers without applying it.
+   repeat goes out on the outbox's backoff, which starts at 1 s and
+   doubles up to its 30 s cap. Each repeat is two requests: the
+   `/v1/status` confirm and the post, which the keeper store answers
+   without applying it.
 18. **A hub swapped for an older version within the confirm's round
    trip.** The `/v1/status` read before a keeper-only post and the post
    are two requests. A hub process that stops and an older one that

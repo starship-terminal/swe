@@ -4,6 +4,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
 import {
+  furtherAlong,
   KEEPER_UNCONFIRMED,
   MAYBE_SENT,
   NOT_KEPT,
@@ -844,6 +845,72 @@ describe("review findings (G31)", () => {
     refuse(new TypeError("dropped"));
     await drain();
     expect(await t.disk()).toMatchObject([{ status: "waiting", ambiguous: true, keeperOnlyAt: 1 }]);
+  });
+});
+
+describe("a failure the hub stated (final review of G31)", () => {
+  const entry = (over: Partial<OutboxEntry>): OutboxEntry => ({
+    commandId: "x", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 1, status: "sent", attempts: 1, ...over,
+  });
+  const stated = entry({ status: "failed", stated: true, error: "expired", endedAt: 5 });
+  const unconfirmed = entry({ status: "unconfirmed", path: "keeper", error: KEEPER_UNCONFIRMED, endedAt: 4 });
+  const deadline = entry({ status: "failed", error: "Not sent: the hub could not be reached for 24 hours.", endedAt: 4 });
+  const doubt = entry({ status: "failed", ambiguous: true, error: MAYBE_SENT, endedAt: 4 });
+
+  it("is further along than unconfirmed, a failure this page made, doubt and sent; never the other way", () => {
+    for (const other of [unconfirmed, deadline, doubt, entry({ status: "sent", path: "keeper" }), entry({ status: "waiting" })]) {
+      expect(furtherAlong(stated, other)).toBeGreaterThan(0);
+      expect(furtherAlong(other, stated)).toBeLessThan(0);
+    }
+    // A failure this page made from a deadline still ties with unconfirmed, as before: it cannot beat the other.
+    expect(furtherAlong(deadline, unconfirmed)).toBe(0);
+  });
+
+  it("an unconfirmed send that gets a failed result ends failed with the hub's note, in memory and on disk", async () => {
+    const t = setup();
+    await t.leave({ status: "unconfirmed", path: "keeper", error: KEEPER_UNCONFIRMED, endedAt: t.timers.now() });
+    t.world.features = null; // no lookup: the result comes down the stream
+    const outbox = await t.make();
+    outbox.noteResult("old", { ok: false, note: "the machine refused it" });
+    await drain();
+    expect(t.entry("old")).toMatchObject({ status: "failed", stated: true, error: "the machine refused it" });
+    expect(await t.disk()).toMatchObject([{ status: "failed", stated: true, error: "the machine refused it" }]);
+  });
+
+  it("two tabs: one holds the send unconfirmed, the other applies the hub's failure; the disk ends failed with the note", async () => {
+    const t = setup();
+    t.world.features = null;
+    await t.leave({ status: "sent", path: "keeper", createdAt: t.timers.now() });
+    const a = t.build(await openOutboxStorage(t.factory));
+    const b = t.build(await openOutboxStorage(t.factory));
+    await Promise.all([a.init(), b.init()]);
+    await t.later(OUTBOX_TTL_MS); // both end it unconfirmed on their own deadline
+    expect(await t.disk()).toMatchObject([{ status: "unconfirmed" }]);
+    b.noteResult("old", { ok: false, note: "expired" });
+    await drain();
+    expect(await t.disk()).toMatchObject([{ status: "failed", stated: true, error: "expired" }]);
+    // The other tab's unconfirmed copy, written again, does not undo it.
+    const storage = await openOutboxStorage(t.factory);
+    expect(await storage.reconcile({ ...unconfirmed, commandId: "old", session: KEY })).toMatchObject({ status: "failed", stated: true });
+    expect(await t.disk()).toMatchObject([{ status: "failed", stated: true, error: "expired" }]);
+    a.close();
+    b.close();
+  });
+
+  it("a 2xx whose own body says rejected wins over an accepted receipt held while the post was out", async () => {
+    const t = setup();
+    const outbox = await t.make();
+    t.transport.on(
+      "/message",
+      async (_path, request) => {
+        outbox.noteReceipt((request.body as { command_id: string }).command_id, "accepted");
+        return { status: 202, body: { ok: true, duplicate: true, receipt: "rejected", reason: "machine is too far behind" } };
+      },
+      "POST",
+    );
+    const sent = await outbox.send({ text: "hi" });
+    await drain();
+    expect(t.entry(sent.commandId)).toMatchObject({ status: "failed", stated: true, error: "machine is too far behind" });
   });
 });
 

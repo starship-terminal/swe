@@ -199,6 +199,25 @@ describe("the hub's features", () => {
     expect(t.hub.posts[0]).not.toHaveProperty("require_keeper");
   });
 
+  it("a changed boot_id alone, the features still listed, blocks the post until they are read again", async () => {
+    const t = setup();
+    let boot = "b1";
+    t.transport.on("/v1/status", () => {
+      t.hub.statusCalls++;
+      return { status: 200, body: { ok: true, v: 1, protocols: [1, 2], features: ALL, boot_id: boot } };
+    });
+    t.state().start();
+    await t.catchUp();
+    boot = "b2"; // another process, which happens to list the same features
+    await t.state().send({ text: "hi" });
+    await drain();
+    expect(t.hub.posts).toEqual([]);
+    t.timers.advance(60_000);
+    await drain();
+    // Read again under b2: confirmed now, and posted keeper-only.
+    expect(t.hub.posts).toEqual([expect.objectContaining({ require_keeper: true })]);
+  });
+
   it("stop() forgets them; start() reads them again", async () => {
     const t = setup();
     t.state().start();
@@ -212,6 +231,53 @@ describe("the hub's features", () => {
 });
 
 describe("lookups", () => {
+  it("a held send the page ended unconfirmed, then expired at the hub: the lookup's failed result makes it failed (review of G31)", async () => {
+    const factory = new IDBFactory();
+    const t = setup({ factory });
+    const stored: { body: Record<string, unknown> } = { body: { ok: true, session: T, command_id: "id1", op: "send", receipt: "held", received_at: 1, updated_at: 1 } };
+    t.transport.on(LOOKUP, () => ({ status: 200, body: stored.body }), "GET");
+    t.answer.next = (body) => ({ status: 202, body: { ok: true, queued: true, command_id: body.command_id, receipt: "held" } });
+    t.state().start();
+    await t.catchUp();
+    await t.state().send({ text: "run the migration" });
+    await drain();
+    expect(t.state().outbox.entries).toMatchObject([{ status: "sent", receipt: "held" }]);
+    t.timers.advance(24 * 60 * 60 * 1000 + 1000); // the page's own 24 h end comes first
+    await drain();
+    expect(t.state().outbox.entries).toMatchObject([{ status: "unconfirmed" }]);
+    const note = "expired: the hub stopped before this was sent, and it is too old to send now";
+    stored.body = { ...stored.body, receipt: "rejected", reason: note, result: { ok: false, note } };
+    await t.drop();
+    await t.catchUp(6);
+    expect(t.lookups()).toContain("id1");
+    expect(t.state().outbox.entries).toMatchObject([{ status: "failed", error: note, stated: true }]);
+    expect(await (await openOutboxStorage(factory)).load(T)).toMatchObject([{ status: "failed", error: note, stated: true }]);
+    // Settled: not asked about again.
+    const asked = t.lookups().length;
+    await t.drop();
+    await t.catchUp(7);
+    expect(t.lookups()).toHaveLength(asked);
+  });
+
+  it("a snapshot taken on an epoch change inside one connection runs the lookups again", async () => {
+    const t = setup();
+    t.transport.on(LOOKUP, (path) => ({
+      status: 200,
+      body: { ok: true, session: T, command_id: path.slice(LOOKUP.length), op: "send", receipt: "accepted", received_at: 1, updated_at: 1 },
+    }));
+    t.state().start();
+    await t.catchUp();
+    await t.state().send({ text: "hi" });
+    await drain();
+    const before = t.lookups().length;
+    // The journal starts over while the stream stays up: the state frame names another epoch, and the store takes
+    // the whole snapshot.
+    t.transport.on("/snapshot", () => ({ status: 200, body: { ...snap(3), epoch: 1 } }));
+    t.transport.last.send(env("session.state", { state: "idle", live: [], pending: [], head: 3, epoch: 1 }, { seq: 0 }));
+    await drain();
+    expect(t.lookups().length).toBeGreaterThan(before);
+  });
+
   it("a catch-up by snapshot carried no result: the lookup settles the send, with no second post", async () => {
     const t = setup();
     const results = new Map<string, unknown>();

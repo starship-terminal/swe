@@ -3424,6 +3424,13 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_error(422, "bad_command", str(exc))
         except runtime_mod.Refused as exc:
+            # Owned when the route was picked, let go before ``_owned``
+            # looked: nothing was stored or typed in. A keeper-only
+            # message says so the way the legacy routes do (G31), so the
+            # client does not read "this session no longer exists".
+            if exc.code == "unknown_session" and action == "message" \
+                    and self._refuse_unless_kept(body):
+                return
             self._send_error(exc.status, exc.code, exc.message)
 
     # ``POST .../command`` ops and the fields each takes.
