@@ -527,6 +527,10 @@ class SessionRuntime:
             if isinstance(rid, str) and rid:
                 pending[rid] = event
         owned.pending = pending
+        # The text of the messages in progress: the hub missed their
+        # deltas while it was away, and v2 streams resume from it.
+        self.hub.sync.on_welcome(owned.key, welcome.get("live"),
+                                 welcome.get("last_seq"))
         # The inbox and the notification tokens know open requests only
         # from events; after a hub restart those were sent long ago.
         self.hub.restore_approvals(owned.key, {
@@ -644,6 +648,10 @@ class SessionRuntime:
                         client.close()
         elif kind == "live":
             owned.live.set()
+            # The replay is in: v2 streams take the state now, with the
+            # text the welcome restored (sending it before the replay
+            # would let a replayed turn.ended clear it on the client).
+            self.hub.sync.resync(owned.key)
         elif kind == "gap":
             oldest = frame.get("oldest_seq")
             self._truncated(owned.key,
@@ -663,7 +671,10 @@ class SessionRuntime:
 
     def _truncated(self, key: str, seq: int) -> None:
         """Tell open streams the journal cannot be made whole: they
-        refetch the messages."""
+        refetch the messages. The session's epoch moves on, so a v2
+        client's cursor from before is answered with a snapshot, never
+        replayed across the hole."""
+        self.hub.sync.new_epoch(key)
         self.hub.bus.publish(key, {"type": "journal.truncated", "seq": seq})
 
     def _recover(self, owned: _Owned, gen: int) -> None:
@@ -726,6 +737,9 @@ class SessionRuntime:
         not write it (the caller then stops this connection)."""
         etype = event.get("type")
         if etype == "message.delta":
+            # v2 streams get the delta as it is; today's clients its
+            # v1 frame.
+            self.hub.sync.on_event(owned.key, event)
             for v1 in protocol_compat.to_v1(
                     event, machine=self.hub.machine_id,
                     at_refs=owned.at_refs):
@@ -743,8 +757,12 @@ class SessionRuntime:
         # here".
         old = owned.status
         self._apply(owned, event)
-        if not self.hub.journal.append_at(key, event):
-            return False
+        with self.hub.journal.hold(key):
+            if not self.hub.journal.append_at(key, event):
+                return False
+            # Under the journal's lock: v2 streams are queued events in
+            # seq order, whichever connection's thread brought them.
+            self.hub.sync.on_event(key, event)
         owned.active_at = float(event.get("ts") or time.time())
         v1 = self.v1(key, event)
         if v1 is not None:

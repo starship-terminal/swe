@@ -1,0 +1,480 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.84,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.84,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.875,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Use apply_patch to create a file named first.txt containing the single word one. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.875,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.875,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Use apply_patch to create a file named first.txt containing the single word one. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.301,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "name": "apply_patch",
+   "summary": "apply_patch · /work/first.txt",
+   "input": {
+    "path": "/work/first.txt",
+    "changes": [
+     {
+      "path": "/work/first.txt",
+      "kind": "add"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.303,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "kind": "tool",
+   "prompt": "Apply file changes:\n/work/first.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000004"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.303,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.303,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.303,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.333,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "status": "ok",
+   "name": "apply_patch",
+   "output": "",
+   "file_edits": [
+    {
+     "path": "/work/first.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,1 @@\n+one\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.347,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10767,
+   "output_tokens": 100,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10764,
+   "context_tokens": 10867,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.461,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.461,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.473,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10891,
+   "output_tokens": 5,
+   "cache_read_tokens": 10764,
+   "cache_write_tokens": 124,
+   "context_tokens": 10896,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.489,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 3.614
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.489,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.513,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Use apply_patch to create a file named second.txt containing the single word two. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.513,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.513,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Use apply_patch to create a file named second.txt containing the single word two. Then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.06,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000007",
+   "name": "apply_patch",
+   "summary": "apply_patch · /work/second.txt",
+   "input": {
+    "path": "/work/second.txt",
+    "changes": [
+     {
+      "path": "/work/second.txt",
+      "kind": "add"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.063,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "00000001-1",
+   "kind": "tool",
+   "prompt": "Apply file changes:\n/work/second.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000007"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.063,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.063,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "request_id": "00000001-1",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.063,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.09,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000007",
+   "status": "ok",
+   "name": "apply_patch",
+   "output": "",
+   "file_edits": [
+    {
+     "path": "/work/second.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,1 @@\n+two\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.095,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 10924,
+   "output_tokens": 87,
+   "cache_read_tokens": 10888,
+   "cache_write_tokens": 33,
+   "context_tokens": 11011,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.068,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "done",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.068,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.078,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 11035,
+   "output_tokens": 5,
+   "cache_read_tokens": 10921,
+   "cache_write_tokens": 111,
+   "context_tokens": 11040,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.085,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.572
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.085,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.085,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

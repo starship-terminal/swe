@@ -236,7 +236,9 @@ The hub (`remote/runtime.py`) is its only writer, and only with
 `remote.session_view` on. What it writes today:
 
 - a `sessions` row per launch and per Continue in SWE; `state` follows
-  the keeper's `session.state`, `last_seq` moves at turn ends, and a
+  the keeper's `session.state`, `last_seq` moves at turn ends, `epoch`
+  moves when the session's journal is started over or loses a stretch
+  ([G9-sync-v2.md](specs/G9-sync-v2.md)), and a
   session SWE let go of is `closed` (`read_only` with a reason when it
   was resumed in a terminal);
 - a `keepers` row per keeper it started or found (`live`, `exited`,

@@ -3308,6 +3308,40 @@ class TestSatelliteForwarding(SatelliteCase):
         self.assertIn("hi there", [m["data"]["text"]
                                    for m in out["messages"]])
 
+    def test_a_v2_stream_on_the_hub_gets_the_copied_events(self):
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        sync = self.srv.state.sync
+        stream = sync.open(hub_key)
+        self.addCleanup(stream.close)
+        first = stream.catch_up()
+        self.assertEqual(first[0]["type"], "session.snapshot")
+        head = self.seqs(hub_key)[-1]
+        self.assertEqual(first[-1]["data"]["head"], head)
+        # A second turn, sent on the satellite itself.
+        status, out = self.agent._local_post(
+            key, "message", {"text": "again", "command_id": "m1"})
+        self.assertEqual(status, 202, out)
+        self.sat.result("m1")  # logged after the turn's end
+        self.settle(key)
+        self.push()
+        got: list[dict] = []
+        while True:
+            frames = stream.next(block=False)
+            if not frames:
+                break
+            got += frames
+        numbered = [f for f in got if f.get("seq")]
+        # Each copied event once, as the v2 event it is, in seq order.
+        self.assertEqual([f["seq"] for f in numbered],
+                         list(range(head + 1, self.seqs(hub_key)[-1] + 1)))
+        self.assertIn("two", [f["data"].get("text") for f in numbered
+                              if f["type"] == "message.completed"])
+        self.assertTrue(all(f["session"] == hub_key for f in numbered))
+
     def test_a_continued_sessions_copy_starts_over_from_the_satellite(self):
         key = self.start([fake.say("one")])
         self.sat.event("turn.ended")
@@ -3325,6 +3359,8 @@ class TestSatelliteForwarding(SatelliteCase):
         # Open streams are told to fetch the messages again, and the
         # copy is the satellite's journal from its first event.
         self.assertEqual(frames.frame("journal.truncated")["seq"], 0)
+        # A v2 client's cursor from before is on another epoch now.
+        self.assertEqual(self.srv.state.sync.epoch(hub_key), 1)
         local = self.agent.local.journal.read_since(key, 0)[0]
         self.assertEqual([dict(e, session=key)
                           for e in self.journal(hub_key)], local)

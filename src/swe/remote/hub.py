@@ -69,6 +69,7 @@ from swe.remote import pulls as pulls_mod
 from swe.remote import runtime as runtime_mod
 from swe.remote import store as store_mod
 from swe.remote import stream as stream_mod
+from swe.remote import sync as sync_mod
 from swe.remote.detach import PendingDetaches
 from swe.remote.journal import Journal
 from swe.webapp import (
@@ -255,6 +256,18 @@ def sse_frame(ev: dict) -> bytes | None:
             frame = ev.frame = _encode_frame(ev)
         return frame
     return _encode_frame(ev)
+
+
+def sse_frame_v2(frame: dict) -> bytes:
+    """One v2 frame as SSE bytes. Only a journaled event has an ``id:``
+    line (its seq): a delta, a ping, a snapshot and anything the hub
+    made for the stream (``seq`` 0) leave Last-Event-ID where it is."""
+    seq = frame.get("seq")
+    return (
+        (f"id: {seq}\n" if isinstance(seq, int) and seq > 0 else "")
+        + f"event: {frame.get('type', 'message')}\n"
+        + f"data: {json.dumps(frame, ensure_ascii=False, default=str)}\n\n"
+    ).encode("utf-8")
 
 
 def _encode_frame(ev: dict) -> bytes | None:
@@ -486,6 +499,14 @@ class HubState:
         # failed (the launch, or the satellite's command, said no).
         self.launches: dict[str, dict] = {}
         self._launch_lock = threading.Lock()
+        # One id per hub process, in ``GET /v1/status`` and every
+        # snapshot: a client that sees it change knows the hub
+        # restarted (it then asks again about what it sent).
+        self.boot_id = secrets.token_hex(8)
+        # What ``v=2`` streams are fed, and the live text and snapshot
+        # they catch up from (``sync.py``). Made before the runtime: a
+        # keeper found at start hands it the text in progress.
+        self.sync = sync_mod.SyncHub(self)
         # The sessions SWE runs through keepers (``runtime.py``), behind
         # ``remote.session_view``. ``runtime`` passes its options
         # through (tests: a spawner, a registry). Opened last: it reads
@@ -495,6 +516,22 @@ class HubState:
         self.catalog.read_only_reason = self.runtime.read_only_reason
         self.tail_manager.skip = self.runtime.owns
         self.runtime.open()
+
+    def status_view(self) -> dict:
+        """``GET /v1/status``: a reachability check that also says what
+        this hub speaks. ``v`` stays 1 for today's clients; a v2 client
+        reads ``protocols`` and ``features``, and ``boot_id`` to notice
+        a restart. Still nothing that names the machine."""
+        features = list(protocol.FEATURES)
+        if self.runtime.active:
+            features.append(protocol.FEATURE_RUNTIME)
+        return {
+            "ok": True,
+            "v": protocol.PROTOCOL_VERSION,
+            "protocols": list(protocol.PROTOCOLS),
+            "features": features,
+            "boot_id": self.boot_id,
+        }
 
     def new_launch(
         self, machine: str, harness: str, cwd: str,
@@ -675,6 +712,9 @@ class HubState:
             with self.journal.hold(key):
                 if not (self.runtime.owns(key) or agent_mod.mirrored(self, key)):
                     written = self.journal.append(key, event)
+                    # Under the journal's lock, so v2 streams are
+                    # queued events in seq order (it never blocks).
+                    self.sync.on_v1(key, written)
         if written is None:
             # A keeper numbers this session's journal: an event of the
             # hub's own (ownership, a notify, a title) would take a seq
@@ -705,6 +745,7 @@ class HubState:
         ev = dict(event)
         ev.pop("seq", None)
         self.bus.publish(key, ev)
+        self.sync.on_v1(key, ev)
         mirrored = self.journal.append(GLOBAL_KEY, ev)
         self.bus.publish(GLOBAL_KEY, mirrored)
         return ev
@@ -763,6 +804,10 @@ class HubState:
         ev = dict(event)
         ev.pop("seq", None)
         self.bus.publish(key, ev)
+        if not self.runtime.owns(key):
+            # A keeper-held session's deltas reach v2 streams as the v2
+            # events they are (``runtime._on_event``).
+            self.sync.on_v1_delta(key, ev)
 
     def expire_pending_approvals(self) -> None:
         """Sweep ``pending_approvals`` entries past ``APPROVAL_TTL_S``.
@@ -908,6 +953,8 @@ class HubState:
         self.waiting.wake_all()
         self.sendq.close()
         self.detaches.close()
+        # Open v2 streams end at their next step.
+        self.sync.close()
         for t in self._threads:
             t.join(timeout=2)
         # The keepers keep running: the next hub reconnects to them.
@@ -1135,7 +1182,7 @@ class HubState:
         (a client's, or the ntfy notifier's) or a client request within
         the last CLIENT_IDLE_S. Satellite traffic doesn't count: it
         watches the satellite's sessions, not this machine's."""
-        if self.bus.watched():
+        if self.bus.watched() or self.sync.watching():
             return True
         return time.monotonic() - self._client_seen_at < CLIENT_IDLE_S
 
@@ -2204,6 +2251,55 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(frame)
         self.wfile.flush()
 
+    def _sse_stream_v2(self, key: str, after_seq: int, args,
+                       device_id: str | None = None) -> None:
+        """``GET /v1/sessions/{key}/events`` for a v2 client
+        (``sync.V2Stream`` decides what is sent): the events after
+        ``last`` or one ``session.snapshot``, then ``session.state``
+        with the live text, then every event and delta as it happens
+        and a ``ping`` every ``PING_S``."""
+        epoch = _opt_int_arg(args.get("epoch"))
+        stream = self._state.sync.open(
+            key, last=after_seq, epoch=epoch, device_id=device_id)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            # As in ``_sse_stream``: after end_headers, and the last
+            # thing this connection does.
+            self.close_connection = True
+            last_revocation_check = 0.0
+            try:
+                frames = stream.catch_up()
+                while frames is not None:
+                    for frame in frames:
+                        self.wfile.write(sse_frame_v2(frame))
+                    if frames:
+                        self.wfile.flush()
+                    now = time.time()
+                    if (
+                        device_id
+                        and now - last_revocation_check > _REVOCATION_CHECK_S
+                    ):
+                        last_revocation_check = now
+                        if self._device_revoked(self._state.home, device_id):
+                            return
+                    frames = stream.next()
+            except (BrokenPipeError, ConnectionResetError,
+                    TimeoutError, OSError):
+                return
+        finally:
+            stream.close()
+
+    def _messages_v2(self, key: str, args) -> None:
+        """``GET .../messages?v=2``: a page of the timeline as v2
+        events, paged like the v1 route."""
+        limit = max(1, min(_int_arg(args.get("limit"), 500), 2000))
+        self._send_json(200, self._state.sync.messages_page(
+            key, before=_int_arg(args.get("before"), 0), limit=limit))
+
     def _sse_after(self, args) -> int:
         """The SSE resume cursor.
 
@@ -2232,10 +2328,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             # A reachability check only: machine id, version and uptime
             # tell the whole tailnet more than a caller needs.
-            self._send_json(200, {
-                "ok": True,
-                "v": protocol.PROTOCOL_VERSION,
-            })
+            self._send_json(200, self._state.status_view())
             return
 
         # The requester's poll is unauthenticated — the request id +
@@ -2498,7 +2591,7 @@ class _Handler(BaseHTTPRequestHandler):
             if sep and action == "commands":
                 self._slash_commands(key)
                 return
-            if sep and action in {"events", "messages"}:
+            if sep and action in {"events", "messages", "snapshot"}:
                 if self._state.catalog.row_for(key) is None:
                     self._send_error(
                         404, "unknown_session", "no such session"
@@ -2519,12 +2612,25 @@ class _Handler(BaseHTTPRequestHandler):
                         str(row["machine_id"]), key,
                         str(row.get("status") or ""),
                     )
+            v2 = protocol.wants_v2(args, self.headers)
             if sep and action == "events":
                 after = self._sse_after(args)
-                self._sse_stream(key, after, device_id=device_id)
+                if v2:
+                    self._sse_stream_v2(key, after, args,
+                                        device_id=device_id)
+                else:
+                    self._sse_stream(key, after, device_id=device_id)
                 return
             if sep and action == "messages":
-                self._messages(key, args)
+                if v2:
+                    self._messages_v2(key, args)
+                else:
+                    self._messages(key, args)
+                return
+            if sep and action == "snapshot":
+                # Always v2: the route is new with it.
+                self._send_json(
+                    200, self._state.sync.snapshot(key, device_id))
                 return
             if sep and action == "files":
                 self._files(key, args)
@@ -4704,6 +4810,17 @@ def _int_arg(values, default: int) -> int:
         return int(values[0])
     except (TypeError, ValueError):
         return default
+
+
+def _opt_int_arg(values) -> int | None:
+    """An integer query argument, or None when it is absent or not a
+    number (a v2 stream with no readable ``epoch`` gets a snapshot)."""
+    if not values:
+        return None
+    try:
+        return int(values[0])
+    except (TypeError, ValueError):
+        return None
 
 
 class _BoundedHTTPServer(ThreadingHTTPServer):

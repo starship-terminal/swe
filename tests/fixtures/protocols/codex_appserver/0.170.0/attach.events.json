@@ -1,0 +1,351 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.942,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.942,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.984,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "What colour is the attached image? Reply with one word."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.984,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.984,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "What colour is the attached image? Reply with one word."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.318,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "Red",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.318,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "Red"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.33,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10435,
+   "output_tokens": 5,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10432,
+   "context_tokens": 10440,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.345,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.361
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.345,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.36,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "[Attached file: /work/notes.txt] What is the first line of the attached file? Reply with just that line."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.36,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.36,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "[Attached file: /work/notes.txt] What is the first line of the attached file? Reply with just that line."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.654,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000006",
+   "name": "shell",
+   "summary": "shell · sed -n 1p notes.txt",
+   "input": {
+    "command": "sed -n 1p notes.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.656,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000006",
+   "status": "ok",
+   "name": "shell",
+   "output": "first line of the notes\n"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.67,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 10506,
+   "output_tokens": 105,
+   "cache_read_tokens": 10432,
+   "cache_write_tokens": 71,
+   "context_tokens": 10611,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.61,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "first ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.61,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "line ",
+   "seq": 2,
+   "offset": 6,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.61,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 3,
+   "offset": 11,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.61,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 4,
+   "offset": 14,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.709,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "notes",
+   "seq": 5,
+   "offset": 18,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.709,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "first line of the notes"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.726,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 10640,
+   "output_tokens": 9,
+   "cache_read_tokens": 10503,
+   "cache_write_tokens": 134,
+   "context_tokens": 10649,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.733,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 3.373
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.733,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.733,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

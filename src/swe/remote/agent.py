@@ -2307,6 +2307,9 @@ class SatelliteKeepers:
                     if not journal.append_at(key, event):
                         break  # not written: the satellite sends it again
                     taken.append(event)
+                    # Under the journal's lock, as for a local keeper:
+                    # v2 streams (G9) are queued events in seq order.
+                    self._to_v2(key, event)
                 seen = max(seen, event["seq"])
             acked = max(journal.last_seq(key), seen)
             released = let_go and (
@@ -2317,6 +2320,11 @@ class SatelliteKeepers:
                 self._mirrors.discard(key)
         if dropped:
             state.bus.publish(key, {"type": "journal.truncated", "seq": 0})
+            sync = getattr(state, "sync", None)
+            if sync is not None:
+                # The numbering started over: a v2 client's cursor
+                # from before is answered with a snapshot.
+                sync.new_epoch(key)
         for event in taken:
             self._publish(key, event)
         if released:
@@ -2342,6 +2350,24 @@ class SatelliteKeepers:
         return row is not None and row.state == "closed" \
             and isinstance(head, int) and not isinstance(head, bool) \
             and head <= row.last_seq
+
+    def _to_v2(self, key: str, event: dict) -> None:
+        """Hand one event just journaled to the session's open v2
+        streams (``sync.py``): a keeper's event as it is, and a v1
+        event of the session's earlier history the way the hub's own
+        journaled v1 events reach them."""
+        from swe.remote.adapters import events as ev
+
+        sync = getattr(self.state, "sync", None)
+        if sync is None:
+            return
+        try:
+            if event.get("v") == ev.VERSION:
+                sync.on_event(key, event)
+            else:
+                sync.on_v1(key, event)
+        except Exception:
+            logger.exception("v2 streams of %s", key)
 
     def _begin(self, store, key: str, mid: str, local_key: str,
                row) -> None:
@@ -2418,9 +2444,10 @@ class SatelliteKeepers:
                     status = protocol_compat.STATUS_FOR_STATE.get(state)
                     # The list hears it now; the satellite's next
                     # catalog push says the same.
-                    self.state.catalog.patch(
-                        key, {"status": status, "state": state},
-                        status or "done")
+                    fields = {"state": state}
+                    if status:
+                        fields["status"] = status
+                    self.state.catalog.patch(key, fields, status or "done")
             elif etype == "command.receipt" and isinstance(cid, str):
                 status = data.get("status")
                 if status == "accepted":

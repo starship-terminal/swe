@@ -627,11 +627,12 @@ One schema for phone↔hub and satellite↔hub (satellites forward the same
 events upstream and receive command envelopes downstream):
 
 ```
-GET  /v1/status                      reachability check {ok, v}; no credential needed
+GET  /v1/status                      reachability check {ok, v, protocols, features, boot_id}; no credential needed
 GET  /v1/events                      SSE stream of every session's events; Last-Event-ID or ?last=seq resumes
 GET  /v1/sessions                    catalog: SessionRow shape + machine + ownership
-GET  /v1/sessions/{id}/events        SSE stream; ?last=seq replays journal
-GET  /v1/sessions/{id}/messages      journal backfill {session, messages, next_before, has_more}; ?before=seq&limit=N (default 500, at most 2000)
+GET  /v1/sessions/{id}/events        SSE stream; ?last=seq replays journal. ?v=2&last=seq&epoch=E is the v2 stream (Sync v2 below)
+GET  /v1/sessions/{id}/messages      journal backfill {session, messages, next_before, has_more}; ?before=seq&limit=N (default 500, at most 2000); ?v=2 pages the timeline as v2 events
+GET  /v1/sessions/{id}/snapshot      v2: everything needed to draw the session from nothing (Sync v2 below)
 GET  /v1/sessions/{id}/commands      the "/" menu: commands this session's harness will run
 POST /v1/sessions/{id}/message       {text, mode: queue|steer, attachments[]}
 GET  /v1/sessions/{id}/queue         queue-mode sends still waiting for idle
@@ -1724,6 +1725,34 @@ and with the hub down.
 | Port taken | one line on stderr and no local API; the hub or agent runs on |
 
 The token is never printed, logged or returned by a route.
+
+## Sync v2 — `sync.py`
+
+A second protocol for one session's stream, asked for per request with
+`?v=2` or the header `X-SWE-Protocol: 2`. A client that does not ask
+gets everything above unchanged. It works for every session, with
+`remote.session_view` on or off. Full rules, and what a client must do
+with each frame: [G9-sync-v2.md](specs/G9-sync-v2.md). The shapes are
+[`schema/session_v2.json`](../src/swe/remote/schema/session_v2.json),
+generated from `adapters/events.py`; the session view's TypeScript
+types are made from that file.
+
+| What | In v2 |
+|---|---|
+| `GET /v1/status` | adds `protocols` (`[1, 2]`), `features` and `boot_id` (new for every hub process) |
+| The events | the v2 events of `adapters/events.py`, as a keeper logged them. A journal of v1 events (a terminal session, a satellite's, the earlier history of one continued in SWE) is converted on the way out (`protocol_compat.to_v2`) |
+| `seq` | above 0: the event's place in the journal, and the only frames with an SSE `id:` line. 0: a frame the hub made for the stream. A delta and the stream's own frames have none |
+| Catch-up | `?v=2&last=<seq>&epoch=<E>`. On the session's epoch and at most 500 seqs behind: the events after `last`, then `session.row`. Otherwise one `session.snapshot`. Either way it ends with a `session.state` frame |
+| `session.state` at the end of a catch-up | `{state, live[], pending[], head, epoch}`: the text so far of every message in progress, the ids of the requests still open, the seq the stream is caught up to |
+| Live text | `message.delta` is never journaled, so the hub keeps the text in progress itself (from the deltas, and from a keeper's welcome after a hub restart) and sends it in `live[]` |
+| Delta offsets | every delta says the `offset` its text starts at. A client appends only at the length it holds; on a hole it asks for the snapshot and carries on from `live[]` |
+| A slow client | its queue (2000 frames) fills: the stream reads the journal again from the last seq it sent, then sends `session.row` and `session.state`. Nothing journaled is lost |
+| `ping` | `{ts, head}` every 10 s; 25 s of silence means the connection is dead |
+| Epoch | a number per session that moves when its journal starts over or loses a stretch; a cursor from another epoch gets a snapshot |
+| `GET /v1/sessions/{key}/snapshot` | the same body the stream's `session.snapshot` carries: row, state, caps, open requests, queue, live text, plan, running tasks, checkpoints, changes, usage, the last 200 timeline events |
+| `GET /v1/sessions/{key}/messages?v=2` | older pages of the timeline, as v2 events |
+| A row change (ownership, title, pin) | a `session.row` frame |
+| `GET /v1/events` | v1 only |
 
 ## Keeping the hub up — `launchd.py`, `systemd.py`
 
