@@ -772,9 +772,9 @@ class TestStreamState(unittest.TestCase):
                 "title": f"Run with {key}?", "display_name": key,
                 "input": {"command": f"curl -H 'x: {key}'"}}},
             {"type": "assistant", "message": {"id": "m", "content": [
-                # The transcript redactor wants a token to stand alone
-                # (no letter or digit right before it).
-                {"type": "tool_use", "id": "tu", "name": f"T_{key}",
+                # Glued to a letter on purpose: the transcript redactor
+                # masks a key that directly follows one (PR 1990).
+                {"type": "tool_use", "id": "tu", "name": f"T{key}",
                  "input": {"q": key}},
                 {"type": "text", "text": f"the key is {key}"}]}},
             {"type": "user", "message": {"content": [
