@@ -1722,6 +1722,7 @@ commands for them.
 | The timeline | the satellite journals the keeper's events, and uploads them with `POST /v1/agent/kept`. The hub's journal for `key@machine` is a copy: same events, same seqs, stored with `Journal.append_at`, so an upload sent twice lands once. The hub numbers nothing in that journal while it copies it |
 | `message`, `approval`, `control`, `queue`, `command` | stored in the hub's `remote.sqlite` under `command_id`, sent to the satellite as a `kept` command, and given there to the same route the hub runs for its own sessions. Answers 202 with `receipt` (`queued` or `held`) and `command_id` |
 | The machine is asleep | a message or an approval answer is `held` for 24 hours and delivered, in order and once, when the machine's command stream comes back. A hold that runs out is rejected (`expired`) and never delivered. `control`, `queue` and `command` answer 409 `machine_offline` |
+| Hub restart | a message or an answer the hub had claimed and not yet put on the machine's command stream is put there once at the machine's next flush (its reconnect, or within 60 seconds of it), in arrival order with what is still held. One that arrived 24 hours ago or more is rejected instead |
 | Agent restart | the keepers run on. The new agent reconnects to them, asks the hub how far each copy reaches, and uploads from there |
 | The hub's session runtime is off | the upload is refused (409 `session_view_off`) and retried every minute; the hub lists the session without a timeline, and commands take the old forwarding path |
 
