@@ -66,10 +66,23 @@ describe("a table from a short reply", () => {
     await settle(() => void t.transport.last.send(...replies(["a", "before"], ["b", table], ["c", "after"])));
     const log = q(t.el, '[role="log"]') as HTMLElement;
     const cells = log.querySelectorAll("td, th").length;
-    // 50 columns, the header and 100 rows: not 400,000.
-    expect(cells).toBe(50 * 101);
-    expect(text(q(log, "[data-table-cut]"))).toContain("Table cut: 1950 more columns not shown.");
+    // 50 columns, the header and 99 rows, which is the reply's whole budget: not 400,000.
+    expect(cells).toBe(5000);
+    expect(text(q(log, "[data-table-cut]"))).toContain("Table cut: 1950 more columns and 1 more row not shown.");
     expect(text(log)).toContain("before");
+    expect(text(log)).toContain("after");
+  });
+
+  it("draws thirty-four tables at their caps within the reply's budget, and the text after them", async () => {
+    const t = setup();
+    const maxTable = `|${"a|".repeat(50)}\n|${"-|".repeat(50)}\n${"|\n".repeat(500)}`;
+    const reply = `${Array.from({ length: 34 }, () => maxTable).join("\n")}\nafter the last table`;
+    await settle(() => void t.transport.last.send(...replies(["a", "before"], ["b", reply], ["c", "after"])));
+    const log = q(t.el, '[role="log"]') as HTMLElement;
+    expect(log.querySelectorAll("td, th").length).toBeLessThanOrEqual(5000);
+    expect(all(log, "[data-table-cut]").length).toBe(34);
+    expect(text(log)).toContain("after the last table");
+    expect(text(log)).toContain("This reply has more tables than this view draws".toLowerCase());
     expect(text(log)).toContain("after");
   });
 

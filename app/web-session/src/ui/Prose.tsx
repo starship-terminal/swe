@@ -83,6 +83,7 @@ function blocks(list: Block[], tight = false): ReactNode {
       case "rule":
         return <hr key={index} className="my-3 border-border" />;
       case "table":
+        if (block.head.length === 0) return <TableCut key={index} cut={block.cut ?? { cols: 0, rows: 0, text: "" }} whole />;
         return (
           <div key={index} className="my-2 overflow-x-auto">
             <table className="w-full border-collapse text-left text-xs">
@@ -114,11 +115,15 @@ function blocks(list: Block[], tight = false): ReactNode {
   });
 }
 
-function TableCut({ cut }: { cut: { cols: number; rows: number; text: string } }) {
-  const parts = [cut.cols > 0 ? `${cut.cols} more ${cut.cols === 1 ? "column" : "columns"}` : "", cut.rows > 0 ? `${cut.rows} more ${cut.rows === 1 ? "row" : "rows"}` : ""].filter(Boolean);
+function TableCut({ cut, whole = false }: { cut: { cols: number; rows: number; text: string }; whole?: boolean }) {
+  // A table left out whole says so as it is; one that lost some says how much more there was.
+  const more = whole ? "" : "more ";
+  const parts = [cut.cols > 0 ? `${cut.cols} ${more}${cut.cols === 1 ? "column" : "columns"}` : "", cut.rows > 0 ? `${cut.rows} ${more}${cut.rows === 1 ? "row" : "rows"}` : ""].filter(Boolean);
   return (
-    <div className="mt-1" data-table-cut>
-      <p className="text-xs text-muted">Table cut: {parts.join(" and ")} not shown.</p>
+    <div className="my-2" data-table-cut>
+      <p className="text-xs text-muted">
+        Table cut: {whole && parts.length === 0 ? "all of it" : parts.join(" and ")} not shown{whole ? " (this reply has more tables than this view draws)" : ""}.
+      </p>
       {cut.text !== "" ? <p className="mt-0.5 text-xs break-words whitespace-pre-wrap text-secondary">{cut.text}</p> : null}
     </div>
   );

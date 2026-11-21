@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { INLINE_READ_MAX, MAX_DEPTH, TABLE_MAX_COLS, TABLE_MAX_ROWS, parseInline, parseMarkdown, safeHref, type Block } from "./markdown";
+import { INLINE_READ_MAX, MAX_DEPTH, TABLE_CELL_BUDGET, TABLE_MAX_COLS, TABLE_MAX_ROWS, parseInline, parseMarkdown, safeHref, type Block } from "./markdown";
 
 describe("inline Markdown", () => {
   it("reads code, bold, italic and links, and keeps the words around them", () => {
@@ -181,9 +181,10 @@ describe("a table from a few bytes", () => {
     if (table?.t !== "table") throw new Error("not a table");
     expect(table.head).toHaveLength(TABLE_MAX_COLS);
     expect(table.align).toHaveLength(TABLE_MAX_COLS);
-    expect(cellsOf(table)).toBeLessThanOrEqual(TABLE_MAX_COLS * (TABLE_MAX_ROWS + 1));
-    expect(cellsOf(table)).toBe(TABLE_MAX_COLS * 101);
-    expect(table.cut).toMatchObject({ cols: 1950, rows: 0 });
+    expect(cellsOf(table)).toBeLessThanOrEqual(TABLE_CELL_BUDGET);
+    // 5000 cells is 100 lines of 50: the header and 99 rows; one row of the 100 is over the reply's budget.
+    expect(cellsOf(table)).toBe(TABLE_MAX_COLS * 100);
+    expect(table.cut).toMatchObject({ cols: 1950, rows: 1 });
   });
 
   it("keeps the first rows of a tall table, counts the rest, and keeps the start of them as text", () => {
@@ -200,5 +201,71 @@ describe("a table from a few bytes", () => {
   it("does not cut a table inside the caps", () => {
     const [table] = parseMarkdown("| a | b |\n|---|---|\n| 1 | 2 |");
     expect(table).toMatchObject({ t: "table", cut: null });
+  });
+});
+
+describe("the budget of cells for one whole reply", () => {
+  /** Every cell drawn by every table in the blocks, nested ones included. */
+  const cells = (blocks: Block[]): number =>
+    blocks.reduce(
+      (sum, b) =>
+        sum +
+        (b.t === "table"
+          ? b.head.length + b.rows.reduce((n, row) => n + row.length, 0)
+          : b.t === "quote"
+            ? cells(b.blocks)
+            : b.t === "list"
+              ? b.items.reduce((n, item) => n + cells(item.blocks), 0)
+              : 0),
+      0,
+    );
+  const tables = (blocks: Block[]): Extract<Block, { t: "table" }>[] =>
+    blocks.flatMap((b) => (b.t === "table" ? [b] : b.t === "quote" ? tables(b.blocks) : b.t === "list" ? b.items.flatMap((item) => tables(item.blocks)) : []));
+  /** A table at the per-table caps: 50 columns, 500 rows, about 1.2 KB of input. */
+  const maxTable = `|${"a|".repeat(50)}\n|${"-|".repeat(50)}\n${"|\n".repeat(500)}`;
+
+  it("draws no more cells in total than the budget when a reply has thirty-four tables at their caps, and still draws the text after them", () => {
+    const reply = `${Array.from({ length: 34 }, () => maxTable).join("\n")}\nafter the last table`;
+    expect(reply.length).toBeLessThan(45_000);
+    const blocks = parseMarkdown(reply);
+    expect(cells(blocks)).toBeLessThanOrEqual(TABLE_CELL_BUDGET);
+    expect(tables(blocks)).toHaveLength(34);
+    // The first table spent the whole budget; the rest are left out whole.
+    const [first, second] = tables(blocks);
+    expect(first?.head).toHaveLength(50);
+    expect(second?.head).toHaveLength(0);
+    expect(second?.cut).not.toBeNull();
+    expect(JSON.stringify(blocks[blocks.length - 1])).toContain("after the last table");
+  });
+
+  it("is spent by tables inside quotes inside lists, in document order", () => {
+    const nested = (rows: number) => ["- item", "", "  > | a | b | c | d | e | f | g | h | i | j |", "  > |---|---|---|---|---|---|---|---|---|---|", ...Array.from({ length: rows }, () => "  > | 1 |")].join("\n");
+    // The nested table asks for 10 columns x 401 lines = 4010 cells; the top-level one then has 990.
+    const flat = `| a | b | c | d | e | f | g | h | i | j |\n|---|---|---|---|---|---|---|---|---|---|\n${"| 1 |\n".repeat(400)}`;
+    const blocks = parseMarkdown(`${nested(400)}\n\n${flat}`);
+    const [inner, outer] = tables(blocks);
+    expect(inner?.head).toHaveLength(10);
+    expect(inner?.rows).toHaveLength(400);
+    expect(outer?.rows.length).toBe(98); // 990 cells is 99 lines of 10: the header and 98 rows
+    expect(outer?.cut?.rows).toBe(302);
+    expect(cells(blocks)).toBeLessThanOrEqual(TABLE_CELL_BUDGET);
+    expect(cells(blocks)).toBe(4010 + 990);
+  });
+
+  it("leaves an ordinary table alone, and a second one after it", () => {
+    const small = (n: number) => `| a | b | c | d | e |\n|---|---|---|---|---|\n${Array.from({ length: 20 }, (_, i) => `| ${i} | ${n} | x | y | z |`).join("\n")}`;
+    const blocks = parseMarkdown(`${small(1)}\n\n${small(2)}`);
+    const [one, two] = tables(blocks);
+    expect(one).toMatchObject({ cut: null });
+    expect(one?.head).toHaveLength(5);
+    expect(one?.rows).toHaveLength(20);
+    expect(two).toMatchObject({ cut: null });
+    expect(cells(blocks)).toBe(2 * 5 * 21);
+  });
+
+  it("starts each reply with a full budget", () => {
+    const one = parseMarkdown(maxTable);
+    const again = parseMarkdown(maxTable);
+    expect(cells(one)).toBe(cells(again));
   });
 });

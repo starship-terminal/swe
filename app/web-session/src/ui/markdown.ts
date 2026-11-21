@@ -24,7 +24,7 @@ export type Block =
       head: Inline[][];
       align: ("left" | "right" | "center" | null)[];
       rows: Inline[][][];
-      /** What the caps left out: columns and rows not drawn, and the first of the left-out rows as plain text. */
+      /** What the caps and the reply's budget left out: columns and rows not drawn, and the first of the left-out lines as plain text. A table with no head at all was left out whole. */
       cut: { cols: number; rows: number; text: string } | null;
     };
 
@@ -61,6 +61,13 @@ export const INLINE_READ_MAX = 6_000;
  */
 export const TABLE_MAX_COLS = 50;
 export const TABLE_MAX_ROWS = 500;
+/**
+ * The cells one reply may draw in all its tables, nested ones included. The caps above bound one table, and
+ * a table at its caps costs about 1.2 kilobytes, so thirty-four of them in one reply would still be a
+ * million cells: the reply as a whole has this budget, spent in document order. A table that does not fit
+ * keeps the rows that do, and every later table is left as plain text.
+ */
+export const TABLE_CELL_BUDGET = 5000;
 /** How much of the left-out rows is shown as plain text under a cut table. */
 export const TABLE_CUT_TEXT = 1000;
 /** How deep formatting inside formatting is read (bold in a link), and how deep quotes and lists nest. */
@@ -136,7 +143,7 @@ const indentOf = (line: string): number => line.length - line.trimStart().length
 
 /** Read a Markdown text into blocks. */
 export function parseMarkdown(text: string): Block[] {
-  return parseLines(text.replace(/\r\n?/g, "\n").split("\n"), 0);
+  return parseLines(text.replace(/\r\n?/g, "\n").split("\n"), 0, { cells: TABLE_CELL_BUDGET });
 }
 
 function startsBlock(line: string, next: string | undefined): boolean {
@@ -150,7 +157,12 @@ function startsBlock(line: string, next: string | undefined): boolean {
   );
 }
 
-function parseLines(lines: string[], depth: number): Block[] {
+/** What one reply has left to spend: shared by every block of one `parseMarkdown` call. */
+interface Budget {
+  cells: number;
+}
+
+function parseLines(lines: string[], depth: number, budget: Budget): Block[] {
   // Quotes and lists inside quotes and lists go this deep and no further: what is left is plain text, so a
   // reply of ten thousand ">" cannot overflow the stack that reads it.
   if (depth >= MAX_DEPTH) return lines.some((line) => line.trim() !== "") ? [{ t: "paragraph", children: [{ t: "text", text: lines.join("\n") }] }] : [];
@@ -198,33 +210,39 @@ function parseLines(lines: string[], depth: number): Block[] {
         inner.push((QUOTE.exec(lines[i] as string) as RegExpExecArray)[1] ?? "");
         i++;
       }
-      blocks.push({ t: "quote", blocks: parseLines(inner, depth + 1) });
+      blocks.push({ t: "quote", blocks: parseLines(inner, depth + 1, budget) });
       continue;
     }
     const next = lines[i + 1];
     if (line.includes("|") && next !== undefined && next.includes("|") && TABLE_SEPARATOR.test(next)) {
-      const all = splitRow(line);
-      const head = all.slice(0, TABLE_MAX_COLS);
-      const align = splitRow(next).slice(0, TABLE_MAX_COLS).map(alignOf);
+      const header = line;
+      const all = splitRow(header);
+      const cols = Math.min(all.length, TABLE_MAX_COLS);
+      const align = splitRow(next).slice(0, cols).map(alignOf);
+      // How many lines of cells fit what the reply has left (the header is one): none means no table at all.
+      const fit = Math.min(Math.floor(budget.cells / cols), TABLE_MAX_ROWS + 1);
       const rows: string[][] = [];
       let cutRows = 0;
-      let cutText = "";
+      let cutText = fit >= 1 ? "" : header.slice(0, TABLE_CUT_TEXT);
       i += 2;
       while (i < lines.length && (lines[i] as string).includes("|") && (lines[i] as string).trim() !== "") {
-        if (rows.length < TABLE_MAX_ROWS) rows.push(splitRow(lines[i] as string).slice(0, TABLE_MAX_COLS));
+        if (fit >= 1 && rows.length < fit - 1) rows.push(splitRow(lines[i] as string).slice(0, cols));
         else {
           cutRows++;
           if (cutText.length < TABLE_CUT_TEXT) cutText += `${cutText === "" ? "" : "\n"}${(lines[i] as string).slice(0, TABLE_CUT_TEXT)}`;
         }
         i++;
       }
-      const cutCols = all.length - head.length;
+      const drawn = fit >= 1;
+      const head = drawn ? all.slice(0, cols) : [];
+      if (drawn) budget.cells -= cols * (1 + rows.length);
+      const cutCols = drawn ? all.length - cols : all.length;
       blocks.push({
         t: "table",
         head: head.map((cell) => parseInline(cell)),
-        align,
+        align: drawn ? align : [],
         rows: rows.map((row) => head.map((_, c) => parseInline(row[c] ?? ""))),
-        cut: cutCols > 0 || cutRows > 0 ? { cols: cutCols, rows: cutRows, text: cutText.slice(0, TABLE_CUT_TEXT) } : null,
+        cut: !drawn || cutCols > 0 || cutRows > 0 ? { cols: cutCols, rows: cutRows, text: cutText.slice(0, TABLE_CUT_TEXT) } : null,
       });
       continue;
     }
@@ -259,7 +277,7 @@ function parseLines(lines: string[], depth: number): Block[] {
           inner.push(following.slice(Math.min(indentOf(following), content)));
           i++;
         }
-        items.push({ children: parseInline(first), blocks: parseLines(inner, depth + 1) });
+        items.push({ children: parseInline(first), blocks: parseLines(inner, depth + 1, budget) });
       }
       blocks.push({ t: "list", ordered, start, items });
       continue;

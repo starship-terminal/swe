@@ -1,6 +1,6 @@
 {
   "hash_rule": "app/web-session/scripts/source-hash.mjs",
-  "source_hash": "fc950af3f9a7fd9d302dae6909101c96b5171fc498af4ce3ddf0727f54a352b9",
+  "source_hash": "f2401e74d38f327a590cefe6ad61953dc0a9f602e0633029e7b78b517a4070c8",
   "sources": {
     "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
     "package.json": "cb9b7879ea6c06714a7ca2fe19e1d3de1eef288fab335122c39db4037073781d",
@@ -58,7 +58,7 @@
     "src/session/credential.ts": "66159f2954a92327d67b29bb79d26d8a7deee5f7e5f4636d822114fda6050a13",
     "src/session/format.test.ts": "d584b3b96934f4607ee8716d53caf56a9b2447506891f603d9ed59787fa8757f",
     "src/session/format.ts": "0a596d4bb3d24224943c6ef915cb4828259e79376317c422b005905e4d1baa55",
-    "src/session/hostile.test.tsx": "d99b42550975ddd355cd543a026ba72def5b99f54c578da6918b73b705f26039",
+    "src/session/hostile.test.tsx": "289f8c6ff766a16476b7a940c40cc067d1325d85f438587524811a52bf739c3f",
     "src/session/index.ts": "869ea039d0cca835cc1bde73fbe5ab64ea8a3b2d98b023c679db9a7fc3f446f4",
     "src/session/legacy.test.tsx": "8e34cc47c2b07ecd4b991dce186f07e88c9b2f28424de18f8a723f0ad9ae51ae",
     "src/session/model.test.ts": "95b16ab41b8080c6f12180cb1f4b7eabf3b387c466e23e8789953a69568952cd",
@@ -75,13 +75,13 @@
     "src/ui/Button.tsx": "ee3661eb4beffc63298da64cae367a080ae7fd5adb4c16da506b9976a65ee544",
     "src/ui/Collapsible.tsx": "d2909866da943f5f06f3fc794df00d1b3cbf4d8196e6e7e3c6fb2e28e2efb503",
     "src/ui/Icon.tsx": "884a85dca89a6cebded748e04d419a7017105bc8e24185e253601a207ec10d44",
-    "src/ui/Prose.tsx": "a4d4b8ea3911da3e97bb356b3abefdab5b0805646b12b375b368eb05ea2d17fb",
+    "src/ui/Prose.tsx": "4663d0bb1fa5ca1322112c7ba4782f66ed96eff0cd1a78b9ecae26fb6b75ca86",
     "src/ui/Spinner.tsx": "0525cb91d161fa6ff4f7e4c0c871f39e1569283103c012a00410126b8d24058e",
     "src/ui/StateArrow.tsx": "cca809b9e590438688991bbb7094bad884240aa2ac22143df9992bc16884a44a",
     "src/ui/cx.ts": "1cbdf30d761f7a8bf449b60b50e7e00edd4e9b13b341e2040a7d070d7fb80139",
     "src/ui/index.ts": "9fc67a580676b48f492435040cb0a1c652c30b179b9a3f6486b882ddab3d2517",
-    "src/ui/markdown.test.ts": "30500ed19f46fc8ddf638a488b01465eb9b3a0b18c057128b2865f9bc9d3b789",
-    "src/ui/markdown.ts": "729cf576d9d273f0197b187d2cc290eb492d3e1f99d66a7b12beea184762682f",
+    "src/ui/markdown.test.ts": "8d050d7d24b560522d2cc34a073c97bd513d5aed96c16482dcfbf55e44987837",
+    "src/ui/markdown.ts": "382092416cd56919c224b5faf0fa73516ee3180041c51c19845917886dc1cd71",
     "tsconfig.json": "3e1f35695a154b6afcb73b5b784cc80988dc7ced8e8d4a2223d4da9f06270a58",
     "vite.config.ts": "f68bf1a948475c30d6674dc63c8c0c9b64faf653de9be18dbc63910adb8be362"
   },

@@ -153,14 +153,39 @@ headings, lists with nesting, quotes, fenced code, tables, rules; code, bold,
 italic and links in a line) and `Prose` draws it with React elements, so reply
 text never becomes HTML. Nesting is capped at 8 levels (quotes, lists, bold in a
 link): what is deeper stays as text, so a reply of ten thousand `>` cannot
-overflow the stack that reads it. A table is drawn with at most 50 columns and
-500 rows: it is rows times columns cells, and ten kilobytes of `|a|a|...` made
-400,000 of them, which froze the tab where no error boundary could help. The
-rest is left out and the table says "Table cut: 1950 more columns and 200 more
-rows not shown." with the start of the left-out rows as plain text. Every other
-construct is linear in the bytes of the reply (a list item, a quote line, a
-span is one to a few nodes for a few bytes), a diff or output is cut at 6000
-characters and 300 lines, and attachment chips at 50. Formatting is read in the first 6000
+overflow the stack that reads it. A table is drawn with at most 50
+columns and 500 rows, and the whole reply has a budget of 5,000 table cells, nested
+tables included, spent in document order. A table is rows times columns cells
+(a short row is filled out to the header's width), so a few bytes make a lot of
+them: ten kilobytes of `|a|a|...` made 400,000 cells, which froze the tab where
+no error boundary can help, and a table at its per-table caps is only about 1.2
+kilobytes, so thirty-four of them would still be a million. A table that does not
+fit the budget keeps the rows that do, and every later table is left out whole.
+What is left out is said ("Table cut: 1950 more columns and 1 more row not
+shown.", or for a table left out whole, "Table cut: 50 columns and 500 rows not
+shown (this reply has more tables than this view draws).") with the start of the
+left-out lines as plain text.
+
+**Nodes per byte.** For every block type, the DOM nodes drawn are bounded by a
+small constant times the bytes of its input; that is what keeps a hostile reply
+from costing more than its size, and it is checked here so the next reviewer does
+not have to:
+
+| Construct | Nodes for N bytes | Why |
+|---|---|---|
+| Paragraph, heading | at most N / 1.5 | the shortest mark (`` `a` ``, `*a*`) is 3 bytes and makes 2 nodes; formatting is read in the first 6000 characters of a run and nested at most 8 deep |
+| Fenced code | 3 | one `pre`, one `code`, one text node, whatever the length |
+| List | at most about 2N | an item is a line of 2 bytes or more and makes an `li` and its text; a nested list adds one `ul` for the line that opens it; nesting is capped at 8 |
+| Quote | about 1 per quote group | a group of quote lines is one `blockquote`; each level costs at least one byte (`>`) and levels are capped at 8 |
+| Rule | 1 per 3 bytes | `---` is the shortest |
+| Table | cells at most 5,000 per reply, plus one `tr` per line | the only construct whose output is not linear in its input (rows times columns), so the only one with a budget; `tr`s are one per line of 2 bytes or more and at most 500 per table |
+| Cut table text | at most 1000 characters in one node per table | a table left out whole costs one note and one text node |
+| Tool input, output, progress, diff | at most 300 lines and 6000 characters, in one `pre` | cut by both |
+| Attachment chips | at most 50 | the list comes from the hub |
+| Request prompt, error message, system message | 1 text node | plain text |
+| Work groups, rows | one per journal item | bounded by the journal (4,000 records, G9), not by a reply |
+
+Formatting is read in the first 6000
 characters of one run of text; the rest stays text, and a mark is searched for
 only when the text holds what would close it, so many marks that never close
 cost no more than a few that do. A link is an anchor only for `http`, `https` and
@@ -266,8 +291,11 @@ composer that does not work. G13 replaces the file.
     id onto the transcript's user message, which this milestone does not touch.
 11. **Formatting is read in the first 6000 characters of a run of text.** A
     paragraph longer than that shows the rest as plain text, marks and all.
-12. **A table is cut at 50 columns and 500 rows**, and the rows left out are
-    plain text, the first 1000 characters of them.
+12. **A table is cut at 50 columns and 500 rows, and a reply draws at most 5,000
+    table cells in all.** A table past the budget keeps the rows that fit, every
+    later one is plain text (the first 1000 characters of what was left out) under
+    a "Table cut" line. A real reply with that many cells is a data dump; the
+    reader sees the start and the note.
 13. **A group's React key is `work-<first seq>`.** When older history joins a
     group at the front its key changes, and the group is drawn again from
     scratch (the person's open or closed choice, and each step's, are kept by
@@ -275,7 +303,7 @@ composer that does not work. G13 replaces the file.
 
 ## Dependencies
 
-None added. The bundle grew by the view: `session-view.js` 96.5 kB (29.5 kB
+None added. The bundle grew by the view: `session-view.js` 96.8 kB (29.7 kB
 gzip, from 2.8 kB, now with zustand), `session-view.css` 16.0 kB (3.9 kB gzip,
 from 5.1 kB).
 
@@ -301,7 +329,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (477 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (482 tests), `pnpm build` | pass |
 | `tests.test_webapp_session_view`, `tests.test_session_view_fixtures` | pass |
 | The built page, served as static files, with a real `fetch`: `/session/index.html?key=claude%3Anope` asks `GET /v1/sessions/claude%3Anope/events?v=2`, gets 404 and shows "Session gone" | pass |
 | 56 screenshots, 14 scenes x desktop and phone x light and dark, taken again after the review fixes | the changed ones read (tool-expanded, stopped-tool, loading, the outbox scenes, default); findings fixed along the way (bubble width, the caret on its own line, a connecting banner said three times, a detached arrow, a diff's blank last row, a skeleton invisible in dark) |
