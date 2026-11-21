@@ -1,0 +1,65 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "steer_tool", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": {"seconds_from_command_to_turn_end": 25.6, "late_file_at_turn_end": true, "late_file_30s_after_command_began": true}}
+{"proc": 0, "dir": "in", "t": 0.539, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.539, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.54, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.541, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.554, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.554, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Run this exact shell command and nothing else: sleep 25 && touch late.txt . Then reply with just: finished"}}}
+{"proc": 0, "dir": "in", "t": 0.555, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.564, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 3.034, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 3.312, "http": {"n": 3, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235236702}, "type": "user", "payload": {"text": "Run this exact shell command and nothing else: sleep 25 && touch late.txt . Then reply with just: finished"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 3.536, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.549, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.549, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.549, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 4.134, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 4.990000000000001e-05, "tokens": {"input": 459, "output": 8, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 4.134, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.33, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795235236923}}}
+{"proc": 0, "dir": "in", "t": 4.33, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.33, "sse": {"type": "session.reasoning.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.304, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "**Running command in shell**\n\nI need to"}}}
+{"proc": 0, "dir": "in", "t": 5.416, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " follow the user's request correctly without deviation. They asked for an exact command, so"}}}
+{"proc": 0, "dir": "in", "t": 5.52, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " I'll use the shell tool to do that."}}}
+{"proc": 0, "dir": "in", "t": 5.63, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " It seems like using a foreground option with a"}}}
+{"proc": 0, "dir": "in", "t": 5.731, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " timeout greater than 25 seconds is the simplest way to"}}}
+{"proc": 0, "dir": "in", "t": 5.836, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " proceed. So, I'll make sure"}}}
+{"proc": 0, "dir": "in", "t": 5.962, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " to call the"}}}
+{"proc": 0, "dir": "in", "t": 6.067, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " shell tool with that command exactly"}}}
+{"proc": 0, "dir": "in", "t": 6.203, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " as instructed. Once it’s done, I'll provide the final reply indicating the action is"}}}
+{"proc": 0, "dir": "in", "t": 6.242, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": " complete."}}}
+{"proc": 0, "dir": "in", "t": 6.242, "sse": {"type": "session.reasoning.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": "**Running command in shell**\n\nI need to follow the user's request correctly without deviation. They asked for an exact command, so I'll use the shell tool to do that. It seems like using a foreground option with a timeout greater than 25 seconds is the simplest way to proceed. So, I'll make sure to call the shell tool with that command exactly as instructed. Once it’s done, I'll provide the final reply indicating the action is complete."}}}
+{"proc": 0, "dir": "in", "t": 6.242, "sse": {"type": "session.tool.input.started", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "id": "call_01", "name": "shell"}}}
+{"proc": 0, "dir": "in", "t": 6.289, "sse": {"type": "session.tool.input.ended", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 6.289, "sse": {"type": "session.tool.called", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "id": "call_01", "input": {"command": "sleep 25 && touch late.txt", "timeout": 30000}, "executed": false}}}
+{"proc": 0, "dir": "in", "t": 6.289, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 6.403, "sse": {"type": "shell.created"}}
+{"proc": 0, "dir": "in", "t": 6.403, "sse": {"type": "session.tool.progress", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "out", "t": 8.294, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Never mind the command. Reply only with the word: steered", "delivery": "steer"}}}
+{"proc": 0, "dir": "in", "t": 8.298, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 8.299, "http": {"n": 4, "status": 200, "body": {"data": {"id": "msg_03", "sessionID": "ses_01", "time": {"created": 1795235241693}, "type": "user", "payload": {"text": "Never mind the command. Reply only with the word: steered"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 31.438, "sse": {"type": "shell.exited"}}
+{"proc": 0, "dir": "in", "t": 31.438, "sse": {"type": "session.tool.success", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "id": "call_01", "content": [{"type": "text", "text": "(no output)"}], "metadata": {"status": "completed", "truncated": false, "exit": 0}, "executed": false}}}
+{"proc": 0, "dir": "in", "t": 31.438, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "finish": "tool-calls", "tokens": {"input": 678, "output": 30, "reasoning": 55, "cache": {"read": 4608, "write": 0}}, "cost": 0.00033401}}}
+{"proc": 0, "dir": "in", "t": 31.438, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.00038391, "tokens": {"input": 1137, "output": 38, "reasoning": 55, "cache": {"read": 4608, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 31.438, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_03"}}}
+{"proc": 0, "dir": "in", "t": 31.866, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_04", "started": 1795235264830}}}
+{"proc": 0, "dir": "in", "t": 31.866, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 31.866, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 31.877, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": "steered"}}}
+{"proc": 0, "dir": "in", "t": 31.877, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "text": "steered"}}}
+{"proc": 0, "dir": "in", "t": 31.918, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 31.918, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "finish": "stop", "tokens": {"input": 736, "output": 6, "reasoning": 0, "cache": {"read": 4608, "write": 0}}, "cost": 0.00024686}}}
+{"proc": 0, "dir": "in", "t": 31.918, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.00063077, "tokens": {"input": 1873, "output": 44, "reasoning": 55, "cache": {"read": 9216, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 31.918, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "exit": 143}

@@ -334,6 +334,14 @@ class SessionCore:
         self._resume(out)
         return out
 
+    def reopen(self, request_id: str, payload: Any) -> None:
+        """Our answer to ``request_id`` never reached the harness: the
+        request is open again, and the session waits on it as before.
+        (The events ``answered`` returned are the caller's to drop.)"""
+        self.pending[request_id] = payload
+        if self.turn is not None:
+            self.waiting = True
+
     def withdrawn(self, out: list, request_id: str,
                   source: str = "harness") -> bool:
         """The harness took back a request it asked."""

@@ -1,0 +1,389 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.554,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.554,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.312,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run this exact shell command and nothing else: sleep 25 && touch late.txt . Then reply with just: finished"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.312,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.312,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run this exact shell command and nothing else: sleep 25 && touch late.txt . Then reply with just: finished"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.134,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 4.990000000000001e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.304,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "**Running command in shell**\n\nI need ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.416,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "to follow the user's request correctly without deviation. They asked for an exact command, ",
+   "seq": 2,
+   "offset": 37,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.52,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "so I'll use the shell tool to do ",
+   "seq": 3,
+   "offset": 128,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.63,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "that. It seems like using a foreground option with ",
+   "seq": 4,
+   "offset": 161,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.731,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "a timeout greater than 25 seconds is the simplest way ",
+   "seq": 5,
+   "offset": 212,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.836,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "to proceed. So, I'll make ",
+   "seq": 6,
+   "offset": 266,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.962,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "sure to call ",
+   "seq": 7,
+   "offset": 292,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.067,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "the shell tool with that command ",
+   "seq": 8,
+   "offset": 305,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.203,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "exactly as instructed. Once it’s done, I'll provide the final reply indicating the action ",
+   "seq": 9,
+   "offset": 338,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.242,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "is ",
+   "seq": 10,
+   "offset": 428,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.242,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "complete.",
+   "seq": 11,
+   "offset": 431,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.242,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "text": "**Running command in shell**\n\nI need to follow the user's request correctly without deviation. They asked for an exact command, so I'll use the shell tool to do that. It seems like using a foreground option with a timeout greater than 25 seconds is the simplest way to proceed. So, I'll make sure to call the shell tool with that command exactly as instructed. Once it’s done, I'll provide the final reply indicating the action is complete."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.289,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "name": "shell",
+   "summary": "shell · sleep 25 && touch late.txt",
+   "input": {
+    "command": "sleep 25 && touch late.txt",
+    "timeout": 30000
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.438,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "shell",
+   "output": "(no output)"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.438,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 678,
+   "output_tokens": 30,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00038391
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.438,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user2",
+   "kind": "user",
+   "text": "Never mind the command. Reply only with the word: steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000031.877,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "steered",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.877,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.918,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 736,
+   "output_tokens": 6,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00063077
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.918,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 28.606
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.918,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000031.918,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

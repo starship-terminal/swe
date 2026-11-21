@@ -1,0 +1,105 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "plan_mode", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": {"file_while_planning": false, "file_after_build": true, "agents_that_ran": ["plan", "plan", "build", "build"]}}
+{"proc": 0, "dir": "in", "t": 0.589, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.589, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.591, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.591, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.609, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.609, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/agent", "body": {"agent": "plan"}}}
+{"proc": 0, "dir": "in", "t": 0.61, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.613, "http": {"n": 3, "status": 204, "body": null}}
+{"proc": 0, "dir": "out", "t": 0.613, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Create a file named planned.txt containing the word no. If you cannot because you are only planning, reply only with: planning"}}}
+{"proc": 0, "dir": "in", "t": 0.614, "sse": {"type": "session.agent.selected", "data": {"sessionID": "ses_01", "agent": "plan"}}}
+{"proc": 0, "dir": "in", "t": 0.625, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 1.876, "http": {"n": 4, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235235286}, "type": "user", "payload": {"text": "Create a file named planned.txt containing the word no. If you cannot because you are only planning, reply only with: planning"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 1.958, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 3.52, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 3.582, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 4.96e-05, "tokens": {"input": 461, "output": 7, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 3.582, "sse": {"type": "session.renamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.454, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "plan", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795235235369}}}
+{"proc": 0, "dir": "in", "t": 4.454, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.454, "sse": {"type": "session.reasoning.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.225, "sse": {"type": "session.reasoning.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": ""}}}
+{"proc": 0, "dir": "in", "t": 5.225, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.227, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "planning"}}}
+{"proc": 0, "dir": "in", "t": 5.227, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": "planning"}}}
+{"proc": 0, "dir": "in", "t": 5.274, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.274, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "finish": "stop", "tokens": {"input": 5435, "output": 7, "reasoning": 21, "cache": {"read": 0, "write": 0}}, "cost": 0.001122}}}
+{"proc": 0, "dir": "in", "t": 5.274, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0011715999999999999, "tokens": {"input": 5896, "output": 14, "reasoning": 21, "cache": {"read": 0, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 5.274, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_03"}}}
+{"proc": 0, "dir": "in", "t": 5.85, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "plan", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_04", "started": 1795235238692}}}
+{"proc": 0, "dir": "in", "t": 5.85, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.85, "sse": {"type": "session.reasoning.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 6.508, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": "**Considering reminder plans**\n\nThe user mentioned reminders, so I need to stay in planning mode"}}}
+{"proc": 0, "dir": "in", "t": 6.609, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": ". They haven't specifically asked to implement anything yet"}}}
+{"proc": 0, "dir": "in", "t": 6.713, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": ". I think I should focus on planning"}}}
+{"proc": 0, "dir": "in", "t": 6.817, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": " the creation of a planned.txt file, but how"}}}
+{"proc": 0, "dir": "in", "t": 6.922, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": " do I go about it without moving"}}}
+{"proc": 0, "dir": "in", "t": 7.025, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": " to implementation? Should I ask the user for"}}}
+{"proc": 0, "dir": "in", "t": 7.149, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": " clarification on what they want in the reminders?"}}}
+{"proc": 0, "dir": "in", "t": 7.258, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": " I want to make sure I'm on the right track before"}}}
+{"proc": 0, "dir": "in", "t": 7.322, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": " moving forward."}}}
+{"proc": 0, "dir": "in", "t": 7.322, "sse": {"type": "session.reasoning.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "text": "**Considering reminder plans**\n\nThe user mentioned reminders, so I need to stay in planning mode. They haven't specifically asked to implement anything yet. I think I should focus on planning the creation of a planned.txt file, but how do I go about it without moving to implementation? Should I ask the user for clarification on what they want in the reminders? I want to make sure I'm on the right track before moving forward."}}}
+{"proc": 0, "dir": "in", "t": 7.322, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.324, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": "Got it—I’m in Plan mode, so I can’t create `planned.txt` yet.\n\nPlan: Once you switch agents to “implement,” I’ll create `planned.txt` and put the single word `no` in it."}}}
+{"proc": 0, "dir": "in", "t": 7.324, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "text": "Got it—I’m in Plan mode, so I can’t create `planned.txt` yet.\n\nPlan: Once you switch agents to “implement,” I’ll create `planned.txt` and put the single word `no` in it."}}}
+{"proc": 0, "dir": "in", "t": 7.412, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.412, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "finish": "stop", "tokens": {"input": 834, "output": 53, "reasoning": 35, "cache": {"read": 4608, "write": 0}}, "cost": 0.00036896000000000005}}}
+{"proc": 0, "dir": "in", "t": 7.412, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0015405599999999998, "tokens": {"input": 6730, "output": 67, "reasoning": 56, "cache": {"read": 4608, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 7.412, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "out", "t": 7.814, "http": {"n": 5, "method": "POST", "path": "/api/session/ses_01/agent", "body": {"agent": "build"}}}
+{"proc": 0, "dir": "in", "t": 7.819, "http": {"n": 5, "status": 204, "body": null}}
+{"proc": 0, "dir": "out", "t": 7.819, "http": {"n": 6, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Create a file named built.txt containing the word yes, then reply only with: built"}}}
+{"proc": 0, "dir": "in", "t": 7.82, "sse": {"type": "session.agent.selected", "data": {"sessionID": "ses_01", "agent": "build", "previous": "plan"}}}
+{"proc": 0, "dir": "in", "t": 7.82, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.823, "http": {"n": 6, "status": 200, "body": {"data": {"id": "msg_05", "sessionID": "ses_01", "time": {"created": 1795235241243}, "type": "user", "payload": {"text": "Create a file named built.txt containing the word yes, then reply only with: built"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 7.831, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.831, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 7.831, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_06"}}}
+{"proc": 0, "dir": "in", "t": 7.831, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_05"}}}
+{"proc": 0, "dir": "in", "t": 8.447, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_07", "started": 1795235241250}}}
+{"proc": 0, "dir": "in", "t": 8.447, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 8.447, "sse": {"type": "session.reasoning.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 9.081, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": "**Planning file implementation**\n\nI need to implement the creation of a file. It"}}}
+{"proc": 0, "dir": "in", "t": 9.186, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": " seems I should be using a patch to add the"}}}
+{"proc": 0, "dir": "in", "t": 9.293, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": " file I have planned. I'm thinking about placing"}}}
+{"proc": 0, "dir": "in", "t": 9.403, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": " it as built.txt in the workspace root. So"}}}
+{"proc": 0, "dir": "in", "t": 9.511, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": ", my next step will be to patch"}}}
+{"proc": 0, "dir": "in", "t": 9.614, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": ", add, or update this file. Okay,"}}}
+{"proc": 0, "dir": "in", "t": 9.719, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": " let's get started on"}}}
+{"proc": 0, "dir": "in", "t": 9.831, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": " that and"}}}
+{"proc": 0, "dir": "in", "t": 9.9, "sse": {"type": "session.reasoning.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "delta": " ensure everything goes smoothly!"}}}
+{"proc": 0, "dir": "in", "t": 9.9, "sse": {"type": "session.reasoning.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "ordinal": 0, "text": "**Planning file implementation**\n\nI need to implement the creation of a file. It seems I should be using a patch to add the file I have planned. I'm thinking about placing it as built.txt in the workspace root. So, my next step will be to patch, add, or update this file. Okay, let's get started on that and ensure everything goes smoothly!"}}}
+{"proc": 0, "dir": "in", "t": 9.9, "sse": {"type": "session.tool.input.started", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "id": "call_01", "name": "patch"}}}
+{"proc": 0, "dir": "in", "t": 9.939, "sse": {"type": "session.tool.input.ended", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 9.939, "sse": {"type": "session.tool.called", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "id": "call_01", "input": {"patchText": "*** Begin Patch\n*** Add File: built.txt\n+yes\n*** End Patch"}, "executed": false}}}
+{"proc": 0, "dir": "in", "t": 9.94, "sse": {"type": "session.tool.success", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "id": "call_01", "content": [{"type": "text", "text": "Success. Updated the following files:\nA built.txt"}], "metadata": {"files": [{"file": "built.txt", "patch": "Index: /work/built.txt\n===================================================================\n--- /work/built.txt\n+++ /work/built.txt\n@@ -0,0 +1,1 @@\n+yes\n", "status": "added", "additions": 1, "deletions": 0}], "truncated": false}, "executed": false}}}
+{"proc": 0, "dir": "in", "t": 9.959, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 9.959, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_07", "finish": "tool-calls", "tokens": {"input": 953, "output": 29, "reasoning": 27, "cache": {"read": 4608, "write": 0}}, "cost": 0.00035276}}}
+{"proc": 0, "dir": "in", "t": 9.959, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0018933199999999998, "tokens": {"input": 7683, "output": 96, "reasoning": 83, "cache": {"read": 9216, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 10.511, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_08", "started": 1795235243376}}}
+{"proc": 0, "dir": "in", "t": 10.511, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 10.511, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 10.512, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_08", "ordinal": 0, "delta": "built"}}}
+{"proc": 0, "dir": "in", "t": 10.512, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_08", "ordinal": 0, "text": "built"}}}
+{"proc": 0, "dir": "in", "t": 10.546, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 10.546, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_08", "finish": "stop", "tokens": {"input": 1029, "output": 5, "reasoning": 0, "cache": {"read": 4608, "write": 0}}, "cost": 0.00030421}}}
+{"proc": 0, "dir": "in", "t": 10.546, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0021975299999999996, "tokens": {"input": 8712, "output": 101, "reasoning": 83, "cache": {"read": 13824, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 10.546, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "exit": 143}

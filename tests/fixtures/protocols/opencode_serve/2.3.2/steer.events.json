@@ -1,0 +1,839 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.446,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.446,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.507,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.507,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.507,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.168,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 5.1200000000000004e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.355,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "1  \n“1 is the start of a simple journey.”  \n2  \n",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.463,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“2 is a pair and a step forward.”  \n3  \n“3 brings balance ",
+   "seq": 2,
+   "offset": 48,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.566,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "with its trio of ideas.”  \n4  \n“4 adds stability—like four corners.”  \n",
+   "seq": 3,
+   "offset": 106,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.672,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "5  \n“5 feels like a classic milestone.”  \n6  \n“6 is ",
+   "seq": 4,
+   "offset": 177,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.778,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "a perfect example of symmetry.”  \n7  \n“7 has a spark of good luck.”  \n",
+   "seq": 5,
+   "offset": 229,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "8  \n“8 is twice four, building strength.”  \n9  \n“9 is ",
+   "seq": 6,
+   "offset": 299,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.991,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "one step from the next set.”  \n10  \n“10 marks a complete first chapter.”  \n",
+   "seq": 7,
+   "offset": 353,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.092,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "11  \n“11 is just beyond ten, gaining momentum.”  \n12  \n“12 ",
+   "seq": 8,
+   "offset": 428,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.198,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "is often linked to cycles and months.”  \n13  \n“13 stands out and keeps you alert.”  \n",
+   "seq": 9,
+   "offset": 487,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.308,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "14  \n“14 adds up to a tidy, steady rhythm.”  \n15  \n",
+   "seq": 10,
+   "offset": 572,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.415,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“15 is three times five—steady and strong.”  \n16  \n“16 is four ",
+   "seq": 11,
+   "offset": 623,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.517,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "squared, showing structure.”  \n17  \n“17 is fresh progress after a round number.”  \n18  \n",
+   "seq": 12,
+   "offset": 686,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.625,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“18 feels like a full, capable count.”  \n19  \n“19 is almost ",
+   "seq": 13,
+   "offset": 774,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.727,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "twenty, near the next peak.”  \n20  \n“20 is ",
+   "seq": 14,
+   "offset": 834,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.832,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "a clear new base to build from.”  \n21  \n“21 is a turn toward ",
+   "seq": 15,
+   "offset": 877,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.94,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "bold, new steps.”  \n22  \n“22 is double eleven—simple ",
+   "seq": 16,
+   "offset": 938,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.101,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "and powerful.”  \n23  \n“23 is one more than twenty-two.”  \n24  \n“24 is a day’s hours worth of possibility.”  \n",
+   "seq": 17,
+   "offset": 991,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.209,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "25  \n“25 is five squared—clean and confident.”  \n26  \n“26 keeps the momentum going.”  \n",
+   "seq": 18,
+   "offset": 1100,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.323,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "27  \n“27 is nearing thirty, with steady drive.”  \n28  \n",
+   "seq": 19,
+   "offset": 1187,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.429,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“28 is perfectly even and satisfying.”  \n29  \n“29 is just one short of ",
+   "seq": 20,
+   "offset": 1242,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.531,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "the next decade.”  \n30  \n“30 is a big checkpoint in the road.”  \n",
+   "seq": 21,
+   "offset": 1313,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.635,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "31  \n“31 is thirty-one and still climbing.”  \n32  \n“32 is ",
+   "seq": 22,
+   "offset": 1378,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.74,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "a doubling that feels solid.”  \n33  \n“33 has a warm, lively kind of motion.”  \n",
+   "seq": 23,
+   "offset": 1436,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.847,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "34  \n“34 continues the count with consistency.”  \n35  \n“35 is five ",
+   "seq": 24,
+   "offset": 1515,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.952,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "times seven—balanced energy.”  \n36  \n“36 is six squared, neat and strong.”  \n",
+   "seq": 25,
+   "offset": 1582,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.057,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "37  \n“37 keeps the pace moving forward.”  \n38  \n“38 is ",
+   "seq": 26,
+   "offset": 1659,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.16,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "steady, with room to grow.”  \n39  \n“39 is just shy of forty.”  \n",
+   "seq": 27,
+   "offset": 1714,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.262,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "40  \n“40 is a major milestone and a reset point.”  \n41  \n",
+   "seq": 28,
+   "offset": 1778,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.374,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“41 is forty-one and gaining speed.”  \n42  \n“42 is meaningful and ",
+   "seq": 29,
+   "offset": 1835,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.482,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "famously memorable.”  \n43  \n“43 keeps the count moving forward.”  \n44  \n",
+   "seq": 30,
+   "offset": 1901,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.587,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“44 is even and dependable.”  \n45  \n“45 is halfway to fifty, in spirit.”  \n",
+   "seq": 31,
+   "offset": 1973,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.707,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "46  \n“46 is one more step into the forties.”  \n47  \n",
+   "seq": 32,
+   "offset": 2048,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.813,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“47 is close to fifty, with anticipation.”  \n48  \n“48 is a ",
+   "seq": 33,
+   "offset": 2100,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.915,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "clean, even stretch.”  \n49  \n“49 is seven squared—strong and neat.”  \n50  \n",
+   "seq": 34,
+   "offset": 2159,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.028,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“50 is the halfway marker to the finish line.”  \n51  \n“51 is ",
+   "seq": 35,
+   "offset": 2234,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.133,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "fifty-one and still rising.”  \n52  \n“52 is more than fifty, with steady cadence.”  \n",
+   "seq": 36,
+   "offset": 2295,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.243,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "53  \n“53 keeps the momentum alive.”  \n54  \n“54 is two steps ",
+   "seq": 37,
+   "offset": 2379,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.347,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "past fifty-two’s rhythm.”  \n55  \n“55 is five ",
+   "seq": 38,
+   "offset": 2439,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.451,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "fives—stacked confidence.”  \n56  \n“56 is a tidy progression onward.”  \n57  \n",
+   "seq": 39,
+   "offset": 2484,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.551,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“57 is nearing sixty, almost there.”  \n58  \n“58 is steady and close to the ",
+   "seq": 40,
+   "offset": 2560,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.656,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "end.”  \n59  \n“59 is one away from sixty—almost complete.”  \n60  \n",
+   "seq": 41,
+   "offset": 2635,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.769,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "“60 is the final count—full circle ",
+   "seq": 42,
+   "offset": 2700,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.844,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "reached.”",
+   "seq": 43,
+   "offset": 2735,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.844,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "1  \n“1 is the start of a simple journey.”  \n2  \n“2 is a pair and a step forward.”  \n3  \n“3 brings balance with its trio of ideas.”  \n4  \n“4 adds stability—like four corners.”  \n5  \n“5 feels like a classic milestone.”  \n6  \n“6 is a perfect example of symmetry.”  \n7  \n“7 has a spark of good luck.”  \n8  \n“8 is twice four, building strength.”  \n9  \n“9 is one step from the next set.”  \n10  \n“10 marks a complete first chapter.”  \n11  \n“11 is just beyond ten, gaining momentum.”  \n12  \n“12 is often linked to cycles and months.”  \n13  \n“13 stands out and keeps you alert.”  \n14  \n“14 adds up to a tidy, steady rhythm.”  \n15  \n“15 is three times five—steady and strong.”  \n16  \n“16 is four squared, showing structure.”  \n17  \n“17 is fresh progress after a round number.”  \n18  \n“18 feels like a full, capable count.”  \n19  \n“19 is almost twenty, near the next peak.”  \n20  \n“20 is a clear new base to build from.”  \n21  \n“21 is a turn toward bold, new steps.”  \n22  \n“22 is double eleven—simple and powerful.”  \n23  \n“23 is one more than twenty-two.”  \n24  \n“24 is a day’s hours worth of possibility.”  \n25  \n“25 is five squared—clean and confident.”  \n26  \n“26 keeps the momentum going.”  \n27  \n“27 is nearing thirty, with steady drive.”  \n28  \n“28 is perfectly even and satisfying.”  \n29  \n“29 is just one short of the next decade.”  \n30  \n“30 is a big checkpoint in the road.”  \n31  \n“31 is thirty-one and still climbing.”  \n32  \n“32 is a doubling that feels solid.”  \n33  \n“33 has a warm, lively kind of motion.”  \n34  \n“34 continues the count with consistency.”  \n35  \n“35 is five times seven—balanced energy.”  \n36  \n“36 is six squared, neat and strong.”  \n37  \n“37 keeps the pace moving forward.”  \n38  \n“38 is steady, with room to grow.”  \n39  \n“39 is just shy of forty.”  \n40  \n“40 is a major milestone and a reset point.”  \n41  \n“41 is forty-one and gaining speed.”  \n42  \n“42 is meaningful and famously memorable.”  \n43  \n“43 keeps the count moving forward.”  \n44  \n“44 is even and dependable.”  \n45  \n“45 is halfway to fifty, in spirit.”  \n46  \n“46 is one more step into the forties.”  \n47  \n“47 is close to fifty, with anticipation.”  \n48  \n“48 is a clean, even stretch.”  \n49  \n“49 is seven squared—strong and neat.”  \n50  \n“50 is the halfway marker to the finish line.”  \n51  \n“51 is fifty-one and still rising.”  \n52  \n“52 is more than fifty, with steady cadence.”  \n53  \n“53 keeps the momentum alive.”  \n54  \n“54 is two steps past fifty-two’s rhythm.”  \n55  \n“55 is five fives—stacked confidence.”  \n56  \n“56 is a tidy progression onward.”  \n57  \n“57 is nearing sixty, almost there.”  \n58  \n“58 is steady and close to the end.”  \n59  \n“59 is one away from sixty—almost complete.”  \n60  \n“60 is the final count—full circle reached.”"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.911,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 677,
+   "output_tokens": 759,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00122751
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.911,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user2",
+   "kind": "user",
+   "text": "Stop counting. Reply only with the word: steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.389,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "steered",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.389,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.439,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 429,
+   "output_tokens": 6,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00143345
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.439,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 5.932
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.439,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.439,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

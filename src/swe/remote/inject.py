@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from swe.remote import attachments, supervise
-from swe.remote.adapters import codex_wire
+from swe.remote.adapters import codex_wire, opencode_wire
 from swe.remote.launch_model import provider_split
 from swe.reports import transcripts as _tr
 from swe.sessions.models import Session
@@ -601,9 +601,10 @@ _SERVE_READY_S = 15.0
 _SERVE_REQ_TIMEOUT = 20.0
 
 # opencode decisions differ from ours: allow once / always / reject.
-_OPENCODE_DECISIONS = {
-    "allow": "once", "always": "always", "deny": "reject",
-}
+# The routes, bodies and event names of this channel (opencode 1.x's
+# serve) live in ``adapters/opencode_wire.py``, with the 2.x API the
+# session adapter speaks.
+_OPENCODE_DECISIONS = opencode_wire.LEGACY_DECISIONS
 
 
 def _free_port() -> int:
@@ -617,7 +618,7 @@ def _seg(value: str) -> str:
     """``value`` as one URL path segment. The approval's request id is
     the client's string: unquoted, ``../abort`` or ``x?y`` would aim the
     POST at another opencode serve route."""
-    return urllib.parse.quote(str(value), safe="")
+    return opencode_wire.seg(value)
 
 
 def _serve_call(
@@ -768,37 +769,25 @@ def _serve_event(serve: _ServeProc, blob: bytes) -> None:
     and text deltas to their ``DeltaStream``."""
     from swe.remote import protocol
 
-    try:
-        ev = json.loads(blob.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    parsed = opencode_wire.legacy_event(blob)
+    if parsed is None:
         return
-    if not isinstance(ev, dict):
-        return
-    etype = str(ev.get("type") or "")
-    props = ev.get("properties") if isinstance(
-        ev.get("properties"), dict) else ev.get("payload")
-    if not isinstance(props, dict):
-        return
-    if etype.startswith("message.part.") or etype == "session.idle":
+    etype, props = parsed
+    if opencode_wire.legacy_is_live(etype):
         _serve_live(serve, etype, props)
         return
-    if "permission" not in etype.lower():
+    permission = opencode_wire.legacy_permission(
+        etype, props, serve.permissions)
+    if permission is None:
         return
-    perm_id = str(
-        props.get("id") or props.get("permissionID") or "")
-    session_id = str(
-        props.get("sessionID") or props.get("sessionId")
-        or serve.permissions.get(perm_id) or "")
+    what, perm_id, session_id, prompt = permission
     sub = serve.subs.get(session_id)
     if sub is None:
         return
     key, emit, machine = sub
     if emit is None:
         return
-    # asked/updated/replied naming has drifted; treat anything that is
-    # not a reply/resolve as a fresh ask.
-    resolved = any(w in etype.lower() for w in ("replied", "resolved"))
-    if resolved:
+    if what == "resolved":
         serve.permissions.pop(perm_id, None)
         emit(key, protocol.event(
             "approval.resolved", key, machine,
@@ -808,13 +797,6 @@ def _serve_event(serve: _ServeProc, blob: bytes) -> None:
     if not perm_id:
         return
     serve.permissions[perm_id] = session_id
-    prompt = str(
-        props.get("title") or props.get("permission")
-        or props.get("message") or "permission requested"
-    )
-    patterns = props.get("patterns") or props.get("metadata") or {}
-    if isinstance(patterns, (list, tuple)):
-        prompt += "\n\n" + "\n".join(f"`{p}`" for p in patterns[:8])
     emit(key, protocol.event(
         "approval.requested", key, machine,
         {"request_id": perm_id, "prompt": _tr._redact_secrets(prompt)},
@@ -846,8 +828,8 @@ class OpencodeServeInjector:
     @staticmethod
     def _spawn(cwd: str, port: int) -> subprocess.Popen:
         return subprocess.Popen(
-            ["opencode", "serve",
-             "--hostname", "127.0.0.1", "--port", str(port)],
+            [*opencode_wire.DEFAULT_ARGV,
+             *opencode_wire.LEGACY_SERVE_ARGS, str(port)],
             cwd=cwd or None,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -962,24 +944,19 @@ class OpencodeServeInjector:
             return InjectResult(False, "opencode serve failed to start")
         # prompt_async queues server-side — steer and queue are the same
         # call; opencode decides whether mid-turn input lands or waits.
-        payload: dict = {"parts": [{"type": "text", "text": text}]}
         # The attach-time pick rides the channel's own fields: model as
         # {providerID, modelID} (provider/model is the only form the
         # server parses — channel_tuning_error enforces it; a stale or
         # hand-edited meta without the slash is left to the server's
         # default), effort as the model's variant.
         split = provider_split(str(meta.get("model") or ""))
-        if split is not None:
-            payload["model"] = {"providerID": split[0],
-                                "modelID": split[1]}
-        effort = str(meta.get("effort") or "")
-        if effort:
-            payload["variant"] = effort
+        request = opencode_wire.legacy_prompt(
+            session.session_id, text,
+            model={"providerID": split[0], "modelID": split[1]}
+            if split is not None else None,
+            variant=str(meta.get("effort") or ""))
         status_code, body = _serve_call(
-            serve.base, "POST",
-            f"/session/{_seg(session.session_id)}/prompt_async",
-            payload,
-        )
+            serve.base, request.method, request.path, request.body)
         if status_code not in (200, 204):
             return InjectResult(
                 False, f"opencode refused the prompt ({status_code})"
@@ -998,18 +975,16 @@ class OpencodeServeInjector:
         if serve is None:
             return InjectResult(False, "opencode serve failed to start")
         session_id = serve.permissions.get(request_id) or session.session_id
+        request = opencode_wire.legacy_permission_reply(
+            session_id, request_id, response)
         status_code, _ = _serve_call(
-            serve.base, "POST",
-            f"/session/{_seg(session_id)}/permissions/{_seg(request_id)}",
-            {"response": response},
-        )
+            serve.base, request.method, request.path, request.body)
         if status_code in (404, 405):
             # Older opencode: /permission/{id}/reply {reply}.
+            request = opencode_wire.legacy_permission_reply_old(
+                request_id, response)
             status_code, _ = _serve_call(
-                serve.base, "POST",
-                f"/permission/{_seg(request_id)}/reply",
-                {"reply": response},
-            )
+                serve.base, request.method, request.path, request.body)
         if status_code not in (200, 204):
             return InjectResult(
                 False, f"opencode refused the reply ({status_code})"
@@ -1024,10 +999,9 @@ class OpencodeServeInjector:
             serve = self._serve_for(session)
             if serve is None:
                 return InjectResult(False, "opencode serve failed to start")
+            request = opencode_wire.legacy_abort(session.session_id)
             status_code, _ = _serve_call(
-                serve.base, "POST",
-                f"/session/{_seg(session.session_id)}/abort", {},
-            )
+                serve.base, request.method, request.path, request.body)
             if status_code not in (200, 204):
                 return InjectResult(
                     False, f"opencode refused abort ({status_code})"

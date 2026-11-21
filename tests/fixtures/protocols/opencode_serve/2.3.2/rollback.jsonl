@@ -1,0 +1,69 @@
+{"fixture": 1, "adapter": "opencode_serve", "version": "2.3.2", "scenario": "rollback", "synthetic": false, "recorded": "2026-11-21", "argv_tails": [["serve", "--hostname", "127.0.0.1", "--port", "0"]], "env_set": ["HOME", "OPENCODE_SERVER_PASSWORD", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"], "model": "openai/gpt-5.4-nano", "error": null, "notes": null}
+{"proc": 0, "dir": "in", "t": 0.541, "sse": {"type": "server.connected"}}
+{"proc": 0, "dir": "out", "t": 0.542, "http": {"n": 1, "method": "GET", "path": "/api/info", "body": null}}
+{"proc": 0, "dir": "in", "t": 0.551, "http": {"n": 1, "status": 200, "body": {"version": "2.3.2"}}}
+{"proc": 0, "dir": "out", "t": 0.551, "http": {"n": 2, "method": "POST", "path": "/api/session", "body": {"location": {"directory": "/work"}, "model": {"providerID": "openai", "id": "gpt-5.4-nano", "variant": "low"}}}}
+{"proc": 0, "dir": "in", "t": 0.566, "http": {"n": 2, "status": 200, "body": {"data": {"id": "ses_01", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}}}}}
+{"proc": 0, "dir": "out", "t": 0.566, "http": {"n": 3, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Remember this word: papaya. Reply only with: ok"}}}
+{"proc": 0, "dir": "in", "t": 0.568, "sse": {"type": "session.created", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 0.618, "sse": {"type": "project.updated"}}
+{"proc": 0, "dir": "in", "t": 3.106, "sse": {"type": "models-dev.refreshed"}}
+{"proc": 0, "dir": "in", "t": 3.551, "http": {"n": 3, "status": 200, "body": {"data": {"id": "msg_01", "sessionID": "ses_01", "time": {"created": 1795235236950}, "type": "user", "payload": {"text": "Remember this word: papaya. Reply only with: ok"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "integration.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "provider.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "model.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "agent.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "command.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "skill.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "artifact.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "websearch.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "reference.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "plugin.updated"}}
+{"proc": 0, "dir": "in", "t": 3.629, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.64, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.64, "sse": {"type": "session.instructions.updated", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 3.64, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_01"}}}
+{"proc": 0, "dir": "in", "t": 4.409, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_02", "started": 1795235237021}}}
+{"proc": 0, "dir": "in", "t": 4.409, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.409, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.411, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "delta": "ok"}}}
+{"proc": 0, "dir": "in", "t": 4.411, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "ordinal": 0, "text": "ok"}}}
+{"proc": 0, "dir": "in", "t": 4.464, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.464, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_02", "finish": "stop", "tokens": {"input": 2715, "output": 5, "reasoning": 0, "cache": {"read": 2560, "write": 0}}, "cost": 0.0006004500000000001}}}
+{"proc": 0, "dir": "in", "t": 4.464, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0006004500000000001, "tokens": {"input": 2715, "output": 5, "reasoning": 0, "cache": {"read": 2560, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 4.464, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "out", "t": 4.869, "http": {"n": 4, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Remember this second word: walrus. Reply only with: ok"}}}
+{"proc": 0, "dir": "in", "t": 4.873, "http": {"n": 4, "status": 200, "body": {"data": {"id": "msg_03", "sessionID": "ses_01", "time": {"created": 1795235238275}, "type": "user", "payload": {"text": "Remember this second word: walrus. Reply only with: ok"}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 4.882, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.882, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 4.882, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_03"}}}
+{"proc": 0, "dir": "in", "t": 5.333, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_04", "started": 1795235238282}}}
+{"proc": 0, "dir": "in", "t": 5.333, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.333, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.335, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "delta": "ok"}}}
+{"proc": 0, "dir": "in", "t": 5.335, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "ordinal": 0, "text": "ok"}}}
+{"proc": 0, "dir": "in", "t": 5.382, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.382, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_04", "finish": "stop", "tokens": {"input": 691, "output": 5, "reasoning": 0, "cache": {"read": 4608, "write": 0}}, "cost": 0.00023661000000000003}}}
+{"proc": 0, "dir": "in", "t": 5.382, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.0008370600000000001, "tokens": {"input": 3406, "output": 10, "reasoning": 0, "cache": {"read": 7168, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 5.382, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "out", "t": 5.789, "http": {"n": 5, "method": "POST", "path": "/api/session/ses_01/revert/stage", "body": {"messageID": "msg_03", "files": false}}}
+{"proc": 0, "dir": "in", "t": 5.792, "http": {"n": 5, "status": 200, "body": {"data": {"messageID": "msg_03", "files": []}}}}
+{"proc": 0, "dir": "out", "t": 5.792, "http": {"n": 6, "method": "POST", "path": "/api/session/ses_01/revert/commit", "body": null}}
+{"proc": 0, "dir": "in", "t": 5.792, "sse": {"type": "session.revert.staged", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.797, "http": {"n": 6, "status": 204, "body": null}}
+{"proc": 0, "dir": "out", "t": 5.797, "http": {"n": 7, "method": "POST", "path": "/api/session/ses_01/prompt", "body": {"text": "Which words did I ask you to remember? Reply with just the words."}}}
+{"proc": 0, "dir": "in", "t": 5.797, "sse": {"type": "session.revert.committed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.799, "http": {"n": 7, "status": 200, "body": {"data": {"id": "msg_05", "sessionID": "ses_01", "time": {"created": 1795235239202}, "type": "user", "payload": {"text": "Which words did I ask you to remember? Reply with just the words."}, "delivery": "steer"}}}}
+{"proc": 0, "dir": "in", "t": 5.807, "sse": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.807, "sse": {"type": "session.execution.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 5.807, "sse": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_01", "inboxID": "msg_05"}}}
+{"proc": 0, "dir": "in", "t": 6.28, "sse": {"type": "session.step.started", "data": {"sessionID": "ses_01", "agent": "build", "model": {"id": "gpt-5.4-nano", "providerID": "openai", "variant": "low"}, "assistantMessageID": "msg_06", "started": 1795235239208}}}
+{"proc": 0, "dir": "in", "t": 6.28, "sse": {"type": "session.step.first-token", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 6.28, "sse": {"type": "session.text.started", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 6.28, "sse": {"type": "session.text.delta", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_06", "ordinal": 0, "delta": "papaya"}}}
+{"proc": 0, "dir": "in", "t": 6.28, "sse": {"type": "session.text.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_06", "ordinal": 0, "text": "papaya"}}}
+{"proc": 0, "dir": "in", "t": 6.299, "sse": {"type": "session.step.streamed", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "dir": "in", "t": 6.299, "sse": {"type": "session.step.ended", "data": {"sessionID": "ses_01", "assistantMessageID": "msg_06", "finish": "stop", "tokens": {"input": 693, "output": 6, "reasoning": 0, "cache": {"read": 4608, "write": 0}}, "cost": 0.00023825999999999999}}}
+{"proc": 0, "dir": "in", "t": 6.299, "sse": {"type": "session.usage.updated", "data": {"sessionID": "ses_01", "cost": 0.00107532, "tokens": {"input": 4099, "output": 16, "reasoning": 0, "cache": {"read": 11776, "write": 0}}}}}
+{"proc": 0, "dir": "in", "t": 6.299, "sse": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_01"}}}
+{"proc": 0, "exit": 143}
