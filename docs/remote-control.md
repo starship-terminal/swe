@@ -255,7 +255,7 @@ remote/
   hub.py         # http.server ThreadingHTTPServer: REST + SSE, device auth
   runtime.py     # the hub's side of session keepers (behind remote.session_view)
   keeper/        # one process per kept session: agent, queue, event log, IPC
-  adapters/      # one structured channel per harness (claude_stream), v2 events
+  adapters/      # one structured channel per harness (claude_stream, codex_appserver, opencode_serve, acp), v2 events
   store.py       # remote.sqlite: sessions, keepers, launches, command receipts
   protocol_compat.py  # v2 events as today's v1 frames
   peer.py        # is a loopback peer the Tailscale daemon? gates X-Forwarded-For
@@ -1661,12 +1661,30 @@ then restart the hub; off by default). Full rules:
 [G8-hub-on-keepers.md](specs/G8-hub-on-keepers.md).
 
 With the setting on, a session of a harness that has a session adapter
-(`capabilities.session` in harness.json; today Claude Code, through
-`claude_stream`) is run by a keeper: one detached process per session
+(`capabilities.session` in harness.json, over the built-in fallback table;
+today Claude Code, Codex, opencode and the ACP harnesses, each through the
+adapter listed below) is run by a keeper: one detached process per session
 (`python -m swe.remote.keeper`) that holds the agent, the send queue
 and the session's event log, and keeps running when the hub restarts.
 Everything else on this page still applies to every other session, and
 to all of them when the setting is off.
+
+| Adapter id | Harness | How SWE talks to it | Recorded against |
+|---|---|---|---|
+| `claude_stream` | Claude Code | `claude` with stream-json on stdio (`claude_wire.py`) | `claude` 2.1.328 |
+| `codex_appserver` | Codex | `codex app-server`, JSON-RPC on stdio (`codex_wire.py`) | `codex` 0.170.0 |
+| `opencode_serve` | opencode | `opencode serve` on a loopback port with a password the adapter makes (`opencode_wire.py`) | `opencode` 2.3.2 |
+| `acp` | Gemini, Qwen, Kimi, Devin, Cursor, Copilot | the agent's ACP mode, JSON-RPC on stdio (`remote/acp.py`) | `qwen` 0.28.0; Gemini and Kimi from hand-written fixtures |
+
+When the hub starts with the setting on, it writes Claude's
+`capabilities.session` entry into harness.json once. For the other
+harnesses, the fallback row turns launch, turns, approvals and interrupt
+on, and refuses steer, fork, rollback and the options until harness.json
+declares them. Each adapter's spec ([G7](specs/G7-claude-stream-adapter.md),
+[G16](specs/G16-more-adapters.md)) has the entry to write and what its
+recordings prove. opencode 2.x needs its adapter: the older channel in
+`inject.py` speaks the 1.x routes, which 2.3.2 answers with 405, so an
+opencode 2.x session started in a terminal cannot be written to.
 
 | What | With a keeper |
 |---|---|

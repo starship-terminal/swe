@@ -130,7 +130,8 @@ claude (`acp`), every feature off.
 adapter, argv, caps, min_version, source)` or `NoAdapter(harness,
 reason, adapter, source)`. It is a `NoAdapter` when the registry says
 `supported: false`, nothing describes the harness, no class is
-registered for the adapter id (true of every id until G7 and G16), or
+registered for the adapter id (none today: G7 and G16 registered every
+built-in id), or
 `argv`'s binary is not on PATH. `reason` is written for the session
 view's read-only bar.
 
