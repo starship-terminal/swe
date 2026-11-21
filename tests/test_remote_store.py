@@ -1036,6 +1036,12 @@ class TestResults(StoreCase):
                          ["a1"])
         self.assertEqual(s.unfinished(machine="m2"), [])
 
+    def test_now_is_the_clock_that_stamps_a_command(self) -> None:
+        s = self.open()
+        s.record_command("a1", session=SESSION, op="send", status="queued")
+        self.clock.advance(90)
+        self.assertEqual(s.now() - s.get_command("a1").received_at, 90)
+
 
 class TestPrune(StoreCase):
     def test_prune_keeps_held_and_unfinished_and_recent(self) -> None:

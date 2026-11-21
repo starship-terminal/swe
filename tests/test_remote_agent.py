@@ -1,27 +1,42 @@
 """R3: satellite agent, remote keys, machine registry, command queue."""
 
+import contextlib
 import http.client
+import io
 import json
+import logging
 import os
+import queue
 import shutil
 import socket
+import stat
 import struct
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
+from urllib.parse import quote
 
+from swe.paths import config_file_for
 from swe.remote import agent as agent_mod
 from swe.remote import usage as usage_mod
 from swe.remote import attachments, catalog as catalog_mod
 from swe.remote import inject, journal, pairing, protocol, supervise
 from swe.remote import hub
+from swe.remote.adapters import events as ev2
+from swe.remote.adapters import fake
 from swe.remote.hub import HubState, make_server
+from swe.remote.keeper import discovery
+from swe.remote.keeper.log import read_log
+from swe.remote.store import StoreError
 from swe.sessions.models import Session
 
 from tests._tempdir import temp_dir
+from tests.test_remote_hub import _session as _hub_session
+from tests.test_remote_hub_keeper import OPTIONS, Feed, KeeperHubCase, Stream
+from tests.test_remote_keeper import WAIT, short_home
 
 
 def _session(sid="s1", tool="claude", path="/tmp/proj"):
@@ -2287,7 +2302,10 @@ class TestR3FinalEdges(unittest.TestCase):
         with patch.object(ag.tail_manager, "sweep_stale", sweep), \
              patch.object(attachments, "sweep", side_effect=swept.append):
             ag._tail_loop()
-        self.assertEqual(calls, [(ag._outbox, (agent_mod.OUTBOX_KEY,))])
+        # This machine's own stream stays too (the loopback API reads
+        # it), with the journal of every session a keeper holds here.
+        self.assertEqual(calls, [(ag._outbox, (agent_mod.OUTBOX_KEY,
+                                               hub.GLOBAL_KEY))])
         # Staged attachments age out here too, as on the hub.
         self.assertEqual(swept, [self.home])
 
@@ -2955,6 +2973,2095 @@ class TestReviewHubFixes(unittest.TestCase):
         seqs = st._sat_cmd_seqs["sat-m1"]
         self.assertNotIn(first["data"]["command_id"], seqs)
         self.assertEqual(len(seqs), 1)  # the unacked command stays
+
+
+# ---------------------------------------------------------------------
+# G15: satellite keepers and the loopback local API
+# (docs/specs/G15-satellite-keepers.md)
+
+class SatelliteCase(KeeperHubCase):
+    """A hub with its session runtime on (``self.srv``, over
+    ``self.home``) and one satellite (``self.agent``, over
+    ``self.sat_home``) whose keepers run on threads of this process and
+    drive the scripted ``FakeAdapter``.
+
+    None of the agent's loops run. A test moves each step itself:
+    ``push`` uploads keeper journals, ``deliver`` hands the agent what
+    the hub put on its command stream. It waits on ``self.sat`` (the v2
+    events the satellite journaled), ``self.feed`` (the ones the hub
+    copied) or ``self.done`` (commands the agent finished), never on
+    time. The hub's store reads ``self.clock``.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sat_home = short_home(self)
+        self.work = self.sat_home / "work"
+        self.work.mkdir()
+        self.sat = Feed(self)
+        self.done: queue.Queue = queue.Queue()
+        # Set to make the next keeper fail to start.
+        self.no_keeper = ""
+        self.cred = self.srv.pair(role="satellite")["credential"]
+        self.agents: list = []
+        self.agent = self.satellite()
+        self.mid = self.agent.machine_id
+        self.store()._clock = self.clock
+
+    # -- the satellite ----------------------------------------------------
+
+    def satellite(self):
+        """An agent over the satellite's home, registered with the hub.
+        Called again after ``crash``, it is the agent after a restart."""
+        agent = agent_mod.RemoteAgent(
+            f"http://127.0.0.1:{self.srv.port}", self.cred, self.sat_home,
+            runtime={"spawn": self.spawn, "on": True,
+                     "registry": self.REGISTRY,
+                     "runtime_dir": self.sat_home / "rt",
+                     "listeners": [self.sat]})
+        agent.catalog._fetch = lambda: []
+        agent.catalog._status_of = lambda ss: ["done"] * len(ss)
+        mark = agent._mark_done
+
+        def marked(seq, epoch=None):
+            mark(seq, epoch)
+            self.done.put(seq)
+
+        agent._mark_done = marked
+        self.agents.append(agent)
+        self.addCleanup(self.end_agent, agent)
+        self.assertTrue(agent._register())
+        return agent
+
+    def spawn(self, key, home=None, env=None, runtime=None):
+        if self.no_keeper:
+            raise discovery.SpawnError("the keeper did not start",
+                                       output=self.no_keeper)
+        return super().spawn(key, home=home, env=env, runtime=runtime)
+
+    def quiet_hubs(self) -> None:
+        super().quiet_hubs()
+        for agent in self.agents:
+            agent.local.runtime._stopping = True
+
+    def end_agent(self, agent) -> None:
+        if getattr(agent, "ended", False):
+            return
+        agent.ended = True
+        agent.close()
+
+    def crash(self, agent=None) -> None:
+        """End the agent the way a kill does: nothing is tidied, no
+        keeper is told. The keepers run on."""
+        agent = agent or self.agent
+        agent.ended = True
+        rt = agent.local.runtime
+        rt._stopping = True
+        for owned in list(rt._sessions.values()):
+            if owned.client is not None:
+                owned.client.close()
+        agent._stop.set()
+        agent.local._stop.set()
+        agent._sendq.close()
+        agent.detaches.close()
+        agent.local.detaches.close()
+        agent.api.close()
+        rt.store.close()
+
+    def start(self, *turns, prompt: str = "hello", launch_id: str = "l1",
+              **plan) -> str:
+        """Launch a keeper session on the satellite, the way the hub's
+        ``launch`` command does; returns its key on that machine."""
+        self.plans.append({"turns": list(turns), **plan})
+        return self.launch_here(prompt, launch_id)
+
+    def launch_here(self, prompt: str = "hello",
+                    launch_id: str = "l1") -> str:
+        frames = Stream(self, self.agent.local, hub.GLOBAL_KEY)
+        ok, note, _degraded = self.agent._execute("", "launch", {
+            "harness": "claude", "cwd": str(self.work), "prompt": prompt,
+            "launch_id": launch_id})
+        self.assertTrue(ok, note)
+        launched = frames.until(
+            lambda f: f.get("type") == "session.launched"
+            and f["data"].get("launch_id") == launch_id,
+            "the launch to settle")
+        return launched["session"]
+
+    def settle(self, key: str, agent=None) -> None:
+        """Return once the satellite has journaled everything its
+        keeper logged (the keeper answers on the connection its events
+        come down)."""
+        (agent or self.agent).runtime.session(key).client.request("status")
+
+    def push(self, agent=None) -> None:
+        """Upload keeper journals until the hub's copies hold all of
+        each."""
+        agent = agent or self.agent
+        for _attempt in range(50):
+            # False while a session this machine let go is not yet
+            # released on the hub: the next upload carries on.
+            agent._push_kept()
+            with agent._kept_lock:
+                behind = [k for k, st in agent._kept.items()
+                          if st["released"] or st["acked"]
+                          != agent.local.journal.last_seq(k)]
+            if not behind:
+                return
+        self.fail(f"the hub's copy never caught up: {behind}")
+
+    def listed(self, key: str) -> str:
+        """Push the catalog, so the hub lists ``key``; the hub's key."""
+        self.assertTrue(self.agent._push_catalog())
+        hub_key = protocol.remote_key(self.mid, key)
+        self.assertEqual(self.srv.state.catalog.row_for(hub_key)["mode"],
+                         "keeper")
+        return hub_key
+
+    # -- the hub ----------------------------------------------------------
+
+    def online(self) -> None:
+        self.srv.state.sat_connected(self.mid)
+
+    def offline(self) -> None:
+        self.srv.state.sat_disconnected(self.mid)
+
+    def back(self, agent=None) -> None:
+        """The machine is back: its command stream is up, and its next
+        upload says so."""
+        agent = agent or self.agent
+        self.online()
+        agent._hub_back()
+        agent._push_kept()
+
+    def stream(self) -> list[dict]:
+        """Everything the hub has put on the satellite's command
+        stream."""
+        return self.srv.state.journal.read_since(
+            hub.HubState.sat_journal_key(self.mid), 0)[0]
+
+    def deliver(self, agent=None) -> int:
+        """Hand the agent what its command stream holds past its
+        cursor, as the stream would; returns how many frames."""
+        agent = agent or self.agent
+        frames = self.srv.state.journal.read_since(
+            hub.HubState.sat_journal_key(self.mid), agent._done_cmd_seq)[0]
+        for frame in frames:
+            agent._handle_frame(json.dumps(frame).encode("utf-8"))
+        return len(frames)
+
+    def finished(self, count: int = 1) -> None:
+        for _n in range(count):
+            self.done.get(timeout=WAIT)
+
+    def kept(self, body: dict):
+        """``POST /v1/agent/kept`` as the satellite."""
+        return self.call_as(self.cred, "POST", "/v1/agent/kept",
+                            {"machine_id": self.mid, **body})
+
+    def call_as(self, credential: str, method: str, path: str, body=None):
+        status, data = self.srv.request(
+            method, path, body,
+            headers={"Authorization": f"Bearer {credential}"})
+        return status, json.loads(data) if data else {}
+
+    def sends(self) -> list[str]:
+        return [c.args[0].text for c in self.calls("send_turn")]
+
+
+class TestSatelliteForwarding(SatelliteCase):
+    """Keeper events reach the hub under the keeper's own seq."""
+
+    def test_the_hubs_journal_is_the_keepers_log(self):
+        key = self.start([fake.say("hi there", chunks=["hi ", "there"])])
+        self.sat.event("turn.ended", status="completed")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        copied = self.journal(hub_key)
+        log = read_log(key, home=self.sat_home).events
+        # Seq for seq the keeper's log, on both machines.
+        self.assertEqual([e["seq"] for e in copied],
+                         list(range(1, len(log) + 1)))
+        self.assertEqual(local, log)
+        self.assertEqual([dict(e, session=key) for e in copied], log)
+        self.assertTrue(all(e["session"] == hub_key and e["v"] == 2
+                            for e in copied))
+        # The hub recorded whose session it copies, and its state.
+        session = self.store().get_session(hub_key)
+        self.assertEqual((session.machine, session.harness, session.state),
+                         (self.mid, "claude", "idle"))
+        self.assertTrue(agent_mod.mirrored(self.srv.state, hub_key))
+        # The hub's own runtime holds no keeper for it.
+        self.assertFalse(self.srv.state.runtime.owns(hub_key))
+
+    def test_a_resend_lands_each_event_once(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        before = self.journal(hub_key)
+        frames = Stream(self, self.srv.state, hub_key)
+        # The whole journal again, as after an ack that was lost.
+        events = self.agent.local.journal.read_since(key, 0)[0]
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": events[-1]["seq"], "events": events}]})
+        self.assertEqual((status, out["acked"]),
+                         (200, {key: events[-1]["seq"]}))
+        self.assertEqual(self.journal(hub_key), before)
+        # And the agent's own resend: it believes the hub has nothing.
+        with self.agent._kept_lock:
+            self.agent._kept[key]["acked"] = 0
+        self.push()
+        self.assertEqual(self.journal(hub_key), before)
+        # Nothing was published a second time either.
+        self.assertTrue(frames.q.empty())
+
+    def test_seqs_skip_ahead_and_are_never_renumbered(self):
+        key = self.start([fake.say("one"), fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        events = self.agent.local.journal.read_since(key, 0)[0]
+        self.assertGreater(len(events), 7)
+        head = events[-1]["seq"]
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": head, "events": events[:3]}]})
+        self.assertEqual(out["acked"], {key: 3})
+        # 4 and 5 never arrive (the satellite's ring dropped them).
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": head, "events": events[5:6]}]})
+        self.assertEqual(out["acked"], {key: 6})
+        self.assertEqual(self.seqs(hub_key), [1, 2, 3, 6])
+        # A seq never goes back: what is older than the copy's last
+        # event is refused, not slotted in under another number.
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": head, "events": events[3:5]}]})
+        self.assertEqual(out["acked"], {key: 6})
+        self.assertEqual(self.seqs(hub_key), [1, 2, 3, 6])
+        # The agent carries on from what the hub says it holds.
+        self.push()
+        self.assertEqual(self.seqs(hub_key),
+                         [1, 2, 3] + list(range(6, head + 1)))
+        copied = {e["seq"]: e for e in self.journal(hub_key)}
+        self.assertEqual(
+            [dict(copied[e["seq"]], session=key) for e in events
+             if e["seq"] in copied],
+            [e for e in events if e["seq"] in copied])
+
+    def test_an_event_the_hub_could_not_write_is_sent_again(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        journal_ = self.srv.state.journal
+        write = journal_.append_at
+        refused = []
+
+        def full_disk(session_key, event):
+            if event["seq"] == 3 and not refused:
+                refused.append(event["seq"])
+                return False
+            return write(session_key, event)
+
+        with patch.object(journal_, "append_at", full_disk):
+            self.assertTrue(self.agent._push_kept())   # asks
+            self.assertTrue(self.agent._push_kept())   # 1, 2, then stops
+        self.assertEqual(self.seqs(hub_key), [1, 2])
+        # The hole is filled by the next upload, under the same seqs.
+        self.push()
+        head = self.agent.local.journal.last_seq(key)
+        self.assertEqual(self.seqs(hub_key), list(range(1, head + 1)))
+
+    def test_the_hub_numbers_nothing_in_a_copied_journal(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        before = self.seqs(hub_key)
+        frames = Stream(self, self.srv.state, hub_key)
+        # An event of the hub's own for that session (a title, a
+        # notify, a queued tail) reaches open streams with no seq.
+        self.srv.state.emit(hub_key, protocol.event(
+            "notify", hub_key, self.mid, {"kind": "finished"}))
+        frame = frames.frame("notify")
+        self.assertNotIn("seq", frame)
+        self.assertEqual(self.seqs(hub_key), before)
+
+    def test_old_clients_read_the_copy_as_v1(self):
+        key = self.start([fake.say("hi there")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        frames = Stream(self, self.srv.state, hub_key)
+        self.push()
+        said = frames.until(
+            lambda f: f.get("type") == "message.appended"
+            and f["data"].get("kind") == "assistant", "the reply")
+        self.assertEqual((said["data"]["text"], said["session"]),
+                         ("hi there", hub_key))
+        status, out = self.call(
+            "GET", f"/v1/sessions/{quote(hub_key, safe='')}/messages")
+        self.assertEqual(status, 200, out)
+        self.assertIn("hi there", [m["data"]["text"]
+                                   for m in out["messages"]])
+
+    def test_a_v2_stream_on_the_hub_gets_the_copied_events(self):
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        sync = self.srv.state.sync
+        stream = sync.open(hub_key)
+        self.addCleanup(stream.close)
+        first = stream.catch_up()
+        self.assertEqual(first[0]["type"], "session.snapshot")
+        head = self.seqs(hub_key)[-1]
+        self.assertEqual(first[-1]["data"]["head"], head)
+        # A second turn, sent on the satellite itself.
+        status, out = self.agent._local_post(
+            key, "message", {"text": "again", "command_id": "m1"})
+        self.assertEqual(status, 202, out)
+        self.sat.result("m1")  # logged after the turn's end
+        self.settle(key)
+        self.push()
+        got: list[dict] = []
+        while True:
+            frames = stream.next(block=False)
+            if not frames:
+                break
+            got += frames
+        numbered = [f for f in got if f.get("seq")]
+        # Each copied event once, as the v2 event it is, in seq order.
+        self.assertEqual([f["seq"] for f in numbered],
+                         list(range(head + 1, self.seqs(hub_key)[-1] + 1)))
+        self.assertIn("two", [f["data"].get("text") for f in numbered
+                              if f["type"] == "message.completed"])
+        self.assertTrue(all(f["session"] == hub_key for f in numbered))
+
+    def test_a_continued_sessions_copy_starts_over_from_the_satellite(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = protocol.remote_key(self.mid, key)
+        # The hub numbered this journal itself before any keeper event
+        # came (the session's terminal history, uploaded the old way).
+        for n in range(3):
+            self.srv.state.emit(hub_key, protocol.event(
+                "message.appended", hub_key, self.mid,
+                {"kind": "assistant", "text": f"old {n}"}))
+        self.assertEqual(self.seqs(hub_key), [1, 2, 3])
+        frames = Stream(self, self.srv.state, hub_key)
+        self.push()
+        # Open streams are told to fetch the messages again, and the
+        # copy is the satellite's journal from its first event.
+        self.assertEqual(frames.frame("journal.truncated")["seq"], 0)
+        # A v2 client's cursor from before is on another epoch now.
+        self.assertEqual(self.srv.state.sync.epoch(hub_key), 1)
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        self.assertEqual([dict(e, session=key)
+                          for e in self.journal(hub_key)], local)
+
+    def test_a_hub_with_its_session_runtime_off_is_left_alone(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        side = agent_mod.satellite_keepers(self.srv.state)
+        with patch.object(agent_mod.SatelliteKeepers, "store", None):
+            status, out = self.kept({"sessions": []})
+            self.assertEqual((status, out["error"]["code"]),
+                             (409, "session_view_off"))
+            # The agent does not hold its other uploads back for it,
+            # and does not ask again at once.
+            self.assertTrue(self.agent._push_kept())
+            self.assertGreater(self.agent._kept_off_until, time.monotonic())
+            self.assertFalse(side.mirrored(
+                protocol.remote_key(self.mid, key)))
+
+
+class TestSatelliteCommands(SatelliteCase):
+    """Hub to satellite to keeper, each command under its id."""
+
+    def running(self, *turns, **plan) -> tuple[str, str]:
+        key = self.start(*turns, **plan)
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        # The rest of the uplink, as the agent's loop sends it after
+        # each upload: the launch's own event among it. The hub numbers
+        # none of it in a journal it copies.
+        self.assertTrue(self.agent._push_events())
+        self.assertTrue(all(e["v"] == 2 for e in self.journal(hub_key)))
+        return key, hub_key
+
+    def test_a_send_from_the_hub_reaches_the_keeper(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "again", "client_id": "m1"})
+        self.assertEqual(status, 202, out)
+        self.assertEqual(
+            (out["receipt"], out["command_id"], out["client_id"],
+             out["waiting"]), ("queued", "m1", "m1", False))
+        stored = self.store().get_command("m1")
+        self.assertEqual((stored.op, stored.machine, stored.session,
+                          stored.status, stored.payload["text"]),
+                         ("send", self.mid, hub_key, "queued", "again"))
+        frame = self.stream()[-1]["data"]
+        self.assertEqual((frame["op"], frame["route"], frame["session"],
+                          frame["body"]["command_id"]),
+                         ("kept", "message", key, "m1"))
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("m1")
+        self.settle(key)
+        # The keeper got it once, under the client's own id.
+        self.assertEqual(self.sends(), ["hello", "again"])
+        self.assertEqual(self.calls("send_turn")[1].args[0].command_id, "m1")
+        self.assertEqual(self.agent.runtime.store.get_command("m1").status,
+                         "accepted")
+        # Its receipt and result come back as the keeper's events.
+        self.push()
+        self.feed.result("m1")
+        done = self.store().get_command("m1")
+        self.assertEqual((done.status, done.result),
+                         ("accepted", {"op": "send", "ok": True}))
+        # The stream's own ack moved the backlog floor.
+        self.assertEqual(self.srv.state._sat_acked.get(self.mid), 1)
+
+    def test_a_retry_under_the_same_id_is_not_sent_twice(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.online()
+        body = {"text": "again", "client_id": "m1"}
+        self.assertEqual(self.post(hub_key, "message", body)[0], 202)
+        status, out = self.post(hub_key, "message", body)
+        self.assertEqual((status, out["duplicate"], out["receipt"]),
+                         (202, True, "queued"))
+        self.assertEqual(len(self.stream()), 1)
+        # The same id for other words is refused.
+        status, out = self.post(hub_key, "message",
+                                {"text": "something else",
+                                 "client_id": "m1"})
+        self.assertEqual((status, out["error"]["code"]),
+                         (409, "command_id_conflict"))
+        self.deliver()
+        self.finished()
+        self.sat.result("m1")
+        # Run again by a satellite that restarted before it was marked
+        # done: its own store answers the duplicate.
+        frame = self.stream()[-1]
+        self.agent._run_kept(frame["seq"], frame["data"], self.agent._cmd_epoch)
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "again"])
+
+    def test_a_held_command_is_delivered_once_after_reconnect(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        # The machine is asleep: no command stream.
+        self.assertFalse(self.srv.state.machine_online(self.mid))
+        status, out = self.post(hub_key, "message",
+                                {"text": "for later", "client_id": "h1"})
+        self.assertEqual((status, out["receipt"], out["command_id"]),
+                         (202, "held", "h1"))
+        held = self.store().get_command("h1")
+        self.assertEqual((held.status, held.reason,
+                          held.expires_at - held.received_at),
+                         ("held", "machine asleep", 24 * 3600.0))
+        self.assertEqual(self.stream(), [])
+        # A retry while it is held answers the hold, and holds nothing
+        # new.
+        status, out = self.post(hub_key, "message",
+                                {"text": "for later", "client_id": "h1"})
+        self.assertEqual((out["duplicate"], out["receipt"]), (True, "held"))
+
+        self.back()
+        self.assertEqual(self.store().get_command("h1").status, "queued")
+        self.assertEqual([f["data"]["id"] for f in self.stream()], ["h1"])
+        # Saying "back" again, or the timer, claims nothing twice.
+        self.back()
+        agent_mod.satellite_keepers(self.srv.state).tick()
+        self.assertEqual(len(self.stream()), 1)
+        self.deliver()
+        self.finished()
+        self.sat.result("h1")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "for later"])
+        self.push()
+        self.feed.result("h1")
+        self.assertEqual(self.store().get_command("h1").result["ok"], True)
+        self.assertEqual(self.deliver(), 0)
+
+    def test_two_held_commands_arrive_in_the_order_they_were_sent(self):
+        key, hub_key = self.running(
+            [fake.say("one")], [fake.say("two")], [fake.say("three")])
+        for cid, text in (("h1", "first"), ("h2", "second")):
+            status, out = self.post(hub_key, "message",
+                                    {"text": text, "client_id": cid})
+            self.assertEqual(out["receipt"], "held")
+        # One sent once the machine is back goes behind both.
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "third", "client_id": "h3"})
+        self.assertEqual(out["receipt"], "queued")
+        self.assertEqual([f["data"]["id"] for f in self.stream()],
+                         ["h1", "h2", "h3"])
+        self.assertEqual(self.deliver(), 3)
+        self.finished(3)
+        self.sat.result("h3")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "first", "second", "third"])
+
+    def test_a_hold_past_24_hours_expires_and_is_never_delivered(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        frames = Stream(self, self.srv.state, hub_key)
+        status, out = self.post(hub_key, "message",
+                                {"text": "too late", "client_id": "h1"})
+        self.assertEqual(out["receipt"], "held")
+        self.clock.advance(24 * 3600.0 - 1)
+        agent_mod.satellite_keepers(self.srv.state).tick()
+        self.assertEqual(self.store().get_command("h1").status, "held")
+        self.clock.advance(1)
+        self.back()
+        expired = self.store().get_command("h1")
+        self.assertEqual((expired.status, expired.reason,
+                          expired.result["ok"]),
+                         ("rejected", "expired", False))
+        self.assertEqual(self.stream(), [])
+        self.assertEqual(self.deliver(), 0)
+        # Open streams hear that it will never run, with no seq.
+        told = frames.frame("command.result", client_id="h1")
+        self.assertEqual((told["data"]["ok"], told["data"]["op"]),
+                         (False, "message"))
+        self.assertIn("expired", told["data"]["note"])
+        self.assertNotIn("seq", told)
+        # A retry of it answers the expiry: a new try needs a new id.
+        status, out = self.post(hub_key, "message",
+                                {"text": "too late", "client_id": "h1"})
+        self.assertEqual((out["duplicate"], out["receipt"], out["reason"]),
+                         (True, "rejected", "expired"))
+        self.assertEqual(self.sends(), ["hello"])
+
+    def test_only_messages_and_answers_are_held(self):
+        key, hub_key = self.running([fake.say("one")])
+        for action, body in (
+                ("control", {"op": "interrupt"}),
+                ("command", {"op": "park"}),
+                ("queue", {"client_id": "m9", "op": "cancel"})):
+            status, out = self.post(hub_key, action, body)
+            self.assertEqual((status, out["error"]["code"]),
+                             (409, "machine_offline"), action)
+        self.assertEqual(self.commands(hub_key), [])
+        status, out = self.post(hub_key, "approval", {
+            "request_id": "r1", "decision": "allow", "client_id": "a1"})
+        self.assertEqual((status, out["receipt"]), (202, "held"))
+
+    def test_an_approval_is_answered_through_the_hub(self):
+        key = self.start([fake.ask("run ls?", options=OPTIONS),
+                          fake.say("done")])
+        rid = self.sat.event("approval.requested")["data"]["request_id"]
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        # The hub's inbox has it, from the copied event.
+        self.assertEqual(self.srv.state.pending_approvals, {hub_key: rid})
+        self.online()
+        status, out = self.post(hub_key, "approval", {
+            "request_id": rid, "decision": "allow", "client_id": "a1"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.deliver()
+        self.finished()
+        self.sat.event("turn.ended", status="completed")
+        self.settle(key)
+        self.assertEqual([(c.args[0], c.args[1].decision)
+                          for c in self.calls("respond")], [(rid, "allow")])
+        self.push()
+        self.assertEqual(self.srv.state.pending_approvals, {})
+        self.assertEqual(self.store().get_command("a1").result["ok"], True)
+
+    def test_a_refusal_on_the_satellite_is_stored_and_announced(self):
+        key = self.start([fake.ask("run ls?", options=OPTIONS)])
+        self.sat.event("approval.requested")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        frames = Stream(self, self.srv.state, hub_key)
+        self.online()
+        # No such request is open there: the satellite's route says so
+        # before any keeper is asked, so no event will.
+        status, out = self.post(hub_key, "approval", {
+            "request_id": "nope", "decision": "2", "client_id": "a1"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.deliver()
+        self.finished()
+        refused = self.store().get_command("a1")
+        self.assertEqual((refused.status, refused.result["ok"]),
+                         ("rejected", False))
+        told = frames.frame("command.result", client_id="a1")
+        self.assertEqual((told["data"]["ok"], told["data"]["op"]),
+                         (False, "approval"))
+
+    def test_detach_through_the_hub_gives_the_journal_back(self):
+        key, hub_key = self.running([fake.say("one")])
+        self.online()
+        status, out = self.post(hub_key, "control",
+                                {"op": "detach", "command_id": "d1"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.deliver()
+        self.finished()
+        self.assertTrue(self.finished_keeper())
+        self.assertFalse(self.agent.runtime.owns(key))
+        done = self.store().get_command("d1")
+        self.assertEqual((done.status, done.result["ok"]),
+                         ("accepted", True))
+        # The keeper's last events go up with the release, and the
+        # copy ends at the last of them.
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        kept = [e["seq"] for e in local if e.get("v") == 2]
+        after = [e for e in local if e["seq"] > kept[-1]]
+        self.assertEqual([e["type"] for e in after], ["session.ownership"])
+        self.assertTrue(self.agent._push_kept())
+        self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+        self.assertEqual(self.store().get_session(hub_key).state, "closed")
+        self.assertEqual(self.agent._kept, {})
+        self.assertEqual(self.seqs(hub_key), kept)
+        # What the satellite's tailer reads after that goes up the
+        # ordinary way, and the hub numbers its journal itself again.
+        self.agent._capture(key, protocol.event(
+            "message.appended", key, self.mid,
+            {"kind": "assistant", "text": "from the terminal"}))
+        self.assertTrue(self.agent._push_events())
+        last = self.journal(hub_key)[-1]
+        self.assertEqual((last["data"]["text"], last["seq"]),
+                         ("from the terminal", kept[-1] + 1))
+
+    def finished_keeper(self) -> bool:
+        return self.finished_of(self.keepers[-1])
+
+    def finished_of(self, keeper) -> bool:
+        keeper._done.wait(WAIT)
+        return keeper.done
+
+    def test_a_session_without_a_keeper_takes_the_old_path(self):
+        self.agent.catalog._fetch = lambda: [_session("t1")]
+        self.assertTrue(self.agent._push_catalog())
+        hub_key = protocol.remote_key(self.mid, "claude:t1")
+        self.online()
+        status, out = self.post(hub_key, "control", {"op": "attach"})
+        self.assertEqual((status, out), (202, {"ok": True, "queued": True}))
+        frame = self.stream()[-1]["data"]
+        self.assertEqual(frame["op"], "attach")
+        self.assertEqual(self.commands(), [])
+
+
+class TestSatelliteEdges(SatelliteCase):
+    def test_a_hub_that_stores_no_commands_still_reaches_the_keeper(self):
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.online()
+        # A hub with its session runtime off forwards the old way: a
+        # v1 ``message`` command with its own id and the client's.
+        with patch.object(agent_mod.SatelliteKeepers, "store", None):
+            status, out = self.post(hub_key, "message",
+                                    {"text": "again", "client_id": "m1"})
+        self.assertEqual((status, out),
+                         (202, {"ok": True, "queued": True,
+                                "client_id": "m1", "waiting": False}))
+        self.assertEqual(self.stream()[-1]["data"]["op"], "message")
+        self.assertIsNone(self.store().get_command("m1"))
+        self.deliver()
+        self.sat.result("m1")
+        self.settle(key)
+        # Through the keeper, under the client's id, not typed into a
+        # pane.
+        self.assertEqual(self.sends(), ["hello", "again"])
+        self.assertEqual(self.calls("send_turn")[1].args[0].command_id, "m1")
+        results = [e for e in self.agent.outbox
+                   if e["type"] == "command.result"
+                   and e["data"].get("client_id") == "m1"]
+        self.assertEqual([(e["data"]["ok"], e["data"]["op"])
+                          for e in results], [(True, "message")])
+        # An approval and a control take the same way in.
+        for op, data, want in (
+                ("approval", {"request_id": "nope", "decision": "allow",
+                              "command_id": "c1"}, False),
+                ("control", {"ctl": "interrupt", "command_id": "c2"}, True)):
+            ok, note, _degraded = self.agent._execute(key, op, data)
+            self.assertEqual(ok, want, note)
+
+    def test_a_keeper_launch_that_fails_is_reported_to_the_hub(self):
+        self.no_keeper = "no such adapter"
+        told: queue.Queue = queue.Queue()
+        report = self.agent._launch_failed
+
+        def reported(launch_id, note):
+            report(launch_id, note)
+            told.put(launch_id)
+
+        self.agent._launch_failed = reported
+        ok, note, _degraded = self.agent._execute("", "launch", {
+            "harness": "claude", "cwd": str(self.work), "prompt": "hello",
+            "launch_id": "l9"})
+        self.assertEqual((ok, note), (True, "starting"))
+        self.assertEqual(told.get(timeout=WAIT), "l9")
+        for thread in threading.enumerate():
+            if thread.name == "remote-launch-l9":
+                thread.join(WAIT)  # it closes the session it never got
+        # On the uplink, in the shape a failed tmux launch reports.
+        failed = [e["data"] for e in self.agent.outbox
+                  if e["type"] == "command.result"
+                  and e["data"].get("launch_id") == "l9"]
+        self.assertEqual([(d["ok"], d["op"]) for d in failed],
+                         [(False, "launch")])
+        self.assertIn("no such adapter", failed[0]["note"])
+        self.assertEqual(self.agent._hub_launches, set())
+        # A folder that is not there never reaches the runtime.
+        ok, note, _degraded = self.agent._execute("", "launch", {
+            "harness": "claude", "cwd": str(self.work / "nope"),
+            "prompt": "hello", "launch_id": "l10"})
+        self.assertEqual((ok, note), (
+            False, f"no such folder on this machine: {self.work / 'nope'}"))
+
+    def test_a_replayed_launch_starts_nothing_twice(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        ok, note, _degraded = self.agent._execute("", "launch", {
+            "harness": "claude", "cwd": str(self.work), "prompt": "hello",
+            "launch_id": "l1"})
+        self.assertEqual((ok, note), (True, "starting"))
+        self.assertEqual([r["key"] for r in self.agent.runtime.rows()],
+                         [key])
+        self.assertEqual(len(self.keepers), 1)
+
+    def test_a_command_is_done_only_once_the_hub_knows_the_answer(self):
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        self.online()
+        self.post(hub_key, "message", {"text": "again", "client_id": "m1"})
+        frame = self.stream()[-1]
+        # The hub goes away as the agent is stopping: the route ran,
+        # the answer could not be reported.
+        base, self.agent.hub = self.agent.hub, "http://127.0.0.1:9"
+        self.agent._stop.set()
+        self.agent._run_kept(frame["seq"], frame["data"],
+                             self.agent._cmd_epoch)
+        self.sat.result("m1")
+        self.assertTrue(self.done.empty())
+        self.assertEqual(self.agent._done_cmd_seq, 0)
+        self.assertEqual(self.store().get_command("m1").status, "queued")
+        # Run again after the restart: the same answer, sent once.
+        self.agent.hub = base
+        self.agent._stop.clear()
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "again"])
+        self.assertEqual(self.store().get_command("m1").status, "accepted")
+
+    def test_an_event_too_big_for_one_upload_is_cut_and_keeps_its_seq(self):
+        key = self.start([fake.say("x" * 40000)])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        with patch.object(agent_mod, "EVENTS_BODY_MAX", 16384):
+            self.push()
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        copied = self.journal(hub_key)
+        self.assertEqual([e["seq"] for e in copied],
+                         [e["seq"] for e in local])
+        big = [e for e in copied if e["type"] == "message.completed"
+               and e["data"]["kind"] == "assistant"][0]
+        self.assertLess(len(big["data"]["text"]), 40000)
+        self.assertTrue(big["data"]["text"].endswith("(truncated)"))
+
+    def test_an_event_the_hub_will_not_take_is_skipped_for_good(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        events = self.agent.local.journal.read_since(key, 0)[0]
+        head = events[-1]["seq"]
+        bad = [dict(events[1], type="no.such.event"),
+               dict(events[2], data="not an object"),
+               {"v": 1, "type": "message.appended", "seq": 4,
+                "data": {"kind": "html", "text": "<b>"}},
+               {"v": 1, "type": "message.delta", "seq": 5, "data": {}},
+               "not an event", {"type": "notify", "seq": "6"}]
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": head, "events": [events[0], *bad]}]})
+        # The ack moves past them: they are not asked for again.
+        self.assertEqual(out["acked"], {key: 5})
+        self.assertEqual(self.seqs(hub_key), [1])
+        # A body that is not the route's is refused whole.
+        for body in ({"sessions": "x"}, {"results": {}}):
+            status, out = self.kept(body)
+            self.assertEqual((status, out["error"]["code"]),
+                             (422, "bad_command"))
+        status, out = self.call_as(self.cred, "POST", "/v1/agent/kept",
+                                   {"sessions": []})
+        self.assertEqual(status, 422)
+        # Another machine's credential cannot speak for this one, and a
+        # phone's cannot use the route at all.
+        other = self.srv.pair(role="satellite")["credential"]
+        self.call_as(other, "POST", "/v1/agent/register",
+                     {"machine": {"id": "other"}})
+        status, out = self.call_as(other, "POST", "/v1/agent/kept", {
+            "machine_id": self.mid, "sessions": []})
+        self.assertEqual(status, 403)
+        status, out = self.srv.request(
+            "POST", "/v1/agent/kept", {"machine_id": self.mid},
+            headers=self.auth())
+        self.assertEqual(status, 403)
+
+
+class TestSatelliteRelease(SatelliteCase):
+    """Letting a session go: the release reaches the hub before the
+    tailer's events, and taking it twice changes nothing."""
+
+    def released(self) -> tuple[str, str, list[int]]:
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        self.assertTrue(self.agent._push_events())
+        self.agent.runtime.close(key)
+        kept = [e["seq"] for e in
+                self.agent.local.journal.read_since(key, 0)[0]
+                if e.get("v") == 2]
+        return key, hub_key, kept
+
+    def test_the_outbox_waits_for_the_release(self):
+        key, hub_key, kept = self.released()
+        # The tailer has the session back and reads something.
+        self.agent._capture(key, protocol.event(
+            "message.appended", key, self.mid,
+            {"kind": "assistant", "text": "from the terminal"}))
+        # The command stream came back meanwhile: the first upload can
+        # only ask how far the hub's copy reaches.
+        self.agent._hub_back()
+        self.assertFalse(self.agent._push_kept())
+        self.assertTrue(agent_mod.mirrored(self.srv.state, hub_key))
+        # So the uplink loop sends nothing else yet. Once the release
+        # is taken, it does, and the hub numbers the event.
+        self.push()
+        self.assertTrue(self.agent._push_kept())
+        self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+        self.assertTrue(self.agent._push_events())
+        last = self.journal(hub_key)[-1]
+        self.assertEqual((last["data"]["text"], last["seq"]),
+                         ("from the terminal", kept[-1] + 1))
+
+    def test_a_release_that_waited_too_long_stops_holding_the_outbox(self):
+        key, hub_key, kept = self.released()
+        with patch.object(agent_mod.SatelliteKeepers, "take",
+                          return_value=(None, False)):
+            self.assertFalse(self.agent._push_kept())
+            with self.agent._kept_lock:
+                self.agent._kept[key]["since"] -= \
+                    agent_mod.KEPT_RELEASE_WAIT_S + 1
+            self.assertTrue(self.agent._push_kept())
+        # It is still asked for, and taken when the hub can.
+        self.push()
+        self.assertEqual(self.agent._kept, {})
+
+    def test_a_release_sent_twice_drops_nothing(self):
+        key, hub_key, kept = self.released()
+        entry = {"key": key, "head": kept[-1], "released": True,
+                 "events": []}
+        self.push()
+        self.assertEqual(self.seqs(hub_key), kept)
+        # The hub numbers the journal itself now.
+        self.srv.state.emit(hub_key, protocol.event(
+            "message.appended", hub_key, self.mid,
+            {"kind": "assistant", "text": "from the terminal"}))
+        before = self.journal(hub_key)
+        self.assertEqual(before[-1]["seq"], kept[-1] + 1)
+        frames = Stream(self, self.srv.state, hub_key)
+        # The answer was lost: the agent says it again, with events
+        # the hub already has, and once more after a restart, as a
+        # question.
+        events = self.agent.local.journal.read_since(key, kept[-3])[0]
+        for again in (dict(entry, events=events[:2]),
+                      {"key": key, "head": kept[-1], "released": True,
+                       "row": {"harness": "claude"}}):
+            status, out = self.kept({"sessions": [again]})
+            self.assertEqual(out["released"], [key])
+            self.assertEqual(self.journal(hub_key), before)
+        self.assertTrue(frames.q.empty())
+        self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+        # And an agent that never heard the answer ends the same way.
+        with self.agent._kept_lock:
+            self.agent._kept[key] = {"acked": None, "released": True,
+                                     "since": time.monotonic()}
+        self.push()
+        self.assertEqual(self.agent._kept, {})
+        self.assertEqual(self.journal(hub_key), before)
+
+    def test_a_copy_survives_a_hub_restart_after_its_keeper_closed(self):
+        key, hub_key, kept = self.released()
+        # The keeper's last events are up (``closed`` among them); the
+        # release is not.
+        events = self.agent.local.journal.read_since(
+            key, self.seqs(hub_key)[-1])[0]
+        events = [e for e in events if e.get("v") == 2]
+        self.assertIn("closed", [e["data"].get("state") for e in events
+                                 if e["type"] == "session.state"])
+        self.kept({"sessions": [
+            {"key": key, "head": kept[-1], "events": events}]})
+        self.assertEqual(self.seqs(hub_key), kept)
+        self.assertNotEqual(self.store().get_session(hub_key).state,
+                            "closed")
+        # A hub started now still knows it copies that journal.
+        self.assertIn(hub_key, agent_mod.SatelliteKeepers(
+            self.srv.state)._mirrors)
+
+    def test_a_session_continued_again_is_copied_again(self):
+        key, hub_key, kept = self.released()
+        self.push()
+        self.assertEqual(self.store().get_session(hub_key).last_seq,
+                         kept[-1])
+        # A later copy of the same session ends past the first: it is
+        # not mistaken for the release the hub already took.
+        side = agent_mod.satellite_keepers(self.srv.state)
+        self.assertFalse(side._released_before(
+            self.store(), hub_key, kept[-1] + 5))
+        self.assertTrue(side._released_before(
+            self.store(), hub_key, kept[-1]))
+
+
+class TestSatelliteGuards(SatelliteCase):
+    def running(self) -> tuple[str, str]:
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        return key, hub_key
+
+    def test_a_satellites_events_cannot_touch_anothers_commands(self):
+        key, hub_key = self.running()
+        store = self.store()
+        # Held for another machine, and one of this machine's own for
+        # another session.
+        store.record_command("x1", session="claude:zz@other", op="send",
+                             status="held", payload={"text": "theirs"},
+                             machine="other")
+        store.record_command("x2", session="claude:zz@" + self.mid,
+                             op="send", status="held",
+                             payload={"text": "elsewhere"}, machine=self.mid)
+        head = self.agent.local.journal.last_seq(key)
+        forged = []
+        for n, cid in enumerate(("x1", "x2"), start=1):
+            for event in (
+                    ev2.command_receipt(key, cid, "rejected",
+                                        reason="unknown_request"),
+                    ev2.command_result(key, cid, "send", True)):
+                forged.append(dict(event, seq=head + len(forged) + 1))
+        status, out = self.kept({"sessions": [
+            {"key": key, "head": head + 4, "events": forged}]})
+        self.assertEqual(out["acked"], {key: head + 4})
+        for cid in ("x1", "x2"):
+            cmd = store.get_command(cid)
+            self.assertEqual((cmd.status, cmd.result), ("held", None))
+
+    def test_a_command_read_too_late_is_refused(self):
+        key, hub_key = self.running()
+        self.online()
+        frames = Stream(self, self.srv.state, hub_key)
+        for route, body, cid, age, ran in (
+                ("control", {"op": "interrupt"}, "s1",
+                 agent_mod.KEPT_FRESH_S + 1, False),
+                ("message", {"text": "a day late"}, "s2",
+                 agent_mod.KEPT_HOLD_S + 1, False),
+                ("message", {"text": "an hour late"}, "s3", 3600.0, True)):
+            status, out = self.post(hub_key, route,
+                                    {**body, "command_id": cid})
+            self.assertEqual(status, 202, out)
+            frame = self.stream()[-1]
+            # Read by a machine that was asleep when it was sent.
+            self.agent._run_kept(
+                frame["seq"], frame["data"], self.agent._cmd_epoch,
+                time.time() - age)
+            self.done.get(timeout=WAIT)
+            stored = self.store().get_command(cid)
+            if ran:
+                self.sat.result(cid)
+                self.assertNotEqual(stored.status, "rejected")
+                continue
+            self.assertEqual((stored.status, stored.result["ok"]),
+                             ("rejected", False))
+            self.assertIn("too late", stored.reason)
+            told = frames.frame("command.result", client_id=cid)
+            self.assertFalse(told["data"]["ok"])
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "an hour late"])
+        self.assertEqual(self.calls("interrupt"), [])
+        # A command that already ran is never "too late": its replay,
+        # read after the deadline, answers what it did.
+        frame = self.stream()[-1]
+        self.agent._run_kept(frame["seq"], frame["data"],
+                             self.agent._cmd_epoch,
+                             time.time() - agent_mod.KEPT_HOLD_S - 1)
+        self.done.get(timeout=WAIT)
+        self.assertNotEqual(self.store().get_command("s3").status,
+                            "rejected")
+        self.assertEqual(self.sends(), ["hello", "an hour late"])
+        self.assertIsNone(self.agent._kept_refusal(
+            key, "message", {"text": "an hour late"}, "s3", 0.0))
+
+    def test_a_replay_after_the_session_was_let_go_types_nothing(self):
+        key, hub_key = self.running()
+        self.online()
+        self.post(hub_key, "message", {"text": "again", "client_id": "m1"})
+        message = self.stream()[-1]
+        self.deliver()
+        self.finished()
+        self.sat.result("m1")
+        self.post(hub_key, "control", {"op": "detach", "command_id": "d1"})
+        detach = self.stream()[-1]
+        self.deliver()
+        self.finished()
+        self.assertFalse(self.agent.runtime.owns(key))
+        # Both are replayed (the agent restarted before it had marked
+        # them done), with the session a terminal session again. The
+        # old path would type the message into a pane and kill it.
+        answers = []
+        report = self.agent._report_kept
+
+        def reported(command_id, via, status, body):
+            answers.append((command_id, status, body.get("receipt"),
+                            body.get("note")))
+            return report(command_id, via, status, body)
+
+        self.agent._report_kept = reported
+        with patch.object(inject, "injector_for",
+                          side_effect=AssertionError("typed into a pane")), \
+             patch.object(supervise, "attach",
+                          side_effect=AssertionError("attached")):
+            for frame in (message, detach):
+                self.agent._run_kept(frame["seq"], frame["data"],
+                                     self.agent._cmd_epoch)
+            # A command that never ran here is refused outright.
+            status, reply = self.agent._kept_refusal(
+                key, "message", {"text": "new"}, "m9", None)
+        self.assertEqual(answers, [("m1", 200, "accepted", None),
+                                   ("d1", 200, None, "already detached")])
+        self.assertEqual((status, reply["error"]["code"]),
+                         (409, "not_kept"))
+        self.assertEqual(self.sends(), ["hello", "again"])
+
+    def test_an_event_that_cannot_be_cut_to_fit_is_skipped(self):
+        key = self.start([fake.say("x" * 40000)])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        with patch.object(agent_mod, "EVENTS_BODY_MAX", 16384), \
+             patch.object(agent_mod, "_clip_event", return_value=None):
+            self.push()
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        big = [e["seq"] for e in local if e["type"] == "message.completed"
+               and e["data"]["kind"] == "assistant"]
+        # Everything but that one event is copied, under its own seq.
+        self.assertEqual(self.seqs(hub_key),
+                         [e["seq"] for e in local if e["seq"] not in big])
+
+    def test_a_later_sessions_big_event_waits_for_a_body_of_its_own(self):
+        first = self.start([fake.say("a" * 9000)])
+        self.sat.event("turn.ended")
+        self.settle(first)
+        second = self.start([fake.say("b" * 9000)], launch_id="l2")
+        self.sat.event("turn.ended")
+        self.settle(second)
+        self.assertTrue(self.agent._push_catalog())
+        with patch.object(agent_mod, "EVENTS_BODY_MAX", 16384):
+            self.push()
+        # Neither was cut: each went up whole in an upload it fit.
+        for key, letter in ((first, "a"), (second, "b")):
+            copied = self.journal(protocol.remote_key(self.mid, key))
+            local = self.agent.local.journal.read_since(key, 0)[0]
+            self.assertEqual([dict(e, session=key) for e in copied], local)
+            self.assertIn(letter * 9000, [
+                e["data"].get("text") for e in copied
+                if e["type"] == "message.completed"])
+
+    def test_a_hello_set_during_an_upload_is_not_lost(self):
+        self.agent._hub_back()
+        with patch.object(agent_mod, "_post", return_value=(0, {})):
+            self.assertFalse(self.agent._push_kept())
+        self.assertTrue(self.agent._kept_hello)
+        with patch.object(agent_mod, "_post", return_value=(404, {})):
+            self.assertTrue(self.agent._push_kept())
+        # An older hub: asked again later, and the hello still owed.
+        self.assertTrue(self.agent._kept_hello)
+        self.assertTrue(self.agent._push_kept())
+        self.assertTrue(self.agent._kept_hello)
+        self.agent._kept_off_until = 0.0
+        self.assertTrue(self.agent._push_kept())
+        self.assertFalse(self.agent._kept_hello)
+
+
+class TestSatelliteContinue(SatelliteCase):
+    SID = "0f4d7a52-3a44-4c3e-9d6b-2f8a5f6f0015"
+
+    def test_a_terminal_session_is_continued_under_a_keeper(self):
+        key = f"claude:{self.SID}"
+        hub_key = protocol.remote_key(self.mid, key)
+        session = _hub_session(sid=self.SID, path=str(self.work), ts=100)
+        self.agent.catalog._fetch = lambda: [session]
+        self.enterContext(patch.object(
+            hub.supervise, "_local_writer_pids", return_value=[]))
+        self.assertTrue(self.agent._push_catalog())
+        # Its history, as the satellite's tailer read it: journaled on
+        # the satellite, and uploaded the ordinary way.
+        for n in range(3):
+            self.agent._capture(key, protocol.event(
+                "message.appended", key, self.mid,
+                protocol.message("assistant", f"old {n}")))
+        self.assertTrue(self.agent._push_events())
+        self.assertEqual(self.agent.local.journal.last_seq(key), 3)
+        mine = self.seqs(hub_key)
+        self.assertGreaterEqual(len(mine), 3)
+
+        self.plans.append({"turns": [[fake.say("continued")]]})
+        ok, note, _degraded = self.agent._execute(
+            key, "attach", {"mode": "auto", "status": "done"})
+        self.assertEqual((ok, note), (True, "continued in SWE"))
+        # Resumed by its own id; the keeper's log starts where the
+        # satellite's journal stood.
+        spec = self.specs[0]
+        self.assertEqual((spec["resume_id"], spec["first_seq"]),
+                         (self.SID, 4))
+        self.assertTrue(self.agent.runtime.owns(key))
+        self.assertNotIn(key, self.agent.tail_manager.tailers)
+        # Attached again: the route says so and starts nothing.
+        ok, note, _degraded = self.agent._execute(
+            key, "attach", {"mode": "auto"})
+        self.assertEqual((ok, len(self.keepers)), (True, 1))
+
+        frames = Stream(self, self.srv.state, hub_key)
+        self.listed(key)
+        self.push()
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "go on", "client_id": "m1"})
+        self.assertEqual(out["receipt"], "queued")
+        self.deliver()
+        self.finished()
+        self.sat.event("turn.ended")
+        self.settle(key)
+        self.push()
+        # The hub's own numbering of that journal gave way to the
+        # satellite's: the earlier history, then the keeper's events.
+        frames.frame("journal.truncated")
+        # The history came up once already, when the tailer read it:
+        # it is copied, not announced again (its notifications and
+        # approvals would be raised a second time).
+        while not frames.q.empty():
+            frames.seen.append(frames.q.get())
+        said = [f["data"].get("text") for f in frames.seen
+                if f.get("type") == "message.appended"]
+        self.assertEqual(said, ["go on", "continued"])
+        local = self.agent.local.journal.read_since(key, 0)[0]
+        copied = self.journal(hub_key)
+        self.assertEqual([e["seq"] for e in copied],
+                         list(range(1, len(local) + 1)))
+        self.assertEqual([e.get("v") for e in copied[:4]], [1, 1, 1, 2])
+        self.assertEqual(
+            [dict(e, session=key) for e in copied],
+            [dict(e, machine=self.mid) if e.get("v") == 1 else e
+             for e in local])
+        status, page = self.call(
+            "GET", f"/v1/sessions/{quote(hub_key, safe='')}/messages")
+        self.assertEqual([m["data"]["text"] for m in page["messages"]],
+                         ["old 0", "old 1", "old 2", "go on", "continued"])
+
+    def test_an_explicit_mode_keeps_the_old_attach(self):
+        key = f"claude:{self.SID}"
+        session = _hub_session(sid=self.SID, path=str(self.work), ts=100)
+        self.agent.catalog._fetch = lambda: [session]
+        self.agent.catalog.refresh()
+        with patch.object(supervise, "attach",
+                          return_value=(True, "attached")) as attach:
+            ok, note, _degraded = self.agent._execute(
+                key, "attach", {"mode": "tmux"})
+        self.assertEqual((ok, note), (True, "attached"))
+        self.assertEqual(attach.call_args.kwargs["mode"], "tmux")
+        self.assertFalse(self.agent.runtime.owns(key))
+
+
+class TestSatelliteRestart(SatelliteCase):
+    def test_a_restart_mid_turn_leaves_no_gap_and_no_duplicate(self):
+        self.plans.append({"autoplay": False, "turns": [
+            [fake.say("looking"), fake.ask("delete a?", options=OPTIONS),
+             fake.say("deleted")],
+            [fake.say("and the next")]]})
+        key = self.launch_here()
+        adapter = self.adapters[0]
+        self.assertTrue(adapter.step())
+        self.sat.event("message.completed", text="looking")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        acked = self.seqs(hub_key)
+        self.assertEqual(acked[-1], self.agent.local.journal.last_seq(key))
+
+        self.crash()
+        self.offline()
+        # No agent: the keeper works on, and a message for the machine
+        # is held.
+        self.assertTrue(adapter.step())
+        self.assertEqual(self.keepers[0].status()["pending"], ["r1"])
+        status, out = self.post(hub_key, "message",
+                                {"text": "while away", "client_id": "h1"})
+        self.assertEqual(out["receipt"], "held")
+        self.assertEqual(self.seqs(hub_key), acked)
+
+        self.sat = Feed(self)
+        self.agent = agent = self.satellite()
+        # It reconnected to the keeper it could not take the lock of
+        # and took in what it missed, after its journal's last seq.
+        self.assertEqual(len(self.keepers), 1)
+        self.assertTrue(agent.runtime.session(key).connected)
+        self.settle(key)
+        self.assertGreater(agent.local.journal.last_seq(key), acked[-1])
+        # It does not trust a cursor of its own: the hub says how far
+        # its copy reaches, and the upload starts right after it.
+        self.assertIsNone(agent._kept[key]["acked"])
+        self.back()
+        self.assertEqual(agent._kept[key]["acked"], acked[-1])
+        self.push()
+        self.assertEqual(self.srv.state.pending_approvals, {hub_key: "r1"})
+        # The held message came with the reconnect, once.
+        self.assertEqual([f["data"]["id"] for f in self.stream()], ["h1"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        status, out = self.post(hub_key, "approval", {
+            "request_id": "r1", "decision": "allow", "client_id": "ok"})
+        self.assertEqual(out["receipt"], "queued")
+        self.deliver()
+        self.finished()
+        adapter.play()
+        self.sat.event("turn.ended", status="completed")
+        self.sat.result("h1")
+        adapter.play()
+        self.sat.event("turn.ended", status="completed")
+        self.settle(key)
+        self.push()
+        # No gap, nothing twice: both journals are the keeper's log.
+        log = read_log(key, home=self.sat_home).events
+        self.assertEqual([e["seq"] for e in log],
+                         list(range(1, len(log) + 1)))
+        self.assertEqual(agent.local.journal.read_since(key, 0)[0], log)
+        self.assertEqual([dict(e, session=key)
+                          for e in self.journal(hub_key)], log)
+        self.assertEqual(self.sends(), ["hello", "while away"])
+        self.assertEqual(self.store().get_command("h1").result["ok"], True)
+
+    def test_an_open_approval_is_back_in_the_inbox_after_a_hub_restart(self):
+        # The inbox drops a request asked more than a day ago by the
+        # wall clock, so the keeper's clock starts at the present.
+        self.clock.t = time.time()
+        key = self.start([fake.ask("run ls?", options=OPTIONS),
+                          fake.say("done")])
+        rid = self.sat.event("approval.requested")["data"]["request_id"]
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        self.assertEqual(self.srv.state.pending_approvals, {hub_key: rid})
+
+        self.kill_hub(self.srv)
+        self.feed = Feed(self)
+        self.srv = srv = self.hub()
+        self.agent.hub = f"http://127.0.0.1:{srv.port}"
+        # The new hub copies the same journal, and knows nothing of
+        # the request: it was announced by the hub before it.
+        self.assertTrue(agent_mod.mirrored(srv.state, hub_key))
+        self.assertEqual(srv.state.pending_approvals, {})
+        told = Stream(self, srv.state, hub.GLOBAL_KEY)
+        self.back()
+        self.push()
+        self.assertEqual(srv.state.pending_approvals, {hub_key: rid})
+        status, inbox = self.call("GET", "/v1/inbox")
+        self.assertIn(hub_key, [item.get("key") for item in inbox["items"]])
+        # A v2 stream's state lists it, and nothing was said twice.
+        state = srv.state.sync.state_frame(hub_key, 0, [])
+        self.assertEqual(state["data"]["pending"], [rid])
+        said = []
+        while not told.q.empty():
+            said.append(told.q.get()["type"])
+        self.assertEqual(said, ["machine.online"])
+        # It can still be answered through the new hub.
+        status, out = self.post(hub_key, "approval", {
+            "request_id": rid, "decision": "allow", "client_id": "a1"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.deliver()
+        self.finished()
+        self.sat.event("turn.ended", status="completed")
+        self.settle(key)
+        self.push()
+        self.assertEqual(srv.state.pending_approvals, {})
+        # A malformed list restores nothing it should not.
+        self.kept({"sessions": [{"key": key, "head": 0, "pending": {
+            "": 1.0, "ok": "x", "r9": True, "x" * 201: 1.0}}]})
+        self.assertEqual(srv.state.pending_approvals, {})
+
+    def test_a_release_cut_off_by_a_restart_still_reaches_the_hub(self):
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        self.agent.runtime.close(key)
+        # The agent notes the release, and dies before it uploads it.
+        self.agent._sync_kept()
+        self.crash()
+        self.agent = agent = self.satellite()
+        self.assertEqual(
+            {k: v["released"] for k, v in agent._kept.items()}, {key: True})
+        self.back()
+        self.push()
+        self.assertEqual(agent._kept, {})
+        self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+
+
+class _WatchedLock:
+    """A lock that says when a second taker is waiting for it."""
+
+    def __init__(self) -> None:
+        self.inner = threading.Lock()
+        self.waiting = threading.Event()
+
+    def __enter__(self) -> None:
+        if not self.inner.acquire(blocking=False):
+            self.waiting.set()
+            self.inner.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.inner.release()
+
+
+class TestSatelliteClaimedNotSent(SatelliteCase):
+    """A command the hub claimed (``held`` to ``queued``) and never put
+    on the machine's stream is put there once, in its place, the next
+    time that machine's commands are flushed."""
+
+    running = TestSatelliteCommands.running
+
+    def hold(self, hub_key: str, *ids: str) -> None:
+        for cid in ids:
+            status, out = self.post(hub_key, "message",
+                                    {"text": f"say {cid}", "client_id": cid})
+            self.assertEqual((status, out["receipt"]), (202, "held"), cid)
+
+    def dies_before_the_stream(self) -> None:
+        """From here this hub claims a command and never puts it on a
+        stream: what a hub that stops between the two leaves behind."""
+        def dead(*args, **kwargs):
+            raise RuntimeError("the hub stopped here")
+
+        self.srv.state.queue_command = dead
+
+    def restart_hub(self) -> None:
+        """End the hub the way a crash does and start another over the
+        same home."""
+        self.kill_hub(self.srv)
+        self.feed = Feed(self)
+        self.srv = self.hub()
+        self.store()._clock = self.clock
+        self.agent.hub = f"http://127.0.0.1:{self.srv.port}"
+
+    def side(self):
+        return agent_mod.satellite_keepers(self.srv.state)
+
+    def on_stream(self) -> list[str]:
+        return [f["data"]["id"] for f in self.stream()
+                if f["data"].get("op") == "kept"]
+
+    def claimed_and_lost(self, hub_key: str, *ids: str) -> None:
+        """Hold ``ids``, then have the hub claim the first and stop."""
+        self.hold(hub_key, *ids)
+        self.dies_before_the_stream()
+        with patch.object(agent_mod.logger, "exception") as self.logged:
+            self.back()
+        self.assertEqual(
+            [self.store().get_command(cid).status for cid in ids],
+            ["queued"] + ["held"] * (len(ids) - 1))
+        self.assertEqual(self.on_stream(), [])
+
+    def test_a_message_claimed_by_a_hub_that_died_is_delivered_once(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.claimed_and_lost(hub_key, "h1")
+        self.restart_hub()
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1"])
+        self.assertEqual(self.store().get_command("h1").status, "queued")
+        # Saying "back" again, the timer, or another restart puts
+        # nothing there twice.
+        self.back()
+        self.side().tick()
+        self.restart_hub()
+        self.back()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("h1")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "say h1"])
+        self.push()
+        self.feed.result("h1")
+        self.assertEqual(self.store().get_command("h1").result["ok"], True)
+
+    def test_a_hand_over_that_fails_is_made_again_without_a_restart(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        put = self.srv.state.queue_command
+        self.claimed_and_lost(hub_key, "h1", "h2")
+        self.assertIn(call("putting %s on %s's stream", "h1", self.mid),
+                      self.logged.mock_calls)
+        self.srv.state.queue_command = put
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+        self.side().tick()
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+
+    def test_a_command_sent_before_the_crash_is_not_sent_twice(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "again", "client_id": "m1"})
+        self.assertEqual(out["receipt"], "queued")
+        # One the satellite has read and one it has not: both are on
+        # the stream, so neither is put there again.
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("m1")
+        status, out = self.post(hub_key, "message",
+                                {"text": "and again", "client_id": "m2"})
+        self.assertEqual(self.on_stream(), ["m1", "m2"])
+        self.restart_hub()
+        self.assertEqual([c.command_id for c in self.store().unfinished(
+            machine=self.mid)], ["m1", "m2"])
+        self.back()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["m1", "m2"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("m2")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "again", "and again"])
+
+    def test_a_command_the_machine_ran_put_on_the_stream_again_runs_once(self):
+        # A stream journal that was deleted holds nothing, so what the
+        # machine already read is put on it again. The satellite's own
+        # store answers that, and the keeper is not asked twice.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.online()
+        self.post(hub_key, "message", {"text": "again", "client_id": "m1"})
+        # The satellite runs it, and the hub stops before it hears so:
+        # the command stays ``queued`` there.
+        report = self.agent._report_kept
+        self.agent._report_kept = lambda *args: False
+        self.assertEqual(self.deliver(), 1)
+        self.sat.result("m1")
+        self.settle(key)
+        self.agent._report_kept = report
+        self.restart_hub()
+        self.assertEqual(self.store().get_command("m1").status, "queued")
+        self.srv.state.journal.drop(hub.HubState.sat_journal_key(self.mid))
+        self.agent._done_cmd_seq = self.agent._last_cmd_seq = 0
+        self.back()
+        self.assertEqual(self.on_stream(), ["m1"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "again"])
+        self.assertEqual(self.store().get_command("m1").status, "accepted")
+
+    def test_order_is_kept_among_claimed_and_still_held_commands(self):
+        key, hub_key = self.running(
+            [fake.say("1")], [fake.say("2")], [fake.say("3")],
+            [fake.say("4")], [fake.say("5")])
+        self.claimed_and_lost(hub_key, "h1", "h2", "h3")
+        self.restart_hub()
+        # One sent to the new hub goes behind all three.
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "say h4", "client_id": "h4"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.assertEqual(self.on_stream(), ["h1", "h2", "h3", "h4"])
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1", "h2", "h3", "h4"])
+        self.assertEqual(self.deliver(), 4)
+        self.finished(4)
+        self.sat.result("h4")
+        self.settle(key)
+        self.assertEqual(self.sends(), [
+            "hello", "say h1", "say h2", "say h3", "say h4"])
+
+    def test_an_expired_hold_is_never_delivered_after_a_restart(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.claimed_and_lost(hub_key, "h1", "h2")
+        self.clock.advance(24 * 3600.0)
+        self.restart_hub()
+        frames = Stream(self, self.srv.state, hub_key)
+        self.back()
+        self.side().tick()
+        # The one still held ran out, and so did the one claimed: its
+        # 24 hours count from when it arrived, not from the claim.
+        # (Holds are swept before the stream is checked.)
+        for cid in ("h2", "h1"):
+            gone = self.store().get_command(cid)
+            self.assertEqual((gone.status, gone.result["ok"]),
+                             ("rejected", False), cid)
+            told = frames.frame("command.result", client_id=cid)
+            self.assertEqual((told["data"]["ok"], told["data"]["op"]),
+                             (False, "message"))
+            self.assertNotIn("seq", told)
+        self.assertIn("expired", self.store().get_command("h1").reason)
+        self.assertEqual(self.on_stream(), [])
+        self.assertEqual(self.deliver(), 0)
+        self.assertEqual(self.sends(), ["hello"])
+
+    def test_a_claimed_message_a_second_short_of_its_day_is_delivered(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.claimed_and_lost(hub_key, "h1")
+        self.clock.advance(24 * 3600.0 - 1)
+        self.restart_hub()
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1"])
+
+    def test_a_command_with_a_result_is_never_touched(self):
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        text = {"text": "done already", "mode": "queue", "attachments": []}
+        # Not on the stream, and finished: one with its result, one
+        # refused, one accepted by the machine and since answered.
+        store.record_command("r1", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        store.set_result("r1", {"ok": True})
+        store.record_command("r2", session=hub_key, op="send",
+                             status="rejected", payload=text,
+                             machine=self.mid, reason="no")
+        store.record_command("r3", session=hub_key, op="send",
+                             status="accepted", payload=text,
+                             machine=self.mid)
+        store.set_result("r3", {"ok": False, "note": "it failed"})
+        # Accepted with no result yet: the machine has it.
+        store.record_command("r4", session=hub_key, op="send",
+                             status="accepted", payload=text,
+                             machine=self.mid)
+        # And one that is owed, so the machine's stream is checked.
+        store.record_command("r5", session=hub_key, op="send",
+                             status="queued", payload=text,
+                             machine=self.mid)
+        before = [store.get_command(cid) for cid in ("r1", "r2", "r3", "r4")]
+        self.restart_hub()
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        self.back()
+        self.side().tick()
+        store = self.store()
+        self.assertEqual(
+            [store.get_command(cid) for cid in ("r1", "r2", "r3", "r4")],
+            before)
+        self.assertEqual(self.on_stream(), ["r5"])
+        self.assertEqual(self.side()._unchecked, set())
+
+    def test_a_claimed_stop_is_not_delivered_late(self):
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        # What a hub that stopped mid-request leaves for a control: it
+        # is never held, so it was claimed while the machine was up.
+        for cid in ("s1", "s2"):
+            store.record_command(cid, session=hub_key, op="control",
+                                 status="queued", payload={"op": "interrupt"},
+                                 machine=self.mid)
+            self.clock.advance(agent_mod.KEPT_FRESH_S / 2 + 1)
+        self.restart_hub()
+        frames = Stream(self, self.srv.state, hub_key)
+        self.back()
+        late = self.store().get_command("s1")
+        self.assertEqual((late.status, late.result["ok"]),
+                         ("rejected", False))
+        told = frames.frame("command.result", client_id="s1")
+        self.assertEqual(told["data"]["ok"], False)
+        # One still inside the ten minutes a satellite allows a Stop
+        # goes out.
+        self.assertEqual(self.on_stream(), ["s2"])
+        self.assertEqual(self.stream()[-1]["data"]["route"], "control")
+
+    def test_a_held_stop_is_not_delivered_late_either(self):
+        # A control is stored ``held`` for the moment before its
+        # claim. One a hub left that way must not go out with the
+        # machine's next flush hours later, as a held message would.
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        for cid in ("s1", "s2"):
+            store.record_command(cid, session=hub_key, op="control",
+                                 status="held", payload={"op": "interrupt"},
+                                 machine=self.mid, reason="machine asleep")
+            self.clock.advance(agent_mod.KEPT_FRESH_S / 2 + 1)
+        frames = Stream(self, self.srv.state, hub_key)
+        self.back()
+        late = self.store().get_command("s1")
+        self.assertEqual((late.status, late.result["ok"]),
+                         ("rejected", False))
+        self.assertEqual(
+            frames.frame("command.result", client_id="s1")["data"]["ok"],
+            False)
+        self.assertEqual(self.on_stream(), ["s2"])
+
+    def test_a_stream_write_that_fails_quietly_is_made_again(self):
+        # ``Journal.append`` reports no failed write: it returns the
+        # event either way. The stream is read back after each put.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.hold(hub_key, "h1", "h2")
+        state = self.srv.state
+        path = state.journal._file(hub.HubState.sat_journal_key(self.mid))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()  # nothing can be appended to it, or read from it
+        with self.assertLogs(agent_mod.logger, "ERROR") as logs:
+            self.back()
+        self.assertIn(f"h1 was not written to {self.mid}'s stream",
+                      logs.output[0])
+        # The flush ended there: the second is still held, behind it.
+        self.assertEqual(
+            [self.store().get_command(c).status for c in ("h1", "h2")],
+            ["queued", "held"])
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        path.rmdir()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+        self.assertEqual(self.side()._unchecked, set())
+        self.assertEqual(self.deliver(), 2)
+        self.finished(2)
+        self.sat.result("h2")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "say h1", "say h2"])
+
+    def test_a_failed_write_then_another_entry_still_leaves_it_owed(self):
+        # A write that fails still takes a seq, so the journal's first
+        # entry can be seq 2, stamped after the claim: the look of a
+        # ring that dropped its beginning. The command whose hand-over
+        # failed here is owed all the same.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.hold(hub_key, "h1")
+        state = self.srv.state
+        path = state.journal._file(hub.HubState.sat_journal_key(self.mid))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()
+        with self.assertLogs(agent_mod.logger, "ERROR"):
+            self.back()
+        path.rmdir()
+        state.queue_command(self.mid, "tail", "", {})
+        first = self.stream()[0]
+        self.assertEqual(first["seq"], 2)
+        self.assertGreater(first["ts"],
+                           self.store().get_command("h1").updated_at)
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1"])
+        self.assertEqual((self.side()._unchecked, self.side()._failed),
+                         (set(), {}))
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1"])
+
+    def test_a_refusal_the_store_would_not_record_is_made_again(self):
+        # The machine is too far behind, and the store is busy when
+        # the hub goes to say so: the command is still owed an answer,
+        # and nothing behind it goes first.
+        key, hub_key = self.running(
+            [fake.say("1")], [fake.say("2")], [fake.say("3")])
+        self.hold(hub_key, "h1", "h2")
+        state, store = self.srv.state, self.store()
+        put, move = state.queue_command, store.transition
+        state.queue_command = lambda *args, **kwargs: None
+
+        def busy(command_id, to, **kwargs):
+            if to == "rejected":
+                raise StoreError("database is locked")
+            return move(command_id, to, **kwargs)
+
+        store.transition = busy
+        with self.assertLogs(agent_mod.logger, "ERROR"):
+            self.back()
+        self.assertEqual(
+            [store.get_command(c).status for c in ("h1", "h2")],
+            ["queued", "held"])
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        # The backlog drained: it goes out, first.
+        state.queue_command, store.transition = put, move
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+
+    def test_a_rejection_the_store_refused_is_made_again(self):
+        key, hub_key = self.running([fake.say("one")])
+        self.claimed_and_lost(hub_key, "h1")
+        self.clock.advance(24 * 3600.0)
+        self.restart_hub()
+        store = self.store()
+        move = store.transition
+
+        def busy(*args, **kwargs):
+            raise StoreError("database is locked")
+
+        store.transition = busy
+        with self.assertLogs(agent_mod.logger, "ERROR"):
+            self.back()
+        self.assertEqual(store.get_command("h1").status, "queued")
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        store.transition = move
+        self.side().tick()
+        self.assertEqual(store.get_command("h1").status, "rejected")
+        self.assertEqual(self.on_stream(), [])
+
+    def cut_stream(self, keep_from: int) -> None:
+        """Drop the stream's entries before seq ``keep_from``, as the
+        ring does when it is full."""
+        path = self.srv.state.journal._file(
+            hub.HubState.sat_journal_key(self.mid))
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        path.write_text("".join(
+            line for line in lines if json.loads(line)["seq"] >= keep_from),
+            encoding="utf-8")
+
+    def test_a_ring_that_dropped_entries_does_not_vouch_for_older_claims(self):
+        # The stream's journal keeps its newest entries only. A command
+        # claimed before the oldest one left may have been on it, and
+        # read by the machine, long ago: it is neither sent again nor
+        # rejected on the word of a journal that cannot know.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        text = {"text": "long ago", "mode": "queue", "attachments": []}
+        store = self.store()
+        store.record_command("old", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        for _n in range(3):
+            self.srv.state.queue_command(self.mid, "tail", "", {})
+        self.cut_stream(2)
+        self.clock.advance(48 * 3600.0)
+        # One claimed after the oldest entry left is owed: the ring
+        # reaches back to its claim. (The store's clock is ahead of
+        # the wall clock the stream's entries are stamped by.)
+        self.clock.t = max(self.clock.t, time.time()) + 60
+        store.record_command("new", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        before = store.get_command("old")
+        self.restart_hub()
+        self.back()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["new"])
+        self.assertEqual(self.store().get_command("old"), before)
+
+    def test_another_machines_commands_are_left_alone(self):
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        text = {"text": "theirs", "mode": "queue", "attachments": []}
+        store.record_command("o1", session="claude:x@other", op="send",
+                             status="queued", payload=text, machine="other")
+        # The hub's own keeper sessions are checked against their
+        # keepers (G8), never put on a stream.
+        store.record_command("o2", session="claude:mine", op="send",
+                             status="queued", payload=text,
+                             machine=self.srv.state.machine_id)
+        # And one of this machine's, so its stream is checked.
+        store.record_command("o3", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        self.restart_hub()
+        state, side = self.srv.state, self.side()
+        self.assertEqual(side._unchecked, {"other", self.mid})
+        self.back()
+        side.tick()
+        # Nor does a flush of the hub's own machine put anything on a
+        # stream.
+        with side._machine_lock(state.machine_id):
+            side._flush(state.machine_id)
+        self.assertEqual(self.on_stream(), ["o3"])
+        for mid in ("other", state.machine_id):
+            self.assertEqual(state.journal.read_since(
+                hub.HubState.sat_journal_key(mid), 0)[0], [])
+        self.assertEqual(
+            [self.store().get_command(c).status for c in ("o1", "o2")],
+            ["queued", "queued"])
+        # The other machine is checked when it is back, not before.
+        self.assertEqual(side._unchecked, {"other"})
+
+    def test_two_flushes_at_once_do_not_interleave(self):
+        key, hub_key = self.running(
+            [fake.say("1")], [fake.say("2")], [fake.say("3")],
+            [fake.say("4")])
+        self.claimed_and_lost(hub_key, "h1", "h2", "h3")
+        self.restart_hub()
+        self.online()
+        side = self.side()
+        lock = side._machine_locks[self.mid] = _WatchedLock()
+        put = self.srv.state.queue_command
+        inside, release = threading.Event(), threading.Event()
+
+        def slow(*args, **kwargs):
+            inside.set()
+            release.wait(WAIT)  # held until the second flush is waiting
+            return put(*args, **kwargs)
+
+        self.srv.state.queue_command = slow
+        flushes = [threading.Thread(target=side.tick),
+                   threading.Thread(target=self.kept, args=({"hello": True},))]
+        try:
+            flushes[0].start()
+            self.assertTrue(inside.wait(WAIT))
+            flushes[1].start()
+            # The second waits for the machine's lock while the first
+            # is mid-flush, and nothing is on the stream yet.
+            self.assertTrue(lock.waiting.wait(WAIT))
+            self.assertEqual(self.on_stream(), [])
+        finally:
+            release.set()
+            for thread in flushes:
+                thread.join(WAIT)
+        self.assertEqual(self.on_stream(), ["h1", "h2", "h3"])
+
+
+class TestLocalApi(SatelliteCase):
+    """The loopback API: the hub's session routes for whoever holds
+    the token in local.json."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.port = self.agent.api.start(0)
+        self.token = agent_mod.load_local(self.sat_home)["token"]
+
+    def local(self, method: str, path: str, body=None, token=None,
+              host=None):
+        headers = {}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        if host is not None:
+            headers["Host"] = host
+        conn = http.client.HTTPConnection("127.0.0.1", self.port,
+                                          timeout=WAIT)
+        try:
+            conn.request(method, path,
+                         body=json.dumps(body) if body is not None else None,
+                         headers=headers)
+            resp = conn.getresponse()
+            data = resp.read()
+            self.seen.append((resp.status, dict(resp.getheaders()), data))
+            return resp.status, json.loads(data) if data else {}
+        finally:
+            conn.close()
+
+    seen: list = []
+
+    def test_a_good_token_a_bad_token_and_no_token(self):
+        self.seen = []
+        key = self.start([fake.say("one")])
+        self.sat.event("turn.ended")
+        status, out = self.local("GET", "/v1/sessions", token=self.token)
+        self.assertEqual(status, 200, out)
+        self.assertEqual([(r["key"], r["mode"]) for r in out["sessions"]],
+                         [(key, "keeper")])
+        for token in ("wrong", self.token[:-1], self.token + "0", "",
+                      self.cred):
+            status, out = self.local("GET", "/v1/sessions", token=token)
+            self.assertEqual((status, out["error"]["code"]),
+                             (401, "unauthorized"), token)
+        status, out = self.local("GET", "/v1/sessions")
+        self.assertEqual(status, 401)
+        status, out = self.local("POST", f"/v1/sessions/{key}/message",
+                                 {"text": "x"})
+        self.assertEqual(status, 401)
+        self.assertEqual(self.sends(), ["hello"])
+
+    def test_it_drives_a_session_with_the_hub_stopped(self):
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        self.end(self.srv)
+        status, out = self.local(
+            "POST", f"/v1/sessions/{key}/message",
+            {"text": "no network", "command_id": "m1"}, token=self.token)
+        self.assertEqual((status, out["receipt"]), (202, "accepted"))
+        self.sat.result("m1")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "no network"])
+        sent = self.calls("send_turn")[1].args[0]
+        self.assertEqual(sent.command_id, "m1")
+        stored = self.agent.runtime.store.get_command("m1")
+        self.assertEqual(stored.device, agent_mod.LOCAL_DEVICE)
+        status, out = self.local("GET", f"/v1/sessions/{key}/messages",
+                                 token=self.token)
+        self.assertEqual(status, 200, out)
+        self.assertIn("two", [m["data"]["text"] for m in out["messages"]])
+        # A launch too: the whole runtime is on this machine.
+        self.plans.append({"turns": [[fake.say("fresh")]]})
+        status, out = self.local("POST", "/v1/sessions", {
+            "harness": "claude", "cwd": str(self.work), "prompt": "new"},
+            token=self.token)
+        self.assertEqual(status, 202, out)
+        self.sat.event("message.completed", text="fresh")
+
+    def test_this_machine_is_listed_with_what_it_can_launch(self):
+        # A fresh satellite: nothing has saved a machine row here yet.
+        status, out = self.local("GET", "/v1/machines", token=self.token)
+        self.assertEqual(out["machines"], [])
+        # ``run`` saves it before it binds the API.
+        self.agent._stop.set()
+        self.agent._usage_loop = lambda: None
+        with patch.object(agent_mod, "_post", return_value=(0, {})):
+            self.agent.run()
+        self.agents.remove(self.agent)
+        self.agent.ended = True
+        self.agent = self.satellite()
+        self.port = self.agent.api.start(0)
+        for path in ("/v1/machines", "/v1/sessions"):
+            status, out = self.local("GET", path, token=self.token)
+            rows = out["machines"]
+            self.assertEqual([(m["id"], m["online"]) for m in rows],
+                             [(self.mid, True)], path)
+            self.assertIn("launchable", rows[0])
+        # A change in what it can launch is saved with the next push.
+        self.agent.machine["launchable"] = ["claude"]
+        with patch.object(self.agent, "_refresh_launchable",
+                          return_value=True):
+            self.agent._push_catalog()
+        status, out = self.local("GET", "/v1/machines", token=self.token)
+        self.assertEqual(out["machines"][0]["launchable"], ["claude"])
+
+    def test_only_the_session_routes_are_served(self):
+        for method, path in (
+                ("GET", "/v1/devices"), ("GET", "/v1/ssh"),
+                ("GET", "/v1/app/overview"), ("GET", "/v1/pair/requests"),
+                ("POST", "/v1/pair"), ("POST", "/v1/agent/register"),
+                ("POST", "/v1/agent/kept"), ("POST", "/v1/devices/revoke")):
+            status, out = self.local(method, path, {} if method == "POST"
+                                     else None, token=self.token)
+            self.assertEqual((status, out["error"]["code"]),
+                             (404, "not_found"), path)
+        for path in ("/v1/status", "/v1/machines", "/v1/inbox"):
+            status, out = self.local("GET", path, token=self.token)
+            self.assertEqual(status, 200, path)
+
+    def test_a_request_under_another_host_name_is_refused(self):
+        status, out = self.local("GET", "/v1/sessions", token=self.token,
+                                 host="evil.example:80")
+        self.assertEqual((status, out["error"]["code"]), (403, "bad_origin"))
+        status, out = self.local("GET", "/v1/sessions", token=self.token,
+                                 host=f"localhost:{self.port}")
+        self.assertEqual(status, 200)
+
+    def test_local_json_is_private_and_made_on_first_use(self):
+        home = temp_dir(self)
+        path = agent_mod.local_file_for(home)
+        self.assertFalse(path.exists())
+        self.assertIsNone(agent_mod.load_local(home))
+        token = agent_mod.local_token(home)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(len(token), 64)
+        # Kept for good: a second use reads the same one.
+        self.assertEqual(agent_mod.local_token(home), token)
+        # A file someone widened is tightened again.
+        os.chmod(path, 0o644)
+        self.assertEqual(agent_mod.local_token(home), token)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        # The satellite's own, written when the API was bound.
+        conf = agent_mod.load_local(self.sat_home)
+        mine = agent_mod.local_file_for(self.sat_home)
+        self.assertEqual(stat.S_IMODE(mine.stat().st_mode), 0o600)
+        self.assertEqual(
+            (conf["url"], conf["port"], conf["pid"], conf["token"]),
+            (f"http://127.0.0.1:{self.port}", self.port, os.getpid(),
+             self.token))
+
+    def test_the_token_is_in_no_log_line_and_no_response(self):
+        self.seen = []
+        records: list[str] = []
+
+        class Keep(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        handler = Keep(level=logging.DEBUG)
+        root = logging.getLogger()
+        level = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        self.addCleanup(root.setLevel, level)
+        self.addCleanup(root.removeHandler, handler)
+        out, err = io.StringIO(), io.StringIO()
+        home = short_home(self)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            # A hub machine's API, from the first use of its token on.
+            state = HubState(home)
+            self.addCleanup(state.stop)
+            api = agent_mod.serve_local(state, home, port=0)
+            self.addCleanup(api.close)
+            # A port that is taken says so, without the token.
+            self.assertIsNone(agent_mod.serve_local(state, home,
+                                                    port=api.port))
+            key = self.start([fake.say("one")])
+            self.sat.event("turn.ended")
+            for path in ("/v1/status", "/v1/sessions", "/v1/machines",
+                         "/v1/inbox", f"/v1/sessions?key={key}",
+                         f"/v1/sessions/{key}/messages",
+                         f"/v1/sessions/{key}/queue", "/v1/devices"):
+                self.local("GET", path, token=self.token)
+            self.local("GET", "/v1/sessions", token="wrong")
+            self.local("POST", f"/v1/sessions/{key}/message",
+                       {"text": "x", "command_id": "m1"}, token=self.token)
+            self.local("POST", f"/v1/sessions/{key}/command",
+                       {"op": "nope"}, token=self.token)
+            status, _body = self.agent.api.call(
+                "GET", "/v1/sessions", device="phone-1")
+            self.assertEqual(status, 200)
+        other = agent_mod.load_local(home)["token"]
+        self.assertNotEqual(other, self.token)
+        self.assertGreater(len(self.seen), 8)
+        printed = out.getvalue() + err.getvalue() + "\n".join(records)
+        self.assertIn("the local API is off", printed)
+        for token in (self.token, other):
+            self.assertNotIn(token, printed)
+            for status, headers, data in self.seen:
+                self.assertNotIn(token.encode(), data)
+                self.assertNotIn(token, json.dumps(headers))
+        # Nor in anything this machine wrote but local.json itself.
+        for folder in (self.sat_home, home):
+            for path in folder.rglob("*"):
+                if path.is_file() and path.name != agent_mod.LOCAL_FILE \
+                        and path.suffix in {".json", ".jsonl", ".log"}:
+                    text = path.read_text(errors="replace")
+                    self.assertNotIn(self.token, text, path)
+                    self.assertNotIn(other, text, path)
+
+    def test_a_call_in_process_needs_no_port(self):
+        self.agent.api.close()
+        key = self.start([fake.say("one")], [fake.say("two")])
+        self.sat.event("turn.ended")
+        status, out = self.agent._local_post(
+            key, "message", {"text": "again", "command_id": "m1"},
+            device="phone-1")
+        self.assertEqual((status, out["receipt"]), (202, "accepted"))
+        self.sat.result("m1")
+        # The sending device the hub named is the one recorded.
+        self.assertEqual(self.agent.runtime.store.get_command("m1").device,
+                         "phone-1")
+
+    def test_the_configured_port(self):
+        home = temp_dir(self)
+        self.assertEqual(agent_mod.local_port_for(home), agent_mod.LOCAL_PORT)
+        conf = config_file_for(home)
+        conf.parent.mkdir(parents=True, exist_ok=True)
+        for value, want in ((8499, 8499), ("8500", 8500), (0, 0),
+                            (70000, agent_mod.LOCAL_PORT),
+                            (True, agent_mod.LOCAL_PORT),
+                            ("x", agent_mod.LOCAL_PORT)):
+            conf.write_text(json.dumps({"remote": {"local_port": value}}))
+            self.assertEqual(agent_mod.local_port_for(home), want, value)
 
 
 if __name__ == "__main__":

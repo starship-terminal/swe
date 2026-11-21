@@ -29,11 +29,16 @@ def _session(sid="s1", tool="claude", path="/tmp/proj", ts=0):
 
 
 class _Server:
-    def __init__(self, sessions=None, statuses=None):
+    def __init__(self, sessions=None, statuses=None, home=None,
+                 runtime=None):
+        """``home`` is a folder the caller owns (a second hub over the
+        same state); ``runtime`` goes to ``HubState`` (the session
+        runtime's options)."""
         # Removed by stop(), or when the object goes if a test never stops it.
-        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.home = Path(self._tmp.name)
-        self.state = HubState(self.home)
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True) \
+            if home is None else None
+        self.home = Path(home) if home is not None else Path(self._tmp.name)
+        self.state = HubState(self.home, runtime=runtime)
         self.state.catalog._fetch = lambda: list(sessions or [])
         self.state.catalog._status_of = (
             statuses or (lambda ss: ["active"] * len(ss))
@@ -62,7 +67,8 @@ class _Server:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=3)
-        self._tmp.cleanup()
+        if self._tmp is not None:
+            self._tmp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -128,11 +134,16 @@ class TestAuth(HubBase):
         status, data = self.srv.request("GET", "/v1/status")
         self.assertEqual(status, 200)
         # Machine id/name, swe version and uptime would name the box
-        # for the whole tailnet; the probe only proves the hub is up.
+        # for the whole tailnet; the probe only proves the hub is up
+        # and says what it speaks (tests/test_remote_sse_v2.py).
+        body = json.loads(data)
         self.assertEqual(
-            json.loads(data),
-            {"ok": True, "v": protocol.PROTOCOL_VERSION},
+            body,
+            {"ok": True, "v": protocol.PROTOCOL_VERSION,
+             "protocols": [1, 2], "features": list(protocol.FEATURES),
+             "boot_id": self.srv.state.boot_id},
         )
+        self.assertNotIn(self.srv.state.machine_id, data.decode())
 
     def test_sessions_requires_auth(self):
         status, _ = self.srv.request("GET", "/v1/sessions")

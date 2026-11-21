@@ -44,7 +44,7 @@ struct SkillRootEdgeTests {
 struct PrimitiveTreeEdgeTests {
     @Test func kindTitles() {
         #expect(PrimitiveTree.Kind.allCases.map(\.title) == [
-            "Main file", "Skills", "Commands", "Agents", "Hooks", "Other files",
+            "Main file", "Manifests", "Skills", "Commands", "Agents", "Hooks", "Other files",
         ])
     }
 

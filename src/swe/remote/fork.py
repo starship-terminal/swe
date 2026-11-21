@@ -1,7 +1,9 @@
 """Fork: a new harness run that continues from an existing session.
 
 ``POST /v1/sessions/{key}/fork {prompt?}`` starts the harness under tmux
-with its own fork command line, so the new run gets the source's history
+with its own fork command line (or, for a harness SWE drives through a
+session keeper and whose adapter can fork, a new keeper that forks by
+the harness's own id: ``request``), so the new run gets the source's history
 and a new session id while the source stays as it was. It is tracked like
 a ``POST /v1/sessions`` launch: a pending marker lets the catalog adopt
 the new transcript, and ``GET /v1/launches/{id}`` names its key.
@@ -207,10 +209,35 @@ def request(state, key: str, row: dict, body: dict | None) -> tuple[int, dict]:
     session = state.catalog.session_for(key)
     if session is None:
         return 404, protocol.error("unknown_session", "no such session")
+    cwd = session.path or ""
+    runtime = getattr(state, "runtime", None)
+    if runtime is not None and runtime.can_drive(session.tool_name) \
+            and runtime.resolve(session.tool_name).caps.fork:
+        # Through a keeper: the adapter forks by the harness's own id
+        # and names the new session up front, so nothing is adopted.
+        if not session.session_id or getattr(session, "mirrored", False):
+            return _unsupported(session.tool_name)
+        if not cwd or not os.path.isdir(cwd):
+            return 422, protocol.error(
+                "bad_cwd", "the session's folder is gone from this "
+                           f"machine: {cwd or '(none recorded)'}")
+        from swe.remote.runtime import Refused
+
+        launch_id = state.new_launch(
+            state.machine_id, session.tool_name, cwd,
+            model=model or "", effort=effort or "")
+        try:
+            runtime.launch(launch_id, session.tool_name, cwd, prompt,
+                           model=model or "", effort=effort or "",
+                           resume_id=session.session_id, fork=True)
+        except Refused as exc:
+            state.settle_launch(launch_id, state="failed", note=exc.message)
+            return exc.status, protocol.error(exc.code, exc.message)
+        return 202, {"ok": True, "launch_id": launch_id, "state": "pending",
+                     "note": "forking"}
     argv = fork_argv(session)
     if not argv:
         return _unsupported(session.tool_name)
-    cwd = session.path or ""
     if not cwd or not os.path.isdir(cwd):
         return 422, protocol.error(
             "bad_cwd", f"the session's folder is gone from this machine: "

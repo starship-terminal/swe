@@ -1,0 +1,202 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.62,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": false,
+    "stop_task": false,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.62,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.621,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.621,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.621,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Sure, ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "here's ",
+   "seq": 2,
+   "offset": 6,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.898,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 3,
+   "offset": 13,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.898,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "countdown ",
+   "seq": 4,
+   "offset": 15,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.917,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "from ",
+   "seq": 5,
+   "offset": 25,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.95,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "1",
+   "seq": 6,
+   "offset": 30,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.95,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Sure, here's a countdown from 1"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.95,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "interrupted",
+   "duration_s": 2.329
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.95,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.95,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

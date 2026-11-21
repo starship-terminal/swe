@@ -62,7 +62,7 @@
 
 - id: G5
   title: Keeper process, IPC, discovery, service survival
-  status: todo
+  status: done
   depends_on: [G4]
   owns: ["src/swe/remote/keeper/**", "src/swe/remote/launchd.py", "src/swe/remote/systemd.py"]
   questions: []
@@ -97,7 +97,7 @@
 
 - id: G8
   title: "Hub on keepers: Claude launch and Continue in SWE"
-  status: todo
+  status: done
   depends_on: [G5, G6, G7]
   owns:
     - "src/swe/remote/hub.py"
@@ -111,7 +111,7 @@
 
 - id: G9
   title: "Sync v2: handshake, ping, overflow replay, epoch, snapshot, live resume"
-  status: todo
+  status: done
   depends_on: [G8]
   owns:
     - "src/swe/remote/protocol.py"
@@ -162,6 +162,7 @@
   tier: implement-standard
   est_runtime: 120m
 
+# G13: on Claude, Steer stops the reply in progress (docs/specs/G7-claude-stream-adapter.md). Label the control accordingly.
 - id: G13
   title: Composer, approvals, queued tray
   status: todo
@@ -184,7 +185,7 @@
 
 - id: G15
   title: Satellite keepers and the loopback local API
-  status: todo
+  status: done
   depends_on: [G8]
   owns: ["src/swe/remote/agent.py", "src/swe/remote/journal.py"]
   questions: []
@@ -194,7 +195,7 @@
 
 - id: G16
   title: Codex, opencode, ACP adapters on keepers (three PRs)
-  status: todo
+  status: done
   depends_on: [G8]
   owns:
     - "src/swe/remote/adapters/codex*.py"

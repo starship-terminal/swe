@@ -1098,7 +1098,44 @@ class EventLog:
             for _, fh in handles:
                 fh.close()
 
+    def read_back(self, *, max_bytes: int | None = None):
+        """The log's valid records, newest first, for a reader that
+        wants the latest record of some kind and stops early (the
+        keeper rebuilding its queue). ``max_bytes`` ends the walk after
+        the segment that takes the bytes read past it. Meant for a log
+        nothing is emitting into: records written during the walk may
+        be missed."""
+        with self._lock:
+            segs = [(s[0], s[1]) for s in self._segments]
+        read = 0
+        newer: int | None = None
+        for first, path in reversed(segs):
+            try:
+                fh = open(path, "rb")
+            except OSError:
+                continue
+            with fh:
+                for rec in _records_backward(fh):
+                    if not _valid(rec, first) or (
+                            newer is not None and rec["seq"] >= newer):
+                        continue
+                    newer = rec["seq"]
+                    yield rec
+                read += fh.seek(0, os.SEEK_END)
+            if max_bytes is not None and read >= max_bytes:
+                return
+
     # -- state ---------------------------------------------------------
+
+    def snapshot(self) -> Subscription:
+        """The state a subscriber would join at (``last_seq``, ``live``,
+        ``pending``, ``open_turn``) without subscribing."""
+        with self._lock:
+            return Subscription(
+                last_seq=self._next - 1,
+                live=[dict(m) for m in self._live.values()],
+                pending=list(self._pending.values()),
+                open_turn=self._open_turn)
 
     @property
     def last_seq(self) -> int:

@@ -225,7 +225,8 @@ order; one past its deadline is never listed, even before
 `expire_held` sweeps it. `expire_held()` rejects every held command at
 or past its deadline with reason `expired` and returns them, so the hub
 can send each one's `command.result`. Time comes from the clock passed
-to `Store` (tests use `FakeClock`).
+to `Store` (tests use `FakeClock`); `now()` reads it, for a caller that
+works out a command's age from `received_at`.
 
 ## Migrations
 

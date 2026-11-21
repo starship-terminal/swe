@@ -62,10 +62,14 @@ from swe.remote import (
     tsid,
     usage as usage_mod,
 )
+from swe.remote import agent as agent_mod
 from swe.remote import fork as fork_mod
 from swe.remote import issues as issues_mod
 from swe.remote import pulls as pulls_mod
+from swe.remote import runtime as runtime_mod
+from swe.remote import store as store_mod
 from swe.remote import stream as stream_mod
+from swe.remote import sync as sync_mod
 from swe.remote.detach import PendingDetaches
 from swe.remote.journal import Journal
 from swe.webapp import (
@@ -254,6 +258,18 @@ def sse_frame(ev: dict) -> bytes | None:
     return _encode_frame(ev)
 
 
+def sse_frame_v2(frame: dict) -> bytes:
+    """One v2 frame as SSE bytes. Only a journaled event has an ``id:``
+    line (its seq): a delta, a ping, a snapshot and anything the hub
+    made for the stream (``seq`` 0) leave Last-Event-ID where it is."""
+    seq = frame.get("seq")
+    return (
+        (f"id: {seq}\n" if isinstance(seq, int) and seq > 0 else "")
+        + f"event: {frame.get('type', 'message')}\n"
+        + f"data: {json.dumps(frame, ensure_ascii=False, default=str)}\n\n"
+    ).encode("utf-8")
+
+
 def _encode_frame(ev: dict) -> bytes | None:
     ev = injected_mod.clean_event(ev)
     if ev is None:
@@ -317,7 +333,8 @@ class EventBus:
 class HubState:
     """Everything the HTTP handlers close over; threads start here."""
 
-    def __init__(self, home: Path | str | None = None) -> None:
+    def __init__(self, home: Path | str | None = None, *,
+                 runtime: dict | None = None) -> None:
         self.home = Path(home) if home is not None else None
         self.machine = catalog_mod.local_machine(self.home)
         self.machine_id = self.machine["id"]
@@ -361,8 +378,7 @@ class HubState:
         # Spans queue_tail's check, enqueue and record, so two opens at
         # once can't both queue. Taken before ``_cmd_lock``, never under.
         self._sat_tail_lock = threading.Lock()
-        self._cmd_seq = 0
-        # Guards ``_cmd_seq`` and every piece of satellite ack
+        # Guards every piece of satellite ack
         # bookkeeping below — command streams, result uploads and
         # queue_command all run on different request threads.
         self._cmd_lock = threading.Lock()
@@ -483,6 +499,39 @@ class HubState:
         # failed (the launch, or the satellite's command, said no).
         self.launches: dict[str, dict] = {}
         self._launch_lock = threading.Lock()
+        # One id per hub process, in ``GET /v1/status`` and every
+        # snapshot: a client that sees it change knows the hub
+        # restarted (it then asks again about what it sent).
+        self.boot_id = secrets.token_hex(8)
+        # What ``v=2`` streams are fed, and the live text and snapshot
+        # they catch up from (``sync.py``). Made before the runtime: a
+        # keeper found at start hands it the text in progress.
+        self.sync = sync_mod.SyncHub(self)
+        # The sessions SWE runs through keepers (``runtime.py``), behind
+        # ``remote.session_view``. ``runtime`` passes its options
+        # through (tests: a spawner, a registry). Opened last: it reads
+        # the journal and may publish at once.
+        self.runtime = runtime_mod.SessionRuntime(self, **(runtime or {}))
+        self.catalog.owned_rows = self.runtime.rows
+        self.catalog.read_only_reason = self.runtime.read_only_reason
+        self.tail_manager.skip = self.runtime.owns
+        self.runtime.open()
+
+    def status_view(self) -> dict:
+        """``GET /v1/status``: a reachability check that also says what
+        this hub speaks. ``v`` stays 1 for today's clients; a v2 client
+        reads ``protocols`` and ``features``, and ``boot_id`` to notice
+        a restart. Still nothing that names the machine."""
+        features = list(protocol.FEATURES)
+        if self.runtime.active:
+            features.append(protocol.FEATURE_RUNTIME)
+        return {
+            "ok": True,
+            "v": protocol.PROTOCOL_VERSION,
+            "protocols": list(protocol.PROTOCOLS),
+            "features": features,
+            "boot_id": self.boot_id,
+        }
 
     def new_launch(
         self, machine: str, harness: str, cwd: str,
@@ -502,6 +551,11 @@ class HubState:
                 "provider": provider, "key": "", "note": "", "created_at": now,
             }
         return launch_id
+
+    def drop_launch(self, launch_id: str) -> None:
+        """Forget a launch that turned out to be another one's retry."""
+        with self._launch_lock:
+            self.launches.pop(launch_id, None)
 
     def settle_launch(self, launch_id: str, **fields) -> bool:
         """Update a pending launch; False when it is gone or settled.
@@ -534,6 +588,9 @@ class HubState:
         with self._launch_lock:
             entry = self.launches.get(launch_id)
             view = dict(entry) if entry else None
+        if view is None:
+            # A keeper launch taken by a hub that has restarted since.
+            view = self.runtime.launch_view(launch_id)
         if view and view["state"] == "started" \
                 and self.catalog.row_for(view["key"]) is None:
             view["state"] = "pending"
@@ -591,8 +648,10 @@ class HubState:
     def _journal_has(self, key: str) -> bool:
         return self.journal.last_seq(key) > 0
 
-    # The one funnel: every event is journaled, then fanned out.
-    def emit(self, key: str, event: dict) -> dict:
+    def _note_event(self, key: str, event: dict):
+        """The bookkeeping every v1 event gets, whoever numbered it:
+        open approvals, launches, satellite acks. Returns ``(launch id,
+        session key)`` when it settled a launch as started."""
         etype = event.get("type")
         adopted = None
         if etype == "approval.requested":
@@ -639,9 +698,32 @@ class HubState:
                     # aren't there.
                     self.settle_launch(lid, note=note)
                 self._settle_untracked(lid)
-        written = self.journal.append(key, event)
-        self.bus.publish(key, written)
-        if key != GLOBAL_KEY:
+        return adopted
+
+    # The one funnel: every event is journaled, then fanned out.
+    def emit(self, key: str, event: dict) -> dict:
+        adopted = self._note_event(key, event)
+        written = None
+        if key == GLOBAL_KEY:
+            written = self.journal.append(key, event)
+        else:
+            # Check and append as one step: a keeper taking the session
+            # over reads the journal's last seq under this same lock.
+            with self.journal.hold(key):
+                if not (self.runtime.owns(key) or agent_mod.mirrored(self, key)):
+                    written = self.journal.append(key, event)
+                    # Under the journal's lock, so v2 streams are
+                    # queued events in seq order (it never blocks).
+                    self.sync.on_v1(key, written)
+        if written is None:
+            # A keeper numbers this session's journal: an event of the
+            # hub's own (ownership, a notify, a title) would take a seq
+            # the keeper's next event needs. Open streams get it with
+            # no seq; the global journal still records it.
+            written = self._publish_unnumbered(key, event)
+        else:
+            self.bus.publish(key, written)
+        if key != GLOBAL_KEY and "seq" in written:
             # The global journal mirrors everything so /v1/events replays
             # a whole-machine timeline. Global subscribers get the
             # *global*-numbered copy so their ``?last=`` cursor lines up
@@ -656,6 +738,61 @@ class HubState:
             tasks_mod.origin_adopted(self, *adopted)
         return written
 
+    def _publish_unnumbered(self, key: str, event: dict) -> dict:
+        """Fan a session event out with no journal seq of its own: to
+        the session's open streams as it is, and into the global
+        journal (which numbers its copy)."""
+        ev = dict(event)
+        ev.pop("seq", None)
+        self.bus.publish(key, ev)
+        self.sync.on_v1(key, ev)
+        mirrored = self.journal.append(GLOBAL_KEY, ev)
+        self.bus.publish(GLOBAL_KEY, mirrored)
+        return ev
+
+    def publish_kept(self, key: str, event: dict, *, seq: bool = True
+                     ) -> None:
+        """A v1 event for a keeper-held session, already in the
+        session's journal under the keeper's seq (``seq`` False: an
+        event the keeper's log does not have, sent with no seq). Runs
+        the same bookkeeping as ``emit`` and mirrors it to the global
+        stream."""
+        self._note_event(key, event)
+        if not seq:
+            self._publish_unnumbered(key, event)
+            return
+        self.bus.publish(key, event)
+        mirrored = self.journal.append(GLOBAL_KEY, event)
+        self.bus.publish(GLOBAL_KEY, mirrored)
+
+    def restore_approvals(self, key: str, open_: dict[str, float]) -> None:
+        """Set ``key``'s open approvals to ``open_`` (request id ->
+        asked at): what a keeper says is still open, after a restart
+        that forgot the events which announced them."""
+        with self._approval_lock:
+            if open_:
+                self._approval_at[key] = dict(open_)
+            else:
+                self._approval_at.pop(key, None)
+            self._sync_pending_approval(key)
+
+    def session_released(self, key: str) -> None:
+        """A keeper let ``key`` go: its row is a terminal session's
+        again, and clients hear the ownership change."""
+        row = self.catalog.row_for(key)
+        if row is not None:
+            for field in ("mode", "state", "caps", "adapter", "control"):
+                row.pop(field, None)
+            row["ownership"] = protocol.OWNERSHIP_OBSERVED
+            reason = self.runtime.read_only_reason(key)
+            if reason:
+                row["control"] = "read_only"
+                row["control_reason"] = reason
+        self.emit(key, _ownership_event(
+            key, self.machine_id, protocol.OWNERSHIP_OBSERVED, None, None,
+            False))
+        self._catalog_wake.set()
+
     def publish_transient(self, key: str, event: dict) -> None:
         """Fan ``event`` out to ``key``'s live subscribers only.
 
@@ -667,6 +804,10 @@ class HubState:
         ev = dict(event)
         ev.pop("seq", None)
         self.bus.publish(key, ev)
+        if not self.runtime.owns(key):
+            # A keeper-held session's deltas reach v2 streams as the v2
+            # events they are (``runtime._on_event``).
+            self.sync.on_v1_delta(key, ev)
 
     def expire_pending_approvals(self) -> None:
         """Sweep ``pending_approvals`` entries past ``APPROVAL_TTL_S``.
@@ -812,8 +953,12 @@ class HubState:
         self.waiting.wake_all()
         self.sendq.close()
         self.detaches.close()
+        # Open v2 streams end at their next step.
+        self.sync.close()
         for t in self._threads:
             t.join(timeout=2)
+        # The keepers keep running: the next hub reconnects to them.
+        self.runtime.stop()
         self.webapp.close()
 
     def _register_machine(self) -> None:
@@ -850,6 +995,9 @@ class HubState:
             str(row.get("key") or "") for row in self.catalog.rows()
             if row.get("remote")
         ]
+        # A keeper-held session has no tailer either, and its journal
+        # is where today's clients read its timeline.
+        keys += [row["key"] for row in self.runtime.rows()]
         return keys
 
     def machine_online(self, mid: str) -> bool:
@@ -982,9 +1130,10 @@ class HubState:
                     ),
                 )
             return None
-        with self._cmd_lock:
-            self._cmd_seq += 1
-            command_id = f"c{self._cmd_seq}"
+        # Unique for ever: a counter starts over with the hub, and a
+        # second ``c1`` would read as a retry of the first wherever
+        # command ids are remembered (the store, a satellite's cursor).
+        command_id = runtime_mod.new_command_id("c")
         local_key, _mid = protocol.split_remote_key(session_key)
         cmd = protocol.command(op, local_key, mid, command_id, data)
         written = self.journal.append(self.sat_journal_key(mid), cmd)
@@ -1033,7 +1182,7 @@ class HubState:
         (a client's, or the ntfy notifier's) or a client request within
         the last CLIENT_IDLE_S. Satellite traffic doesn't count: it
         watches the satellite's sessions, not this machine's."""
-        if self.bus.watched():
+        if self.bus.watched() or self.sync.watching():
             return True
         return time.monotonic() - self._client_seen_at < CLIENT_IDLE_S
 
@@ -1120,6 +1269,7 @@ class HubState:
                     self.tail_manager.tailers, self.emit,
                     self.machine_id, self.deltas)
                 supervise.reap_kept(self.home, self.catalog.session_for)
+                self.runtime.tick()
                 self._prune_pair_requests()
                 # GitHub last: a slow ``gh`` must never hold up adoption
                 # or tail sync, which don't need it.
@@ -1990,7 +2140,13 @@ class _Handler(BaseHTTPRequestHandler):
                     self._sse_write(
                         {"type": "journal.truncated", "seq": after_seq})
                 for ev in replay:
-                    self._sse_write(ev)
+                    # A keeper-held session's journal holds v2 events:
+                    # today's clients get each as its v1 frame, or
+                    # nothing where v1 has none (the cursor still moves).
+                    frame = self._state.runtime.v1(journal_key, ev) \
+                        if key is not None else ev
+                    if frame is not None:
+                        self._sse_write(frame)
                     if isinstance(ev.get("seq"), int):
                         replayed = max(replayed, ev["seq"])
                 self._sse_write({
@@ -2095,6 +2251,55 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(frame)
         self.wfile.flush()
 
+    def _sse_stream_v2(self, key: str, after_seq: int, args,
+                       device_id: str | None = None) -> None:
+        """``GET /v1/sessions/{key}/events`` for a v2 client
+        (``sync.V2Stream`` decides what is sent): the events after
+        ``last`` or one ``session.snapshot``, then ``session.state``
+        with the live text, then every event and delta as it happens
+        and a ``ping`` every ``PING_S``."""
+        epoch = _opt_int_arg(args.get("epoch"))
+        stream = self._state.sync.open(
+            key, last=after_seq, epoch=epoch, device_id=device_id)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            # As in ``_sse_stream``: after end_headers, and the last
+            # thing this connection does.
+            self.close_connection = True
+            last_revocation_check = 0.0
+            try:
+                frames = stream.catch_up()
+                while frames is not None:
+                    for frame in frames:
+                        self.wfile.write(sse_frame_v2(frame))
+                    if frames:
+                        self.wfile.flush()
+                    now = time.time()
+                    if (
+                        device_id
+                        and now - last_revocation_check > _REVOCATION_CHECK_S
+                    ):
+                        last_revocation_check = now
+                        if self._device_revoked(self._state.home, device_id):
+                            return
+                    frames = stream.next()
+            except (BrokenPipeError, ConnectionResetError,
+                    TimeoutError, OSError):
+                return
+        finally:
+            stream.close()
+
+    def _messages_v2(self, key: str, args) -> None:
+        """``GET .../messages?v=2``: a page of the timeline as v2
+        events, paged like the v1 route."""
+        limit = max(1, min(_int_arg(args.get("limit"), 500), 2000))
+        self._send_json(200, self._state.sync.messages_page(
+            key, before=_int_arg(args.get("before"), 0), limit=limit))
+
     def _sse_after(self, args) -> int:
         """The SSE resume cursor.
 
@@ -2123,10 +2328,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             # A reachability check only: machine id, version and uptime
             # tell the whole tailnet more than a caller needs.
-            self._send_json(200, {
-                "ok": True,
-                "v": protocol.PROTOCOL_VERSION,
-            })
+            self._send_json(200, self._state.status_view())
             return
 
         # The requester's poll is unauthenticated — the request id +
@@ -2389,7 +2591,7 @@ class _Handler(BaseHTTPRequestHandler):
             if sep and action == "commands":
                 self._slash_commands(key)
                 return
-            if sep and action in {"events", "messages"}:
+            if sep and action in {"events", "messages", "snapshot"}:
                 if self._state.catalog.row_for(key) is None:
                     self._send_error(
                         404, "unknown_session", "no such session"
@@ -2410,12 +2612,25 @@ class _Handler(BaseHTTPRequestHandler):
                         str(row["machine_id"]), key,
                         str(row.get("status") or ""),
                     )
+            v2 = protocol.wants_v2(args, self.headers)
             if sep and action == "events":
                 after = self._sse_after(args)
-                self._sse_stream(key, after, device_id=device_id)
+                if v2:
+                    self._sse_stream_v2(key, after, args,
+                                        device_id=device_id)
+                else:
+                    self._sse_stream(key, after, device_id=device_id)
                 return
             if sep and action == "messages":
-                self._messages(key, args)
+                if v2:
+                    self._messages_v2(key, args)
+                else:
+                    self._messages(key, args)
+                return
+            if sep and action == "snapshot":
+                # Always v2: the route is new with it.
+                self._send_json(
+                    200, self._state.sync.snapshot(key, device_id))
                 return
             if sep and action == "files":
                 self._files(key, args)
@@ -2432,7 +2647,9 @@ class _Handler(BaseHTTPRequestHandler):
                 # A satellite session's sends never wait on the hub, so
                 # its list is honestly empty.
                 self._send_json(200, {
-                    "sends": self._state.waiting.list(key),
+                    "sends": self._state.runtime.queue_view(key)
+                    if self._state.runtime.owns(key)
+                    else self._state.waiting.list(key),
                 })
                 return
             self._send_error(404, "not_found", "unknown route")
@@ -2658,6 +2875,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "accepted": accepted})
             return
 
+        if path == "/v1/agent/kept":  # agent.py: satellite keeper sessions
+            agent_mod.kept_route(self, device_id)
+            return
+
         if path == "/v1/sessions":
             self._launch()
             return
@@ -2708,10 +2929,18 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             remote_mid = row.get("machine_id")
             if remote_mid and remote_mid != self._state.machine_id:
-                self._forward(key, remote_mid, action, row)
+                if not agent_mod.to_keeper(self, key, action, row, device_id):
+                    self._forward(key, remote_mid, action, row)
                 return
             if action == "attachments":
                 self._stage_attachment(key)
+                return
+            if action in {"message", "approval", "control", "queue"} \
+                    and self._state.runtime.owns(key):
+                self._kept(key, row, action, device_id)
+                return
+            if action == "command":
+                self._kept_command(key, device_id)
                 return
             if action == "control":
                 self._control(key, row)
@@ -2980,6 +3209,14 @@ class _Handler(BaseHTTPRequestHandler):
             if blocked:
                 self._send_error(422, "unsupported_provider", blocked)
                 return
+        rt = state.runtime
+        if rt.can_drive(harness) and not cmd["yolo"]:
+            # Through a keeper: the session's id is chosen here, so
+            # there is no pending marker and nothing to adopt. A yolo
+            # launch still takes the path below (the keeper has no
+            # autonomy setting yet).
+            self._launch_kept(body, cmd, machine)
+            return
         tracked = harness not in catalog_mod.untracked(
             catalog_mod.launchable_harnesses())
         # An ACP launch needs no tmux; its fallback reports a missing
@@ -3039,6 +3276,177 @@ class _Handler(BaseHTTPRequestHandler):
             "ok": True, "launch_id": launch_id, "state": "pending",
             "note": "starting over ACP" if over_acp else "starting under tmux",
         })
+
+    def _launch_kept(self, body: dict, cmd: dict, machine: str) -> None:
+        """``POST /v1/sessions`` for a harness SWE drives through a
+        keeper. A retry under the same ``command_id`` (or ``client_id``)
+        answers the launch it already made."""
+        state, rt = self._state, self._state.runtime
+        try:
+            command_id = store_mod.command_id_of(body)
+        except ValueError as exc:
+            self._send_error(422, "bad_command", str(exc))
+            return
+        fields = {"model": cmd["model"] or "", "effort": cmd["effort"] or "",
+                  "provider": cmd["provider"] or ""}
+        made = rt.launch_for(command_id)
+        if made is None:
+            launch_id = state.new_launch(machine, cmd["harness"], cmd["cwd"],
+                                         **fields)
+            try:
+                rt.launch(launch_id, cmd["harness"], cmd["cwd"],
+                          cmd["prompt"], command_id=command_id, **fields)
+            except runtime_mod.DuplicateLaunch as dup:
+                # Another request under this id got there first.
+                state.drop_launch(launch_id)
+                made = dup.launch_id
+            except runtime_mod.Refused as exc:
+                state.settle_launch(launch_id, state="failed",
+                                    note=exc.message)
+                self._send_error(exc.status, exc.code, exc.message)
+                return
+            else:
+                self._send_json(202, {
+                    "ok": True, "launch_id": launch_id, "state": "pending",
+                    "note": "starting",
+                })
+                return
+        if not rt.launch_matches(made, cmd["harness"], cmd["cwd"],
+                                 cmd["prompt"], **fields):
+            self._send_error(409, "command_id_conflict", (
+                "command_id was already used for a different launch"))
+            return
+        view = state.launch_view(made) or {}
+        self._send_json(202, {
+            "ok": True, "launch_id": made, "duplicate": True,
+            "state": view.get("state") or "pending",
+            "note": view.get("note") or "",
+        })
+
+    def _kept(self, key: str, row: dict, action: str,
+              device_id: str | None) -> None:
+        """A write to a session a keeper holds: ``message``,
+        ``approval``, ``control`` or ``queue``. Each is stored under its
+        ``command_id`` (``client_id`` from a client that predates it)
+        before it is delivered, so a retry answers the stored receipt
+        and is never applied twice."""
+        body = self._read_body()
+        if body is None:
+            self._send_error(400, "bad_body", "unreadable JSON body")
+            return
+        state, rt = self._state, self._state.runtime
+        try:
+            # A queue action's ``client_id`` names the queued message,
+            # not the action: only ``command_id`` is the action's own.
+            command_id = store_mod.command_id_of(
+                {"command_id": body.get("command_id")}
+                if action == "queue" else body)
+            if action == "message":
+                cmd = protocol.parse_message_command(body)
+                paths = []
+                for ref in cmd["attachments"]:
+                    path = attachments.resolve(state.home, key, ref)
+                    if path is None:
+                        self._send_error(422, "bad_attachment",
+                                         f"unknown attachment {ref}")
+                        return
+                    paths.append(path)
+                self._send_json(*rt.send(
+                    key, cmd["text"], mode=cmd["mode"], paths=paths,
+                    device=device_id, command_id=command_id))
+            elif action == "approval":
+                cmd = protocol.parse_approval_command(body)
+                self._send_json(*rt.respond(
+                    key, cmd["request_id"], cmd["decision"],
+                    device=device_id, command_id=command_id))
+            elif action == "queue":
+                act = protocol.parse_queue_action(body)
+                self._send_json(*rt.queue_action(
+                    key, act["client_id"], act["op"], act["text"],
+                    device=device_id, command_id=command_id))
+            else:
+                self._kept_control(key, body, device_id, command_id)
+        except ValueError as exc:
+            self._send_error(422, "bad_command", str(exc))
+        except runtime_mod.Refused as exc:
+            self._send_error(exc.status, exc.code, exc.message)
+
+    # ``POST .../command`` ops and the fields each takes.
+    _KEPT_OPS = {
+        "set_option": ("name", "value"),
+        "stop_task": ("task_id",),
+        "interrupt": ("clear_queue",),
+        "park": (),
+    }
+
+    def _kept_command(self, key: str, device_id: str | None) -> None:
+        """``POST /v1/sessions/{key}/command {op, command_id?, ...}``:
+        the keeper ops today's routes have no name for. ``set_option``
+        takes ``name`` (``model``, ``effort``, ``permission_mode``,
+        ``plan_mode``) and ``value``; ``stop_task`` a ``task_id``;
+        ``interrupt`` an optional ``clear_queue``; ``park`` nothing.
+        Answers the receipt. Only for a session a keeper holds."""
+        rt = self._state.runtime
+        if not rt.owns(key):
+            self._send_error(409, "not_kept", (
+                "this session is not run by a session keeper"))
+            return
+        body = self._read_body()
+        if body is None:
+            self._send_error(400, "bad_body", "unreadable JSON body")
+            return
+        op = body.get("op")
+        if not isinstance(op, str) or op not in self._KEPT_OPS:
+            self._send_error(422, "bad_command", (
+                f"op must be one of {sorted(self._KEPT_OPS)}"))
+            return
+        fields = {name: body[name] for name in self._KEPT_OPS[op]
+                  if body.get(name) is not None}
+        try:
+            command_id = store_mod.command_id_of(body)
+            status, reason = rt.command(key, op, device=device_id,
+                                        command_id=command_id, **fields)
+        except ValueError as exc:
+            self._send_error(422, "bad_command", str(exc))
+            return
+        except runtime_mod.Refused as exc:
+            self._send_error(exc.status, exc.code, exc.message)
+            return
+        if status == "rejected":
+            self._send_error(409, "command_rejected",
+                             runtime_mod._reason(reason))
+            return
+        self._send_json(200, {"ok": True, "receipt": status,
+                              "command_id": command_id or ""})
+
+    def _kept_control(self, key: str, body: dict, device_id: str | None,
+                      command_id: str | None) -> None:
+        state, rt = self._state, self._state.runtime
+        cmd = protocol.parse_control_command(body)
+        op, mode = cmd["op"], cmd.get("mode") or "now"
+        if op == "attach":
+            undone = state.detaches.cancel(key, "cancelled by attach")
+            self._send_json(200, {"ok": True, "note": (
+                "already attached; the pending detach is cancelled"
+                if undone == "cancelled" else "already attached")})
+            return
+        if op in {"kill", "detach"}:
+            if op == "detach" and mode == "keep":
+                raise runtime_mod.Refused(409, "control_failed", (
+                    "keep leaves a tmux pane running; this session has "
+                    "none. Detach it instead: it can be continued later"))
+            if op == "detach" and mode == "when_idle":
+                self._detach_when_idle(key)
+                return
+            state.detaches.cancel(key, f"replaced by {op} {mode}")
+            rt.close(key)
+            attachments.drop_session(state.home, key)
+            state.session_released(key)
+            self._send_json(200, {"ok": True, "note": "detached"})
+            return
+        self._send_json(*rt.control(
+            key, op, str(cmd.get("value") or ""), device=device_id,
+            command_id=command_id))
 
     def _injector(self, key: str):
         meta = supervise.meta_for(self._state.home, key)
@@ -3610,6 +4018,10 @@ class _Handler(BaseHTTPRequestHandler):
         state = self._state
 
         def status() -> str:
+            owned = state.runtime.session(key)
+            if owned is not None:
+                # The keeper's own state, not a read of the transcript.
+                return owned.status
             row = state.catalog.row_for(key) or {}
             session = state.catalog.session_for(key)
             fallback = str(row.get("status") or "")
@@ -3617,6 +4029,14 @@ class _Handler(BaseHTTPRequestHandler):
                 if session is not None else fallback
 
         def fire() -> tuple[bool, str]:
+            if state.runtime.owns(key):
+                try:
+                    state.runtime.close(key)
+                except runtime_mod.Refused as exc:
+                    return False, exc.message
+                attachments.drop_session(state.home, key)
+                state.session_released(key)
+                return True, "detached"
             if supervise.meta_for(state.home, key) is None:
                 return False, "session was already detached"
             result = self._injector(key).control(
@@ -3673,6 +4093,13 @@ class _Handler(BaseHTTPRequestHandler):
                 422, "bad_mode",
                 f"mode must be one of {sorted(supervise.ATTACH_MODES)}",
             )
+            return
+        if mode == "auto" and not row.get("kept") \
+                and self._state.runtime.can_drive(session.tool_name):
+            # Continue in SWE: resume it under a keeper. An explicit
+            # mode still asks for that channel by name, and a kept tmux
+            # pane is taken back as it is.
+            self._continue_in_swe(key, row, session, body)
             return
         if mode == "headless" and session.tool_name != "claude":
             self._send_error(
@@ -3743,6 +4170,65 @@ class _Handler(BaseHTTPRequestHandler):
         self._emit_ownership(key)
         self._send_json(200, {"ok": True, "note": note})
 
+    def _continue_in_swe(self, key: str, row: dict, session,
+                         body: dict) -> None:
+        """Attach a terminal-started session by resuming it under a
+        keeper. Refused while anything else may still write to it: a
+        turn in flight, a transcript that moved a moment ago, or a
+        harness process that still has the session open."""
+        state = self._state
+        try:
+            model = protocol._launch_value(body, "model")
+            effort = protocol._launch_value(body, "effort")
+        except ValueError as exc:
+            self._send_error(422, "bad_command", str(exc))
+            return
+        if not session.session_id or getattr(session, "mirrored", False):
+            self._send_error(422, "not_attachable",
+                             "this session has no id to resume it by")
+            return
+        moving = "transcript is still moving; try again when it is idle"
+        if str(row.get("status") or "") == "active":
+            self._send_error(409, "not_idle",
+                             "session is mid-turn; try again when it is idle")
+            return
+        last = state.tail_manager.last_append_at(key)
+        if last is not None and time.time() - last < supervise.ATTACH_IDLE_S:
+            self._send_error(409, "not_idle", moving)
+            return
+        transcript = tail.resolve_jsonl_path(session)
+        try:
+            if transcript is not None and time.time() - \
+                    transcript.stat().st_mtime < supervise.ATTACH_IDLE_S:
+                self._send_error(409, "not_idle", moving)
+                return
+        except OSError:
+            pass
+        writers = supervise._local_writer_pids(session)
+        if writers:
+            pids = ", ".join(str(pid) for pid in writers)
+            self._send_error(409, "session_in_use", (
+                f"{session.tool_name} still has this session open in a "
+                f"terminal (pid {pids}); quit it there, then continue "
+                "here"))
+            return
+        from swe.sessions.resume import account_env
+
+        try:
+            note = state.runtime.continue_session(
+                key, session, model=model or "", effort=effort or "",
+                env=account_env(session))
+        except runtime_mod.Refused as exc:
+            self._send_error(exc.status, exc.code, exc.message)
+            return
+        state.catalog.patch(key, {
+            "ownership": protocol.OWNERSHIP_ATTACHED,
+            "mode": runtime_mod.MODE, "control": "full",
+        }, str(row.get("status") or ""))
+        self._emit_ownership(key)
+        state._catalog_wake.set()
+        self._send_json(200, {"ok": True, "note": note})
+
     def _mark_read(self, device_id: str, key: str, row: dict) -> None:
         """``POST /v1/sessions/{key}/read {at?}``: this device's
         last-read cursor (``readstate.py``). ``at`` defaults to now, and
@@ -3804,7 +4290,9 @@ class _Handler(BaseHTTPRequestHandler):
         # local registry: its fields ride the satellite's rows.
         meta = supervise.meta_for(self._state.home, key)
         krow = meta is None and supervise.kept(self._state.home).get(key)
-        if meta is not None:
+        if self._state.runtime.owns(key):
+            tmux, mode, kept = None, runtime_mod.MODE, False
+        elif meta is not None:
             tmux, mode, kept = meta.get("tmux"), meta.get("mode"), False
         elif krow:
             tmux, mode, kept = krow.get("tmux"), krow.get("mode"), True
@@ -3894,8 +4382,10 @@ class _Handler(BaseHTTPRequestHandler):
         limit = max(1, min(limit, 2000))
         # One past the page tells whether an older page exists, without
         # reading the rest of the journal.
+        v1 = self._state.runtime.v1
         messages = self._state.journal.read_tail(
-            key, limit + 1, before_seq=before, keep=_served_message,
+            key, limit + 1, before_seq=before,
+            keep=lambda ev: _served_message(v1(key, ev)),
         )
         has_more = len(messages) > limit
         tail_events = messages[-limit:]
@@ -4308,7 +4798,7 @@ def _parse_multipart(ctype: str, body: bytes) -> tuple[str, bytes | None]:
 def _served_message(ev: dict) -> dict | None:
     """A ``message.appended`` journal event as ``/messages`` serves it
     (cleaned), or None for any other event or one cleaning drops."""
-    if ev.get("type") != "message.appended":
+    if ev is None or ev.get("type") != "message.appended":
         return None
     return injected_mod.clean_event(ev)
 
@@ -4320,6 +4810,17 @@ def _int_arg(values, default: int) -> int:
         return int(values[0])
     except (TypeError, ValueError):
         return default
+
+
+def _opt_int_arg(values) -> int | None:
+    """An integer query argument, or None when it is absent or not a
+    number (a v2 stream with no readable ``epoch`` gets a snapshot)."""
+    if not values:
+        return None
+    try:
+        return int(values[0])
+    except (TypeError, ValueError):
+        return None
 
 
 class _BoundedHTTPServer(ThreadingHTTPServer):

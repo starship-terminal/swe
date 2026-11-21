@@ -1,0 +1,268 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.779,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": true,
+    "stop_task": true,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.779,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.782,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Use the Bash tool, in the foreground (not in the background), to run exactly this command and nothing else: sleep 20 && echo done > slept.txt. Then reply only with: finished"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.782,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.782,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Use the Bash tool, in the foreground (not in the background), to run exactly this command and nothing else: sleep 20 && echo done > slept.txt. Then reply only with: finished"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.472,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_01",
+   "name": "Bash",
+   "summary": "Bash · sleep 20 && echo done > slept.txt",
+   "input": {
+    "command": "sleep 20 && echo done > slept.txt",
+    "description": "Sleep 20 seconds then write done to slept.txt"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.608,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.608,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000018",
+   "kind": "command",
+   "prompt": "Allow Bash?\nBash · sleep 20 && echo done > slept.txt",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "always",
+     "label": "Always allow",
+     "kind": "always",
+     "standing": true
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "toolu_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.608,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000000-0000-4000-8000-000000000018",
+   "source": "user",
+   "decision": "allow"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.608,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.609,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user2",
+   "kind": "user",
+   "text": "Stop what you are doing and reply only with: steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.387,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "toolu_01",
+   "status": "cancelled",
+   "name": "Bash",
+   "output": "<error>Command was aborted before completion</error>"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.399,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 101,
+   "cache_read_tokens": 13517,
+   "cache_write_tokens": 5379,
+   "cost_usd": 0.000858245,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.113,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "steered",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.113,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.124,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 2,
+   "output_tokens": 4,
+   "cache_read_tokens": 18896,
+   "cache_write_tokens": 168,
+   "cost_usd": 0.001070405,
+   "context_window": 1000000
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.125,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 7.343
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.125,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000012.125,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

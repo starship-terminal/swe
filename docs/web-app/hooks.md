@@ -142,10 +142,11 @@ A bad window is 422 `bad_window`, a failed read
   preview here is read-only and `editable` only decides the lock note's
   wording.
 - "Show in Finder" has no web equivalent.
-- The Mac page shows counts on a per-harness timeline of events; this
-  page has no timeline, so the columns sit on the grouped rows and the
-  window picker above them. A script shared by several harnesses shows the
-  same summed counts on each of its rows.
+- The Mac page is one table, a row per script per event under a harness
+  dropdown, and opens a hook as a full page with the script's editor; this
+  page keeps its grouped rows, with the count columns on them and the
+  window picker above them, and a read-only detail page. A script shared by
+  several harnesses shows the same summed counts on each of its rows.
 - The rest of `swe hooks` — `delete`, `disable`, `enable`, `sync` and
   `edit` — is not exposed; linking and replacing go through `swe init`
   like the app's strip, and `new` through the POST above.

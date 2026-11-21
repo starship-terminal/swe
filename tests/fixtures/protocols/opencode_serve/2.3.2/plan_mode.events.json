@@ -1,0 +1,686 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.609,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.609,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.876,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Create a file named planned.txt containing the word no. If you cannot because you are only planning, reply only with: planning"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.876,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.876,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Create a file named planned.txt containing the word no. If you cannot because you are only planning, reply only with: planning"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.582,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 4.96e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.227,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "planning",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.227,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "planning"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.274,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 5435,
+   "output_tokens": 7,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0011715999999999999
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.508,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "**Considering reminder plans**\n\nThe user mentioned reminders, so I need to stay in planning ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.609,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "mode. They haven't specifically asked to implement anything ",
+   "seq": 2,
+   "offset": 92,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.713,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "yet. I think I should focus on ",
+   "seq": 3,
+   "offset": 152,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.817,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "planning the creation of a planned.txt file, but ",
+   "seq": 4,
+   "offset": 183,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.922,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "how do I go about it without ",
+   "seq": 5,
+   "offset": 232,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.025,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "moving to implementation? Should I ask the user ",
+   "seq": 6,
+   "offset": 261,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.149,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "for clarification on what they want in the ",
+   "seq": 7,
+   "offset": 309,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.258,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "reminders? I want to make sure I'm on the right track ",
+   "seq": 8,
+   "offset": 352,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.322,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "before moving ",
+   "seq": 9,
+   "offset": 406,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.322,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "forward.",
+   "seq": 10,
+   "offset": 420,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.322,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "text": "**Considering reminder plans**\n\nThe user mentioned reminders, so I need to stay in planning mode. They haven't specifically asked to implement anything yet. I think I should focus on planning the creation of a planned.txt file, but how do I go about it without moving to implementation? Should I ask the user for clarification on what they want in the reminders? I want to make sure I'm on the right track before moving forward."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.324,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "Got it—I’m in Plan mode, so I can’t create `planned.txt` yet.\n\nPlan: Once you switch agents to “implement,” I’ll create `planned.txt` and put the single word `no` in ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.324,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "it.",
+   "seq": 2,
+   "offset": 166,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.324,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "Got it—I’m in Plan mode, so I can’t create `planned.txt` yet.\n\nPlan: Once you switch agents to “implement,” I’ll create `planned.txt` and put the single word `no` in it."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.412,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 834,
+   "output_tokens": 53,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0015405599999999998
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.412,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 5.536
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.412,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.823,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Create a file named built.txt containing the word yes, then reply only with: built"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.823,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000007.823,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Create a file named built.txt containing the word yes, then reply only with: built"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.081,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "**Planning file implementation**\n\nI need to implement the creation of a file. ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.186,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "It seems I should be using a patch to add ",
+   "seq": 2,
+   "offset": 78,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.293,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "the file I have planned. I'm thinking about ",
+   "seq": 3,
+   "offset": 120,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.403,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "placing it as built.txt in the workspace root. ",
+   "seq": 4,
+   "offset": 164,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.511,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "So, my next step will be to ",
+   "seq": 5,
+   "offset": 211,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.614,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "patch, add, or update this file. ",
+   "seq": 6,
+   "offset": 239,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.719,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "Okay, let's get started ",
+   "seq": 7,
+   "offset": 272,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.831,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "on that ",
+   "seq": 8,
+   "offset": 296,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.9,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "and ensure everything goes ",
+   "seq": 9,
+   "offset": 304,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.9,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "kind": "thinking",
+   "text": "smoothly!",
+   "seq": 10,
+   "offset": 331,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.9,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:r0",
+   "text": "**Planning file implementation**\n\nI need to implement the creation of a file. It seems I should be using a patch to add the file I have planned. I'm thinking about placing it as built.txt in the workspace root. So, my next step will be to patch, add, or update this file. Okay, let's get started on that and ensure everything goes smoothly!"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.939,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_01",
+   "name": "patch",
+   "summary": "patch",
+   "input": {
+    "patchText": "*** Begin Patch\n*** Add File: built.txt\n+yes\n*** End Patch"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.94,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "patch",
+   "output": "Success. Updated the following files:\nA built.txt",
+   "file_edits": [
+    {
+     "path": "built.txt",
+     "kind": "add",
+     "diff": "@@ -0,0 +1,1 @@\n+yes\n"
+    }
+   ]
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.959,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 953,
+   "output_tokens": 29,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0018933199999999998
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.512,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "built",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.512,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "built"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.546,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 1029,
+   "output_tokens": 5,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0021975299999999996
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.546,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 2.723
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.546,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.546,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

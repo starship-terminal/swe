@@ -67,6 +67,12 @@ half never mix:
   completions/       generated shell completion scripts
   data/              this machine's stores: ledgers, catalog,   (gitignored)
                      search index, Devin cloud, remote state
+    remote/remote.sqlite        session runtime store: sessions, keepers,
+                                launches, command receipts
+    remote/keepers/<slug>/      one session's keeper: keeper.json, spec.json,
+                                keeper.out and log/ (the event log)
+    remote/local.json           the loopback API's token and address
+    remote/agent-kept.json      satellite only: keeper sessions the hub copies
   cache/             sessions, rate limits, counts             (gitignored)
   backups/           pre-overwrite copies                      (gitignored)
 ```
@@ -596,6 +602,18 @@ map, the bottom-layer ordering and the per-extension checklists are in
    flow), and `harness/rate_limits.py` prints diagnostics from inside
    fetch logic, which is a leak rather than a decision.
 3. `cli.py` is dispatch only.
+
+The session runtime in `src/swe/remote/` adds two pieces to this layering,
+both behind `remote.session_view` (off by default). `remote/adapters/` holds
+one class per structured agent channel (`claude_stream`, `codex_appserver`,
+`opencode_serve`, `acp`), registered by id in `adapters/registry.py`. Each
+harness has one module that knows its wire format (`claude_wire.py`,
+`codex_wire.py`, `opencode_wire.py`; the ACP wire is `remote/acp.py`), and the
+adapters share `base.py`, `core.py` and `events.py`. No adapter imports the hub. `remote/keeper/` is a process, started as `python -m
+swe.remote.keeper`, that holds one adapter, its send queue and its event log;
+the hub's `runtime.py` and a satellite's agent talk to it over a Unix socket.
+`hub.py` imports `agent.py`, so `agent.py` imports `hub` only inside a function.
+[docs/remote-control.md](docs/remote-control.md) has the package map.
 
 One cycle exists, `harness <-> sessions`, and both directions are
 function-local imports rather than module-level, so it does not break loading.

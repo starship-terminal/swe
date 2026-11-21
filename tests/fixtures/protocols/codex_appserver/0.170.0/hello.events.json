@@ -1,0 +1,159 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.867,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.867,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.908,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Reply with exactly these words and nothing else: hello there"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.908,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.908,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Reply with exactly these words and nothing else: hello there"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.315,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "hello ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.349,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "there",
+   "seq": 2,
+   "offset": 6,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.349,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "hello there"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.368,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10381,
+   "output_tokens": 6,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10378,
+   "context_tokens": 10387,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.373,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.465
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.373,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.373,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

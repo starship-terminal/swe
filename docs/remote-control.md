@@ -11,8 +11,10 @@ session itself, a keeper process holds the agent across hub restarts, and one
 web session view replaces the separate chats. Read the
 [spec](specs/G1-session-runtime-redesign.md), the
 [decision record](decisions/0001-session-runtime-redesign.md) and the
-[roadmap](roadmap/milestones.yaml). Until those milestones land, the rest of
-this doc is accurate.
+[roadmap](roadmap/milestones.yaml). The first part is in the hub behind a
+setting that is off by default: see
+[Sessions on keepers](#sessions-on-keepers--runtimepy). With it off, the
+rest of this doc is accurate as it stands.
 
 Watch and steer CLI coding sessions (Claude Code, Codex, opencode and the
 rest of the registry) from a phone. Read the chat, send prompts, see new
@@ -251,10 +253,15 @@ remote/
   fork.py        # fork a session: per-harness fork command lines, the route
   journal.py     # per-session seq-numbered event log (replay on reconnect)
   hub.py         # http.server ThreadingHTTPServer: REST + SSE, device auth
+  runtime.py     # the hub's side of session keepers (behind remote.session_view)
+  keeper/        # one process per kept session: agent, queue, event log, IPC
+  adapters/      # one structured channel per harness (claude_stream, codex_appserver, opencode_serve, acp), v2 events
+  store.py       # remote.sqlite: sessions, keepers, launches, command receipts
+  protocol_compat.py  # v2 events as today's v1 frames
   peer.py        # is a loopback peer the Tailscale daemon? gates X-Forwarded-For
   files.py       # @-mention paths under a session's folder (/v1/sessions/{id}/files)
   preview.py     # one .html/.svg file from a session's folder (/v1/sessions/{id}/preview)
-  agent.py       # satellite daemon: dial hub, run local tail/inject
+  agent.py       # satellite daemon: dial hub, run local tail/inject and keepers; the loopback API; the hub's side of satellite keepers
   notify.py      # needs-you/finished/error/GitHub-unread/service-status fan-out via ntfy
   launchd.py     # serve/agent --install: the hub or satellite as a per-user LaunchAgent
   systemd.py     # serve/agent --install on Linux: the hub or satellite as a systemd user unit
@@ -620,15 +627,16 @@ One schema for phone↔hub and satellite↔hub (satellites forward the same
 events upstream and receive command envelopes downstream):
 
 ```
-GET  /v1/status                      reachability check {ok, v}; no credential needed
+GET  /v1/status                      reachability check {ok, v, protocols, features, boot_id}; no credential needed
 GET  /v1/events                      SSE stream of every session's events; Last-Event-ID or ?last=seq resumes
 GET  /v1/sessions                    catalog: SessionRow shape + machine + ownership
-GET  /v1/sessions/{id}/events        SSE stream; ?last=seq replays journal
-GET  /v1/sessions/{id}/messages      journal backfill {session, messages, next_before, has_more}; ?before=seq&limit=N (default 500, at most 2000)
+GET  /v1/sessions/{id}/events        SSE stream; ?last=seq replays journal. ?v=2&last=seq&epoch=E is the v2 stream (Sync v2 below)
+GET  /v1/sessions/{id}/messages      journal backfill {session, messages, next_before, has_more}; ?before=seq&limit=N (default 500, at most 2000); ?v=2 pages the timeline as v2 events
+GET  /v1/sessions/{id}/snapshot      v2: everything needed to draw the session from nothing (Sync v2 below)
 GET  /v1/sessions/{id}/commands      the "/" menu: commands this session's harness will run
 POST /v1/sessions/{id}/message       {text, mode: queue|steer, attachments[]}
 GET  /v1/sessions/{id}/queue         queue-mode sends still waiting for idle
-POST /v1/sessions/{id}/queue         {client_id, op: steer|cancel|edit, text?} on one waiting send
+POST /v1/sessions/{id}/queue         {client_id, op: steer|cancel|edit, text?, command_id?} on one waiting send
 POST /v1/sessions/{id}/attachments   multipart upload → staged file, returns ref
 POST /v1/sessions/{id}/approval      {request_id, decision}
 POST /v1/sessions/{id}/pin           {pinned: bool} → pin or unpin on the hub
@@ -1646,6 +1654,125 @@ sign-in without `confirm_this_device: true` (a stray tap can't lock the
 phone out), and `500 ssh_key_left` when the device is out but its
 `authorized_keys` line stayed.
 
+## Sessions on keepers — `runtime.py`
+
+Behind `remote.session_view` (`swe config set remote.session_view true`,
+then restart the hub; off by default). Full rules:
+[G8-hub-on-keepers.md](specs/G8-hub-on-keepers.md).
+
+With the setting on, a session of a harness that has a session adapter
+(`capabilities.session` in harness.json, over the built-in fallback table;
+today Claude Code, Codex, opencode and the ACP harnesses, each through the
+adapter listed below) is run by a keeper: one detached process per session
+(`python -m swe.remote.keeper`) that holds the agent, the send queue
+and the session's event log, and keeps running when the hub restarts.
+Everything else on this page still applies to every other session, and
+to all of them when the setting is off.
+
+| Adapter id | Harness | How SWE talks to it | Recorded against |
+|---|---|---|---|
+| `claude_stream` | Claude Code | `claude` with stream-json on stdio (`claude_wire.py`) | `claude` 2.1.328 |
+| `codex_appserver` | Codex | `codex app-server`, JSON-RPC on stdio (`codex_wire.py`) | `codex` 0.170.0 |
+| `opencode_serve` | opencode | `opencode serve` on a loopback port with a password the adapter makes (`opencode_wire.py`) | `opencode` 2.3.2 |
+| `acp` | Gemini, Qwen, Kimi, Devin, Cursor, Copilot | the agent's ACP mode, JSON-RPC on stdio (`remote/acp.py`) | `qwen` 0.28.0; Gemini and Kimi from hand-written fixtures |
+
+When the hub starts with the setting on, it writes Claude's
+`capabilities.session` entry into harness.json once. For the other
+harnesses, the fallback row turns launch, turns, approvals and interrupt
+on, and refuses steer, fork, rollback and the options until harness.json
+declares them. Each adapter's spec ([G7](specs/G7-claude-stream-adapter.md),
+[G16](specs/G16-more-adapters.md)) has the entry to write and what its
+recordings prove. opencode 2.x needs its adapter: the older channel in
+`inject.py` speaks the 1.x routes, which 2.3.2 answers with 405, so an
+opencode 2.x session started in a terminal cannot be written to.
+
+| What | With a keeper |
+|---|---|
+| `POST /v1/sessions` | the hub picks the session id, stores the prompt, starts a keeper and sends the prompt. No pending marker, nothing to adopt. One launch per `command_id`: a retry, or a second request at the same moment, answers the launch already made; the same id for a different launch answers 409 `command_id_conflict`. `yolo: true` still launches the old way |
+| Attach (`control {op: attach}`, no `mode`) | Continue in SWE: the session is resumed by its own id under a keeper. Refused (409) while it is mid-turn, its transcript moved in the last 5 seconds, or a harness process still has it open (`session_in_use`). An explicit `mode` still asks for that channel |
+| The row | `ownership: attached`, `mode: "keeper"`, `control: "full"`, `state` (the keeper's), `status`, `adapter`, `caps` |
+| `message`, `approval`, `control`, `queue` | stored under `command_id` (or `client_id`) in `remote.sqlite` before delivery. A retry answers the stored receipt (`duplicate: true`) and is not applied again. `message` answers 202 with `receipt` (`accepted` or `queued`) and `waiting` |
+| Two devices answer one approval | the first wins; the second gets 409 `approval_failed` |
+| The queue | lives in the keeper. `GET .../queue` lists it; `edit`, `cancel` and `steer` act on it. `client_id` names the queued message; an optional `command_id` is the action's own id, and a retry under it is not applied again. Send now sends the text as last edited |
+| The timeline | the keeper's log. The hub journals each event under the keeper's seq and does not tail the CLI's transcript for that session. Today's clients get the same v1 frames as before (`protocol_compat.to_v1`); a question with choices arrives as an approval card |
+| Hub restart | the hub reconnects to every keeper still running, replays from the journal's last seq, and the open approvals and the queue are as they were. A message the old hub accepted and never delivered is delivered |
+| Agent crash | status `error`; the next message restarts the agent in the same keeper |
+| Keeper killed | open approval cards are retired and status turns `error`; the next message starts a new keeper that resumes the harness session |
+| `detach`, `kill` | stop the keeper; the session is a terminal session again (`ownership: observed`) and can be continued later. A keeper that does not stop keeps the session attached and answers 503 `keeper_failed`. `detach` with `mode: keep` answers 409 (there is no pane to keep) |
+| `compact`, `clear` | 409 `control_failed`: not available on a keeper yet |
+| `POST /v1/sessions/{key}/command {op, command_id?, ...}` | new, keeper-held sessions only (409 `not_kept` otherwise): `set_option` with `name` (`model`, `effort`, `permission_mode`, `plan_mode`) and `value`, `stop_task` with `task_id`, `interrupt` with an optional `clear_queue`, `park`. Answers `{ok, receipt, command_id}` |
+| Fork | a new keeper that forks by the harness's id, when the adapter can fork |
+| Parked, then resumed in a terminal | the hub lets go: `ownership: observed`, `control: "read_only"`, `control_reason` |
+
+A keeper parks its agent after 30 idle minutes and resumes it on the
+next message. `GET /v1/launches/<id>` answers from `remote.sqlite` when
+the hub that took the launch has restarted.
+
+### On a satellite
+
+Full rules: [G15-satellite-keepers.md](specs/G15-satellite-keepers.md).
+The setting is read on each machine for that machine: turn it on on the
+satellite (and restart its agent) for its sessions to run under
+keepers, and on the hub for the hub to copy their timelines and hold
+commands for them.
+
+| What | With a keeper on a satellite |
+|---|---|
+| Launch, attach | the satellite's agent starts the keeper, the way the hub does for its own machine. The hub sends the same `launch` and `attach` commands as before |
+| The timeline | the satellite journals the keeper's events, and uploads them with `POST /v1/agent/kept`. The hub's journal for `key@machine` is a copy: same events, same seqs, stored with `Journal.append_at`, so an upload sent twice lands once. The hub numbers nothing in that journal while it copies it |
+| `message`, `approval`, `control`, `queue`, `command` | stored in the hub's `remote.sqlite` under `command_id`, sent to the satellite as a `kept` command, and given there to the same route the hub runs for its own sessions. Answers 202 with `receipt` (`queued` or `held`) and `command_id` |
+| The machine is asleep | a message or an approval answer is `held` for 24 hours and delivered, in order and once, when the machine's command stream comes back. A hold that runs out is rejected (`expired`) and never delivered. `control`, `queue` and `command` answer 409 `machine_offline` |
+| Hub restart | a message or an answer the hub had claimed and not yet put on the machine's command stream is put there once at the machine's next flush (its reconnect, or within 60 seconds of it), in arrival order with what is still held. One that arrived 24 hours ago or more is rejected instead |
+| Agent restart | the keepers run on. The new agent reconnects to them, asks the hub how far each copy reaches, and uploads from there |
+| The hub's session runtime is off | the upload is refused (409 `session_view_off`) and retried every minute; the hub lists the session without a timeline, and commands take the old forwarding path |
+
+## The loopback API
+
+Every machine binds one more listener, on `127.0.0.1` only:
+`swe remote serve` on the hub machine and `swe remote agent` on a
+satellite. It serves the same `/v1` session routes as the hub, through
+the same handler, over that machine's own sessions, so a client on the
+machine (the Mac app) can list, read and drive them with no network
+and with the hub down.
+
+| | |
+|---|---|
+| Address | `http://127.0.0.1:8476`, or the port in `remote.local_port` (`swe config set remote.local_port <n>`; `0` picks a free one). The address bound is written to `local.json` |
+| Who may call | `Authorization: Bearer <token>`, the token in `~/.swe/data/remote/local.json` (mode 0600, made on first use). Being able to read that file is the proof. A paired device's credential is not accepted here, and the token is accepted nowhere else |
+| Routes | `/v1/sessions` and everything under it, `/v1/launches/*`, `/v1/events`, `/v1/status`, `/v1/machines`, `/v1/folders`, `/v1/inbox`, and the static files. Anything else under `/v1` answers 404 |
+| Host | a request whose `Host` is not `127.0.0.1`, `localhost` or `[::1]` (with or without the port) answers 403 `bad_origin` |
+| Port taken | one line on stderr and no local API; the hub or agent runs on |
+
+The token is never printed, logged or returned by a route.
+
+## Sync v2 — `sync.py`
+
+A second protocol for one session's stream, asked for per request with
+`?v=2` or the header `X-SWE-Protocol: 2`. A client that does not ask
+gets everything above unchanged. It works for every session, with
+`remote.session_view` on or off. Full rules, and what a client must do
+with each frame: [G9-sync-v2.md](specs/G9-sync-v2.md). The shapes are
+[`schema/session_v2.json`](../src/swe/remote/schema/session_v2.json),
+generated from `adapters/events.py`; the session view's TypeScript
+types are made from that file.
+
+| What | In v2 |
+|---|---|
+| `GET /v1/status` | adds `protocols` (`[1, 2]`), `features` and `boot_id` (new for every hub process) |
+| The events | the v2 events of `adapters/events.py`, as a keeper logged them. A journal of v1 events (a terminal session, a satellite's, the earlier history of one continued in SWE) is converted on the way out (`protocol_compat.to_v2`) |
+| `seq` | above 0: the event's place in the journal, and the only frames with an SSE `id:` line. 0: a frame the hub made for the stream. A delta and the stream's own frames have none |
+| Catch-up | `?v=2&last=<seq>&epoch=<E>`. On the session's epoch and at most 500 seqs behind: the events after `last`, then `session.row`. Otherwise one `session.snapshot`. Either way it ends with a `session.state` frame |
+| `session.state` at the end of a catch-up | `{state, live[], pending[], head, epoch}`: the text so far of every message in progress, the ids of the requests still open, the seq the stream is caught up to |
+| Live text | `message.delta` is never journaled, so the hub keeps the text in progress itself (from the deltas, and from a keeper's welcome after a hub restart) and sends it in `live[]` |
+| Delta offsets | every delta says the `offset` its text starts at. A client appends only at the length it holds; on a hole it asks for the snapshot and carries on from `live[]` |
+| A slow client | its queue (2000 frames) fills: the stream reads the journal again from the last seq it sent, then sends `session.row` and `session.state`. Nothing journaled is lost |
+| `ping` | `{ts, head}` every 10 s; 25 s of silence means the connection is dead |
+| Epoch | a number per session that moves when its journal starts over or loses a stretch; a cursor from another epoch gets a snapshot |
+| `GET /v1/sessions/{key}/snapshot` | the same body the stream's `session.snapshot` carries: row, state, caps, open requests, queue, live text, plan, running tasks, checkpoints, changes, usage, the last 200 timeline events |
+| `GET /v1/sessions/{key}/messages?v=2` | older pages of the timeline, as v2 events |
+| A row change (ownership, title, pin) | a `session.row` frame |
+| `GET /v1/events` | v1 only |
+
 ## Keeping the hub up — `launchd.py`, `systemd.py`
 
 A hub started from a shell dies with the login session, and nothing
@@ -1663,6 +1790,15 @@ new bundle. The agent gets the installing shell's `PATH` and logs to
 It runs `serve --tailnet`: with no Tailscale address yet (early in a
 login) the hub exits instead of binding localhost, and launchd retries.
 `--install` again restarts it; `--uninstall` stops and removes it.
+
+The LaunchAgent sets `AbandonProcessGroup`, so launchd leaves session
+keepers running when the hub's job ends. An agent installed before that
+key existed gets it without a reinstall: `swe remote serve` adds the key
+to the installed plist when it starts, and when it is running as that
+agent it reloads the job from the new file (`launchctl bootout` and
+`bootstrap`, from a shell outside the job, because the unload ends the
+hub). The hub is back a moment later. On Linux the unit needs nothing:
+each keeper is started in a systemd scope of its own.
 
 On Linux, `--install` writes the systemd user unit
 `~/.config/systemd/user/swe-remote-hub.service` (under
@@ -1726,6 +1862,13 @@ fetch + POST events; stdlib covers both). Registers machine metadata —
 hostname, specs, harnesses detected by the existing `discover`
 machinery. Hub stamps every session `machine_id` + reachability; queued
 commands wait in the hub journal until reconnect.
+
+Since G15 the agent also holds this machine's own hub state
+(`RemoteAgent.local`): a journal of every session here, the session
+runtime that runs this machine's keepers, and the loopback API (see
+"On a satellite" and "The loopback API" above). Each event is written
+to that journal and to the uplink outbox. `agent-kept.json` lists the
+keeper sessions whose journal the hub copies.
 
 `swe remote agent --install` keeps it running across reboots and
 logouts (see "Keeping a satellite up" above). The macOS app side is a

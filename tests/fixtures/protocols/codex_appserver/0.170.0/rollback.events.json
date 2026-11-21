@@ -1,0 +1,355 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.034,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.034,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T12-02-54-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.122,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Remember this word: papaya. Reply only with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.122,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.122,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Remember this word: papaya. Reply only with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.73,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "ok",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.73,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_01",
+   "kind": "assistant",
+   "text": "ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.735,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10385,
+   "output_tokens": 5,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10382,
+   "context_tokens": 10390,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.742,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.62
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.742,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.746,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Remember this second word: walrus. Reply only with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.746,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.746,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Remember this second word: walrus. Reply only with: ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.63,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "ok",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.63,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "ok"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.639,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 10409,
+   "output_tokens": 5,
+   "cache_read_tokens": 10382,
+   "cache_write_tokens": 24,
+   "context_tokens": 10414,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.653,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 0.907
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.653,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.723,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T12-02-57-00000000-0000-4000-8000-000000000001_00000000-0000-4000-8000-000000000006"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.727,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "text": "Which words did I ask you to remember? Reply with just the words."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.727,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.727,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "t-00000001-3:user",
+   "kind": "user",
+   "text": "Which words did I ask you to remember? Reply with just the words."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.595,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "papaya",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.595,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "id": "msg_03",
+   "kind": "assistant",
+   "text": "papaya"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.619,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "input_tokens": 10411,
+   "output_tokens": 6,
+   "cache_read_tokens": 10382,
+   "cache_write_tokens": 26,
+   "context_tokens": 10417,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.643,
+  "turn_id": "t-00000001-3",
+  "data": {
+   "status": "completed",
+   "duration_s": 0.916
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.643,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.643,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

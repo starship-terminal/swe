@@ -175,6 +175,12 @@ class StartSpec:
     :func:`swe.remote.adapters.registry.adapter_for`; None lets the
     adapter use its own default. ``harness`` is for labels and logs
     only: an adapter never branches on it.
+
+    ``session_id`` is the id a new (or forked) session should take, for
+    a harness that lets the caller choose: the hub names the session
+    before its keeper exists, so the session key and the harness's own
+    id agree. An adapter that cannot choose ignores it and returns the
+    id it got from ``start``.
     """
 
     session_key: str
@@ -188,6 +194,7 @@ class StartSpec:
     plan_mode: bool = False
     env: Mapping[str, str] = field(default_factory=dict)
     harness: str = ""
+    session_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.session_key:

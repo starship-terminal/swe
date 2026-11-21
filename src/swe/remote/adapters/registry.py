@@ -26,8 +26,9 @@ from swe.remote.adapters.fallback import SESSION_FALLBACK
 ADAPTER_ID_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 # Adapter modules shipped with SWE, imported once on first lookup so
-# each registers itself. G7 adds ``claude_stream``, G16 the others.
-BUILTIN_MODULES: tuple[str, ...] = ("claude_stream",)
+# each registers itself. G7 added ``claude_stream``, G16 the others.
+BUILTIN_MODULES: tuple[str, ...] = ("claude_stream", "codex_appserver",
+                                    "opencode_serve", "acp")
 
 _BOOL_KEYS = ("steer", "plan_mode", "rollback", "fork", "stop_task")
 

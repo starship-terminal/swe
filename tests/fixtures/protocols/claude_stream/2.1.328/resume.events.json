@@ -7,7 +7,7 @@
   "ts": 1760000002.792,
   "data": {
    "caps": {
-    "steer": false,
+    "steer": true,
     "plan_mode": true,
     "rollback": false,
     "fork": true,
@@ -148,7 +148,7 @@
   "ts": 1760000002.838,
   "data": {
    "caps": {
-    "steer": false,
+    "steer": true,
     "plan_mode": true,
     "rollback": false,
     "fork": true,
@@ -289,7 +289,7 @@
   "ts": 1760000003.521,
   "data": {
    "caps": {
-    "steer": false,
+    "steer": true,
     "plan_mode": true,
     "rollback": false,
     "fork": true,

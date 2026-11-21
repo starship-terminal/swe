@@ -17,6 +17,12 @@ compares against).
     python3 scripts/record_protocol.py scrub    # re-apply the blanking
     python3 scripts/record_protocol.py list     # the scenarios
 
+``--adapter=claude_stream`` is recorded here; the other adapters'
+scenarios live beside this file (``OTHER_ADAPTERS``: ``record_codex.py``
+for ``codex_appserver``, ``record_opencode.py`` for ``opencode_serve``,
+``record_acp.py`` for ``acp``) and share ``Redactor`` (and ``Driver``, where the wire is lines on
+stdio).
+
 Every scenario runs in a fresh ``mktemp -d`` folder holding two dummy
 files, never in a real project, with the owner's MCP servers, hooks,
 plugins and CLAUDE.md kept out as far as the CLI's flags allow
@@ -93,12 +99,25 @@ class ScenarioError(Exception):
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+# Not ``\b``: Codex joins two of them with ``_`` in a file name, and an
+# underscore is a word character.
+_UUID_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+                      r"(?![0-9A-Za-z])")
 # API message, request and tool-use ids (``msg_011Ch...``): a digit is
 # required, so a field name such as ``task_notification`` never matches.
-_PREFIXED_ID_RE = re.compile(
-    r"\b(msg|req|toolu|srvtoolu)_(?=[A-Za-z]*[0-9])([A-Za-z0-9]{12,})\b")
+_ID_PREFIXES = ("msg", "req", "toolu", "srvtoolu")
+
+
+def _prefixed_id_re(prefixes) -> "re.Pattern":
+    # Lookarounds, not ``\b``: an id can follow an underscore
+    # (``msg_fork_notice_ses_...``).
+    return re.compile(r"(?<![0-9A-Za-z])(" + "|".join(prefixes)
+                      + r")_(?=[A-Za-z]*[0-9])([A-Za-z0-9]{12,})"
+                      r"(?![0-9A-Za-z])")
+
+
+_PREFIXED_ID_RE = _prefixed_id_re(_ID_PREFIXES)
 # The CLI's own per-user scratch folder (task output files).
 _CLI_TMP_RE = re.compile(r"/(?:private/)?tmp/claude-\d+/[^\s\"'`]*")
 _TMP_RE = re.compile(r"/(?:private/)?var/folders/[^\s\"'`]*")
@@ -134,7 +153,9 @@ def scrub(obj):
 
 class Redactor:
     def __init__(self, work: str, *, config: str = "", home: str, user: str,
-                 secrets: list[str], deny: list[str]) -> None:
+                 secrets: list[str], deny: list[str],
+                 hosts: list[str] | None = None,
+                 id_prefixes: tuple = _ID_PREFIXES) -> None:
         self.work = [p for p in {work, os.path.realpath(work)} if p]
         self.config = [p for p in {config, os.path.realpath(config)} if p] \
             if config else []
@@ -150,6 +171,11 @@ class Redactor:
         self.user = user
         self.secrets = [s for s in secrets if s and len(s) >= 6]
         self.deny = [d for d in deny if d]
+        # This machine's names (a host name often holds its owner's).
+        self.hosts = sorted({h for h in hosts or () if h and len(h) >= 4},
+                            key=len, reverse=True)
+        self._prefixed = _PREFIXED_ID_RE if id_prefixes == _ID_PREFIXES \
+            else _prefixed_id_re(id_prefixes)
         self.ids: dict[str, str] = {}
         self.counts: dict[str, int] = {}
 
@@ -173,6 +199,8 @@ class Redactor:
         if self.home:
             s = s.replace(self.home, "~")
         s = _USERS_RE.sub("~", s)
+        for host in self.hosts:
+            s = re.sub(re.escape(host), "host", s, flags=re.IGNORECASE)
         if self.user:
             s = re.sub(rf"\b{re.escape(self.user)}\b", "user", s)
         s = _EMAIL_RE.sub("user@example.com", s)
@@ -180,7 +208,7 @@ class Redactor:
         s = _UUID_RE.sub(lambda m: self._id(
             "uuid", m.group(0).lower(),
             lambda n: f"00000000-0000-4000-8000-{n:012d}"), s)
-        s = _PREFIXED_ID_RE.sub(lambda m: self._id(
+        s = self._prefixed.sub(lambda m: self._id(
             m.group(1), m.group(0),
             lambda n, p=m.group(1): f"{p}_{n:02d}"), s)
         return s
@@ -222,7 +250,8 @@ class Redactor:
     def leaks(self, text: str) -> list[str]:
         """What in ``text`` must never reach the repo."""
         found = []
-        needles = [self.home, *self.secrets, *self.deny, *self.pieces]
+        needles = [self.home, *self.secrets, *self.deny, *self.pieces,
+                   *self.hosts]
         if self.user:
             needles.append(self.user)
         low = text.lower()
@@ -597,6 +626,101 @@ def sc_steer(spawn, work, ctx):
     return [d]
 
 
+def _is_can_use(m) -> bool:
+    return m.get("type") == "control_request" and (
+        m.get("request") or {}).get("subtype") == "can_use_tool"
+
+
+def _results_then_idle(d: Driver, start: int, *, skip=(), timeout=90.0,
+                       answer=None) -> list:
+    """Every ``result`` since ``start`` until the CLI goes idle, allowing
+    (or ``answer``-ing) any new ``can_use_tool`` except the ids in
+    ``skip``; the results in order."""
+    deadline = time.monotonic() + timeout
+    handled = set(skip)
+    while True:
+        msg = d.wait(
+            lambda m: (m.get("type") == "system"
+                       and m.get("subtype") == "session_state_changed"
+                       and m.get("state") == "idle")
+            or (_is_can_use(m) and m.get("request_id") not in handled),
+            max(0.1, deadline - time.monotonic()), start, "idle")
+        if msg.get("type") == "system":
+            return [m for m in d.incoming(start) if m.get("type") == "result"]
+        handled.add(msg["request_id"])
+        req = msg.get("request") or {}
+        d.send(answer(msg["request_id"], req) if answer
+               else _allow(msg["request_id"], req))
+
+
+def sc_steer_tool(spawn, work, ctx):
+    """``priority: "now"`` sent while a slow Bash call runs: is the call
+    killed, what does its tool_result say, does the file it would write
+    appear, how does the turn end."""
+    d = spawn(permission_mode="default")
+    _handshake(d)
+    start = d.mark()
+    d.send(wire.user_message(
+        "Use the Bash tool, in the foreground (not in the background), to "
+        "run exactly this command and nothing else: sleep 20 && echo done "
+        "> slept.txt. Then reply only with: finished"))
+    asked = d.wait(_is_can_use, 90, start, "the Bash approval")
+    d.send(_allow(asked["request_id"], asked.get("request") or {}))
+    allowed_at = time.monotonic()
+    # Let the command get going: a tool_progress line if the CLI sends
+    # one, else three seconds.
+    try:
+        d.wait(lambda m: m.get("type") == "tool_progress", 3, start,
+               "tool progress")
+    except ScenarioError:
+        pass
+    time.sleep(max(0.0, 3.0 - (time.monotonic() - allowed_at)))
+    ctx["written_before_steer"] = Path(work, "slept.txt").exists()
+    d.send(wire.user_message("Stop what you are doing and reply only with: "
+                             "steered", priority="now"))
+    results = _results_then_idle(d, start, skip={asked["request_id"]})
+    ctx["idle_after_s"] = round(time.monotonic() - allowed_at, 1)
+    ctx["results"] = len(results)
+    ctx["written_at_idle"] = Path(work, "slept.txt").exists()
+    # A command left running would finish 20 s after it started.
+    time.sleep(max(0.0, 25.0 - (time.monotonic() - allowed_at)))
+    ctx["written_after_25s"] = Path(work, "slept.txt").exists()
+    return [d]
+
+
+def sc_steer_approval(spawn, work, ctx):
+    """``priority: "now"`` sent while a ``can_use_tool`` is open: is the
+    request cancelled, left open, or denied for us."""
+    d = spawn(permission_mode="default")
+    _handshake(d)
+    start = d.mark()
+    d.send(wire.user_message(
+        "Use the Bash tool to run exactly this command and nothing else: "
+        "touch approved.txt. Then reply only with: done"))
+    asked = d.wait(_is_can_use, 90, start, "the Bash approval")
+    rid = asked["request_id"]
+    after = d.mark()
+    d.send(wire.user_message("Do not run anything. Reply only with: steered",
+                             priority="now"))
+    # Unanswered on purpose: what does the CLI do with it?
+    cancelled = False
+    try:
+        d.wait(lambda m: m.get("type") == "control_cancel_request"
+               and m.get("request_id") == rid, 30, after, "a cancel")
+        cancelled = True
+    except ScenarioError:
+        pass
+    ctx["cancelled"] = cancelled
+    ctx["result_before_answer"] = any(
+        m.get("type") == "result" for m in d.incoming(after))
+    if not cancelled:
+        # Left open: deny it so the session can go on.
+        d.send(wire.permission_deny(rid, "The user steered instead."))
+    _results_then_idle(d, start, skip={rid}, answer=_deny)
+    ctx["file_written"] = Path(work, "approved.txt").exists()
+    return [d]
+
+
 def sc_resume(spawn, work, ctx):
     sid = wire.new_session_id()
     d1 = spawn(session_id=sid, persist=True)
@@ -646,6 +770,8 @@ SCENARIOS = {
     "subagent": sc_subagent,
     "stop_task": sc_stop_task,
     "steer": sc_steer,
+    "steer_tool": sc_steer_tool,
+    "steer_approval": sc_steer_approval,
     "resume": sc_resume,
     "rewind": sc_rewind,
 }
@@ -691,6 +817,8 @@ def _deny_names(raw_logs: list[list[dict]]) -> list[str]:
 
 def record(adapter: str, scenario: str, version: str, raw_dir: Path | None,
            claude: str) -> Path:
+    if adapter in OTHER_ADAPTERS:
+        return _other(adapter).record(scenario, version, raw_dir, claude)
     if adapter != "claude_stream":
         raise SystemExit(f"no recorder for adapter {adapter!r}")
     fn = SCENARIOS[scenario]
@@ -781,10 +909,33 @@ def record(adapter: str, scenario: str, version: str, raw_dir: Path | None,
     return out
 
 
+# Adapters recorded by a module beside this one: adapter id -> module.
+OTHER_ADAPTERS = {"codex_appserver": "record_codex",
+                  "opencode_serve": "record_opencode",
+                  "acp": "record_acp"}
+
+
+def _other(adapter: str):
+    """The recorder module of an adapter this file does not record."""
+    import importlib
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    return importlib.import_module(OTHER_ADAPTERS[adapter])
+
+
+def _replay_for(path: Path):
+    """The wire module's ``replay`` for a fixture, by the adapter folder
+    it sits in."""
+    adapter = path.parent.parent.name
+    if adapter in OTHER_ADAPTERS:
+        return _other(adapter).replay
+    return wire.replay
+
+
 def golden(path: Path) -> Path:
     """Write ``<scenario>.events.json`` beside a fixture: the canonical
-    v2 events ``claude_wire.replay`` derives from it."""
-    events = wire.replay(load_fixture(path))
+    v2 events its adapter's wire module derives from it."""
+    events = _replay_for(path)(load_fixture(path))
     out = path.with_name(path.name[:-len(".jsonl")] + ".events.json")
     out.write_text(json.dumps(events, indent=1, ensure_ascii=False) + "\n")
     return out
@@ -796,6 +947,7 @@ def load_fixture(path: Path) -> list[dict]:
 
 
 def cli_version(claude: str) -> str:
+    """The version ``<cli> --version`` prints."""
     out = subprocess.run([claude, "--version"], capture_output=True,
                          text=True, timeout=30).stdout
     m = re.search(r"\d+\.\d+\.\d+", out)
@@ -808,17 +960,22 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     rec = sub.add_parser("record")
-    rec.add_argument("--adapter", default="claude_stream")
-    rec.add_argument("--scenario", action="append", required=True,
-                     choices=sorted(SCENARIOS))
+    rec.add_argument("--adapter", default="claude_stream",
+                     choices=["claude_stream", *sorted(OTHER_ADAPTERS)])
+    rec.add_argument("--scenario", action="append", required=True)
     rec.add_argument("--raw-dir", type=Path)
     rec.add_argument("--claude", default=shutil.which("claude") or "claude")
+    rec.add_argument("--cli", help="the CLI binary of another adapter "
+                                   "(default: found on PATH)")
     sub.add_parser("golden")
     sub.add_parser("scrub")
     sub.add_parser("list")
     args = ap.parse_args(argv)
     if args.cmd == "list":
         print("\n".join(sorted(SCENARIOS)))
+        for adapter in sorted(OTHER_ADAPTERS):
+            print("\n".join(f"{adapter}: {name}"
+                            for name in sorted(_other(adapter).SCENARIOS)))
         return 0
     if args.cmd == "scrub":
         for path in sorted(FIXTURES.rglob("*.jsonl")):
@@ -831,9 +988,18 @@ def main(argv: list[str] | None = None) -> int:
         for path in sorted(FIXTURES.rglob("*.jsonl")):
             print(golden(path).relative_to(ROOT))
         return 0
-    version = cli_version(args.claude)
+    if args.adapter in OTHER_ADAPTERS:
+        other = _other(args.adapter)
+        known, cli = other.SCENARIOS, args.cli or other.default_cli()
+    else:
+        known, cli = SCENARIOS, args.claude
+    unknown = [name for name in args.scenario if name not in known]
+    if unknown:
+        ap.error(f"no {args.adapter} scenario named {', '.join(unknown)} "
+                 f"(choose from {', '.join(sorted(known))})")
+    version = cli_version(cli)
     for scenario in args.scenario:
-        record(args.adapter, scenario, version, args.raw_dir, args.claude)
+        record(args.adapter, scenario, version, args.raw_dir, cli)
     return 0
 
 

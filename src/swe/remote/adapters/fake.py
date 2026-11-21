@@ -314,6 +314,8 @@ class FakeAdapter:
             self.spec, self.sink, self.alive = spec, sink, True
             if spec.resume_id and not spec.fork:
                 self.session_id = spec.resume_id
+            elif spec.session_id:
+                self.session_id = spec.session_id
             elif spec.fork:
                 self.session_id = f"{spec.resume_id}-fork"
             for name in ("model", "effort", "permission_mode"):

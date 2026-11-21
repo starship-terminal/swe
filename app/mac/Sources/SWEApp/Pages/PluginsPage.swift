@@ -14,8 +14,18 @@ struct PluginsPage: View {
     private static let foldLimit = 8
     /// Harnesses whose drift cards are unfolded.
     @State private var opened: Set<String> = []
-    /// A plugin's detail is on screen (`DetailOpenKey`).
-    @State private var detailOpen = false
+    /// The plugin open in its detail page, nil while the list shows. Kept
+    /// here, not in the list: the page stops scrolling and hides its tabs
+    /// while a detail is open (its editor fills the window and scrolls
+    /// itself), and that swap rebuilds the content below it.
+    @State private var openedPlugin: ExplorePlugin?
+
+    /// A plugin's detail has the page: the back chevron, no tabs over it,
+    /// no page scroll. False again once the catalog stops listing the
+    /// plugin, so the list that takes its place scrolls and has its tabs.
+    private var showsDetail: Bool {
+        app.pluginsTab == .explore && PluginExplorer.detail(of: openedPlugin, in: catalog.index) != nil
+    }
 
     /// App-wide, so a check outlives a trip to another page and the last
     /// report shows at once.
@@ -26,8 +36,8 @@ struct PluginsPage: View {
         @Bindable var app = app
         Page(title: "Plugins",
              subtitle: "Switch installed plugins on or off in each harness. Import into SWE to own and edit their files.",
-             back: app.pluginsTab == .explore && detailOpen
-                ? ("Back to all plugins", { app.navReselects += 1 }) : nil) {
+             back: showsDetail ? ("Back to all plugins", { app.navReselects += 1 }) : nil,
+             scrolls: !showsDetail) {
             switch app.pluginsTab {
             case .explore:
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await refreshExplore() } }
@@ -50,22 +60,25 @@ struct PluginsPage: View {
                     .help("Check again (⌘R)")
             }
         } content: {
-            Tabs(options: [(PluginsTab.explore, "Plugins"), (PluginsTab.health, "Health")],
-                 selection: $app.pluginsTab, style: .underline,
-                 // Reselecting Explore while a plugin detail is open goes
-                 // back to the list, through the detail's unsaved ask.
-                 onSelect: { tab in
-                    if tab == .explore { app.navReselects += 1 }
-                 })
+            // An open plugin takes the whole page, like a skill: the tabs
+            // come back with the list, so a click on Health can never drop
+            // the detail's unsaved edits.
+            if !showsDetail {
+                Tabs(options: [(PluginsTab.explore, "Plugins"), (PluginsTab.health, "Health")],
+                     selection: $app.pluginsTab, style: .underline)
+            }
             switch app.pluginsTab {
             case .explore:
                 PluginExplorer(model: catalog, openHealth: { app.pluginsTab = .health },
                                confirm: { confirmingAction = $0 },
-                               confirmBatch: { confirmingBatch = $0 })
-                    .onPreferenceChange(DetailOpenKey.self) { detailOpen = $0 }
+                               confirmBatch: { confirmingBatch = $0 },
+                               opened: $openedPlugin)
             case .health: health
             }
         }
+        // Another tab picked from outside the page (⌘K): the list is what
+        // Plugins comes back to.
+        .onChange(of: app.pluginsTab) { if app.pluginsTab != .explore { openedPlugin = nil } }
         .task(id: app.swePath) {
             // Health's report stays warm behind Explore, the tab on show.
             await model.loadIfStale(swe: app.swe, for: app.swePath)

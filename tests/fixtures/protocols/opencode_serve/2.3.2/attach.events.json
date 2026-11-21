@@ -1,0 +1,1291 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.543,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.543,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.492,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "What colour is the attached image? Reply with one word."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.492,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.492,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "What colour is the attached image? Reply with one word."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.909,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 4.8200000000000006e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.69,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "**Considering image inspection**\n\nI need to inspect an ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.798,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "image, so I might use the read ",
+   "seq": 2,
+   "offset": 55,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.967,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "tool for that. It's designed to support direct display of images, which sounds ",
+   "seq": 3,
+   "offset": 86,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.076,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "like it could be the easiest way to ",
+   "seq": 4,
+   "offset": 165,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.181,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "do this. So, I think ",
+   "seq": 5,
+   "offset": 201,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.298,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "I’ll go ahead and call the read function on ",
+   "seq": 6,
+   "offset": 222,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.405,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "the file. Let's see what details it ",
+   "seq": 7,
+   "offset": 266,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.417,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "kind": "thinking",
+   "text": "provides!",
+   "seq": 8,
+   "offset": 302,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.417,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:r0",
+   "text": "**Considering image inspection**\n\nI need to inspect an image, so I might use the read tool for that. It's designed to support direct display of images, which sounds like it could be the easiest way to do this. So, I think I’ll go ahead and call the read function on the file. Let's see what details it provides!"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.648,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "name": "read",
+   "summary": "read · /work/square.png",
+   "input": {
+    "path": "/work/square.png",
+    "limit": 2000
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.651,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_01",
+   "status": "ok",
+   "name": "read",
+   "output": "Image read successfully"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.679,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 5322,
+   "output_tokens": 62,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00123385
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.827,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "**Determining dominant color**\n\nI need to find the color in the ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.93,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "image, but I’m not completely sure ",
+   "seq": 2,
+   "offset": 64,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.044,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "if it’s black or something ",
+   "seq": 3,
+   "offset": 99,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.164,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "else. I wonder if I should compute the dominant ",
+   "seq": 4,
+   "offset": 126,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.276,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "color by using a shell command in ",
+   "seq": 5,
+   "offset": 174,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.392,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "Python to analyze the pixels. ",
+   "seq": 6,
+   "offset": 208,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.492,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "I'll aim to get the average color from ",
+   "seq": 7,
+   "offset": 238,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.595,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "the image, which should ",
+   "seq": 8,
+   "offset": 277,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.698,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "help clarify things. It seems like a practical ",
+   "seq": 9,
+   "offset": 301,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.818,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "approach to really nail down the ",
+   "seq": 10,
+   "offset": 348,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.858,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "kind": "thinking",
+   "text": "color!",
+   "seq": 11,
+   "offset": 381,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.858,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_03:r0",
+   "text": "**Determining dominant color**\n\nI need to find the color in the image, but I’m not completely sure if it’s black or something else. I wonder if I should compute the dominant color by using a shell command in Python to analyze the pixels. I'll aim to get the average color from the image, which should help clarify things. It seems like a practical approach to really nail down the color!"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.948,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_02",
+   "name": "shell",
+   "summary": "shell · python3 - <<'PY'",
+   "input": {
+    "command": "python3 - <<'PY'\nfrom PIL import Image\nimg=Image.open('square.png').convert('RGBA')\n# sample center pixels\nw,h=img.size\npixels=[img.getpixel((w//2+i,h//2+j)) for i in range(-2,3) for j in range(-2,3)]\n# average ignoring fully transparent\nimport numpy as np\narr=np.array([p for p in pixels if p[3]>0])\nprint('size',img.size)\nif len(arr)==0:\n    print('no opaque')\nelse:\n    rgb=arr[:,:3].mean(axis=0)\n    print('avg rgb',rgb)\nPY",
+    "workdir": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.127,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_02",
+   "status": "ok",
+   "name": "shell",
+   "output": "Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nModuleNotFoundError: No module named 'PIL'\n\nExit code: 1"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.127,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 826,
+   "output_tokens": 210,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00180746
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.402,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "**Exploring image processing options**\n\nI'm considering various ways to process ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.51,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "images. Maybe using ImageMagick's ",
+   "seq": 2,
+   "offset": 80,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.611,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "identify function, though I'm uncertain. I also ",
+   "seq": 3,
+   "offset": 114,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.72,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "thought about using Python with matplotlib, but that ",
+   "seq": 4,
+   "offset": 162,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.824,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "seems less likely to work. There's the option ",
+   "seq": 5,
+   "offset": 215,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.926,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "to use ImageMagick convert to text. ",
+   "seq": 6,
+   "offset": 261,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.032,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "I might try using Python with imageio instead ",
+   "seq": 7,
+   "offset": 297,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.134,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "and should check if it's installed. If I'm ",
+   "seq": 8,
+   "offset": 343,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.241,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "using Python 3, I should ensure I ",
+   "seq": 9,
+   "offset": 386,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.346,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "can import imageio ",
+   "seq": 10,
+   "offset": 420,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.346,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "kind": "thinking",
+   "text": "properly.",
+   "seq": 11,
+   "offset": 439,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.346,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:r0",
+   "text": "**Exploring image processing options**\n\nI'm considering various ways to process images. Maybe using ImageMagick's identify function, though I'm uncertain. I also thought about using Python with matplotlib, but that seems less likely to work. There's the option to use ImageMagick convert to text. I might try using Python with imageio instead and should check if it's installed. If I'm using Python 3, I should ensure I can import imageio properly."
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.421,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_03",
+   "name": "shell",
+   "summary": "shell · python3 - <<'PY'",
+   "input": {
+    "command": "python3 - <<'PY'\nimport imageio.v2 as imageio\nimg=imageio.imread('square.png')\nprint(img.shape, img.dtype)\n# compute mean of non-transparent if alpha exists\nimport numpy as np\nif img.shape[-1]==4:\n    mask=img[...,3]>0\n    rgb=img[mask][...,:3]\nelse:\n    rgb=img[...,:3]\nprint('mean',rgb.mean(axis=0))\nPY",
+    "workdir": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.454,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_03",
+   "status": "ok",
+   "name": "shell",
+   "output": "Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nModuleNotFoundError: No module named 'imageio'\n\nExit code: 1"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000011.454,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 1127,
+   "output_tokens": 164,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00241127
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.637,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "**Considering image processing**\n\nI'm thinking about how to identify the dominant ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.74,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "colors in an image. A good start could be ",
+   "seq": 2,
+   "offset": 82,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.858,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "using `identify -format`, but I wonder if ",
+   "seq": 3,
+   "offset": 124,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.961,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "that's the best option. It might be ",
+   "seq": 4,
+   "offset": 166,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.067,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "worth trying `convert square.png ",
+   "seq": 5,
+   "offset": 202,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.171,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "-format %c histogram:info:- | ",
+   "seq": 6,
+   "offset": 235,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.275,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "sort` as another approach. I’ll consider utilizing ",
+   "seq": 7,
+   "offset": 265,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.382,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "ImageMagick for this task. ",
+   "seq": 8,
+   "offset": 316,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.465,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "Let’s see if that ",
+   "seq": 9,
+   "offset": 343,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.465,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "kind": "thinking",
+   "text": "works!",
+   "seq": 10,
+   "offset": 361,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.465,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_05:r0",
+   "text": "**Considering image processing**\n\nI'm thinking about how to identify the dominant colors in an image. A good start could be using `identify -format`, but I wonder if that's the best option. It might be worth trying `convert square.png -format %c histogram:info:- | sort` as another approach. I’ll consider utilizing ImageMagick for this task. Let’s see if that works!"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.502,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_04",
+   "name": "shell",
+   "summary": "shell · identify -verbose square.png | head",
+   "input": {
+    "command": "identify -verbose square.png | head",
+    "workdir": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.52,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "call_04",
+   "status": "ok",
+   "name": "shell",
+   "output": "zsh:1: command not found: identify\n"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000013.52,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 380,
+   "output_tokens": 65,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00273991
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.031,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "**Considering image processing tools**\n\nI can’t use ImageMagick, so ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.136,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "I’ll rethink my approach. Maybe a Node script ",
+   "seq": 2,
+   "offset": 68,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.274,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "with pngjs could work, though it might require ",
+   "seq": 3,
+   "offset": 114,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.38,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "installation. However, using Python with Tkinter ",
+   "seq": 4,
+   "offset": 161,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.487,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "feels like an unnecessary complication. I could ",
+   "seq": 5,
+   "offset": 210,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.596,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "try using base64 with Python, ",
+   "seq": 6,
+   "offset": 258,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.7,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "but if I don't have PIL, ",
+   "seq": 7,
+   "offset": 288,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.802,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "it might be tricky. Alternatively, ",
+   "seq": 8,
+   "offset": 313,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000015.905,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "I can visually interpret the output; ",
+   "seq": 9,
+   "offset": 348,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000016.007,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "the thumbnail appears red, so I’ll simply ",
+   "seq": 10,
+   "offset": 385,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000016.116,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "answer “red” to keep it ",
+   "seq": 11,
+   "offset": 427,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000016.117,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "kind": "thinking",
+   "text": "straightforward.",
+   "seq": 12,
+   "offset": 451,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "thinking.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.117,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:r0",
+   "text": "**Considering image processing tools**\n\nI can’t use ImageMagick, so I’ll rethink my approach. Maybe a Node script with pngjs could work, though it might require installation. However, using Python with Tkinter feels like an unnecessary complication. I could try using base64 with Python, but if I don't have PIL, it might be tricky. Alternatively, I can visually interpret the output; the thumbnail appears red, so I’ll simply answer “red” to keep it straightforward."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000016.117,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:0",
+   "kind": "assistant",
+   "text": "red",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.117,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_06:0",
+   "kind": "assistant",
+   "text": "red"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.155,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 6145,
+   "output_tokens": 7,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00410766
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.155,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 12.663
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.155,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.57,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "What is the first line of the attached file? Reply with just that line."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.57,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000016.57,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "What is the first line of the attached file? Reply with just that line."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000017.207,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "first line of the ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000017.207,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "notes",
+   "seq": 2,
+   "offset": 18,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000017.207,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_08:0",
+   "kind": "assistant",
+   "text": "first line of the notes"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000017.271,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 1382,
+   "output_tokens": 9,
+   "cache_read_tokens": 4608,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00448747
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000017.271,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 0.701
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000017.271,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000017.271,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

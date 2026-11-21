@@ -89,6 +89,115 @@ Required steps for any feature that adds files or changes `cmd_*` handlers:
 
 Common pitfall: if a feature works with `PYTHONPATH=src python -m swe.cli` but not with the installed `swe` command, the installed copy is stale (likely a non-editable install). Re-run `pip install -e .` to switch to editable mode and sync with the source tree.
 
+### Session keeper tests
+
+`tests/test_remote_keeper.py` runs a `Keeper` on a thread with the
+scripted `FakeAdapter` and a `FakeClock`, and talks to it over its real
+Unix socket; a test waits on a frame or on `keeper.sync()`, never on a
+sleep. Its home comes from `short_home`, because a socket address is
+limited to about 100 bytes and macOS's default temp folder is half of
+that. `RealProcess` starts `python -m swe.remote.keeper` for real,
+driving `tests/fakes/fake_claude.py`. Every test stops its keepers in
+cleanup.
+
+Whether a keeper outlives a restart of the hub's service depends on
+launchd and systemd themselves, so that has its own check against the
+real service manager: `python3 scripts/keeper_survival_check.py
+[--control]`. CI runs it on Linux (`keeper-survival` in `ci.yml`); run
+it by hand on a Mac after changing `remote/keeper/discovery.py`,
+`remote/launchd.py` or `remote/systemd.py`. It installs a throwaway
+service of its own and touches neither the real hub nor `~/.swe`.
+
+### Hub on keepers tests
+
+`tests/test_remote_hub_keeper.py` runs the hub's HTTP server (`HubBase`)
+with the session runtime on and an injected spawner, so each keeper is
+a `Keeper` thread driving the scripted `FakeAdapter`, started from the
+`spec.json` the hub wrote. `kill_hub` ends a hub the way a crash does
+(connections dropped, nothing tidied) and a second hub is started over
+the same home while the keepers run on. A test waits on the runtime's
+listener feed (`Feed`: every v2 event taken into a journal), on a
+subscriber queue (`Stream`), or on an HTTP event stream; `drain` asks
+the keeper a question over the hub's own connection, whose answer
+arrives after every event already logged. Nothing sleeps or polls.
+`RealProcess` runs the same flow over real `python -m
+swe.remote.keeper` processes and `tests/fakes/fake_claude.py`. Every
+test stops its keepers in cleanup, and tells its hubs first so they do
+not read the stop as a crash.
+
+### Sync v2 tests
+
+`tests/test_remote_sse_v2.py` runs the hub on keepers the same way
+(`KeeperHubCase`) and reads a `?v=2` stream over HTTP, as a client does.
+Every frame it reads is checked against the committed
+`src/swe/remote/schema/session_v2.json` as it arrives, and one test checks
+that the file is what `python3 -m swe.remote.schema` would write. `Client`
+in that file is a small reference client: the cursor is the highest seq it
+has seen, a state frame replaces the live text, and a delta is appended only
+at the offset the client holds. A test that has to decide when the stream is
+read (a full queue, the ping) drives a `V2Stream` itself. The hub's ping
+clock is a `FakeClock` that moves only when a test moves it, so no stream
+pings unless the test is about pings. Nothing sleeps or polls.
+
+### Session adapter tests: fixtures, fakes and the recorder
+
+A session adapter (`remote/adapters/`) is tested three ways, and no test runs the
+real CLI.
+
+| Layer | Where | What it checks |
+|---|---|---|
+| Recorded fixtures | `tests/fixtures/protocols/<adapter>/<version>/<scenario>.jsonl` and `<scenario>.events.json` (the ACP folders are `<agent>-<version>/`, and `<agent>-synthetic/` for fixtures written by hand) | each recording replays through the wire module's `replay` to exactly its golden events, and every event is a valid v2 event |
+| Wire module | the same test files | the encoders, decoders and state machine, line by line |
+| The adapter over a fake | `tests/fakes/fake_claude.py`, `fake_codex.py`, `fake_opencode.py`, `fake_acp.py` | the shared `AdapterContract`, plus faults |
+
+The tests are `tests/test_remote_claude_adapter.py` (Claude),
+`tests/test_remote_adapters.py` (Codex and opencode, from its "G16" banner)
+and `tests/test_remote_acp.py` (ACP). Each fake is a stdlib script the test
+starts as `[sys.executable, <fake>]`. It answers the way the recordings show
+the real CLI does, and the `FAKE_<NAME>_MODE` variable picks its behaviour
+(approval, slow, crash, no handshake, and so on); each file's docstring lists
+the modes. The fixtures hold no secrets: the recorder blanks paths, ids,
+user and host names, keys and emails before it writes, and refuses to write
+a file that still holds one.
+
+`scripts/record_protocol.py` makes the fixtures. `record_codex.py`,
+`record_opencode.py` and `record_acp.py` hold the scenarios of the other
+adapters and are run through it with `--adapter=`:
+
+```bash
+python3 scripts/record_protocol.py list
+python3 scripts/record_protocol.py record --adapter=claude_stream \
+    --scenario=hello --scenario=approval --raw-dir=/some/scratch/dir
+python3 scripts/record_protocol.py golden   # rebuild every golden file
+python3 scripts/record_protocol.py scrub    # re-apply the blanking
+```
+
+`record` runs the real CLI in a fresh `mktemp -d` folder with a throwaway
+home (a throwaway `CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex, the
+`XDG_*` folders for opencode), so the CLI never reads or writes the owner's
+`~/.claude` or any other real config. Never point a recording at the real
+folder: Claude's plan mode writes plan files there. `--raw-dir` keeps an
+unredacted copy outside the repo for the person recording; never commit it.
+Codex, opencode and ACP recordings read `OPENAI_API_KEY` from the
+environment. A Claude scenario costs about three US cents at most.
+
+To record again for a new CLI version:
+
+1. Run `record` for the scenarios you need. The folder is named for the
+   version `<cli> --version` prints (for ACP, `<agent>-<version>`).
+2. Read every new fixture.
+3. `gitleaks detect --no-git --source tests/fixtures/protocols`.
+4. `grep -rn -i "<user name>\|@gmail\|/Users/\|/var/folders/" tests/fixtures/protocols`
+   must find nothing (`git grep` misses untracked files).
+5. Run the adapter's test file. A golden mismatch on an old version's fixtures
+   means the mapping changed; on the new version's it means the wire did. Fix
+   the wire module, run `golden`, and read the diff of the `.events.json`
+   files.
+
+The adapters' specs ([G7](specs/G7-claude-stream-adapter.md),
+[G16](specs/G16-more-adapters.md)) say what each recording proves and what
+is still unverified.
+
 ### Web app tests
 
 `tests/test_webapp_*.py` cover the web app's page data (`/v1/app/*`)
