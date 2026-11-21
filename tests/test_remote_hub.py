@@ -134,11 +134,16 @@ class TestAuth(HubBase):
         status, data = self.srv.request("GET", "/v1/status")
         self.assertEqual(status, 200)
         # Machine id/name, swe version and uptime would name the box
-        # for the whole tailnet; the probe only proves the hub is up.
+        # for the whole tailnet; the probe only proves the hub is up
+        # and says what it speaks (tests/test_remote_sse_v2.py).
+        body = json.loads(data)
         self.assertEqual(
-            json.loads(data),
-            {"ok": True, "v": protocol.PROTOCOL_VERSION},
+            body,
+            {"ok": True, "v": protocol.PROTOCOL_VERSION,
+             "protocols": [1, 2], "features": list(protocol.FEATURES),
+             "boot_id": self.srv.state.boot_id},
         )
+        self.assertNotIn(self.srv.state.machine_id, data.decode())
 
     def test_sessions_requires_auth(self):
         status, _ = self.srv.request("GET", "/v1/sessions")
