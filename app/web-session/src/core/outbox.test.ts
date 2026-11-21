@@ -86,7 +86,6 @@ function setup(over: { factory?: IDBFactory; storage?: OutboxStorage; random?: (
       random: over.random ?? (() => 0.5),
       newId: () => `c${++ids}`,
       canPost: () => world.canPost,
-      keeperHeld: () => world.keeper,
       onChange: (view) => views.push(view),
       ...more,
     });
@@ -333,33 +332,23 @@ describe("results", () => {
 });
 
 describe("answers that are not 2xx", () => {
-  it("no answer, keeper session: tried again under the same id, and the hub applies it once", async () => {
-    const t = setup({ random: () => 0 });
-    t.hub.loseAnswers = 1;
-    const outbox = await t.make();
-    const entry = await outbox.send({ text: "once" });
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "waiting", ambiguous: true, attempts: 1 });
-    t.timers.advance(500);
-    await drain();
-    expect(t.hub.received.map((b) => b["command_id"])).toEqual([entry.commandId, entry.commandId]);
-    expect(t.hub.applied).toEqual([entry.commandId]);
-    expect(t.view().entries[0]).toMatchObject({ status: "sent", receipt: "queued" });
+
+  it("no answer, on any row: failed, may or may not have been sent, never tried again", async () => {
+    for (const path of ["keeper", "legacy"] as const) {
+      const t = setup();
+      if (path === "legacy") legacy(t);
+      t.transport.down = true;
+      const outbox = await t.make();
+      await outbox.send({ text: "x" });
+      await drain();
+      expect(t.view().entries[0], path).toMatchObject({ status: "failed", error: MAYBE_SENT });
+      t.transport.down = false;
+      t.timers.advance(60_000);
+      await drain();
+      expect(t.transport.calls, path).toHaveLength(1);
+    }
   });
 
-  it("no answer, any other session: failed, may or may not have been sent, never tried again", async () => {
-    const t = setup();
-    legacy(t);
-    t.transport.down = true;
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
-    t.transport.down = false;
-    t.timers.advance(60_000);
-    await drain();
-    expect(t.transport.calls).toHaveLength(1);
-  });
 
   it("408 and a 5xx that may have been applied: the same as no answer", async () => {
     for (const status of [408, 500, 502, 504]) {
@@ -371,12 +360,12 @@ describe("answers that are not 2xx", () => {
       await drain();
       expect(t.view().entries[0], String(status)).toMatchObject({ status: "failed", error: MAYBE_SENT });
 
-      const k = setup();
+      const k = setup(); // a keeper row: no repeat there either
       k.hub.status = status;
       const kept = await k.make();
       await kept.send({ text: "x" });
       await drain();
-      expect(k.view().entries[0], String(status)).toMatchObject({ status: "waiting", ambiguous: true });
+      expect(k.view().entries[0], String(status)).toMatchObject({ status: "failed", error: MAYBE_SENT });
     }
   });
 
@@ -394,20 +383,6 @@ describe("answers that are not 2xx", () => {
     }
   });
 
-  it("a repeat after an unanswered post fails instead once the row no longer says keeper", async () => {
-    const t = setup({ random: () => 0 });
-    t.transport.down = true;
-    const outbox = await t.make();
-    await outbox.send({ text: "x" });
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "waiting", ambiguous: true });
-    t.world.keeper = false; // detached meanwhile
-    t.transport.down = false;
-    t.timers.advance(500);
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
-    expect(t.transport.calls).toHaveLength(1);
-  });
 
   it("401 and 403: kept waiting and paused until wake()", async () => {
     for (const status of [401, 403]) {
@@ -443,9 +418,9 @@ describe("answers that are not 2xx", () => {
     }
   });
 
-  it("backs off between repeats, and holds the sends behind the one that cannot go", async () => {
+  it("backs off between retries, and holds the sends behind the one that cannot go", async () => {
     const t = setup({ random: () => 0 });
-    t.hub.status = 503;
+    t.hub.status = 429; // nothing was applied: the only answer still tried again
     const outbox = await t.make();
     await outbox.send({ text: "first" });
     await outbox.send({ text: "second" });
@@ -467,63 +442,36 @@ describe("answers that are not 2xx", () => {
   });
 });
 
-describe("asking again after a catch-up", () => {
-  it("re-posts every keeper-path send while the row says keeper, and the stored result settles it", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    const entry = await outbox.send({ text: "x" });
-    await drain();
-    outbox.recheckSent();
-    await drain();
-    expect(t.hub.received.map((b) => b["command_id"])).toEqual([entry.commandId, entry.commandId]);
-    expect(t.hub.applied).toEqual([entry.commandId]);
-    t.hub.results.set(entry.commandId, { ok: false, note: "the hub restarted before this was delivered" });
-    outbox.recheckSent();
-    await drain();
-    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: "the hub restarted before this was delivered" });
-  });
-
-  it("never re-posts a legacy send", async () => {
-    const t = setup();
-    legacy(t);
-    const outbox = await t.make();
-    await outbox.send({ text: "rm -rf build" });
-    await drain();
-    for (let i = 0; i < 3; i++) {
-      outbox.recheckSent();
-      outbox.wake();
+describe("a sent send is never posted again", () => {
+  // Rechecks are gone: a re-post goes to the route the hub picks when it arrives, and the one that is not the keeper
+  // does not de-duplicate. (These pinned review 1's "ask again after a catch-up" and review 2's "never re-post a legacy
+  // send" and "not once the session is no longer keeper-held".)
+  for (const path of ["keeper", "legacy"] as const) {
+    it(`${path}: however often the page wakes or catches up, one post`, async () => {
+      const t = setup();
+      if (path === "legacy") legacy(t);
+      const outbox = await t.make();
+      await outbox.send({ text: "rm -rf build" });
       await drain();
-    }
-    expect(t.hub.applied).toHaveLength(1);
-    expect(statuses(t)).toEqual(["sent"]);
-  });
+      for (let i = 0; i < 3; i++) {
+        outbox.wake();
+        await drain();
+      }
+      expect(t.hub.received).toHaveLength(1);
+      expect(statuses(t)).toEqual(["sent"]);
+    });
+  }
 
-  it("does not re-post a keeper send once the session is no longer keeper-held", async () => {
+  it("keeper: a result that never comes ends it at 24 hours as sent, its result not seen", async () => {
     const t = setup();
     const outbox = await t.make();
     await outbox.send({ text: "x" });
     await drain();
-    t.world.keeper = false;
-    outbox.recheckSent();
+    t.timers.advance(OUTBOX_TTL_MS + 1);
     await drain();
+    expect(t.view().entries).toMatchObject([{ status: "unconfirmed", error: KEEPER_UNCONFIRMED }]);
+    expect(KEEPER_UNCONFIRMED).toBe("Sent. Its result was not seen on this device.");
     expect(t.hub.received).toHaveLength(1);
-    expect(statuses(t)).toEqual(["sent"]);
-  });
-
-  it("asks again after sign-in when the ask was refused", async () => {
-    const t = setup();
-    const outbox = await t.make();
-    const entry = await outbox.send({ text: "x" });
-    await drain();
-    t.hub.status = 401;
-    outbox.recheckSent();
-    await drain();
-    expect(t.view().paused).toBe("unauthorized");
-    t.hub.status = null;
-    t.hub.results.set(entry.commandId, { ok: true });
-    outbox.wake();
-    await drain();
-    expect(t.view().entries).toEqual([]);
   });
 });
 
@@ -658,16 +606,18 @@ describe("surviving a reload, a restart and a broken database", () => {
     expect(t.view().entries[0]).toMatchObject({ commandId: "old", status: "sent" });
   });
 
-  it("asks again about an acknowledged keeper send after a reload", async () => {
+  it("an acknowledged keeper send after a reload: not asked about again, settled by a result that arrives", async () => {
     const t = setup();
     const before = await t.make();
     const entry = await before.send({ text: "x" });
     await drain();
     before.close();
-    t.hub.results.set(entry.commandId, { ok: true });
-    await t.make();
+    const after = await t.make();
     await drain();
-    expect(t.hub.applied).toEqual([entry.commandId]);
+    expect(t.hub.received).toHaveLength(1);
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "keeper" }]);
+    after.noteResult(entry.commandId, { ok: true });
+    await drain();
     expect(t.view().entries).toEqual([]);
   });
 
@@ -754,8 +704,9 @@ describe("surviving a reload, a restart and a broken database", () => {
     await outbox.send({ text: "hi" });
     await drain();
     expect(notes[0]).toContain("the disk is full");
-    expect(t.view()).toMatchObject({ persistent: false, note: notes[0] });
-    expect(statuses(t)).toEqual(["sent"]);
+    expect(t.view()).toMatchObject({ persistent: false, note: notes[0], storageDown: true });
+    // Its first write may have landed, so nothing is posted under a claim the database did not record.
+    expect(t.view().entries).toMatchObject([{ status: "waiting", lastError: STORAGE_DOWN }]);
   });
 
   it("a deferred storage reports memory until the database is open", async () => {
@@ -817,7 +768,7 @@ describe("one page posts an entry (claims)", () => {
     expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
   });
 
-  it("an abandoned claim on a keeper row is posted again under the same id, and the hub answers with the stored receipt", async () => {
+  it("an abandoned claim, on a keeper row too, is not posted again: it may have been applied", async () => {
     const t = setup();
     t.hub.applied.push("x1"); // the abandoned post did reach the hub
     const storage = await openOutboxStorage(t.factory);
@@ -828,9 +779,9 @@ describe("one page posts an entry (claims)", () => {
     });
     await t.make();
     await drain();
-    expect(t.hub.received.map((b) => b["command_id"])).toEqual(["x1"]);
-    expect(t.hub.applied).toEqual(["x1"]);
-    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "queued", attempts: 2 });
+    expect(t.hub.received).toEqual([]);
+    // Resolved by the deadline pass (no claim, `ambiguous`), and ended there: it is never posted again.
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT, ambiguous: true, attempts: 1 });
     expect((await stored(t.factory))[0]?.claim).toBeUndefined();
   });
 
@@ -870,12 +821,13 @@ describe("the deadline timer never spins", () => {
       await drain();
     }
     expect(t.timers.zeroDelay).toBe(0);
-    expect(t.view().entries[0]).toMatchObject({ status: "waiting", ambiguous: true });
+    // Resolved by the pass itself, and ended: its post may have reached the hub and it is never posted again.
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT, ambiguous: true });
     expect(t.view().entries[0]?.claim).toBeUndefined();
-    expect((await stored(t.factory))[0]).toMatchObject({ ambiguous: true });
-    // Its own deadline is the next timer, in the future.
-    expect(t.timers.nextIn).toBe(OUTBOX_TTL_MS - CLAIM_STALE_MS - 20);
-    // Once it may post, the repeat rule decides: this path does not de-duplicate.
+    expect((await stored(t.factory))[0]).toMatchObject({ status: "failed", ambiguous: true });
+    // Its own deadline (how long an ended send is kept) is the next timer, in the future.
+    expect(t.timers.nextIn).toBe(TERMINAL_KEPT_MS - 20);
+    // Once it may post: still nothing, it ended.
     t.world.canPost = true;
     await t.make();
     await drain();
@@ -908,7 +860,7 @@ describe("stop() while a post is out", () => {
       const late: [OutboxEntry, boolean][] = [];
       const first = new Outbox({
         session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers, random: () => 0.5,
-        newId: () => "c1", owner: "page", keeperHeld: () => t.world.keeper, onLate: (e, settled) => late.push([e, settled]), onChange: () => {},
+        newId: () => "c1", owner: "page", onLate: (e, settled) => late.push([e, settled]), onChange: () => {},
       });
       await first.init();
       await first.send({ text: "x" });
@@ -917,7 +869,7 @@ describe("stop() while a post is out", () => {
       first.close();
       const second = new Outbox({
         session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers, random: () => 0.5,
-        newId: () => "c2", owner: "page", keeperHeld: () => t.world.keeper, initial: carried, onChange: (view) => t.views.push(view),
+        newId: () => "c2", owner: "page", initial: carried, onChange: (view) => t.views.push(view),
       });
       await second.init();
       await drain();
@@ -936,45 +888,20 @@ describe("stop() while a post is out", () => {
 });
 
 describe("what a 503 means", () => {
-  it("keeper_failed, or a code this client does not know: may have been applied, so the row decides", async () => {
-    for (const code of ["keeper_failed", "something_new"]) {
-      const t = setup({ random: () => 0 });
-      let n = 0;
-      t.transport.on("/message", () => {
-        n++;
-        return n === 1
-          ? { status: 503, body: { error: { code, message: "the session's keeper did not answer" } } }
-          : { status: 202, body: { ok: true, queued: true } };
-      }, "POST");
-      const outbox = await t.make();
-      await outbox.send({ text: "hello" });
-      await drain();
-      expect(t.view().entries[0], code).toMatchObject({ status: "waiting", ambiguous: true });
-      t.world.keeper = false; // detached before the retry
-      t.timers.advance(1000);
-      await drain();
-      expect(n, code).toBe(1);
-      expect(t.view().entries[0], code).toMatchObject({ status: "failed", error: MAYBE_SENT });
-    }
-  });
-
-  it("every 503, store_failed included, may have been applied (a satellite answers it after storing): the row decides", async () => {
-    for (const keeper of [true, false]) {
-      const t = setup({ random: () => 0 });
-      if (!keeper) legacy(t);
-      let n = 0;
-      t.transport.on("/message", () => (++n === 1 ? { status: 503, body: { error: { code: "store_failed", message: "disk" } } } : { status: 202, body: { receipt: "duplicate" } }), "POST");
-      const outbox = await t.make();
-      await outbox.send({ text: "hello" });
-      await drain();
-      t.timers.advance(500);
-      await drain();
-      if (keeper) {
-        expect(n).toBe(2);
-        expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "duplicate" });
-      } else {
-        expect(n).toBe(1);
-        expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+  it("every 503 (keeper_failed, store_failed, a code this client does not know) may have been applied: failed, never posted again", async () => {
+    for (const code of ["keeper_failed", "store_failed", "something_new"]) {
+      for (const keeper of [true, false]) {
+        const t = setup({ random: () => 0 });
+        if (!keeper) legacy(t);
+        let n = 0;
+        t.transport.on("/message", () => (++n === 1 ? { status: 503, body: { error: { code, message: "no" } } } : { status: 202, body: { ok: true, queued: true } }), "POST");
+        const outbox = await t.make();
+        await outbox.send({ text: "hello" });
+        await drain();
+        t.timers.advance(60_000);
+        await drain();
+        expect(n, `${code} ${keeper}`).toBe(1);
+        expect(t.view().entries[0], `${code} ${keeper}`).toMatchObject({ status: "failed", error: MAYBE_SENT });
       }
     }
   });
@@ -1017,7 +944,7 @@ describe("what is kept", () => {
     const deferred = new DeferredStorage(new Promise<OutboxStorage>((resolve) => (open = resolve)));
     const outbox = new Outbox({
       session: KEY, storage: deferred, transport: t.transport, timers: t.timers, random: () => 0.5, newId: () => "n",
-      canPost: () => false, keeperHeld: () => true, onChange: (view) => t.views.push(view),
+      canPost: () => false, onChange: (view) => t.views.push(view),
     });
     const loading = outbox.init();
     outbox.sessionGone(); // the 404 came first
@@ -1273,21 +1200,21 @@ describe("init(): storage is the truth at start", () => {
     const a = t.build(held.storage, { initial: [handedOver("x", { attempts: 1, lastError: "busy" })] });
     const loading = a.init();
     await drain(); // a's load has read the claimed copy; its answer waits
-    // The other tab, a minute later, takes the stale claim over and posts; its answer has not come yet.
-    t.transport.on("/message", () => new Promise<JsonResponse>(() => {}), "POST");
+    // The other tab, a minute later, takes the stale claim over: the send may have been applied, so it ends it.
     t.timers.advance(CLAIM_STALE_MS + 1);
     const b = await t.make(await openOutboxStorage(t.factory));
     await drain();
-    expect(t.transport.posts("/message")).toHaveLength(1);
+    expect(t.transport.posts("/message")).toHaveLength(0);
     const theirs = (await stored(t.factory))[0];
-    expect(theirs).toMatchObject({ attempts: 2, ambiguous: true });
+    expect(theirs).toMatchObject({ attempts: 1, ambiguous: true, status: "failed", error: MAYBE_SENT });
     // Now a merges: its copy beat what it read, but the write-back compares with what is stored now, so the other
     // tab's claim stands and a leaves the send to it.
     held.release();
     await loading;
     await drain();
-    expect(t.transport.posts("/message")).toHaveLength(1);
+    expect(t.transport.posts("/message")).toHaveLength(0);
     expect(await stored(t.factory)).toEqual([theirs]);
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: MAYBE_SENT }]);
     a.close();
     b.close();
   });
@@ -1493,14 +1420,43 @@ describe("when storage fails", () => {
     expect(t.view().entries).toMatchObject([{ status: "failed", error: NOT_SENT_IN_TIME }]);
   });
 
-  it("database down, keeper row: sends still go, under a claim only this page knows (the hub de-duplicates)", async () => {
-    const t = setup();
+  it("database down, keeper row: nothing is posted either, then once after the database answers", async () => {
+    const t = setup(); // a keeper row
     const db = await failing(t, { put: Infinity, claim: Infinity });
     const outbox = await t.make(db.storage);
     await outbox.send({ text: "x" });
     await drain();
+    t.timers.advance(30_000);
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ status: "waiting", lastError: STORAGE_DOWN }]);
+    db.heal();
+    t.timers.advance(30_000);
+    await drain();
     expect(t.hub.received.map((b) => b["text"])).toEqual(["x"]);
-    expect(t.view().entries).toMatchObject([{ status: "sent", path: "keeper", attempts: 1 }]);
+    expect(await stored(t.factory)).toMatchObject([{ status: "sent", path: "keeper", attempts: 1 }]);
+  });
+
+  it("a keeper-row page in an outage, the session leaves the keeper, a healthy legacy-row page: one post in all", async () => {
+    const t = setup();
+    // Page A's first write landed (the database holds x, waiting, 0 attempts); then its database stops answering.
+    await (await openOutboxStorage(t.factory)).put({
+      commandId: "x", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 0,
+    });
+    const db = await failing(t, { claim: Infinity, put: Infinity });
+    await t.make(db.storage); // its row says keeper
+    await drain();
+    t.timers.advance(30_000);
+    await drain();
+    expect(t.hub.received).toEqual([]); // not posted under a claim only memory knows
+    // The session leaves the keeper; page B, healthy, on the same database, sees a legacy row.
+    legacy(t);
+    await t.make(await openOutboxStorage(t.factory));
+    await drain();
+    t.timers.advance(60_000);
+    await drain();
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual(["x"]);
+    expect(t.hub.applied).toEqual(["x"]);
   });
 
   it("a first write the database took although the page heard an error, then a reload: one post in all", async () => {
@@ -1573,13 +1529,13 @@ describe("when storage fails", () => {
     const outbox = await t.make(db.storage);
     t.timers.advance(CLAIM_STALE_MS + 1);
     await drain();
-    // Resolved here: its post may have reached the hub, and no claim is left on it.
-    expect(t.view().entries).toMatchObject([{ commandId: "x", status: "waiting", ambiguous: true }]);
+    // Resolved in memory (its post may have reached the hub) and ended: never posted again. The end's write
+    // found the database answering, and replayed the held copy first, further along than the stale claim.
+    expect(t.view().entries).toMatchObject([{ commandId: "x", status: "failed", error: MAYBE_SENT, ambiguous: true }]);
     expect(t.view().entries[0]).not.toHaveProperty("claim");
     expect(t.hub.received).toEqual([]);
-    expect((await stored(t.factory))[0]).toHaveProperty("claim"); // the database still has the stale claim
-    await outbox.send({ text: "y" }); // the database answers: the held copy, further along, replaces it
-    expect((await stored(t.factory)).find((e) => e.commandId === "x")).toMatchObject({ ambiguous: true, attempts: 1 });
+    void outbox;
+    expect((await stored(t.factory)).find((e) => e.commandId === "x")).toMatchObject({ status: "failed", ambiguous: true, attempts: 1 });
     expect((await stored(t.factory)).find((e) => e.commandId === "x")).not.toHaveProperty("claim");
   });
 
@@ -1599,5 +1555,93 @@ describe("when storage fails", () => {
 
   const handed = (id: string, over: Partial<OutboxEntry> = {}): OutboxEntry => ({
     commandId: id, session: KEY, text: id, attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 0, ...over,
+  });
+});
+
+describe("evidence after a send ended as may or may not have been sent", () => {
+  /** A keeper-row send whose answer was lost: it ends in doubt. */
+  const inDoubt = async () => {
+    const t = setup();
+    t.transport.down = true;
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    t.transport.down = false;
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: MAYBE_SENT, ambiguous: true }]);
+    return { t, outbox, entry };
+  };
+
+  it("an ok or cancelled result afterwards: it leaves as delivered", async () => {
+    for (const result of [{ ok: true }, { ok: false, cancelled: true }]) {
+      const { t, outbox, entry } = await inDoubt();
+      outbox.noteResult(entry.commandId, result);
+      await drain();
+      expect(t.view().entries).toEqual([]);
+      expect(await stored(t.factory)).toEqual([]);
+    }
+  });
+
+  it("a failed result afterwards replaces the doubt with the hub's reason", async () => {
+    const { t, outbox, entry } = await inDoubt();
+    outbox.noteResult(entry.commandId, { ok: false, note: "the session is not running" });
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "the session is not running" }]);
+    expect(t.view().entries[0]?.ambiguous).toBeUndefined();
+    // A definite failure then stands.
+    outbox.noteResult(entry.commandId, { ok: false, note: "something else" });
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "the session is not running" }]);
+  });
+
+  it("its receipt afterwards (live, or already in the session's records): it is sent", async () => {
+    const { t, outbox, entry } = await inDoubt();
+    outbox.noteReceipt(entry.commandId, "accepted");
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "sent", path: "keeper", receipt: "accepted" }]);
+    expect(t.view().entries[0]?.ambiguous).toBeUndefined();
+    expect(await stored(t.factory)).toMatchObject([{ status: "sent", receipt: "accepted" }]);
+    expect(t.transport.posts("/message")).toHaveLength(1); // its one post; the evidence posted nothing
+
+    const again = await inDoubt();
+    again.outbox.close();
+    const restarted = again.t.build(await openOutboxStorage(again.t.factory), {
+      knownReceipt: (id) => (id === again.entry.commandId ? "queued" : undefined),
+    });
+    await restarted.init();
+    await drain();
+    expect(again.t.view().entries).toMatchObject([{ status: "sent", receipt: "queued" }]);
+  });
+
+  it("a receipt saying it was refused moves nothing; a definite failure is not reopened by a receipt", async () => {
+    const { t, outbox, entry } = await inDoubt();
+    outbox.noteReceipt(entry.commandId, "rejected");
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: MAYBE_SENT }]);
+    outbox.noteResult(entry.commandId, { ok: false, note: "no" });
+    await drain();
+    outbox.noteReceipt(entry.commandId, "accepted");
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "no" }]);
+  });
+
+  it("the order: in doubt is between waiting and sent, below a definite end", () => {
+    const base: OutboxEntry = { commandId: "x", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 1 };
+    const doubt: OutboxEntry = { ...base, status: "failed", ambiguous: true, error: MAYBE_SENT };
+    const sent: OutboxEntry = { ...base, status: "sent", path: "keeper", receipt: "accepted" };
+    const failed: OutboxEntry = { ...base, status: "failed", error: "no" };
+    expect(furtherAlong(doubt, base)).toBeGreaterThan(0);
+    expect(furtherAlong(sent, doubt)).toBeGreaterThan(0);
+    expect(furtherAlong(failed, sent)).toBeGreaterThan(0);
+    expect(furtherAlong({ ...base, status: "unconfirmed" }, doubt)).toBeGreaterThan(0);
+    expect(furtherAlong(failed, { ...base, status: "unconfirmed" })).toBe(0); // the reviewer's tie stays a tie
+  });
+
+  it("a send answered 202 with a `rejected` receipt (a satellite's refusal, answered again) fails with the hub's reason", async () => {
+    const t = setup();
+    t.transport.on("/message", () => ({ status: 202, body: { ok: true, receipt: "rejected", duplicate: true, reason: "machine is too far behind" } }), "POST");
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().entries).toMatchObject([{ status: "failed", error: "machine is too far behind" }]);
   });
 });

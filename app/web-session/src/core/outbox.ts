@@ -15,14 +15,14 @@
 //   `client_id`. The hub's answer decides the path: a 2xx with a `receipt`
 //   means the hub stored the command under that id (`keeper`), one without
 //   means it did not (`legacy`).
-// - A post is repeated only where the hub de-duplicates by id: the entry's
-//   path is `keeper`, or it has none yet and the row says a keeper holds the
-//   session, and the row still says so at the moment of the repeat. Anywhere
-//   else an answer that may mean "applied" (none at all, 408, a 5xx) ends the
-//   send as failed, "may or may not have been sent".
+// - A post is never repeated, on any row: the hub picks the route when the
+//   post arrives, and the route that is not the keeper does not de-duplicate.
+//   An answer that may mean "applied" (none at all, 408, a 5xx, an abandoned
+//   claim) ends the send as failed, "may or may not have been sent". Only an
+//   answer that says nothing was stored (429, 425) is tried again.
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
-import { CLAIM_STALE_MS, decideClaim, furtherAlong, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, furtherAlong, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 
 export { furtherAlong };
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
@@ -50,8 +50,7 @@ export const MAYBE_SENT =
 export const NOT_SENT_IN_TIME = "Not sent: the hub could not be reached for 24 hours.";
 export const LEGACY_UNCONFIRMED =
   "The hub took this message but never said whether it reached the session: check the session, and send it again if it is not there.";
-export const KEEPER_UNCONFIRMED =
-  "The hub took this message but no result came in 24 hours: check the session, and send it again if it is not there.";
+export const KEEPER_UNCONFIRMED = "Sent. Its result was not seen on this device.";
 export const SESSION_GONE = "Not sent: this session no longer exists.";
 export const UNDELIVERED = "The hub could not deliver this message.";
 
@@ -69,7 +68,7 @@ export interface OutboxView {
   owner: string;
   /** Storage is still being loaded: what `entries` shows may change, so no action should be offered on it. */
   loading: boolean;
-  /** The database has stopped answering: no send on a legacy row is posted until it answers again. */
+  /** The database has stopped answering: no send is posted until it answers again. */
   storageDown: boolean;
 }
 
@@ -86,8 +85,6 @@ export interface OutboxOptions {
    * connection is not in a state that refuses (unauthorized, gone, outdated). Deadlines run regardless.
    */
   canPost?(): boolean;
-  /** Whether the row says a keeper holds the session (`row.mode` is `keeper`): where a repeat is safe. */
-  keeperHeld(): boolean;
   backoff?: BackoffOptions;
   /** Entries an earlier outbox of this page held (a store that was stopped and started again). */
   initial?: OutboxEntry[];
@@ -97,6 +94,8 @@ export interface OutboxOptions {
   onLate?(entry: OutboxEntry, settled: boolean): void;
   /** The `command.result` the session already holds for an id, if any: applied to the sends storage loads. */
   knownResult?(commandId: string): SendResultData | undefined;
+  /** The `command.receipt` the session already holds for an id, if any: evidence that the hub took the send. */
+  knownReceipt?(commandId: string): string | undefined;
   onChange(view: OutboxView): void;
 }
 
@@ -148,7 +147,6 @@ export class Outbox {
   private readonly options: OutboxOptions;
   private readonly backoff: BackoffOptions;
   private list: OutboxEntry[] = [];
-  private recheck = new Set<string>();
   private flushing: Promise<void> | null = null;
   private again = false;
   private retryTimer: unknown = null;
@@ -173,6 +171,7 @@ export class Outbox {
    */
   private ready = false;
   private early = new Map<string, SendResultData>();
+  private earlyReceipts = new Map<string, string>();
   private lateWhileLoading = new Map<string, { entry: OutboxEntry; settled: boolean }>();
   /** Ids this outbox removed while loading (discarded, retried, settled): never taken back from the load or written again. */
   private removed = new Set<string>();
@@ -221,8 +220,6 @@ export class Outbox {
     if (this.closed) return;
     this.ready = true;
     this.removed.clear(); // only the merge reads it
-    // The hub may have lost what it owed us while this page was away: ask again where that is safe.
-    for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
     // A 404 (or an outdated hub) that came before the stored entries were loaded applies to them too.
     if (this.gone !== null) this.sessionGone(this.gone);
     this.changed();
@@ -267,13 +264,17 @@ export class Outbox {
     for (const entry of [...this.list]) {
       const result = this.options.knownResult?.(entry.commandId);
       if (result !== undefined && !this.early.has(entry.commandId)) this.early.set(entry.commandId, result);
+      const receipt = this.options.knownReceipt?.(entry.commandId);
+      if (receipt !== undefined && !this.earlyReceipts.has(entry.commandId)) this.earlyReceipts.set(entry.commandId, receipt);
     }
-    while (this.lateWhileLoading.size > 0 || this.early.size > 0) {
+    while (this.lateWhileLoading.size > 0 || this.earlyReceipts.size > 0 || this.early.size > 0) {
       for (const [id, { entry, settled }] of this.takeAll(this.lateWhileLoading)) {
         if (!this.list.some((e) => e.commandId === id)) continue;
         if (settled) await this.drop(id);
         else this.replace(entry);
       }
+      // Receipts before results: a result then settles what a receipt made `sent`.
+      for (const [id, receipt] of this.takeAll(this.earlyReceipts)) await this.received(id, receipt);
       for (const [id, result] of this.takeAll(this.early)) {
         const entry = this.list.find((e) => e.commandId === id);
         if (entry !== undefined) await this.settle(entry, result);
@@ -334,16 +335,6 @@ export class Outbox {
     void this.flush();
   }
 
-  /**
-   * A catch-up just ended: ask again, under the same ids, about every send the keeper path took. The hub
-   * answers a repeat with the stored receipt and result. A catch-up by snapshot or overflow recovery carries
-   * no `command.result`, and a failed one the hub made for the stream has `seq` 0 and is not replayed, so a
-   * result could have been missed. Legacy sends are never asked about: that path does not de-duplicate.
-   */
-  recheckSent(): void {
-    for (const entry of this.list) if (entry.status === "sent" && entry.path === "keeper") this.recheck.add(entry.commandId);
-    void this.flush();
-  }
 
   /**
    * The `command.result` for a send came down the stream. An empty id changes nothing. While storage loads, every
@@ -359,6 +350,32 @@ export class Outbox {
     this.early.delete(commandId);
     if (this.early.size >= EARLY_RESULTS_KEPT) this.early.delete(this.early.keys().next().value as string);
     this.early.set(commandId, result);
+  }
+
+  /**
+   * The `command.receipt` for a send came down the stream: the hub took it. A send this page still holds as
+   * waiting, or ended as "may or may not have been sent", is `sent` on this evidence. Held, like a result, while
+   * storage loads.
+   */
+  noteReceipt(commandId: string, receipt: string): void {
+    if (commandId === "") return;
+    if (!this.ready) {
+      this.earlyReceipts.delete(commandId);
+      if (this.earlyReceipts.size >= EARLY_RESULTS_KEPT) this.earlyReceipts.delete(this.earlyReceipts.keys().next().value as string);
+      this.earlyReceipts.set(commandId, receipt);
+      return;
+    }
+    void this.received(commandId, receipt);
+  }
+
+  private async received(commandId: string, receipt: string): Promise<void> {
+    if (receipt === "rejected") return; // not taken: the post's own answer, or a result, says why
+    const entry = this.list.find((e) => e.commandId === commandId);
+    if (entry === undefined || this.inFlight === commandId) return; // the post's own answer decides
+    const doubt = entry.status === "failed" && entry.ambiguous === true;
+    if (entry.status !== "waiting" && !doubt) return;
+    const { error: _error, endedAt: _ended, lastError: _last, ambiguous: _ambiguous, ...rest } = entry;
+    await this.save({ ...rest, status: "sent", path: "keeper", receipt, sentAt: this.options.timers.now() });
   }
 
   /** The session no longer exists: nothing still open can be sent. */
@@ -426,19 +443,6 @@ export class Outbox {
       if (outcome === "retry") return this.scheduleRetry();
       if (outcome === "paused" || outcome === "held") return;
     }
-    for (const id of [...this.recheck]) {
-      if (this.closed || !this.canPost()) return;
-      this.recheck.delete(id);
-      const entry = this.list.find((e) => e.commandId === id);
-      if (entry === undefined || entry.status !== "sent" || entry.path !== "keeper") continue;
-      // The row must still say a keeper holds the session: a detached session's path no longer de-duplicates.
-      if (!this.options.keeperHeld()) continue;
-      const outcome = await this.ask(entry);
-      if (outcome === "paused") {
-        this.recheck.add(id); // asked about again after sign-in
-        return;
-      }
-    }
     this.failures = 0;
   }
 
@@ -468,11 +472,6 @@ export class Outbox {
     }
   }
 
-  /** A repeat of this send is harmless: the row says a keeper holds the session, and no answer said otherwise. */
-  private repeatIsHarmless(entry: OutboxEntry | undefined): boolean {
-    return entry !== undefined && this.options.keeperHeld() && entry.path !== "legacy";
-  }
-
   /** The entry is not going to be posted after all: it can be discarded again. */
   private notPosting(): void {
     this.inFlight = null;
@@ -486,7 +485,7 @@ export class Outbox {
     return entry === undefined || TERMINAL.has(entry.status) ? undefined : entry;
   }
 
-  /** A waiting entry's post: its first, or a repeat where repeating is safe. */
+  /** A waiting entry's post: its first, or again after an answer that said nothing was stored (429, 425). */
   private async deliver(entry: OutboxEntry): Promise<Outcome> {
     // Claim it first: the counted attempt and this page's claim are on disk before the request leaves, in one
     // transaction, so a reload or a second tab never makes a "first" post of something already posted.
@@ -500,11 +499,6 @@ export class Outbox {
       this.notPosting();
       throw error;
     }
-    if (claim.kind === "unrecorded" && this.repeatIsHarmless(this.current(entry.commandId))) {
-      // A keeper row de-duplicates by command id, so a post under a claim only this page knows cannot be applied
-      // twice: it goes now, as it would with no database. (Where a repeat is not harmless, see below.)
-      claim = decideClaim(this.current(entry.commandId) as OutboxEntry, this.owner, this.options.timers.now(), CLAIM_STALE_MS).claim;
-    }
     if (claim.kind !== "claimed" || this.closed) this.notPosting();
     if (this.closed) return "done";
     if (claim.kind === "missing") {
@@ -517,8 +511,8 @@ export class Outbox {
       return "done";
     }
     if (claim.kind === "unrecorded") {
-      // The database did not take the claim. On a legacy row a send is posted only under a claim the database
-      // recorded: not now. Shown, not written (a write would drop the claim the entry may hold, which other pages
+      // The database did not take the claim. A send is posted only under a claim the database recorded, on every
+      // row (a keeper row can stop being one before another page posts it again): not now. Shown, not written (a write would drop the claim the entry may hold, which other pages
       // rely on), and tried again; its deadline still ends it.
       const now = this.current(entry.commandId);
       if (now !== undefined) this.replace({ ...now, lastError: STORAGE_DOWN });
@@ -538,9 +532,10 @@ export class Outbox {
     }
     const attempted = claim.entry;
     this.adopt(attempted);
-    if (attempted.ambiguous && !this.options.keeperHeld()) {
+    if (attempted.ambiguous) {
       this.notPosting();
-      // An earlier post may have been applied, and here a repeat would not be recognised as the same message.
+      // An earlier post may have been applied. No row is sure to de-duplicate a repeat: the hub picks the route
+      // when the post arrives, and a session can leave its keeper after this page last saw the row.
       await this.fail(attempted, MAYBE_SENT);
       return "done";
     }
@@ -551,12 +546,17 @@ export class Outbox {
     }
     const now = this.current(entry.commandId);
     if (now === undefined) return "done"; // a result came first
-    if (response === null) return this.unsure(now, "The hub did not answer");
+    if (response === null) return this.unsure(now);
     const { status } = response;
     if (status >= 200 && status < 300) {
-      const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData };
+      const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData; reason?: unknown };
       if (body.result !== undefined && body.result !== null && typeof body.result === "object") {
         await this.settle(now, body.result);
+        return "done";
+      }
+      if (body.receipt === "rejected") {
+        // A keeper stored it as refused (a satellite's 429 backlog_full, answered again to a repeat): not taken.
+        await this.fail(now, typeof body.reason === "string" && body.reason !== "" ? body.reason : UNDELIVERED);
         return "done";
       }
       const keeper = typeof body.receipt === "string";
@@ -583,7 +583,7 @@ export class Outbox {
       await this.save({ ...now, lastError: errorText(response) });
       return "retry";
     }
-    if (status === 408 || status >= 500) return this.unsure(now, errorText(response));
+    if (status === 408 || status >= 500) return this.unsure(now);
     if (status === 409 && errorCode(response) === "duplicate_client_id") {
       // The legacy path still holds a send under this id: an earlier post of ours got there. It is sent.
       await this.save({ ...now, status: "sent", path: "legacy", sentAt: this.options.timers.now() });
@@ -641,34 +641,9 @@ export class Outbox {
     void this.flush();
   }
 
-  /** An answer that may mean the hub applied the send: repeat it only where the hub de-duplicates. */
-  private async unsure(entry: OutboxEntry, why: string): Promise<Outcome> {
-    if (!this.options.keeperHeld()) {
-      await this.fail(entry, MAYBE_SENT);
-      return "done";
-    }
-    await this.save({ ...entry, ambiguous: true, lastError: why });
-    return "retry";
-  }
-
-  /** A keeper-path send asked about again under its own id. It stays `sent` unless the answer settles it. */
-  private async ask(entry: OutboxEntry): Promise<Outcome> {
-    const response = await this.post(entry);
-    const now = this.current(entry.commandId);
-    if (now === undefined || response === null) return "done"; // asked again at the next catch-up
-    if (response.status >= 200 && response.status < 300) {
-      const body = (response.body ?? {}) as { result?: SendResultData };
-      if (body.result !== undefined && body.result !== null && typeof body.result === "object") {
-        await this.settle(now, body.result);
-      }
-      return "done";
-    }
-    if (response.status === 401 || response.status === 403) {
-      this.paused = "unauthorized";
-      this.changed();
-      return "paused";
-    }
-    if (response.status === 404) await this.fail(now, SESSION_GONE);
+  /** An answer that may mean the hub applied the send: it ends there, and is never posted again. */
+  private async unsure(entry: OutboxEntry): Promise<Outcome> {
+    await this.fail(entry, MAYBE_SENT);
     return "done";
   }
 
@@ -680,7 +655,7 @@ export class Outbox {
       await this.drop(entry.commandId);
       return;
     }
-    if (entry.status === "failed") return; // the first failure stands
+    if (entry.status === "failed" && entry.ambiguous !== true) return; // the first definite failure stands
     await this.fail(entry, typeof result.note === "string" && result.note !== "" ? result.note : UNDELIVERED);
   }
 
@@ -692,7 +667,7 @@ export class Outbox {
       if (TERMINAL.has(entry.status)) {
         if (now - (entry.endedAt ?? entry.createdAt) >= TERMINAL_KEPT_MS) await this.drop(entry.commandId);
       } else if (entry.status === "waiting") {
-        if (now - entry.createdAt >= OUTBOX_TTL_MS) await this.fail(entry, NOT_SENT_IN_TIME);
+        if (now - entry.createdAt >= OUTBOX_TTL_MS) await this.fail(entry, entry.ambiguous === true ? MAYBE_SENT : NOT_SENT_IN_TIME);
         else if (entry.claim !== undefined && now - entry.claim.at >= CLAIM_STALE_MS && this.inFlight !== entry.commandId) {
           // An abandoned claim is resolved here, whether or not this page may post: the entry becomes
           // `ambiguous` (its post may have reached the hub) and its own deadlines apply from now on.
@@ -703,6 +678,9 @@ export class Outbox {
             this.changed();
           } else {
             this.adopt(resolved);
+            // Its post may have reached the hub, and it is never posted again: it ends here.
+            const standing = this.current(resolved.commandId);
+            if (standing?.status === "waiting" && standing.ambiguous === true) await this.fail(standing, MAYBE_SENT);
           }
         }
       } else if (entry.path === "legacy") {
@@ -768,14 +746,15 @@ export class Outbox {
   private async end(entry: OutboxEntry, status: "failed" | "unconfirmed", error: string): Promise<void> {
     const ended: OutboxEntry = { ...entry, status, error, endedAt: this.options.timers.now() };
     delete ended.lastError;
-    this.recheck.delete(entry.commandId);
+    // "May or may not have been sent" is the one end evidence can still move on (see `furtherAlong`).
+    if (error === MAYBE_SENT) ended.ambiguous = true;
+    else delete ended.ambiguous;
     await this.save(ended);
     this.scheduleAge();
   }
 
   private async drop(commandId: string): Promise<void> {
     if (!this.ready) this.removed.add(commandId);
-    this.recheck.delete(commandId);
     this.list = this.list.filter((e) => e.commandId !== commandId);
     this.changed();
     await this.options.storage.remove(commandId);

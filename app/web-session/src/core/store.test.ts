@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { createSessionStore, type SessionStore } from "./store";
 import { FallbackStorage, openOutboxStorage, MemoryStorage, type OutboxStorage } from "./outbox-storage";
-import { MAYBE_SENT, NOT_SENT_IN_TIME, SESSION_GONE, STORAGE_DOWN, TERMINAL_KEPT_MS } from "./outbox";
+import { KEEPER_UNCONFIRMED, MAYBE_SENT, NOT_SENT_IN_TIME, OUTBOX_TTL_MS, SESSION_GONE, STORAGE_DOWN, TERMINAL_KEPT_MS } from "./outbox";
 import { CLAIM_STALE_MS } from "./outbox-storage";
 import { FakeEnvironment, FakeTimers, FakeTransport, drain, loadFixture, snapshotFrame, type Fixture } from "./test-support";
 import type { Frame, Snapshot } from "./types";
@@ -336,7 +336,7 @@ describe("sends", () => {
     expect(t.state().session.commands["id1"]?.result).toMatchObject({ ok: true });
   });
 
-  it("are asked about again after every reconnect, whether or not the hub restarted", async () => {
+  it("are not posted again after a reconnect, whether or not the hub restarted", async () => {
     const t = playing("default");
     t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
     const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
@@ -349,11 +349,12 @@ describe("sends", () => {
     t.transport.last.end({ kind: "closed" });
     t.transport.last.send({ ...snapshot, data: { ...snapshot.data, boot_id: "boot-2" } }, state);
     await drain();
-    expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1", "id1"]);
+    expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1"]);
     expect(t.state().session.bootId).toBe("boot-2");
+    expect(t.state().outbox.entries).toMatchObject([{ status: "sent", path: "keeper" }]);
   });
 
-  it("are asked about again after a reconnect whose catch-up was a snapshot, which carries no results", async () => {
+  it("a reconnect whose catch-up was a snapshot carries no result: not posted again, and 24 hours end it as sent, its result not seen", async () => {
     const t = boot();
     t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
     t.state().start();
@@ -367,20 +368,17 @@ describe("sends", () => {
     t.transport.last.send(...snap(5));
     await t.state().send({ text: "hello" });
     await drain();
-    expect(t.transport.posts("/message")).toHaveLength(1);
-    expect(t.state().outbox.entries[0]?.status).toBe("sent");
     t.timers.advance(10_000);
     t.transport.last.end({ kind: "closed" });
     t.transport.last.send(...snap(900)); // the same boot, a wide gap: a snapshot with no command.result
     await drain();
-    // Asked again under the same id; the hub's answer carries the stored result.
-    expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1", "id1"]);
-    t.transport.on("/message", () => ({ status: 202, body: { receipt: "queued", result: { ok: false, note: "the session is not running" } } }), "POST");
-    t.timers.advance(10_000);
-    t.transport.last.end({ kind: "closed" });
-    t.transport.last.send(...snap(901));
+    expect(t.transport.posts("/message")).toHaveLength(1);
+    expect(t.state().outbox.entries).toMatchObject([{ status: "sent", path: "keeper" }]);
+    // Its result was in the gap: nothing settles it, and at 24 hours it ends as sent, its result not seen.
+    t.timers.advance(OUTBOX_TTL_MS);
     await drain();
-    expect(t.state().outbox.entries[0]).toMatchObject({ status: "failed", error: "the session is not running" });
+    expect(t.state().sends).toMatchObject([{ shown: "unconfirmed", reason: KEEPER_UNCONFIRMED }]);
+    expect(t.transport.posts("/message")).toHaveLength(1);
   });
 
   it("to a session no keeper holds are posted once, with client_id, and not again after any reconnect", async () => {
@@ -576,7 +574,7 @@ describe("the send lifecycle through the store (review 3)", () => {
     store.getState().stop();
   });
 
-  it("a keeper-held session whose caps are still null: a lost answer is tried again, because the row says keeper", async () => {
+  it("a keeper-held session whose caps are still null: a lost answer is not tried again either", async () => {
     const { store, transport, timers } = start();
     let answered = 0;
     transport.on("/message", () => {
@@ -588,10 +586,10 @@ describe("the send lifecycle through the store (review 3)", () => {
     await drain();
     await store.getState().send({ text: "hello" });
     await drain();
-    expect(store.getState().outbox.entries).toMatchObject([{ status: "waiting", ambiguous: true }]);
-    timers.advance(500);
+    expect(store.getState().outbox.entries).toMatchObject([{ status: "failed", error: MAYBE_SENT }]);
+    timers.advance(60_000);
     await drain();
-    expect(store.getState().outbox.entries).toMatchObject([{ status: "sent", path: "keeper" }]);
+    expect(answered).toBe(1);
     store.getState().stop();
   });
 
@@ -718,14 +716,10 @@ describe("reload or a second tab while a post is on its way (review 4)", () => {
       expect(b.store.getState().sends[0]).toMatchObject({ shown: "waiting", reason: expect.stringContaining("another tab") });
       timers.advance(CLAIM_STALE_MS);
       await drain();
-      if (keeper) {
-        // The hub de-duplicates: posted once more under the same id, and it answers with the stored receipt.
-        expect(posted.map((p) => p["command_id"])).toEqual(["id1", "id1"]);
-        expect(b.store.getState().outbox.entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "duplicate" });
-      } else {
-        expect(posted).toHaveLength(1);
-        expect(b.store.getState().sends[0]).toMatchObject({ shown: "failed", reason: MAYBE_SENT });
-      }
+      // On either row: the first post may have been applied, and no row is sure to de-duplicate a repeat.
+      void keeper;
+      expect(posted).toHaveLength(1);
+      expect(b.store.getState().sends[0]).toMatchObject({ shown: "failed", reason: MAYBE_SENT });
     });
   }
 
@@ -771,7 +765,7 @@ describe("reload or a second tab while a post is on its way (review 4)", () => {
     expect(b.store.getState().sends).toMatchObject([{ shown: "failed", reason: SESSION_GONE }]);
   });
 
-  it("503 keeper_failed and then a detach: the retry is not posted to the legacy path", async () => {
+  it("503 keeper_failed: failed at once, so nothing can reach the legacy path after a detach", async () => {
     const timers = new FakeTimers();
     const a = page(null, timers);
     let n = 0;
@@ -783,7 +777,7 @@ describe("reload or a second tab while a post is on its way (review 4)", () => {
     await drain();
     await a.store.getState().send({ text: "hello" });
     await drain();
-    expect(a.store.getState().outbox.entries[0]).toMatchObject({ status: "waiting", ambiguous: true });
+    expect(a.store.getState().outbox.entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
     a.transport.last.send(env("session.row", { row: { key: T } })); // detached: no mode
     await drain();
     timers.advance(1000);
@@ -1177,4 +1171,22 @@ describe("a claim the database cannot record (review 9)", () => {
       expect((await (await openOutboxStorage(factory)).load(T))[0]).toMatchObject({ status: "sent", attempts: 1 });
     });
   }
+});
+
+describe("evidence through the store (review 11)", () => {
+  it("a lost answer ends a keeper send in doubt; its command.receipt on the stream then makes it sent", async () => {
+    const t = playing("default");
+    t.transport.on("/message", () => {
+      throw new TypeError("the answer never arrived");
+    }, "POST");
+    t.transport.last.send(...frames(t.fixture).slice(0, 2));
+    await drain();
+    await t.state().send({ text: "x" });
+    await drain();
+    expect(t.state().sends).toMatchObject([{ shown: "failed", reason: MAYBE_SENT }]);
+    t.transport.last.send({ v: 2, type: "command.receipt", session: KEY, seq: 0, ts: 1, command_id: "id1", data: { status: "accepted" } } as Frame);
+    await drain();
+    expect(t.state().sends).toMatchObject([{ shown: "sent" }]);
+    expect(t.transport.posts("/message")).toHaveLength(1);
+  });
 });

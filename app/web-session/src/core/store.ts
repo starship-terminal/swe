@@ -163,7 +163,6 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
           connection: state.connection,
           loaded: state.session.loaded,
           online: environment.online(),
-          keeper: state.session.row?.["mode"] === "keeper",
         }),
       });
     };
@@ -177,10 +176,6 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const before = get().session;
       const { state, effects } = reduce(before, frame);
       set({ session: state });
-      // Every catch-up ends with this frame (a replay, a snapshot, an overflow recovery): a result may have
-      // been missed while the stream was away or behind, and the row now says whether a keeper holds the
-      // session, so this is when sends acknowledged earlier are asked about again.
-      if (frame.type === "session.state" && frame.data.live !== undefined) outbox?.recheckSent();
       // The session's row is known now: sends that waited for that may go.
       if (!before.loaded && state.loaded) {
         refreshSends();
@@ -192,6 +187,9 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       }
       if (frame.type === "command.result" && frame.command_id !== undefined && frame.command_id !== "") {
         outbox?.noteResult(frame.command_id, sendResult(frame.data));
+      }
+      if (frame.type === "command.receipt" && frame.command_id !== undefined && frame.command_id !== "") {
+        outbox?.noteReceipt(frame.command_id, frame.data.status);
       }
       for (const effect of effects) {
         if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);
@@ -331,12 +329,11 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
             outbox?.adoptLate(entry, settled);
           },
           // A result this store took in before the outbox loaded its stored sends (a stop() and start(), say).
+          knownReceipt: (commandId) => get().session.commands[commandId]?.receipt?.status,
           knownResult: (commandId) => {
             const result = get().session.commands[commandId]?.result;
             return result === undefined ? undefined : sendResult(result);
           },
-          // A repeat is safe only where the hub de-duplicates by id: a session a keeper holds.
-          keeperHeld: () => get().session.row?.["mode"] === "keeper",
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
           onChange: (view) => setOutbox(view),
         });

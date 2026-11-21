@@ -248,23 +248,20 @@ Every transition:
 | `waiting` | may not post (offline, row not seen yet, unauthorized, gone, outdated) | stays `waiting`; `sends[]` says why |
 | `waiting` | this page claims it to post (one read-write transaction: the claim and the counted attempt are on disk before the request leaves) | posted |
 | `waiting` | it holds a claim less than `CLAIM_STALE_MS` (60 s) old: another tab's, or this page's from before its store was stopped and started again | stays `waiting`, left alone ("being sent from another tab"); looked at again when the claim would be stale |
-| `waiting` | its claim is older than that (abandoned: a page closed with the post out, so it may have reached the hub). A reloaded page has a new owner id, so it sees the old page's claim as another page's and waits out this limit | the deadline pass itself resolves it, whether or not this page may post: the claim is removed and the entry marked `ambiguous`, atomically. When this page may post, the repeat rule below decides: posted again where the row says keeper, else `failed` "may or may not have been sent" |
+| `waiting` | its claim is older than that (abandoned: a page closed with the post out, so it may have reached the hub). A reloaded page has a new owner id, so it sees the old page's claim as another page's and waits out this limit | the deadline pass itself resolves it, whether or not this page may post: the claim is removed and the entry marked `ambiguous`, atomically. When this page may post it ends `failed` "may or may not have been sent", on any row: it is never posted again |
 | `waiting` (this page's post out) | the store is stopped | the answer is still written to storage and the claim released; the outbox that replaces this one takes the entry as the answer left it, at once |
 | `waiting` | the claim finds it `sent` or ended by another page, or gone from storage | taken as storage has it |
 | `waiting` | post answered 2xx with a `receipt` | `sent`, `path: keeper` |
 | `waiting` | post answered 2xx without one | `sent`, `path: legacy` |
 | `waiting` | post answered 2xx with the stored `result` | removed if ok or cancelled, else `failed` with its note |
-| `waiting` | no answer, 408, any 5xx (every 503 included), and the row says `mode: keeper` | `waiting`, `ambiguous`, tried again with backoff under the same id |
-| `waiting` | the same, and the row does not say keeper | `failed`: "may or may not have been sent: check the session, and send it again if it did not arrive" |
-| `waiting` (`ambiguous`) | its retry comes and the row no longer says keeper | `failed`, the same reason; nothing is posted |
+| `waiting` | no answer, 408, any 5xx (every 503 included), on any row | `failed`: "may or may not have been sent: check the session, and send it again if it did not arrive"; never posted again |
 | `waiting` | 429, 425 (the hub said not now before it stored or queued anything) | `waiting`, tried again with backoff, on any path |
 | `waiting` | 409 `duplicate_client_id` (the legacy path still holds a send under this id: an earlier post got there) | `sent`, `path: legacy` |
 | `waiting` | 401, 403 | `waiting`; the outbox pauses until `wake()` |
 | `waiting` | 404 | `failed`: "this session no longer exists" |
 | `waiting` | another 4xx (409, 422 ...) | `failed`, with the hub's message |
 | `waiting` | 24 hours since it was made (`OUTBOX_TTL_MS`) | `failed`: "the hub could not be reached for 24 hours" |
-| `sent` (keeper) | a catch-up ends (the state frame with `live[]`) and the row still says keeper | asked again under the same id: a stored result settles it, else it stays `sent` |
-| `sent` (keeper) | 24 hours since it was made | `unconfirmed` |
+| `sent` (keeper) | 24 hours since it was made and no result seen | `unconfirmed`: "Sent. Its result was not seen on this device." (the keeper accepted it; only its result is unknown) |
 | `sent` (legacy) | 45 minutes since the hub took it (`LEGACY_CONFIRM_MS`, longer than the hub's 30 minute busy limit) | `unconfirmed`: "the hub took this message but never said whether it reached the session" |
 | `waiting`, `sent` | `command.result` ok or cancelled | removed |
 | `waiting`, `sent` | `command.result` not ok | `failed`, with its note |
@@ -289,16 +286,68 @@ answer with (`hub.py` `_send_message`, `_kept`, `_forward`;
 | 409 | `duplicate_client_id` | the legacy path still holds a send under this id | `sent`, legacy |
 | 422 | `bad_command`, `bad_attachment` | the command or an attachment is invalid | `failed`, the hub's message |
 | 429 | `backlog_full` | too many waiting, before this one was queued | retried, any path |
-| 503 | `store_failed` | the hub's store could not record it. Not always "nothing was applied": a satellite's keeper route answers it from `get_command` after `record_command` stored the command, and its `_flush` may have delivered it (`agent.py`) | `ambiguous`: retried only where the row says keeper |
-| 503 | `keeper_failed` | the keeper did not answer, possibly after the request reached it ("not known to have been applied") | `ambiguous`: retried only where the row says keeper |
-| 503 | any other code | not known | `ambiguous`, the same |
-| 408, 500, 502, 504, other 5xx, no answer | | a proxy, a crash, a timeout, a lost connection | `ambiguous`, the same |
+| 503 | `store_failed` | the hub's store could not record it. Not always "nothing was applied": a satellite's keeper route answers it from `get_command` after `record_command` stored the command, and its `_flush` may have delivered it (`agent.py`) | `failed`, may or may not have been sent |
+| 503 | `keeper_failed` | the keeper did not answer, possibly after the request reached it ("not known to have been applied") | `failed`, may or may not have been sent |
+| 503 | any other code | not known | `failed`, the same |
+| 408, 500, 502, 504, other 5xx, no answer | | a proxy, a crash, a timeout, a lost connection | `failed`, the same |
 
-Where a repeat is allowed: only where the hub de-duplicates by id. The
-entry's path is `keeper`, or it has no path yet and the row says `mode:
-keeper` (whatever `caps` says: a just-launched session has none yet), and
-in both cases the row still says so at the moment of the repeat. A legacy
-send is never posted twice. A `command.result` with an empty id changes
+**The invariant.** A page posts a given command id at most once, under a
+claim the database recorded, on every row. It is posted again under the
+same id only after an answer that says the hub stored nothing, so the
+repeat is a first delivery on either route:
+
+| Answer | Why nothing was stored | Then |
+|---|---|---|
+| 429 `backlog_full` (local legacy route, a satellite's forwarded post) | refused before the send was queued (`hub.py` `_send_message` checks `MAX_SEND_BACKLOG` first; `queue_command` returned nothing) | tried again with backoff |
+| 425 | not raised by any message route today; read as "not now" | tried again with backoff |
+| 401, 403 | the credential is checked before the body is read | paused until `wake()`, then tried again |
+
+One 429 is different: a keeper on a satellite answers 429 `backlog_full`
+after `record_command` stored the command as `rejected` (`agent.py`). A
+repeat under the same id then gets 202 with receipt `rejected`, not a
+delivery; the client ends the send `failed` with the hub's reason on that
+receipt. Every other answer may mean the send was applied, and ends it.
+Nothing is asked about again.
+
+The hub picks the route for a message when the post arrives
+(`runtime.owns(key)`, `hub.py`), and the route that is not the keeper
+(`_send_message`) types a repeat in again unless the first is still
+queued; a session can leave its keeper after this page last saw
+`mode: keeper`, so no client-side check makes a repeat safe. Until the hub
+offers a keeper-only post and a read-only command lookup (Schema gaps), an
+answer that may mean the send was applied ends it as "may or may not have
+been sent", and the person can send it again as a new message.
+
+**Evidence after a send ended in doubt.** An answer that may mean the send
+was applied ends it "may or may not have been sent" (`failed`,
+`ambiguous`). On a keeper row a lost answer usually means the keeper took
+the message, and the proof follows on the stream, so evidence still moves
+it on: its `command.result` ok or cancelled removes it as delivered; a
+failed result replaces the doubt with the hub's note (a definite
+`failed`, which then stands); its `command.receipt`, live or held in
+`session.commands` when the outbox starts (`knownReceipt`), makes it
+`sent` on the keeper path. A `rejected` receipt moves nothing. This fits
+the order as its own stage: in doubt is below `sent` and below a definite
+end, so a receipt's `sent` and a result's `failed` both move forward, and
+the two copies of a definite `failed` and an `unconfirmed` entry still
+compare equal (Limit 10 is unchanged).
+
+What settles a `sent` keeper entry: its `command.result`, live on the
+stream or in a catch-up's replay, and `knownResult`, the results this
+store took in from those frames (`session.commands`, the last 200
+commands, for the store's life) when its outbox starts again. A catch-up
+replays at most `REPLAY_MAX` (500) events from the session's journal
+(`protocol.py`), which keeps up to 4000 records or 16 MB and trims to 2000
+or 8 MB (`journal.py`). A result is missed, and the entry ends at 24 hours
+as "Sent. Its result was not seen on this device.", when: the catch-up was
+a snapshot (a gap over 500 events, a trimmed journal, an epoch change) or
+the page loaded fresh (a first connection gets a snapshot, and a snapshot
+carries no `command.result`); or the result was one the hub made for the
+stream with `seq` 0 while this page was away (not replayed). The hub's
+`commands` table keeps a finished command for 7 days (`store.py`
+`RETAIN_S`), but no route reads it.
+
+A `command.result` with an empty id changes
 nothing. One with an id the outbox does not hold is kept until the stored
 sends are loaded (up to 200), then applied to them with the results the
 session already holds (`session.commands`), before anything is posted;
@@ -372,10 +421,10 @@ step by step, and the first step that tells them apart decides:
 
 | Step | Further along | Why it only moves forward |
 |---|---|---|
-| 1. Stage | `failed`, `unconfirmed` over `sent` over `waiting` | `waiting` becomes `sent` on a 2xx; `waiting` or `sent` ends terminal; nothing leaves a terminal state except removal (a new id for a retry) |
+| 1. Stage | `failed` (definite) and `unconfirmed`, over `sent`, over in doubt (`failed` and `ambiguous`: "may or may not have been sent"), over `waiting` | `waiting` becomes `sent` on a 2xx, or in doubt on an answer that may mean it was applied; in doubt becomes `sent` on its receipt, or a definite `failed` on a failed result; `sent` ends `unconfirmed` or `failed`; nothing leaves a definite end except removal (a new id for a retry) |
 | 2. `attempts` | more | only a claim changes it, and always by +1 |
 | 3. The claim | no claim over a claim | a claim is only ever written together with attempts+1 (`decideClaim`, tested), so at the same count a copy without one is the later, released one: its answer (429, 425, 408, 5xx, 401) or `abandon` removed it |
-| 4. `ambiguous` | set over not | within `waiting` it is only ever set (an unsure answer, an abandoned claim, a stale claim taken over), never cleared; `sent` drops it, but stage 1 already decided |
+| 4. `ambiguous` | set over not | within `waiting` it is only ever set (an abandoned claim, a stale claim taken over), never cleared; leaving `waiting` decides by stage first |
 
 Both copies are read in today's terms first: a status an earlier build
 stored as `pending` is `waiting` (in a load, a claim, an abandon and a
@@ -406,23 +455,24 @@ Database server lost"). `FallbackStorage` then works by three rules:
    further along wins), and the storage is the database again
    (`persistent` true, the note cleared).
 3. **A claim the database did not record is not a claim.** In fallback
-   every claim answers `unrecorded`. On a legacy row the outbox does not
-   post the send: it shows "Not sent yet: this device's storage did not
-   answer, and sending now could send it twice. Trying again." on every
-   waiting send (`outbox.storageDown`), tries again on its backoff, and
-   lets the 24-hour deadline end it if the database never answers. The
-   entry is not written meanwhile (a write would drop a claim other pages
-   rely on). On a keeper row the outbox claims it in memory and posts it:
-   that hub de-duplicates by command id, so a repeat is harmless. It uses
-   the same test as a repeat: the row says `mode: keeper` and no answer
-   for the send said legacy.
+   every claim answers `unrecorded`, and the outbox posts nothing, on any
+   row: it shows "Not sent yet: this device's storage did not answer, and
+   sending now could send it twice. Trying again." on every waiting send
+   (`outbox.storageDown`), tries again on its backoff, and lets the
+   24-hour deadline end it if the database never answers. The entry is
+   not written meanwhile (a write would drop a claim other pages rely on).
+   A keeper row gets no exception: the session can leave the keeper before
+   another page posts the send again, and that post then reaches the route
+   that does not de-duplicate.
 
-**Why no legacy message is posted twice.** On a legacy row, a page posts
-a send only under a claim the database recorded. Two recorded claims on
-one id cannot both be live (a claim is taken in one read-write
-transaction, and a fresh claim makes every other page see it busy), so two
-posts need a takeover of a stale claim, and a takeover marks the send
-`ambiguous`, which on a legacy row is never posted. A page cannot know
+**Why no message is posted twice on a route that does not de-duplicate.**
+A page posts a given command id at most once, under a claim the database
+recorded, on every row (a repeat only follows an answer that stored
+nothing, above). Two recorded claims on one id cannot both be live (a claim is taken
+in one read-write transaction, and a fresh claim makes every other page
+see it busy), so two posts need a takeover of a stale claim, and a
+takeover marks the send `ambiguous`, which is never posted again, on any
+row. A page cannot know
 that a write it heard fail did not land, so while a database exists no
 send counts as only in memory. With no database at all (it is missing or
 did not open, and the storage is a plain memory storage), memory is the
@@ -431,9 +481,8 @@ only store and a claim made there is the recorded one.
 | Operation | When it fails, after the fresh try |
 |---|---|
 | A send's first write | held in memory, written when the database answers. The write may have landed anyway |
-| Claim, legacy row | `unrecorded`: not posted, waiting with the reason above, tried again on the backoff; the deadline still ends it |
-| Claim, keeper row | claimed in memory and posted (the hub de-duplicates) |
-| Save after an answer (`sent`, a release, an end) | held, replayed when the database answers. Until then the database shows this page's recorded claim: other pages see it busy, then stale; they post it again only on a keeper row (de-duplicated), and on a legacy row end it "may or may not have been sent" (Limits) |
+| Claim | `unrecorded`: not posted on any row, waiting with the reason above, tried again on the backoff; the deadline still ends it |
+| Save after an answer (`sent`, a release, an end) | held, replayed when the database answers. Until then the database shows this page's recorded claim: other pages see it busy, then stale, then end it "may or may not have been sent" (Limits); none posts it again |
 | `late()` after `stop()` | as a save after an answer |
 | Abandon a stale claim | resolved in memory (`ambiguous`, no claim), replayed later; the database keeps the stale claim, which every page resolves the same way |
 | Remove (a discard, a delivered result, the terminal cap) | held, replayed when the database answers. If the page reloads first, the next page finds the entry (Limits) |
@@ -524,7 +573,7 @@ body. What the store does on its own: a hole in the deltas fetches
 with backoff, five tries, since the next catch-up's state frame restores
 it anyway); an epoch the client does not hold fetches the snapshot and
 replaces everything; a `command.result` reaches the outbox; going live
-wakes the outbox and asks again about every `sent` entry.
+wakes the outbox. Nothing is asked about again.
 
 ## Fixtures
 
@@ -589,7 +638,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 307 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 311 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -616,6 +665,30 @@ changed here.
   both, equal, never repeats such a send, and ends one that got no answer as
   "may or may not have been sent". If the hub should store the id on that path
   too, a client could repeat safely and settle on the result.
+- **No keeper-only post.** The hub routes a message post when it arrives,
+  so a client cannot make a repeat safe by checking the row first. Asked
+  for: a body field `require_keeper: true` that makes the hub answer 409
+  (a new code, for example `not_kept`) when `runtime.owns(key)` is false,
+  instead of using the legacy route.
+- **No read-only command lookup.** Asked for:
+  `GET /v1/sessions/{key}/commands/{id}` returning the stored receipt and
+  result (the `commands` table already keeps them 7 days). The client would
+  call it for every `sent` keeper entry when its outbox starts and after
+  each catch-up, and settle an entry from the answer before its 24-hour
+  deadline. Rechecks were removed because the only way to ask was to post
+  the message again.
+- **What the client turns back on once the hub has both.** (1) Quiet
+  repeats on a keeper row: an answer that may mean the send was applied (no
+  answer, 408, a 5xx, an abandoned claim) leaves a keeper-path send
+  `waiting` and `ambiguous` instead of ending it, and it is posted again
+  under the same id with `require_keeper: true` on the backoff; a 409
+  `not_kept` ends it "may or may not have been sent" as today. A send with
+  no path yet is repeated this way only where the row says keeper. (2)
+  Rechecks through the GET: for every `sent` keeper entry when its outbox
+  starts and after each catch-up's state frame, settled from the stored
+  result, or moved on from doubt by the stored receipt, before the 24-hour
+  deadline; never a message post. The tests to bring back are the deleted
+  ones listed in the PR for this change.
 - **Restore has no route.** `restore(checkpointId)` posts to
   `POST /v1/sessions/{key}/restore {checkpoint_id, command_id}`, which G19
   must provide (G15's notes: a command in `_KEPT_OPS`, not in `HELD_OPS`).
@@ -636,21 +709,18 @@ changed here.
 
 These are known and left for later. None of them posts a message twice or
 hammers the hub. Only one posts something the person did not expect:
-Limit 6, on both paths, posts once a message the person discarded. The
+Limit 5, on both paths, posts once a message the person discarded. The
 others show a wrong end state, leave the view waiting, or hold a resource.
 They are not fixed in G11; G13 should know them.
 
 1. **`stop()` during the claim transaction leaves a claim for a send that
    was never posted.** On a legacy row that entry ends "may or may not
    have been sent" after 60 s.
-2. **A recheck post that is out at `close()` keeps its IndexedDB
-   connection open.** `close()` sets `closeAfterLate`, but `ask()` never
-   calls `late()`, so the connection stays open until the page unloads.
-3. **Two tabs can disagree after a device sleep.** One send can show
+2. **Two tabs can disagree after a device sleep.** One send can show
    `failed` in one tab and `sent` in the other. No second post goes out.
-4. **The reducer never trims.** Every item, turn and index entry stays for
+3. **The reducer never trims.** Every item, turn and index entry stays for
    the life of the view.
-5. **An IndexedDB open that never answers leaves the outbox loading.**
+4. **An IndexedDB open that never answers leaves the outbox loading.**
    Safari has a known bug where `indexedDB.open` fires neither `success`
    nor `error`. The `DeferredStorage` then never resolves: the view stays
    on "Loading the sends kept on this device.", with no Discard or Retry,
@@ -658,41 +728,51 @@ They are not fixed in G11; G13 should know them.
    at all. Suggested fix (G18): a timeout on the open in
    `openOutboxStorage` (a few seconds) that falls back to a memory storage
    with the usual note, as it does when the open fails.
-6. **A removal the database never takes, then a reload.** A discard of a
+5. **A removal the database never takes, then a reload.** A discard of a
    `waiting` send the database holds, made while it does not answer, and
    the page reloads (or another tab loads) before it answers again: the
    next page finds the send `waiting` and posts it. That is one post of a
    message the person discarded, not a repeat; nothing stops it on either
    path. A delivered result's removal in the same case: the next page
-   finds it `sent`. On a keeper row the recheck settles it; on a legacy
-   row it waits 45 minutes and ends `unconfirmed`. A wrong display, not a
+   finds it `sent`; it ends `unconfirmed` (45 minutes on a legacy row, 24
+   hours on a keeper row). A wrong display, not a
    repeat. Possible fix (a later milestone): a tombstone list of removed
    ids in `localStorage`, which the next page applies before its first
    pass.
-7. **A save after an answer the database never takes, then a reload.**
+6. **A save after an answer the database never takes, then a reload.**
    The next page finds the send `waiting` with this page's claim: busy,
-   then stale after a minute. On a keeper row it is posted again and the
-   hub de-duplicates it; on a legacy row it ends `failed`, "may or may not
-   have been sent", although it was delivered once. A wrong display, never
-   a second post on the legacy path.
-8. **A `late()` write landing after a discard made after `ready`.** The
+   then stale after a minute, and then it ends `failed`, "may or may not
+   have been sent", on any row, although it was delivered once. A wrong
+   display, never a second post.
+7. **A `late()` write landing after a discard made after `ready`.** The
    older outbox's answer writes the send back as `sent`. A later page shows
    it `sent`; on a legacy row it ends `unconfirmed`. It is never posted
    again.
-9. **A send whose first write failed, then a reload before the database
+8. **A send whose first write failed, then a reload before the database
    answers.** If the write did not land, the next page does not know the
    send: it is lost (it was never posted on a legacy row; on a keeper row
    at most once), as the fallback note says. If it did land, the next page
    finds it `waiting` and posts it once, under a claim it records.
-10. **A claim that landed but reported an error.** This page never posts
+9. **A claim that landed but reported an error.** This page never posts
    the send (it heard the claim fail). The database holds this page's
    claim: after a minute it is stale, and on a legacy row the send ends
    `failed`, "may or may not have been sent", although it never left. A
    wrong display; the person can retry it.
-11. **`save()` on a full tie keeps the stored copy.** A failed result on
+10. **`save()` on a full tie keeps the stored copy.** A failed result on
    an `unconfirmed` entry (both terminal, the same attempts, no claim)
    leaves the stored copy, here and after a reload: the entry keeps the
    `unconfirmed` reason instead of the hub's note. A wrong display.
+11. **A keeper send's result can be missed.** When the result came while
+   this page was away and the catch-up was a snapshot (or the page loaded
+   fresh), nothing settles the entry: at 24 hours it ends `unconfirmed`,
+   "Sent. Its result was not seen on this device." A wrong display (the
+   keeper accepted it); the read-only command lookup in Schema gaps fixes
+   it.
+12. **An answer that may mean the send was applied ends it on a keeper row
+   too.** A lost answer, a 5xx or an abandoned claim ends the send "may or
+   may not have been sent" instead of the quiet retry under the same id it
+   used to get, until the hub has a keeper-only post (Schema gaps). The
+   person can send it again.
 
 ## What G12 and G13 must know
 

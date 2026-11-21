@@ -43,7 +43,7 @@ export interface OutboxEntry {
   receipt?: string;
   /** When the hub's 2xx answer came. */
   sentAt?: number;
-  /** The last attempt got no answer, or one that may mean the hub applied it: a repeat is safe only where the hub de-duplicates. */
+  /** An earlier post may have been applied (an abandoned claim): it is never posted again. */
   ambiguous?: boolean;
   /** Why the last attempt did not land, while it waits to be tried again. */
   lastError?: string;
@@ -80,7 +80,7 @@ export type Claim =
 
 /**
  * An abandoned claim, resolved without posting: a stale claim is removed and the entry marked `ambiguous` (its
- * post may have reached the hub), so its own deadlines and the repeat rule apply from here. Anything else is
+ * post may have reached the hub), so it is never posted again and its own deadlines apply. Anything else is
  * left as stored.
  */
 export function decideAbandon(
@@ -96,22 +96,27 @@ export function decideAbandon(
   return { entry: abandoned, write: abandoned };
 }
 
-const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 1, failed: 2, unconfirmed: 2 };
+const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 2, failed: 3, unconfirmed: 3 };
 
 /** An entry as an earlier build of the outbox stored it, in today's terms: `waiting` was called `pending`. */
 export function normalizeEntry(entry: OutboxEntry): OutboxEntry {
   return (entry.status as string) === "pending" ? { ...entry, status: "waiting" } : entry;
 }
 
-/** A copy's stage; one whose status this build does not know is below every known one, so it never wins. */
+/**
+ * A copy's stage. `failed` and `ambiguous` (ended as "may or may not have been sent") is its own stage, between
+ * `waiting` and `sent`: evidence that it arrived (a receipt) moves it on to `sent`. One whose status this build
+ * does not know is below every known one, so it never wins.
+ */
 function stageOf(entry: OutboxEntry): number {
+  if (entry.status === "failed" && entry.ambiguous === true) return 1;
   return STAGE[entry.status] ?? -1;
 }
 
 /**
  * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
  * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
- * `sent` over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
+ * `sent` over "may or may not have been sent" over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
  * with attempts+1, so a claim-free copy at the same count is the released one); `ambiguous` over not.
  */
 export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
@@ -126,7 +131,7 @@ export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
 /**
  * The claim rule, the same for every storage: given the entry as stored, may `owner` post it now? An
  * abandoned claim (another page's, older than `staleMs`, or this page's own) means an earlier post may have
- * reached the hub, so the entry comes back `ambiguous` and the outbox's repeat rule decides.
+ * reached the hub, so the entry comes back `ambiguous` and the outbox ends it instead of posting it.
  */
 export function decideClaim(
   stored: OutboxEntry | undefined,
@@ -366,7 +371,7 @@ class IndexedDbStorage implements OutboxStorage {
  *
  * While in fallback every claim is `unrecorded`: another page reading the database would not see a claim made
  * here, and a page can never know that a write it heard fail did not land, so no id is certain to be only in
- * memory. (The outbox posts a keeper-row send under a claim of its own then: that hub de-duplicates.)
+ * memory. The outbox posts nothing then, on any row.
  */
 export class FallbackStorage implements OutboxStorage {
   private inner: OutboxStorage;

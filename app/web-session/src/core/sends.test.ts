@@ -41,12 +41,11 @@ describe("describeSends", () => {
     expect(one({ entries: [entry({ status: "unconfirmed", error: "maybe" })] })).toMatchObject({ shown: "unconfirmed", reason: "maybe", canRetry: true });
   });
 
-  it("says the database is down for a legacy row's waiting send, and not for a keeper row's", () => {
-    const view = outbox([entry({})], { storageDown: true, persistent: false });
-    const at = (keeper: boolean) =>
-      describeSends({ outbox: view, connection: connection("live"), loaded: true, online: true, keeper })[0]?.reason;
-    expect(at(false)).toBe(`${STORAGE_DOWN}. Trying again.`);
-    expect(at(true)).toBe("Waiting to be sent.");
+  it("says the database is down for every waiting send while it is", () => {
+    const at = (storageDown: boolean) =>
+      describeSends({ outbox: outbox([entry({})], { storageDown }), connection: connection("live"), loaded: true, online: true })[0]?.reason;
+    expect(at(true)).toBe(`${STORAGE_DOWN}. Trying again.`);
+    expect(at(false)).toBe("Waiting to be sent.");
   });
 
   it("offers nothing while the outbox is loading what storage holds", () => {
