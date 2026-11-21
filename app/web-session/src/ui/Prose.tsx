@@ -1,9 +1,9 @@
 import { memo, type ReactNode } from "react";
 
 import { cx } from "./cx";
-import { parseMarkdown, type Block, type Inline } from "./markdown";
+import { parseInline, parseMarkdown, type Block, type Inline } from "./markdown";
 
-function inline(nodes: Inline[]): ReactNode {
+function inline(nodes: Inline[], links = true): ReactNode {
   return nodes.map((node, index) => {
     switch (node.t) {
       case "text":
@@ -17,12 +17,14 @@ function inline(nodes: Inline[]): ReactNode {
       case "strong":
         return (
           <strong key={index} className="font-semibold">
-            {inline(node.children)}
+            {inline(node.children, links)}
           </strong>
         );
       case "em":
-        return <em key={index}>{inline(node.children)}</em>;
+        return <em key={index}>{inline(node.children, links)}</em>;
       case "link":
+        // A line of text that must not carry the person anywhere (a request's prompt): the words, no anchor.
+        if (!links) return <span key={index}>{inline(node.children, links)}</span>;
         return (
           <a key={index} className="text-link underline decoration-border-strong underline-offset-2 hover:decoration-current" href={node.href} rel="noopener noreferrer" target="_blank">
             {inline(node.children)}
@@ -137,3 +139,19 @@ function align(value: "left" | "right" | "center" | null | undefined) {
 export const Prose = memo(function Prose({ text, className }: { text: string; className?: string }) {
   return <div className={cx("sv-prose text-sm leading-6 break-words", className)}>{blocks(parseMarkdown(text))}</div>;
 });
+
+/**
+ * One run of an agent's text with the inline formatting the timeline reads (code, bold, italic) and nothing
+ * else: no block, no table, and no link (the words of a link stay, the anchor does not). Only the first
+ * `readMax` characters are read for formatting, which caps the nodes it can make at about two thirds of that
+ * many; the rest is plain text in one node. Line breaks are the container's (`whitespace-pre-wrap`).
+ */
+export function InlineText({ text, readMax = 2000 }: { text: string; readMax?: number }) {
+  const head = text.length > readMax ? text.slice(0, readMax) : text;
+  return (
+    <>
+      {inline(parseInline(head), false)}
+      {text.length > readMax ? text.slice(readMax) : null}
+    </>
+  );
+}

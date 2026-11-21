@@ -75,7 +75,7 @@ function Item({
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <AnswerButton aria-label="Edit queued message" disabled={!idle} onClick={() => setEdit(id, { text: item.text, original: item.text })} variant="plain">
               <Icon className="size-3.5" name="edit" />
-              Edit
+              <span className="hidden sm:inline">Edit</span>
             </AnswerButton>
             <AnswerButton
               aria-label="Stop the reply and send this now"
@@ -88,7 +88,7 @@ function Item({
             </AnswerButton>
             <AnswerButton aria-label="Remove queued message" disabled={!idle} onClick={() => void run("cancel")} variant="danger">
               <Icon className="size-3.5" name="trash" />
-              Remove
+              <span className="hidden sm:inline">Remove</span>
             </AnswerButton>
             {busy !== null ? <Spinner /> : null}
           </div>
@@ -174,7 +174,7 @@ export function QueueTray({ store, onKeep }: { store: SessionStore; onKeep(text:
               This agent cannot stop a reply to send a message sooner. Queued messages are sent when the reply ends.
             </p>
           ) : null}
-          <ul className="flex flex-col gap-1.5 pb-1.5">
+          <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto pb-1.5">
             {shown.map((item) => (
               <Guard key={item.command_id} message="This queued message could not be shown." part="queued">
                 <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} steerOk={steerOk} store={store} />

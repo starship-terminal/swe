@@ -215,14 +215,18 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
   const stopDisabled = refusalMessage !== null || stopState !== "idle";
 
   return (
-    <footer className="shrink-0 pr-safe-right pb-safe-bottom pl-safe-left" data-composer="form">
-      <div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 pt-2 pb-4">
-        <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-          <RequestDock settleMs={settleMs} store={store} />
-        </Guard>
-        <Guard message="The queue could not be shown. Queued messages are still sent when the reply ends." part="tray">
-          <QueueTray onKeep={keep} store={store} />
-        </Guard>
+    // The footer takes at most two thirds of the view, so the timeline always keeps a third. The dock and the
+    // tray scroll inside what is left over, and the box and its buttons never leave the screen.
+    <footer className="flex max-h-2/3 shrink-0 flex-col pr-safe-right pb-safe-bottom pl-safe-left" data-composer="form">
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col gap-2 px-4 pt-2 pb-4">
+        <div className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
+          <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
+            <RequestDock settleMs={settleMs} store={store} />
+          </Guard>
+          <Guard message="The queue could not be shown. Queued messages are still sent when the reply ends." part="tray">
+            <QueueTray onKeep={keep} store={store} />
+          </Guard>
+        </div>
         {!persistent && outboxNote !== "" ? (
           <p className="text-xs text-secondary" data-outbox-note role="status">
             {asArrived(outboxNote)}
@@ -235,7 +239,7 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
         ) : null}
         <form
           aria-label="Composer"
-          className="flex flex-col gap-1.5 rounded-card border border-border bg-card p-2 focus-within:border-border-strong"
+          className="flex shrink-0 flex-col gap-1.5 rounded-card border border-border bg-card p-2 focus-within:border-border-strong"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
             if (!blockedBy && hasContent) void submit("queue");
@@ -304,13 +308,13 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
             rows={1}
             value={text}
           />
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-nowrap items-center gap-1.5">
             <input ref={picker} accept={ACCEPT} aria-label="Attach files" className="hidden" multiple onChange={(event) => addFiles(event.currentTarget.files)} tabIndex={-1} type="file" />
             <AnswerButton aria-label="Attach files" disabled={submitting} onClick={() => picker.current?.click()} variant="plain">
               <Icon className="size-4" name="attach" />
               <span className="hidden sm:inline">Attach</span>
             </AnswerButton>
-            <span className="flex-1" />
+            <span className="min-w-0 flex-1" />
             {busyTurn ? (
               <>
                 <AnswerButton
@@ -321,7 +325,7 @@ function Form({ store, sessionKey, upload, settleMs }: Required<ComposerProps>) 
                   variant="danger"
                 >
                   {stopState === "sending" ? <Spinner /> : <Icon className="size-3.5" name="stop" />}
-                  {stopState === "sent" ? "Stopping" : "Stop"}
+                  <span className="hidden sm:inline">{stopState === "sent" ? "Stopping" : "Stop"}</span>
                 </AnswerButton>
                 <AnswerButton
                   aria-describedby={steerReason === null ? undefined : reasonId}

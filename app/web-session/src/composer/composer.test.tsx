@@ -279,6 +279,8 @@ describe("while a reply is in progress", () => {
     expect(posts(m, "control")).toHaveLength(1);
     expect(posts(m, "control")[0]).toMatchObject({ op: "interrupt" });
     expect(text(btn(m, "Stop the reply"))).toBe("Stopping");
+    // At phone width Stop is an icon with the name `aria-label` gives; its word shows from the small breakpoint up.
+    expect(btn(m, "Stop the reply")?.querySelector("span.hidden")).not.toBeNull();
   });
 
   it("disables Stop, with the reason, when the connection is down", async () => {

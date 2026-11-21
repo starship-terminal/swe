@@ -109,6 +109,27 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       );
       await type(c, "And bump the version");
       break;
+    case "composer-queued-many":
+      send(
+        ...queued.slice(0, 3),
+        frame(k, "approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow", by: "device-1" }),
+        frame(k, "session.state", 14, { state: "running" }),
+        frame(k, "queue.updated", 15, {
+          items: [
+            { command_id: "q1", text: "then lint it", by: "device-1", mode: "queue" },
+            { command_id: "q2", text: LONG_REPLY, by: "device-2", mode: "queue", attachments: ["1760000000-aa11bb-build.log"] },
+            { command_id: "q3", text: "and update the changelog", by: "device-1", mode: "queue" },
+            { command_id: "q4", text: "then open the pull request and ask for a review", by: "device-1", mode: "queue" },
+            { command_id: "q5", text: "finally tag the release", by: "device-1", mode: "queue" },
+          ],
+        }),
+      );
+      await type(c, "And bump the version");
+      break;
+    case "composer-approval-confirm":
+      send(...approval.slice(0, 2));
+      await press(c, "Always allow");
+      break;
     case "composer-queued-edit":
       send(
         ...queued.slice(0, 3),

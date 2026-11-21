@@ -130,6 +130,26 @@ describe("the queued tray", () => {
     expect(text(tray(m))).toContain("5 more queued messages not shown.");
   });
 
+  it("scrolls inside its own box, and the whole composer is held to two thirds of the view, so the timeline keeps a third", async () => {
+    // Layout contract: jsdom has no layout, so this reads the classes; the screens show the result.
+    const m = await withQueue();
+    const list = q(tray(m), "ul") as HTMLElement;
+    expect(list.classList.contains("max-h-48")).toBe(true);
+    expect(list.classList.contains("overflow-y-auto")).toBe(true);
+    const footer = q(m.el, "footer") as HTMLElement;
+    expect(footer.classList.contains("max-h-2/3")).toBe(true);
+    expect((q(m.el, "[data-composer-above]") as HTMLElement).classList.contains("overflow-y-auto")).toBe(true);
+  });
+
+  it("offers Edit and Remove as icons with names at phone width, and as words from the small breakpoint up", async () => {
+    const m = await withQueue();
+    for (const label of ["Edit queued message", "Remove queued message"]) {
+      const button = btn(m, label) as HTMLButtonElement;
+      expect(button.querySelector("svg")).not.toBeNull();
+      expect(button.querySelector("span.hidden.sm\\:inline")).not.toBeNull();
+    }
+  });
+
   it("offers no reorder: the hub has none", async () => {
     const m = await withQueue();
     expect(all(tray(m), "button").map((b) => b.getAttribute("aria-label") ?? text(b))).toEqual(["Queued: 1 message, sent when the reply ends", "Edit queued message", "Stop the reply and send this now", "Remove queued message"]);

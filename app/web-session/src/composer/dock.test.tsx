@@ -21,8 +21,9 @@ describe("the approval dock", () => {
   it("shows the request with its answers, and takes no focus", async () => {
     const m = await withApproval();
     expect(dock(m).getAttribute("data-dock")).toBe("approval");
-    expect(text(dock(m))).toContain("Run `rm -rf build`?");
-    expect(all(dock(m), "button").map((b) => text(b))).toEqual(["Allow", "Always", "Deny"]);
+    expect(text(dock(m))).toContain("Run rm -rf build?");
+    expect(text(q(dock(m), "code"))).toBe("rm -rf build");
+    expect(all(dock(m), "button").map((b) => text(b))).toEqual(["Allow", "Always allow", "Deny"]);
     expect(dock(m).contains(document.activeElement)).toBe(false);
     expect(dock(m).querySelector("[autofocus]")).toBeNull();
   });
@@ -54,15 +55,44 @@ describe("the approval dock", () => {
 
   it("needs a second press for a standing grant", async () => {
     const m = await withApproval();
-    await click(btn(m, "Always"));
+    await click(btn(m, "Always allow"));
     expect(posts(m, "approval")).toHaveLength(0);
-    expect(text(q(m.el, '[data-note="standing"]'))).toContain("turns off later questions");
+    // The first press says what the second will do, in the button and beside it.
+    expect(btn(m, "Press again to always allow")).toBeDefined();
+    expect(text(q(m.el, '[data-note="standing"]'))).toContain("Always allow this kind of call? Pressing again turns off later questions");
     await click(btn(m, "Cancel"));
     expect(q(m.el, '[data-note="standing"]')).toBeNull();
-    await click(btn(m, "Always"));
-    await click(btn(m, "Yes, always allow"));
+    await click(btn(m, "Always allow"));
+    await click(btn(m, "Press again to always allow"));
     expect(posts(m, "approval")).toHaveLength(1);
     expect(posts(m, "approval")[0]).toMatchObject({ decision: "always" });
+  });
+
+  it("shows code in a request as code, and nothing else of Markdown: no link, no heading, no table", async () => {
+    const m = mount();
+    await play(m, "approval", 0, 4);
+    await feed(m, request(15, "r7", { prompt: "Run `rm -rf build` **now**, see [docs](https://example.com) and [x](javascript:alert(1))\n# not a heading\n|a|b|\n|-|-|" }));
+    const shown = q(dock(m), '[data-untrusted="prompt"]') as HTMLElement;
+    expect(text(q(shown, "code"))).toBe("rm -rf build");
+    expect(text(q(shown, "strong"))).toBe("now");
+    expect(q(shown, "a")).toBeNull();
+    expect(q(shown, "h1, h2, table")).toBeNull();
+    expect(shown.textContent).toContain("docs");
+    expect(shown.textContent).toContain("# not a heading");
+    expect(shown.textContent).toContain("|a|b|");
+  });
+
+  it("names the tool when a standing grant asks to be confirmed", async () => {
+    const m = mount();
+    await play(m, "approval", 0, 4);
+    await feed(
+      m,
+      frame("tool.started", 14, { call_id: "c1", name: "Bash", summary: "ls", input: { command: "ls" } }, { turn_id: "t1" }),
+      request(15, "r8", { call_id: "c1", options: [{ id: "allow", label: "Allow", kind: "allow" }, { id: "always", label: "Always", kind: "allow", standing: true }] }),
+    );
+    await settle(() => wait(60));
+    await click(btn(m, "Always allow"));
+    expect(text(q(m.el, '[data-note="standing"]'))).toContain("Always allow Bash? Pressing again turns off");
   });
 
   it("removes the dock when the request is answered elsewhere", async () => {

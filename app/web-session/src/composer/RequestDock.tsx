@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useSessionStore, type RequestEvent, type SessionStore, type TimelineItem, type ToolItem } from "../core";
-import { Collapsible, cx, Spinner, StateArrow } from "../ui";
+import { Collapsible, cx, InlineText, Spinner, StateArrow } from "../ui";
 import { AnswerButton } from "./AnswerButton";
 import { answer, decisionFor } from "./answer";
 import { Guard } from "./Guard";
 import { clip, cut, inputText, label, NAME_SHOWN, OPTIONS_SHOWN } from "./text";
+
+/**
+ * What a button says. A standing option the hub calls just "Always" says what it grants: "Always allow". Any
+ * other label is the hub's, cut to a length and not changed.
+ */
+function wording(option: Option): string {
+  if (option.standing === true && /^always$/i.test(option.label.trim())) return "Always allow";
+  return label(option.label);
+}
 
 type Option = { id: string; label: string; kind?: string; standing?: boolean };
 
@@ -29,7 +38,7 @@ function Clipped({ text, className }: { text: string; className?: string }) {
   return (
     <>
       <p className={cx("max-h-32 overflow-auto text-sm leading-6 break-words whitespace-pre-wrap", className)} data-untrusted="prompt">
-        {shown}
+        <InlineText text={shown} />
       </p>
       {hidden > 0 ? <p className="mt-1 text-xs text-muted">{hidden.toLocaleString("en-US")} more characters not shown.</p> : null}
     </>
@@ -158,7 +167,7 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
               onClick={() => pick(option, index)}
               variant={deny ? "danger" : index === firstAllow ? "primary" : "plain"}
             >
-              {confirm ? "Yes, always allow" : label(option.label)}
+              {confirm ? "Press again to always allow" : wording(option)}
             </AnswerButton>
           );
         })}
@@ -179,7 +188,7 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
       ) : null}
       {confirming !== null ? (
         <p className="mt-1.5 text-xs text-secondary" data-note="standing">
-          This turns off later questions of the same kind for this session. Press Yes to allow it for good, or Cancel.
+          {`Always allow ${tool?.name !== undefined && tool.name !== "" ? cut(tool.name, NAME_SHOWN).text : "this kind of call"}? Pressing again turns off later questions of the same kind for this session. Cancel to go back.`}
         </p>
       ) : null}
       {status !== null ? (

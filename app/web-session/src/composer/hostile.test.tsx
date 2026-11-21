@@ -24,17 +24,30 @@ async function ask(m: Mounted, data: object, tool?: object): Promise<void> {
 }
 
 describe("a hostile request", () => {
-  it("draws a megabyte of prompt as one cut text, with its letters unchanged and no markup made from it", async () => {
+  it("draws a megabyte of prompt as one cut text, reading marks in its first part only, and makes no markup from it", async () => {
     const m = mount();
     const prompt = NASTY.repeat(15_000);
     await ask(m, { prompt });
     const shown = q(dock(m), '[data-untrusted="prompt"]') as HTMLElement;
-    expect(shown.textContent).toBe(prompt.slice(0, 6000));
+    // The part past the inline reader's reach is the text as it arrived, every letter of it.
+    expect(shown.textContent?.endsWith(prompt.slice(2000, 6000))).toBe(true);
     expect(text(dock(m))).toContain(`${(prompt.length - 6000).toLocaleString("en-US")} more characters not shown.`);
-    expect(all(dock(m), "*").length).toBeLessThan(40);
+    expect(all(dock(m), "*").length).toBeLessThan(200);
     expect(q(dock(m), "img")).toBeNull();
     expect(q(dock(m), "a")).toBeNull();
-    expect(q(dock(m), "strong")).toBeNull();
+  });
+
+  it("keeps every letter of a prompt with no marks in it", async () => {
+    const m = mount();
+    const prompt = "Delete build/ and dist/ (y/n)? ".repeat(1000);
+    await ask(m, { prompt });
+    expect((q(dock(m), '[data-untrusted="prompt"]') as HTMLElement).textContent).toBe(prompt.slice(0, 6000));
+  });
+
+  it("makes at most about a thousand nodes of a prompt that is all marks", async () => {
+    const m = mount();
+    await ask(m, { prompt: "`a`".repeat(5000) });
+    expect(all(dock(m), "*").length).toBeLessThan(1500);
   });
 
   it("cuts a prompt of many short lines at 300 lines", async () => {

@@ -29,6 +29,8 @@ Edits outside `src/composer/`, each the smallest that mounts the composer:
 | `src/session/Timeline.tsx` | a send the hub holds in `session.queue` is left out of the timeline, since the tray draws it (G11: "draw that instead of the pending bubble") |
 | `src/session/model.ts` | a comment only |
 | `src/ui/Icon.tsx` | three icons: `attach`, `stop`, `edit` |
+| `src/ui/Prose.tsx`, `src/ui/index.ts` | `InlineText`: one run of text with the timeline's inline reader (code, bold, italic) and nothing else |
+| `src/session/Rows.tsx` | the timeline's request row draws its prompt through `InlineText`, so a prompt shows the same in the row and in the dock |
 | `src/session/screens/main.tsx`, `shoot.mjs` | the composer's scenes (`composer-*`) |
 | `SessionShell.test.tsx`, `SessionView.test.tsx` | the tests that described the placeholder now describe the composer |
 
@@ -46,12 +48,20 @@ message is kept on the device first (G11's outbox) and the timeline draws its
 bubble and its reason. Enter sends, Shift+Enter adds a line. On a touch screen
 (`pointer: coarse`) Enter adds a line and Ctrl or Cmd+Enter sends.
 
+The action row is one line at every width, with the primary button at its right
+end: Attach is an icon, **Stop** is an icon below the `sm` breakpoint (its name is
+the button's `aria-label`; the word shows from `sm` up), and "Stop and send" and
+Send/Queue are words (about 300 of the 342 px a 390 px phone has). The footer is
+held to two thirds of the view (`max-h-2/3`), so the timeline always keeps a
+third; the dock and the tray scroll inside what is left, and the box never leaves
+the screen.
+
 While a reply is in progress two more buttons appear:
 
 - **Stop** posts `interrupt` (a gated action: off, with the store's reason as its
   title, while the connection is down or has not caught up). After a successful
   press it reads "Stopping" until the turn ends, or for at most five seconds.
-- **Stop and send** is G13's label for steer. It says what it does: "Stops the
+- **Stop and send** is G13's label for steer (see "What steer does, per agent"). It says what it does: "Stops the
   current reply, then sends this message now." That sentence is true on every
   harness (G16 gap 6: a Codex steer does not stop a running command, an opencode
   steer does not cut the reply being written, Claude kills the running call);
@@ -146,9 +156,13 @@ answered by one device.
 **What is sent.** An option whose id is `allow`, `always` or `deny` sends that
 word; any other option sends its 1-based place in the request's full option list
 (the hub reads it that way, `runtime.respond`), also when the list is cut. A
-standing option (`standing: true`, G16 gap 9: "Always allow") takes a second
-press ("Yes, always allow", with a sentence saying it turns off later questions).
-Only the first allowing option is filled.
+standing option (`standing: true`, G16 gap 9) is worded "Always allow" when the
+hub's own label is just "Always" (any other label is the hub's, cut and not
+changed), and takes a second press. The first press changes the button to "Press
+again to always allow" and says beside it what that does: "Always allow Bash?
+Pressing again turns off later questions of the same kind for this session.
+Cancel to go back." (the tool is named from the call the request asks about, else
+"this kind of call"). Only the first allowing option is filled.
 
 **A question in words cannot be answered.** `input.requested` of kind `text` has
 no route that carries text (G11 "Schema gaps"). The dock says "This view cannot
@@ -156,8 +170,13 @@ send a typed answer yet. Answer it in the terminal, or skip the question." and
 offers **Skip this question**, which sends `deny`. Nothing pretends to send words.
 
 **Text from an agent** (the prompt, the tool name, the tool input, the options'
-labels, a queued message) is drawn as text in a fixed number of nodes and never
-parsed: no Markdown, no links, no HTML. The prompt is cut at 6000 characters or
+labels, a queued message) is drawn as text in a bounded number of nodes, never as
+HTML. The prompt goes through the timeline's inline reader (`InlineText`): code
+spans show as code, bold and italic as such, and nothing else: no block, no
+heading, no table, and no link (the words of a link stay, the anchor does not, so
+nothing in a request can carry the person off the page, `safeHref` or not). Only
+the first 2000 characters of the prompt are read for formatting, which caps its
+nodes at about 1300; the rest is one text node. The other texts are plain. The prompt is cut at 6000 characters or
 300 lines, whichever comes first, with "N more characters not shown."; the tool
 input is JSON in one `pre` cut the same way, only once opened; the tool name at
 120 characters; an option label at 300 (with an ellipsis); at most 20 options with
@@ -182,16 +201,45 @@ its edit was open leaves the edited words in a card to move into the message box
 or let go; they are never dropped quietly. A send that is in the queue is drawn by
 the tray, not also as a bubble in the timeline.
 
+## What steer does, per agent
+
+One label, "Stop and send", with the one sentence "Stops the current reply, then
+sends this message now.", is what the first version says on every harness
+(G1, "Carried forward from wave 2"; G16 gap 6). It is exact on Claude (the reply
+is cut, a running tool call is killed, an open approval withdrawn). It is not
+exact on Codex (the reply is cut, but a running command is not stopped, and a
+steer waits behind an open approval) or on opencode (a steer does not even cut the
+reply being written, and its message can show up only in the next turn). ACP has
+no steer.
+
+**The caps cannot tell these apart.** `Caps` is `{steer, plan_mode, rollback,
+fork, stop_task, options}`: `steer` is a boolean, true for Claude, Codex and
+opencode alike. The row names the harness and the adapter, but the view must not
+branch on a harness name (AGENTS.md: capabilities first), so it cannot choose a
+wording from that either. What the hub would need to carry, for a later
+milestone to word the control per agent: a field on `session.caps`, for example
+`steer_effect: "stops_reply" | "after_tool" | "next_turn"` (G16's three cases),
+set by each adapter from what its recordings prove (`claude_wire.PROVEN` is the
+model), and listed in `session_v2.json`. With it the label, the button's `title`
+and the tray's sentence would be chosen from the field; without it they are the
+one sentence above. Until then the cases the view can tell apart, and has a
+screenshot of each, are: steer offered (`composer-busy`, `composer-queued`) and
+steer not offered (`composer-no-steer`: the button is disabled with its reason).
+
 ## Left out, and why
 
-| Left out | Why |
-|---|---|
-| Model and effort pickers, plan toggle | `caps.options` and `caps.plan_mode` are readable, but the store has no action that posts `control {op: "set_option"}`, and `src/core/**` was not this milestone's to change. No v2 event lists an ACP agent's modes or models either (G1, G20). Nothing is drawn rather than a control that does nothing. G20 owns plan mode |
-| Queue reorder | the hub has `edit`, `cancel` and `steer` on a queued message and no reorder |
-| A typed answer to a question | no route carries the text (above) |
-| Slash commands and `@` files | not in this milestone; the placeholder no longer promises them |
-| "Allowed on iPhone" captions | G21 |
-| t3code's `ComposerPendingApprovalActions` | not copied (no checkout); written from the description in G1 |
+What each would need, so the next milestone can pick it up:
+
+| Left out | Why | What it needs |
+|---|---|---|
+| Model and effort pickers | `caps.options` lists the option names a session can set (`model`, `permission_mode`, ...), but the store has no action that sets one, and `src/core/**` was not this milestone's to change | a store action `setOption(name, value)` that posts `POST /v1/sessions/{key}/control {op: "set_option", name, value, command_id}` (the hub's `_KEPT_OPS` already has `set_option` with `name` and `value`); the values to offer: Claude has no list (G7), ACP agents list their own modes and models (`AcpState.modes`, `.models`) and no v2 event carries them yet, opencode models are `provider/model`, Codex `permission_mode` is `untrusted`, `on-request` or `never` (G16): a new field on `session.caps` or a `session.options` event |
+| Plan toggle | the same missing action; G20 owns plan mode | `setOption("plan_mode", true|false)` through the same route, shown only when `caps.plan_mode` |
+| Queue reorder | the hub has `edit`, `cancel` and `steer` on a queued message and nothing that moves one | a hub op `queue {op: "move", client_id, before}` in `hub.py`'s queue handler and the keeper's queue, then `queueAction("move", id, ...)` in the store |
+| A typed answer to a question | no route carries the text | `POST .../approval {request_id, text}` reading `text` into the adapter's `Answer.text` (the field exists in `adapters/base.py` and `claude_wire.answer` uses it), and `respond(requestId, decision, text?)` in the store |
+| A steer wording per agent | `Caps.steer` is a boolean | see "What steer does, per agent" |
+| Slash commands and `@` files | not in this milestone; the placeholder no longer promises them | G20/G21's |
+| "Allowed on iPhone" captions | | G21 |
+| t3code's `ComposerPendingApprovalActions` | not copied (no checkout); written from the description in G1 | |
 
 ## Limits
 
@@ -233,7 +281,7 @@ the tray, not also as a bubble in the timeline.
 `pnpm exec vite --config src/session/screens/vite.config.ts`, then
 `node src/session/screens/shoot.mjs <dir> composer-empty ...`. Scenes:
 `composer-empty`, `-typing`, `-multiline`, `-sending`, `-busy`, `-queued`,
-`-queued-edit`, `-approval`, `-approval-offline`, `-input-text`, `-input-choice`,
+`-queued-edit`, `-queued-many`, `-approval`, `-approval-confirm`, `-approval-offline`, `-input-text`, `-input-choice`,
 `-offline`, `-storage-down`, `-loading`, `-no-steer`, `-read-only`,
 `-attachments`, `-hostile`; each at 1280x800 and a 390x844 phone, light and dark.
 `scenes.ts` scripts each over the recorded fixtures plus a few hand-built frames,
@@ -251,6 +299,6 @@ Run on 2026-11-22, macOS 27.3, Node 22.23.1.
 |---|---|
 | `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (33 files; the composer's tests are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
 | The built files under `src/swe/webapp/static/session/` equal a fresh build; `tests.test_webapp_session_view` | pass |
-| **Each guard, removed.** 46 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. Three edits first survived (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", and all three then failed their edits |
+| **Each guard, removed.** 57 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (no links, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (footer and tray caps, icon-only Stop, Edit and Remove). Three edits first survived (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", and all three then failed their edits |
 | **A real hub.** `swe remote serve` on a throwaway HOME, harness.json pointing Claude's adapter at `tests/fakes/fake_claude.py` in `approval` mode, headless Chrome on the built page (`/session/index.html?key=...`) with the saved credential: the first turn's approval shows in the dock with nothing focused; a real mouse click on Allow answers it; text typed with the keyboard and sent with Enter arrives once; the second turn's approval is answered with a click. The hub's v2 messages hold the typed message once (`["list the build folder","now list it again please"]`) and both approvals as `source user, decision allow` | pass; screenshots `G13-e2e/` in the shared notes folder, script `G13-e2e_view.mjs` (run with `swe` as `PYTHONPATH=src python3 -m swe.cli`, since this was a worktree) |
-| Screenshots, 18 composer scenes x desktop 1280 and phone 390 x light and dark (72 files) | read; `G13-screens-final/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the dock now scrolls inside 18 rem), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |
+| Screenshots, 20 composer scenes x desktop 1280 and phone 390 x light and dark (80 files) | read; `G13-screens-final/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the dock now scrolls inside 18 rem), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |

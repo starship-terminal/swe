@@ -1,5 +1,5 @@
 import type { CompactedItem, ErrorItem, LiveText, RequestItem } from "../core";
-import { cx, Icon, Prose, Spinner, StateArrow } from "../ui";
+import { cx, Icon, InlineText, Prose, Spinner, StateArrow } from "../ui";
 import { plural } from "./format";
 import type { TurnFooter } from "./model";
 
@@ -90,7 +90,9 @@ export function RequestRow({ item }: { item: RequestItem }) {
   return (
     <div className={cx("rounded-card border px-3 py-2", open ? "border-warning bg-subtle" : "border-border")} data-request={open ? "open" : "closed"}>
       <p className="text-xs text-muted">{kind ?? "Request"}</p>
-      <p className="mt-0.5 text-sm leading-6 break-words whitespace-pre-wrap">{data.prompt}</p>
+      <p className="mt-0.5 text-sm leading-6 break-words whitespace-pre-wrap">
+        <InlineText text={data.prompt} />
+      </p>
       <p className="mt-1.5 flex items-center gap-1.5 text-xs text-secondary">
         <StateArrow colour={arrow} />
         {text}
