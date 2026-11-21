@@ -277,9 +277,9 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 
 | Check | Result |
 |---|---|
-| `tests.test_remote_agent` (200 tests, 28 new) | pass |
+| `tests.test_remote_agent` (208 tests, 36 new) | pass, 5 runs in a row |
 | Full suite against a throwaway HOME | pass (see the PR) |
-| Two throwaway HOMEs on one Mac against an installed `swe`, the fake Claude agent: a hub and a satellite, a launch on the satellite from the hub, a send from the hub answered by the satellite's keeper, the agent killed mid-turn and started again, a message held while it was down delivered once, both journals equal to the keeper's log, the loopback API answering with the hub stopped | see the PR |
+| Against an installed `swe` (`pip install -e .` in a fresh venv), two throwaway HOMEs on one Mac, `swe remote serve` in one and `swe remote agent` in the other, harness.json on the satellite pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py` (`FAKE_CLAUDE_MODE=approval`): a launch on the satellite asked for on the hub; an approval and a send from the hub answered by the satellite's keeper; `kill -9` the agent with an approval open, a message sent meanwhile answered `held` (its retry `duplicate`, a Stop 409 `machine_offline`); the agent started again, the approval answered, the held message run once; 55 events, seqs 1..55, the satellite's journal and the hub's copy both equal to the keeper's log; then the hub stopped and the satellite's loopback API listing the session and running one more turn, 401 without the token or with a paired credential, 404 for `/v1/devices`; `local.json` mode 0600 and its token in no other file under either HOME, logs included; detach ends the keeper | pass |
 
 ## Interface changes to earlier milestones
 

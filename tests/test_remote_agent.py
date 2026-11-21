@@ -1,10 +1,15 @@
 """R3: satellite agent, remote keys, machine registry, command queue."""
 
+import contextlib
 import http.client
+import io
 import json
+import logging
 import os
+import queue
 import shutil
 import socket
+import stat
 import struct
 import tempfile
 import threading
@@ -12,16 +17,24 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import quote
 
+from swe.paths import config_file_for
 from swe.remote import agent as agent_mod
 from swe.remote import usage as usage_mod
 from swe.remote import attachments, catalog as catalog_mod
 from swe.remote import inject, journal, pairing, protocol, supervise
 from swe.remote import hub
+from swe.remote.adapters import fake
 from swe.remote.hub import HubState, make_server
+from swe.remote.keeper import discovery
+from swe.remote.keeper.log import read_log
 from swe.sessions.models import Session
 
 from tests._tempdir import temp_dir
+from tests.test_remote_hub import _session as _hub_session
+from tests.test_remote_hub_keeper import OPTIONS, Feed, KeeperHubCase, Stream
+from tests.test_remote_keeper import WAIT, short_home
 
 
 def _session(sid="s1", tool="claude", path="/tmp/proj"):
@@ -2960,31 +2973,9 @@ class TestReviewHubFixes(unittest.TestCase):
         self.assertEqual(len(seqs), 1)  # the unacked command stays
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------------------------------------------------------------------
 # G15: satellite keepers and the loopback local API
 # (docs/specs/G15-satellite-keepers.md)
-
-import contextlib  # noqa: E402
-import io  # noqa: E402
-import logging  # noqa: E402
-import queue  # noqa: E402
-import stat  # noqa: E402
-from urllib.parse import quote  # noqa: E402
-
-from swe.paths import config_file_for  # noqa: E402
-from swe.remote.adapters import fake  # noqa: E402
-from swe.remote.keeper import discovery  # noqa: E402
-from swe.remote.keeper.log import read_log  # noqa: E402
-
-from tests.test_remote_hub import _session as _hub_session  # noqa: E402
-from tests.test_remote_hub_keeper import (  # noqa: E402
-    OPTIONS, Feed, KeeperHubCase, Stream)
-from tests.test_remote_keeper import WAIT, short_home  # noqa: E402
-
 
 class SatelliteCase(KeeperHubCase):
     """A hub with its session runtime on (``self.srv``, over
@@ -4162,3 +4153,7 @@ class TestLocalApi(SatelliteCase):
                             ("x", agent_mod.LOCAL_PORT)):
             conf.write_text(json.dumps({"remote": {"local_port": value}}))
             self.assertEqual(agent_mod.local_port_for(home), want, value)
+
+
+if __name__ == "__main__":
+    unittest.main()

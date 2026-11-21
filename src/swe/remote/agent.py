@@ -2366,7 +2366,11 @@ class SatelliteKeepers:
             if not receipt.duplicate and online:
                 # Whatever was held before it goes first.
                 self._flush(mid)
-        stored = store.get_command(cid)
+        try:
+            stored = store.get_command(cid)
+        except store_mod.StoreError as exc:
+            handler._send_error(503, "store_failed", str(exc))
+            return True
         status = stored.status if stored is not None else "held"
         out = {"ok": True, "queued": True, "waiting": False,
                "command_id": cid, "client_id": client_id,
