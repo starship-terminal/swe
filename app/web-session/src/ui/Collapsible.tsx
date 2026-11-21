@@ -11,17 +11,15 @@ interface Props {
   children: ReactNode;
   className?: string;
   buttonClassName?: string;
-  /** The panel's label for a screen reader, when the header alone does not name it. */
-  label?: string;
 }
 
 /**
  * A disclosure: a header button and a panel that grows and shrinks (the `.sv-collapse` rules in
  * session.css animate it, and do not under reduced motion). The panel's content is made the first
  * time it is opened, so a long session of closed work groups draws only their headers; once made it
- * stays, so closing it can animate. A closed panel is `inert`: its controls are out of the tab order.
+ * stays, so closing it can animate. A closed panel is `inert`: its controls are out of the tab order. It is not a landmark (a long session would fill the screen reader's list); the button's `aria-expanded` and `aria-controls` say what it is.
  */
-export function Collapsible({ header, open, onToggle, children, className, buttonClassName, label }: Props) {
+export function Collapsible({ header, open, onToggle, children, className, buttonClassName }: Props) {
   const id = useId();
   const [made, setMade] = useState(open);
   if (open && !made) setMade(true);
@@ -40,7 +38,7 @@ export function Collapsible({ header, open, onToggle, children, className, butto
         <Icon className={cx("sv-chevron size-3.5 shrink-0 text-muted", open && "sv-chevron-open")} name="chevron" />
         {header}
       </button>
-      <div aria-label={label} className="sv-collapse" data-open={open} id={id} inert={!open} role="region">
+      <div className="sv-collapse" data-open={open} id={id} inert={!open}>
         <div className="sv-collapse-inner">{made ? children : null}</div>
       </div>
     </div>

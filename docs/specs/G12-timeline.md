@@ -46,14 +46,21 @@ are the two files outside `session/` and `ui/` that changed: G10 named
 
 **Work groups.** A group is the run of steps between two other rows. It is
 closed once it is done and open while it runs, and a person's own toggle wins
-and stays (`useToggles`, keyed by the row before the group, or the start of
-its turn, so the id survives a running group growing and an older page of history
-joining it at the front): a group does not close under someone reading it. Closed, its steps are not made at all; opened
-once, they stay so the close can animate. A tool opens for its input, its
-progress while it runs, each file edit as a coloured diff (`diffLines` reads hunk headers, so
-a changed line such as `++counter;` is not taken for a file header) and its output, each cut at 6000 characters or 300 lines with a
-note of how much is not shown. "Worked for" is the span from the group's first
-step to its last step's end (`completedAt`).
+and stays: a group does not close under someone reading it, and a running group
+the person closed stays closed as it grows. The choice (`useToggles`) is kept
+for every entry of the group (its `seqs`) and read from the first that has one,
+so it survives the group growing at the end (a running group) or at the front
+(an older page of history joined it); the React key is `work-<first seq>`, which
+is unique among groups. Closed, its steps are not made at all; opened once, they
+stay so the close can animate. A step still "running" in a turn that has ended
+never finished: it shows as stopped, not as a spinner. A tool opens for its
+input, its progress while it runs, each file edit as a coloured diff
+(`diffLines` reads hunk headers, so a changed line such as `++counter;` is not
+taken for a file header, and a diff's trailing newline is not a blank row) and
+its output. Input, progress, output and diffs are all cut the same way, at 6000
+characters or 300 lines, whichever comes first (one very long line is cut too),
+with a note of how many characters are not shown. "Worked for" is the span from
+the group's first step to its last step's end (`completedAt`).
 
 **Streaming.** The core applies deltas by id and offset; the view draws
 `session.live` and does nothing with offsets. A hole shows "Catching up with the
@@ -71,17 +78,53 @@ decides nothing. Retry calls `retrySend` (a new send under a new id; if the stor
 because the session became read-only or is gone, the reason shows under that
 send), Discard calls `discardSend`.
 
-**A delivered message shows once.** The hub echoes the command id a send was
-posted under as the `command_id` of the user's `message.completed` (the keeper
-path stores it; the legacy path's `client_id` is served under `command_id`, and
-the core posts both, equal). `visibleSends` hides any send whose `commandId`
-equals the `commandId` of a user message already in the timeline. The outbox
+**A delivered message shows once (keeper path).** The keeper path echoes the
+command id a send was posted under as the `command_id` of the user's
+`message.completed` (the core posts `command_id` and `client_id`, equal).
+`visibleSends` hides any send whose `commandId` equals the `commandId` of a
+user message already in the timeline, and never matches by text. The outbox
 entry itself stays until its `command.result` (G11's invariant); the view only
-stops drawing it. A send the hub queued but has not yet started is still drawn,
-as "Queued: it will be sent when the current turn ends.": it has no timeline
-message yet, and the queued tray that would show it is G13's. A steer ends its
-queued entry with a `cancelled` result and its text arrives as a new user
-message under a new command id, so the cancelled entry leaves with its result.
+stops drawing it. A send the hub only queued is still drawn, as "Queued: it
+will be sent when the current turn ends.": it has no timeline message yet, and
+the queued tray that would show it is G13's. A steer ends its queued entry with
+a `cancelled` result and its text arrives as a new user message under a new
+command id, so the cancelled entry leaves with its result.
+
+**Legacy sends (a session no keeper holds).** The rule above does not hold
+there, and the first version of this spec said it did. On that path the hub
+answers a send with 202 and no receipt, and the user's message reaches the
+journal later from the harness's transcript (`tail.py`), whose records carry no
+send id: `protocol.message_data` has no `client_id` field, and nothing in
+`hub.py` (`_send_message`, `_deliver`, `_send_result`) or `sendq.py` attaches
+one to a `message.appended` event. So `protocol_compat.to_v2` makes the user's
+`message.completed` as `{id: "j<seq>", kind: "user", text}`, with no
+`command_id`, for a send from this device, from another device, or typed in the
+terminal alike, and no id links a message to a send. The view therefore shows
+what is true and guesses nothing:
+
+- The send's bubble ("Sent. Waiting for the session to take it.", no actions)
+  and the delivered message are both on screen until the send's `command.result`
+  arrives (v2 serves its `client_id` as `command_id`), which removes the entry.
+  The result is published when the hub has injected the text, so the two usually
+  share the screen for a moment, in either order.
+- If that result is lost (a catch-up by snapshot does not carry it, and a legacy
+  send cannot be asked about), the entry ends `unconfirmed` after 45 minutes
+  (`LEGACY_CONFIRM_MS`) and offers Retry and Discard **beside the message that
+  was delivered**. Retry sends it again as a new message, so the session would
+  get it twice. The bubble says "never said whether it reached the session"; the
+  person has to look.
+- A pending send with the same words as a message typed in the terminal stays
+  drawn: matching by text would hide a send that was not delivered.
+
+What a hub change would need to carry to close this: the legacy `_deliver` would
+have to leave the send's id where the transcript's user record can be matched to
+it (for instance a marker in the injected text that the tail strips and turns
+into `client_id` on the `message.appended`, or the injector returning the
+transcript position it wrote at), `to_v2` would pass it on as `command_id`
+(`_v2` already takes a `command_id`), and a satellite's agent would forward it
+the same way. `session_v2.json` already allows `command_id` on the event. None
+of this is in G12: it changes `hub.py` and the tail, which other work owns.
+Limit 10 below states the person's side of it.
 
 **Connection.** The header carries the state arrow and a word ("Live",
 "Catching up", "Reconnecting, retrying in 4s", "Offline", "Hub not answering",
@@ -106,7 +149,12 @@ only on `pre` and `code`.
 **Markdown.** `ui/markdown.ts` reads a reply into plain data (paragraphs,
 headings, lists with nesting, quotes, fenced code, tables, rules; code, bold,
 italic and links in a line) and `Prose` draws it with React elements, so reply
-text never becomes HTML. A link is an anchor only for `http`, `https` and
+text never becomes HTML. Nesting is capped at 8 levels (quotes, lists, bold in a
+link): what is deeper stays as text, so a reply of ten thousand `>` cannot
+overflow the stack that reads it. Formatting is read in the first 6000
+characters of one run of text; the rest stays text, and a mark is searched for
+only when the text holds what would close it, so many marks that never close
+cost no more than a few that do. A link is an anchor only for `http`, `https` and
 `mailto` (`rel="noopener noreferrer"`); anything else leaves its words. A code span closes with
 a run of backticks as long as its opening one, and a list item's content is
 read with its real indent removed, so code under a numbered item keeps its own. An open
@@ -114,11 +162,38 @@ code fence runs to the end, so a reply still being written draws sensibly.
 `react-markdown` (named in G1) was not added: nothing else needed its
 dependency tree.
 
+**One bad item.** Each row sits in its own error boundary: a row that throws
+while it is drawn shows "This item could not be shown." (and is tried again when
+the item changes) and the rest of the timeline stays. A second boundary around
+the whole timeline shows one line in its place and leaves the header and the
+composer's place standing. Without them a render error unmounted the whole view,
+and since the item is in the journal, did so on every load of that session.
+
+**Where the window sits.** The timeline follows the newest content while the
+person is at the end, and stops following once they scroll up ("Jump to
+latest" takes them back). When older history is added above, the row they were
+reading is kept where it was in the window (the first row with any of it in
+view is noted when they ask, and its place is restored once the page arrives in
+front of the first item; a reply growing at the bottom meanwhile does not move
+it). Opening or closing something is the person's own doing: the height it
+changes does not pin the window to the end, which would carry the header they
+pressed off the top; following the end resumes once the change has settled and
+the window says it is at the end again.
+
+**Cost.** A streamed delta redraws the live row and no other: rows are compared
+by what they hold (`rowsEqual`, the journal's items and the live text are the
+same objects until they change), `RowView` and `Prose` are memoised, and the
+test counts the history rows drawn and parsed after a delta (none). With 5,000
+rows a delta cost 255 to 320 ms before and about 40 ms now (what remains is
+making the rows and comparing them).
+
 **The composer's place.** `ComposerPlaceholder` is the disabled box G10 drew,
 marked `data-placeholder="composer"` and commented as G13's. Its one live part
 is the outbox's `note`, which G11 asks a view to show beside the composer when
 storage does not survive a reload. It shows the read-only reason as its
-placeholder when the row says so. G13 replaces the file.
+placeholder when the row says so, has a dashed border, and says beside the box
+"Sending from this view is not available yet." so it is not taken for a
+composer that does not work. G13 replaces the file.
 
 ## Decisions
 
@@ -141,15 +216,21 @@ placeholder when the row says so. G13 replaces the file.
 ## Limits
 
 1. **No virtualisation.** Every row is in the DOM, and the reducer never trims
-   (G11 Limit 3), so a very long session costs layout time. Closed work groups
-   draw only their headers, which is most of the weight. `@legendapp/list` (G1)
-   is the way out when it matters.
-2. **Browser tests are jsdom tests.** G1 names Playwright; the toolchain has
-   Vitest and jsdom, and adding a browser runner to CI was not this
-   milestone's. The DOM tests run the real store over the recorded fixtures.
-   The look was checked in Chrome through `session/screens/shoot.mjs` (a
-   manual step, not a CI job). Scroll position and the animations are only
-   checked there.
+   (G11 Limit 3), so a very long session costs layout time and memory. Closed
+   work groups draw only their headers, and a delta redraws only the live row
+   (about 40 ms at 5,000 rows, measured in jsdom), but a first draw of 5,000
+   rows takes about 0.6 s and building the rows is still linear in the journal.
+   `@legendapp/list` (G1) is the way out when it matters.
+2. **Browser tests are jsdom tests, and the screenshots are not a test.** G1
+   names Playwright; the toolchain has Vitest and jsdom, and adding a browser
+   runner to CI was not this milestone's. The DOM tests run the real store over
+   the recorded fixtures and over hand-built sequences, and the scroll tests
+   give jsdom a small fake layout (rows of a set height). The screenshots come
+   from `session/screens/shoot.mjs`, which does not use Playwright: it starts
+   Chrome and drives it over the DevTools protocol with Node's own WebSocket. It
+   is a manual step, not a CI job, and checks nothing by itself: the pictures
+   are for a person to read. Real scroll physics and the animations are only
+   seen there.
 3. **Global class names.** Tailwind's utilities are global (G10's note for
    G14). This stylesheet emits among others `block`, `grid`, `hidden`, `flex`,
    `relative`, `table`, `underline` and `truncate`; the web app already uses
@@ -169,11 +250,22 @@ placeholder when the row says so. G13 replaces the file.
    with fake timers (the view takes a `now` prop for that).
 9. **The footer's lines come from `fileEdits`' diffs.** A tool that reports a
    file edit with no diff counts the file and no lines.
+10. **A legacy send can show beside its delivered message** (see "Legacy sends"):
+    both are drawn until the send's result arrives, and if that result is lost
+    the send ends unconfirmed with Retry next to the message that was
+    delivered; Retry would send it again. It needs the hub to carry the send's
+    id onto the transcript's user message, which this milestone does not touch.
+11. **Formatting is read in the first 6000 characters of a run of text.** A
+    paragraph longer than that shows the rest as plain text, marks and all.
+12. **A group's React key is `work-<first seq>`.** When older history joins a
+    group at the front its key changes, and the group is drawn again from
+    scratch (the person's open or closed choice, and each step's, are kept by
+    seq, so nothing they chose is lost).
 
 ## Dependencies
 
-None added. The bundle grew by the view: `session-view.js` 90.1 kB (27.4 kB
-gzip, from 2.8 kB, now with zustand), `session-view.css` 15.9 kB (3.9 kB gzip,
+None added. The bundle grew by the view: `session-view.js` 95.3 kB (29.1 kB
+gzip, from 2.8 kB, now with zustand), `session-view.css` 16.0 kB (3.9 kB gzip,
 from 5.1 kB).
 
 ## Screens
@@ -184,13 +276,13 @@ over the recorded fixtures at <http://localhost:5199/?scene=NAME&theme=light|dar
 `node src/session/screens/shoot.mjs <dir>` photographs every scene at 1280x800
 and at a 390x844 touch phone, in light and dark, over the DevTools protocol
 (Node 22 and a Chrome binary, no dependency). Scenes: `default`,
-`work-group-expanded`, `tool-expanded`, `streaming`, `empty`, `loading`,
+`work-group-expanded`, `tool-expanded`, `stopped-tool`, `streaming`, `empty`, `loading`,
 `offline`, `reconnecting`, `session-gone`, `hub-not-answering`,
 `outbox-states` (waiting, sending, queued, refused, in doubt, unconfirmed),
 `outbox-storage-down`, `outbox-loading`. The outbox scenes set the store's
 `outbox` and `sends` through `describeSends`, so the words are the
 selector's. The run for this milestone is under the shared notes folder,
-`G12-screens/` (52 files).
+`G12-screens/` (56 files).
 
 ## Verification
 
@@ -198,7 +290,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (397 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (465 tests), `pnpm build` | pass |
 | `tests.test_webapp_session_view`, `tests.test_session_view_fixtures` | pass |
 | The built page, served as static files, with a real `fetch`: `/session/index.html?key=claude%3Anope` asks `GET /v1/sessions/claude%3Anope/events?v=2`, gets 404 and shows "Session gone" | pass |
-| 52 screenshots, each read: 13 scenes x desktop and phone x light and dark | read; findings fixed (bubble width, the caret on its own line, a connecting banner said three times, a detached arrow) |
+| 56 screenshots, 14 scenes x desktop and phone x light and dark, taken again after the review fixes | the changed ones read (tool-expanded, stopped-tool, loading, the outbox scenes, default); findings fixed along the way (bubble width, the caret on its own line, a connecting banner said three times, a detached arrow, a diff's blank last row, a skeleton invisible in dark) |

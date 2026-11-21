@@ -34,7 +34,10 @@ export function diffLines(diff: string | undefined): { text: string; kind: DiffK
   let old = 0;
   let next = 0;
   let sawHunk = false;
-  for (const text of (diff ?? "").split("\n")) {
+  const source = (diff ?? "").split("\n");
+  // A diff ends with a newline: that is the end of its last line, not a blank line of its own.
+  if (source.length > 1 && source[source.length - 1] === "") source.pop();
+  for (const text of source) {
     const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(text);
     if (hunk !== null) {
       sawHunk = true;
@@ -85,8 +88,30 @@ export function baseName(path: string): string {
   return cut < 0 ? trimmed : trimmed.slice(cut + 1);
 }
 
-/** Cut a long text for drawing: the start, and how much was left out. */
-export function clip(text: string, max: number): { text: string; hidden: number } {
-  if (text.length <= max) return { text, hidden: 0 };
-  return { text: text.slice(0, max), hidden: text.length - max };
+/** How much of a text, or a diff, is drawn before "not shown": at most this many characters and this many lines. */
+export const SHOWN_CHARS = 6000;
+export const SHOWN_LINES = 300;
+
+/**
+ * Cut a long text for drawing: at most `maxLines` lines, then at most `maxChars` characters (one very long
+ * line is cut too). `hidden` counts the characters left out.
+ */
+export function clip(text: string, maxChars = SHOWN_CHARS, maxLines = SHOWN_LINES): { text: string; hidden: number } {
+  let shown = text;
+  let at = -1;
+  for (let line = 0; line < maxLines; line++) {
+    at = shown.indexOf("\n", at + 1);
+    if (at < 0) break;
+    if (line === maxLines - 1) shown = shown.slice(0, at);
+  }
+  if (shown.length > maxChars) shown = shown.slice(0, maxChars);
+  return { text: shown, hidden: text.length - shown.length };
+}
+
+/** A reason as a sentence: a capital to start, and a full stop to end (the hub's notes arrive as they were written). */
+export function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return trimmed;
+  const cased = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(cased) ? cased : `${cased}.`;
 }

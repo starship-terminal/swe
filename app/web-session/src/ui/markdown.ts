@@ -34,17 +34,28 @@ export function safeHref(raw: string): string | null {
   }
 }
 
-const INLINE_PATTERNS: { kind: "code" | "link" | "strong" | "em"; re: RegExp }[] = [
-  { kind: "code", re: /(?<!`)(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/ },
-  { kind: "link", re: /\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/ },
-  { kind: "strong", re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/ },
-  { kind: "em", re: /\*([^*\s][^*\n]*?)\*|(?<![\w])_([^_\s][^_\n]*?)_(?![\w])/ },
+/** Each pattern runs only when the text holds what it needs (`needs`), so text with no closing mark costs nothing to scan. */
+const INLINE_PATTERNS: { kind: "code" | "link" | "strong" | "em"; re: RegExp; needs: string[] }[] = [
+  { kind: "code", re: /(?<!`)(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/, needs: ["`"] },
+  { kind: "link", re: /\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/, needs: ["]("] },
+  { kind: "strong", re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/, needs: ["**", "__"] },
+  { kind: "em", re: /\*([^*\s][^*\n]*?)\*|(?<![\w])_([^_\s][^_\n]*?)_(?![\w])/, needs: ["*", "_"] },
 ];
 
+/**
+ * How much of one run of text is read for formatting. Finding the next mark scans what is left, so a
+ * hostile run of marks would cost the square of its length; what is past this many characters stays text.
+ */
+export const INLINE_READ_MAX = 6_000;
+/** How deep formatting inside formatting is read (bold in a link), and how deep quotes and lists nest. */
+export const MAX_DEPTH = 8;
+
 /** Read the formatting inside one line of text. */
-export function parseInline(text: string): Inline[] {
+export function parseInline(text: string, depth = 0): Inline[] {
   const out: Inline[] = [];
-  let rest = text;
+  if (depth >= MAX_DEPTH) return text === "" ? [] : [{ t: "text", text }];
+  let rest = text.length > INLINE_READ_MAX ? text.slice(0, INLINE_READ_MAX) : text;
+  const beyond = text.length > INLINE_READ_MAX ? text.slice(INLINE_READ_MAX) : "";
   const pushText = (value: string) => {
     if (value === "") return;
     const last = out[out.length - 1];
@@ -53,7 +64,8 @@ export function parseInline(text: string): Inline[] {
   };
   while (rest !== "") {
     let best: { kind: (typeof INLINE_PATTERNS)[number]["kind"]; match: RegExpExecArray } | null = null;
-    for (const { kind, re } of INLINE_PATTERNS) {
+    for (const { kind, re, needs } of INLINE_PATTERNS) {
+      if (!needs.some((mark) => rest.includes(mark))) continue;
       const match = re.exec(rest);
       if (match !== null && (best === null || match.index < best.match.index)) best = { kind, match };
     }
@@ -74,10 +86,11 @@ export function parseInline(text: string): Inline[] {
       const href = safeHref(match[2] ?? "");
       // An address that is not safe leaves the words, not a dead link.
       if (href === null) pushText(match[1] ?? "");
-      else out.push({ t: "link", href, children: parseInline(match[1] ?? "") });
-    } else if (kind === "strong") out.push({ t: "strong", children: parseInline(match[1] ?? match[2] ?? "") });
-    else out.push({ t: "em", children: parseInline(match[1] ?? match[2] ?? "") });
+      else out.push({ t: "link", href, children: parseInline(match[1] ?? "", depth + 1) });
+    } else if (kind === "strong") out.push({ t: "strong", children: parseInline(match[1] ?? match[2] ?? "", depth + 1) });
+    else out.push({ t: "em", children: parseInline(match[1] ?? match[2] ?? "", depth + 1) });
   }
+  pushText(beyond);
   return out;
 }
 
@@ -107,7 +120,7 @@ const indentOf = (line: string): number => line.length - line.trimStart().length
 
 /** Read a Markdown text into blocks. */
 export function parseMarkdown(text: string): Block[] {
-  return parseLines(text.replace(/\r\n?/g, "\n").split("\n"));
+  return parseLines(text.replace(/\r\n?/g, "\n").split("\n"), 0);
 }
 
 function startsBlock(line: string, next: string | undefined): boolean {
@@ -121,7 +134,10 @@ function startsBlock(line: string, next: string | undefined): boolean {
   );
 }
 
-function parseLines(lines: string[]): Block[] {
+function parseLines(lines: string[], depth: number): Block[] {
+  // Quotes and lists inside quotes and lists go this deep and no further: what is left is plain text, so a
+  // reply of ten thousand ">" cannot overflow the stack that reads it.
+  if (depth >= MAX_DEPTH) return lines.some((line) => line.trim() !== "") ? [{ t: "paragraph", children: [{ t: "text", text: lines.join("\n") }] }] : [];
   const blocks: Block[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -166,7 +182,7 @@ function parseLines(lines: string[]): Block[] {
         inner.push((QUOTE.exec(lines[i] as string) as RegExpExecArray)[1] ?? "");
         i++;
       }
-      blocks.push({ t: "quote", blocks: parseLines(inner) });
+      blocks.push({ t: "quote", blocks: parseLines(inner, depth + 1) });
       continue;
     }
     const next = lines[i + 1];
@@ -218,7 +234,7 @@ function parseLines(lines: string[]): Block[] {
           inner.push(following.slice(Math.min(indentOf(following), content)));
           i++;
         }
-        items.push({ children: parseInline(first), blocks: parseLines(inner) });
+        items.push({ children: parseInline(first), blocks: parseLines(inner, depth + 1) });
       }
       blocks.push({ t: "list", ordered, start, items });
       continue;

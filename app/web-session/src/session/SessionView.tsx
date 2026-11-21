@@ -7,6 +7,7 @@ import { describeConnection } from "./connection";
 import { Header } from "./Header";
 import { rowLabels } from "./model";
 import { Timeline } from "./Timeline";
+import { TimelineBoundary } from "./RowBoundary";
 import { StateArrow } from "../ui";
 
 /**
@@ -37,7 +38,9 @@ export function SessionView({ store, sessionKey, now = Date.now }: { store: Sess
           </p>
         </div>
       ) : null}
-      <Timeline store={store} />
+      <TimelineBoundary>
+        <Timeline store={store} />
+      </TimelineBoundary>
       <ComposerPlaceholder store={store} />
     </div>
   );

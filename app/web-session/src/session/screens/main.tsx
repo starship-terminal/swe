@@ -145,6 +145,18 @@ async function run(): Promise<void> {
       transport.frames(...streaming.slice(0, third + 1));
       break;
     }
+    case "stopped-tool": {
+      // A turn that was interrupted with a call still running: the step shows as stopped, not spinning.
+      const more = (type: string, seq: number, data: unknown): Frame => ({ v: 2, type, session: KEY, seq, ts: 1760000020 + seq, turn_id: "t3", data }) as unknown as Frame;
+      transport.frames(
+        ...all,
+        more("turn.started", 40, {}),
+        more("message.completed", 41, { id: "u3", kind: "user", text: "Run the whole suite" }),
+        more("tool.started", 42, { call_id: "c-stuck", name: "Bash", summary: "npm run test:all", input: { command: "npm run test:all" } }),
+        more("turn.ended", 43, { status: "interrupted" }),
+      );
+      break;
+    }
     case "gone":
       transport.end({ kind: "http", status: 404 });
       break;

@@ -2,6 +2,9 @@ import { readOnlyReason, useSessionStore, type SessionStore } from "../core";
 
 export const COMPOSER_PLACEHOLDER = "Ask anything. @ files, / commands";
 
+/** Said beside the disabled box, so it is not taken for a composer that does not work. */
+export const NOT_YET = "Sending from this view is not available yet.";
+
 /**
  * PLACEHOLDER, replaced by the composer milestone (G13): the message box, the approvals dock and the
  * queued tray go here. It is a disabled box, so the frame of the page is the final one; nothing in it
@@ -21,8 +24,9 @@ export function ComposerPlaceholder({ store }: { store: SessionStore }) {
         ) : null}
         <form
           aria-label="Composer"
-          className="flex items-end gap-2 rounded-card border border-border bg-card p-2 opacity-60"
+          className="flex items-end gap-2 rounded-card border border-dashed border-border-strong bg-card p-2 opacity-60"
           onSubmit={(event) => event.preventDefault()}
+          title={NOT_YET}
         >
           <textarea
             aria-label="Message"
@@ -37,6 +41,9 @@ export function ComposerPlaceholder({ store }: { store: SessionStore }) {
             </svg>
           </button>
         </form>
+        <p className="mt-1.5 text-xs text-muted" data-placeholder-note>
+          {NOT_YET}
+        </p>
       </div>
     </footer>
   );

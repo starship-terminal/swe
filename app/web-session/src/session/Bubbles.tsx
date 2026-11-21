@@ -1,6 +1,6 @@
 import { MAYBE_SENT, type MessageItem, type SendView } from "../core";
 import { Button, cx, Icon, Prose, Spinner, StateArrow, type ArrowColour } from "../ui";
-import { baseName } from "./format";
+import { baseName, sentence } from "./format";
 
 /** A message the person wrote: a quiet bubble on the right. */
 export function UserBubble({ text, attachments, muted, tone }: { text: string; attachments?: readonly string[] | undefined; muted?: boolean; tone?: "danger" }) {
@@ -84,7 +84,7 @@ export function SendBubble({
       <div className="flex max-w-5/6 flex-col items-end gap-1.5 self-end text-xs text-secondary">
         <p className="flex items-start gap-1.5">
           {send.shown === "sending" ? <Spinner className="mt-0.5" /> : <StateArrow className="mt-0.5" colour={arrowFor(send)} />}
-          <span>{send.reason}</span>
+          <span>{sentence(send.reason)}</span>
         </p>
         {note !== undefined ? (
           <p className="text-danger-text" role="alert">

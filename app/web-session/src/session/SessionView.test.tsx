@@ -1,97 +1,8 @@
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { createSessionStore, describeSends, type Frame, type SessionStore } from "../core";
-import { MemoryStorage } from "../core/outbox-storage";
-import {
-  FakeEnvironment,
-  FakeTimers,
-  FakeTransport,
-  drain,
-  loadFixture,
-  snapshotFrame,
-  type Fixture,
-} from "../core/test-support";
-import { SessionView } from "./SessionView";
-
-declare global {
-  // React reads this to know act() wraps the updates.
-  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
-}
-
-beforeAll(() => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-});
-
-const KEY = "claude:session-1";
-
-let root: Root | undefined;
-let host: HTMLElement | undefined;
-const stores: SessionStore[] = [];
-
-afterEach(() => {
-  act(() => root?.unmount());
-  for (const store of stores.splice(0)) store.getState().stop();
-  host?.remove();
-  root = undefined;
-  host = undefined;
-});
-
-function setup(over: { online?: boolean } = {}) {
-  const timers = new FakeTimers();
-  const transport = new FakeTransport();
-  const environment = new FakeEnvironment();
-  environment.isOnline = over.online ?? true;
-  let ids = 0;
-  const store = createSessionStore({
-    sessionKey: KEY,
-    transport,
-    timers,
-    random: () => 0,
-    environment,
-    openStorage: async () => new MemoryStorage("no database in tests"),
-    newId: () => `id${++ids}`,
-  });
-  stores.push(store);
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => {
-    root?.render(<SessionView now={() => timers.now()} sessionKey={KEY} store={store} />);
-    store.getState().start();
-  });
-  return { store, transport, timers, environment, el: host };
-}
-
-/** Run something that changes the store, and let the view and the store's own async work settle. */
-async function settle(work: () => unknown = () => {}): Promise<void> {
-  await act(async () => {
-    await work();
-    await drain();
-  });
-}
-
-const frames = (fixture: Fixture, connection = 0): Frame[] => (fixture.connections[connection]?.frames ?? []) as Frame[];
-
-async function play(t: ReturnType<typeof setup>, name: string, from = 0, to?: number): Promise<Fixture> {
-  const fixture = loadFixture(name);
-  await settle(() => void t.transport.last.send(...frames(fixture).slice(from, to)));
-  return fixture;
-}
-
-const text = (el: Element | null | undefined) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
-const q = (el: Element, selector: string) => el.querySelector(selector);
-const all = (el: Element, selector: string) => Array.from(el.querySelectorAll(selector));
-
-function button(el: Element, label: string): HTMLButtonElement | undefined {
-  return all(el, "button").find((b) => text(b).includes(label)) as HTMLButtonElement | undefined;
-}
-
-async function click(target: Element | undefined | null): Promise<void> {
-  if (target === undefined || target === null) throw new Error("nothing to click");
-  await settle(() => (target as HTMLElement).click());
-}
+import { describeSends, type Frame } from "../core";
+import { loadFixture, snapshotFrame, type Fixture } from "../core/test-support";
+import { all, button, click, frames, play, q, setup, settle, text, KEY } from "./test-harness";
 
 describe("the recorded session, drawn", () => {
   it("draws the user's words, the reply as prose, and the steps between them in a collapsed work group", async () => {
@@ -308,7 +219,7 @@ describe("sends from the outbox", () => {
     answer(t, 409, { error: { code: "send_rejected", message: "the session cannot take a message now" } });
     await settle(async () => void (await t.store.getState().send({ text: "run it" })));
     const bubble = q(t.el, '[data-send="failed"]') as HTMLElement;
-    expect(text(bubble)).toContain("the session cannot take a message now");
+    expect(text(bubble)).toContain("The session cannot take a message now.");
     expect(q(bubble, '[data-arrow="red"]')).not.toBeNull();
     expect(button(bubble, "Discard")).toBeDefined();
     expect(t.transport.posts("/message")).toHaveLength(1);
@@ -524,5 +435,181 @@ describe("what a refactor of the rows must not change", () => {
       ),
     );
     expect(text(q(t.el, '[data-request="closed"]'))).toContain("Chose: dev");
+  });
+});
+
+// ---------------------------------------------------------------------
+// The details of a work group, built by hand: the recordings hold no long outputs, stuck tools or open turns.
+
+import { bodyOf, frame } from "./test-harness";
+
+/** A session of idle history made of these timeline events (and an open turn, when named). */
+async function history(events: Frame[], open: string | null = null) {
+  const t = setup();
+  const head = 200;
+  await settle(
+    () =>
+      void t.transport.last.send(
+        snapshotFrame({ ...bodyOf("default"), messages: events as never, state: open === null ? "idle" : "running", open_turn: open, head }),
+        frame("session.state", 0, { state: open === null ? "idle" : "running", live: [], pending: [], head, epoch: 0 }),
+      ),
+  );
+  return t;
+}
+
+const toolCall = (seq: number, over: { input?: unknown; output?: string; status?: string; edits?: object[]; running?: boolean } = {}): Frame[] => {
+  const started = frame("tool.started", seq, { call_id: `c${seq}`, name: "Bash", summary: `step ${seq}`, ...(over.input === undefined ? {} : { input: over.input }) }, { turn_id: "t1" });
+  if (over.running === true) return [started];
+  return [
+    started,
+    frame("tool.completed", seq + 1, { call_id: `c${seq}`, status: over.status ?? "ok", name: "Bash", output: over.output ?? "", ...(over.edits === undefined ? {} : { file_edits: over.edits }) }, { turn_id: "t1" }),
+  ];
+};
+
+async function openAll(t: ReturnType<typeof setup>, step: string) {
+  await click(button(t.el, "Worked"));
+  await click(all(t.el, "button").find((b) => text(b).includes(step)));
+  return q(t.el, ".sv-collapse") as HTMLElement;
+}
+
+describe("long text in a step", () => {
+  it("cuts an output at 6000 characters and says how much is not shown", async () => {
+    const t = await history(toolCall(10, { output: "x".repeat(7000) }));
+    const panel = await openAll(t, "step 10");
+    expect(text(panel)).toContain("1000 more characters not shown.");
+    expect(all(panel, "pre code").find((c) => text(c).startsWith("xxx"))?.textContent).toHaveLength(6000);
+  });
+
+  it("cuts an output at 300 lines, whatever its length", async () => {
+    const t = await history(toolCall(10, { output: Array.from({ length: 400 }, (_, i) => `line ${i}`).join("\n") }));
+    const panel = await openAll(t, "step 10");
+    const shown = all(panel, "pre code").find((c) => text(c).startsWith("line 0")) as HTMLElement;
+    expect((shown.textContent ?? "").split("\n")).toHaveLength(300);
+    expect(text(panel)).toMatch(/\d+ more characters not shown\./);
+  });
+
+  it("cuts an input the same way", async () => {
+    const t = await history(toolCall(10, { input: "y".repeat(9000) }));
+    const panel = await openAll(t, "step 10");
+    expect(text(panel)).toContain("3000 more characters not shown.");
+  });
+});
+
+describe("a diff in a step", () => {
+  const edit = (diff: string) => [{ path: "src/app.py", kind: "modify", diff }];
+  const diffSpans = (panel: HTMLElement) => all(panel, "pre code span");
+
+  it("has no blank row from its trailing newline", async () => {
+    const t = await history(toolCall(10, { edits: edit("@@ -1 +1 @@\n-a\n+b\n") }));
+    const panel = await openAll(t, "step 10");
+    expect(diffSpans(panel).map((s) => s.textContent)).toEqual(["@@ -1 +1 @@", "-a", "+b"]);
+  });
+
+  it("cuts at 300 lines, and says so", async () => {
+    const lines = Array.from({ length: 400 }, (_, i) => `+line ${i}`);
+    const t = await history(toolCall(10, { edits: edit(`@@ -0,0 +1,400 @@\n${lines.join("\n")}`) }));
+    const panel = await openAll(t, "step 10");
+    expect(diffSpans(panel)).toHaveLength(300);
+    expect(text(panel)).toMatch(/\d+ more characters not shown\./);
+  });
+
+  it("cuts a diff that is one very long line, by characters", async () => {
+    const t = await history(toolCall(10, { edits: edit(`@@ -1 +1 @@\n-${"a".repeat(10_000)}\n+b`) }));
+    const panel = await openAll(t, "step 10");
+    const total = diffSpans(panel).reduce((sum, s) => sum + (s.textContent ?? "").length, 0);
+    expect(total).toBeLessThanOrEqual(6000 + 2);
+    expect(text(panel)).toMatch(/\d{4} more characters not shown\./);
+  });
+});
+
+describe("a group that is still going", () => {
+  it("starts open while its turn runs, and closes by itself once the turn is done", async () => {
+    const t = await history([frame("turn.started", 9, {}, { turn_id: "t1" }), ...toolCall(10, { running: true })], "t1");
+    const header = () => all(t.el, "button").find((b) => text(b).startsWith("Working")) as HTMLButtonElement;
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(text(q(t.el, ".sv-collapse"))).toContain("step 10");
+
+    await settle(
+      () =>
+        void t.transport.last.send(
+          frame("tool.completed", 11, { call_id: "c10", status: "ok", name: "Bash" }, { turn_id: "t1" }),
+          frame("message.completed", 12, { id: "done", kind: "assistant", text: "Done." }, { turn_id: "t1" }),
+          frame("turn.ended", 13, { status: "completed", duration_s: 5 }, { turn_id: "t1" }),
+        ),
+    );
+    const done = all(t.el, "button").find((b) => text(b).startsWith("Worked")) as HTMLButtonElement;
+    expect(done.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps a running group closed once the person closed it, even as it grows", async () => {
+    const t = await history([frame("turn.started", 9, {}, { turn_id: "t1" }), ...toolCall(10, { running: true })], "t1");
+    const header = () => all(t.el, "button").find((b) => /^(Working|Worked)/.test(text(b))) as HTMLButtonElement;
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    await click(header());
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    await settle(() => void t.transport.last.send(...toolCall(12, { running: true })));
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(text(header())).toContain("2 tool calls");
+  });
+});
+
+describe("a step that never finished", () => {
+  it("is shown stopped, not spinning, once its turn has ended", async () => {
+    const t = await history([
+      frame("turn.started", 95, {}, { turn_id: "t1" }),
+      ...toolCall(96, { running: true }),
+      frame("turn.ended", 97, { status: "interrupted" }, { turn_id: "t1" }),
+    ]);
+    await click(button(t.el, "Worked"));
+    const row = all(t.el, "button").find((b) => text(b).includes("step 96")) as HTMLButtonElement;
+    expect(text(row)).toContain("Stopped");
+    expect(text(row)).not.toContain("Running");
+    expect(row.querySelector(".sv-spin")).toBeNull();
+  });
+
+  it("still spins while its turn is running", async () => {
+    const t = await history([frame("turn.started", 9, {}, { turn_id: "t1" }), ...toolCall(10, { running: true })], "t1");
+    const row = all(t.el, "button").find((b) => text(b).includes("step 10")) as HTMLButtonElement;
+    expect(row.querySelector(".sv-spin")).not.toBeNull();
+    expect(text(row)).toContain("Running");
+  });
+});
+
+describe("how the steps read to a screen reader", () => {
+  it("makes no landmark of a disclosure panel, and ties each button to its panel", async () => {
+    const t = await history([...toolCall(10), ...toolCall(12)]);
+    await click(button(t.el, "Worked"));
+    expect(all(t.el, '[role="region"]')).toHaveLength(0);
+    for (const b of all(t.el, "button[aria-controls]")) {
+      const panel = t.el.ownerDocument.getElementById(b.getAttribute("aria-controls") as string);
+      expect(panel).not.toBeNull();
+      expect(panel?.classList.contains("sv-collapse")).toBe(true);
+    }
+  });
+});
+
+describe("a reply that finishes", () => {
+  it("does not enter a second time, and a new row does", async () => {
+    const t = setup();
+    await play(t, "streaming", 0, 4); // the snapshot, the state frame and two chunks
+    expect(q(t.el, '[data-live="assistant"]')).not.toBeNull();
+    const live = q(t.el, '[data-row-kind="live"]') as HTMLElement;
+    expect(live.classList.contains("sv-enter")).toBe(false); // a live row of the first draw
+    await play(t, "streaming", 4);
+    const reply = all(t.el, '[data-row-kind="assistant"]')[0] as HTMLElement;
+    expect(text(reply)).toBe("Hello world");
+    expect(reply.classList.contains("sv-enter")).toBe(false);
+    await settle(() => void t.transport.last.send(frame("message.completed", 30, { id: "u2", kind: "user", text: "next" }, { turn_id: "t2" })));
+    const next = all(t.el, '[data-row-kind="user"]').at(-1) as HTMLElement;
+    expect(next.classList.contains("sv-enter")).toBe(true);
+  });
+});
+
+describe("the composer's place", () => {
+  it("says in words that sending from this view is not available yet", async () => {
+    const t = setup();
+    await play(t, "default");
+    expect(text(q(t.el, "[data-placeholder-note]"))).toBe("Sending from this view is not available yet.");
+    expect(q(t.el, "form[aria-label='Composer']")?.getAttribute("title")).toBe("Sending from this view is not available yet.");
   });
 });

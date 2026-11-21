@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useSessionStore, type SessionStore } from "../core";
 import { Button, cx, Icon } from "../ui";
 import { AssistantMessage, SendBubble, SystemMessage, UserMessage } from "./Bubbles";
-import { buildRows, type Row } from "./model";
+import { buildRows, rowIdentity, rowsEqual, type Row } from "./model";
+import { RowBoundary } from "./RowBoundary";
 import { FooterRow, LiveRow, NoticeRow, RequestRow, WorkingRow } from "./Rows";
 import { describeConnection } from "./connection";
 import { EmptyState, LoadingState, UnavailableState } from "./States";
@@ -12,10 +13,14 @@ import { useToggles, WorkGroupView, type Toggles } from "./WorkGroup";
 /** How far from the end still counts as "reading the latest". */
 const STICK_PX = 64;
 
+/** How long after the person opens or closes something until the window is asked where they are (the disclosure animates for 200 ms). */
+const SETTLE_MS = 350;
+
 const reducedMotion = (): boolean =>
   typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function RowView({
+/** Drawn again only when its row, the toggles, or the sends' refusals change (see `rowsEqual`). */
+const RowView = memo(function RowView({
   row,
   toggles,
   onDiscard,
@@ -50,14 +55,7 @@ function RowView({
     case "send":
       return <SendBubble note={refused[row.send.commandId]} onDiscard={onDiscard} onRetry={onRetry} send={row.send} />;
   }
-}
-
-/** What makes a row the same row across a change of kind: a reply is one thing while it streams and after. */
-function identity(row: Row): string {
-  if (row.kind === "live") return `reply-${row.live.id}`;
-  if (row.kind === "assistant") return `reply-${row.item.id}`;
-  return row.key;
-}
+}, (before, after) => rowsEqual(before.row, after.row) && before.toggles === after.toggles && before.refused === after.refused && before.onDiscard === after.onDiscard && before.onRetry === after.onRetry);
 
 /**
  * The turns of the session: what the person and the agent said, the work between, live text as it is
@@ -81,15 +79,14 @@ export function Timeline({ store }: { store: SessionStore }) {
     () => buildRows({ items, live, turns, stopped, openTurn, phase }, sends),
     [items, live, turns, stopped, openTurn, phase, sends],
   );
-  const toggles = useToggles();
-
   const scroller = useRef<HTMLElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const [atEnd, setAtEnd] = useState(true);
-  // Where the person was reading when older history was asked for, and the first item then: the position
-  // is kept only once a page arrives in front of that item (a reply growing meanwhile must not move it).
-  const anchor = useRef<{ height: number; top: number; first: number | undefined } | null>(null);
+  // The row the person was reading when older history was asked for, where it sat in the window, and the
+  // first item then. The position is restored by that row, and only once a page has arrived in front of
+  // the first item: what a reply growing at the bottom adds meanwhile does not move it.
+  const anchor = useRef<{ key: string; offset: number; first: number | undefined } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
   const toEnd = useCallback((smooth: boolean) => {
@@ -107,25 +104,48 @@ export function Timeline({ store }: { store: SessionStore }) {
     setAtEnd(near);
   }, []);
 
+  // Opening or closing something is the person's own doing: the height it changes is not a reason to jump to
+  // the end (which would carry the header they just pressed off the top). They stop following the end until
+  // the change has settled and the window says where they are.
+  const settling = useRef<number | null>(null);
+  const onUserToggle = useCallback(() => {
+    stuck.current = false;
+    if (settling.current !== null) window.clearTimeout(settling.current);
+    settling.current = window.setTimeout(() => {
+      settling.current = null;
+      onScroll();
+    }, SETTLE_MS);
+  }, [onScroll]);
+  useEffect(
+    () => () => {
+      if (settling.current !== null) window.clearTimeout(settling.current);
+    },
+    [],
+  );
+  const toggles = useToggles(onUserToggle);
+
   // New rows, or new text in the last one: stay at the end if that is where the person is. After older
-  // history was added at the top, keep what they were looking at where it was.
+  // history was added at the top, keep the row they were reading where it was.
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el === null) return;
-    if (anchor.current !== null && items[0]?.seq !== anchor.current.first) {
-      el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
-      anchor.current = null;
-    } else if (stuck.current && anchor.current === null) {
-      el.scrollTop = el.scrollHeight;
+    const held = anchor.current;
+    if (held !== null) {
+      if (items[0]?.seq !== held.first) {
+        restore(el, held);
+        anchor.current = null;
+      }
+      return;
     }
+    if (stuck.current) el.scrollTop = el.scrollHeight;
   }, [rows, items]);
 
-  // A group opening or closing changes the height with no new row: follow that too.
+  // A change of height with no new row (a reply wrapping, an image) follows the end too.
   useEffect(() => {
     const target = content.current;
     if (target === null || typeof ResizeObserver === "undefined") return;
     const watcher = new ResizeObserver(() => {
-      if (stuck.current && scroller.current !== null) scroller.current.scrollTop = scroller.current.scrollHeight;
+      if (stuck.current && anchor.current === null && scroller.current !== null) scroller.current.scrollTop = scroller.current.scrollHeight;
     });
     watcher.observe(target);
     return () => watcher.disconnect();
@@ -137,23 +157,28 @@ export function Timeline({ store }: { store: SessionStore }) {
   const fresh = seen.current;
   useEffect(() => {
     if (!loaded) return;
-    seen.current = new Set(rows.flatMap((row) => [row.key, identity(row)]));
+    seen.current = new Set(rows.flatMap((row) => [row.key, rowIdentity(row)]));
   }, [rows, loaded]);
 
   const discard = useCallback((id: string) => void store.getState().discardSend(id), [store]);
   // A Retry the store refuses (the session became read-only, or is gone) says why, under that send.
   const [refused, setRefused] = useState<Record<string, string>>({});
   const retry = useCallback(
-    async (id: string) => {
+    (id: string) => {
       setRefused(({ [id]: _gone, ...rest }) => rest);
-      const result = await store.getState().retrySend(id);
-      if (result !== undefined && !result.ok) setRefused((held) => ({ ...held, [id]: result.message }));
+      void store
+        .getState()
+        .retrySend(id)
+        .then((result) => {
+          if (result !== undefined && !result.ok) setRefused((held) => ({ ...held, [id]: result.message }));
+        });
     },
     [store],
   );
   const loadOlder = useCallback(async () => {
     const el = scroller.current;
-    if (el !== null) anchor.current = { height: el.scrollHeight, top: el.scrollTop, first: items[0]?.seq };
+    const reading = el === null || content.current === null ? null : firstVisible(el, content.current);
+    if (reading !== null) anchor.current = { ...reading, first: items[0]?.seq };
     setLoadingOlder(true);
     try {
       await store.getState().loadOlder();
@@ -187,8 +212,15 @@ export function Timeline({ store }: { store: SessionStore }) {
           </div>
         ) : null}
         {rows.map((row) => (
-          <div key={row.key} className={cx(fresh !== null && !fresh.has(row.key) && !fresh.has(identity(row)) && "sv-enter")} data-row-kind={row.kind}>
-            <RowView onDiscard={discard} onRetry={(id) => void retry(id)} refused={refused} row={row} toggles={toggles} />
+          <div
+            key={row.key}
+            className={cx(fresh !== null && !fresh.has(row.key) && !fresh.has(rowIdentity(row)) && "sv-enter")}
+            data-row-key={row.key}
+            data-row-kind={row.kind}
+          >
+            <RowBoundary resetKey={subject(row)}>
+              <RowView onDiscard={discard} onRetry={retry} refused={refused} row={row} toggles={toggles} />
+            </RowBoundary>
           </div>
         ))}
       </div>
@@ -216,4 +248,40 @@ export function Timeline({ store }: { store: SessionStore }) {
       ) : null}
     </div>
   );
+}
+
+/** What a row is made of, for telling a changed row from the same one made again. */
+function subject(row: Row): unknown {
+  switch (row.kind) {
+    case "live":
+      return row.live;
+    case "work":
+      return row.entries.at(-1);
+    case "footer":
+      return row.turn;
+    case "send":
+      return row.send.reason + row.send.shown;
+    case "working":
+      return row.key;
+    default:
+      return row.item;
+  }
+}
+
+/** The first row with any of it in the window, and how far below the window's top it starts. */
+export function firstVisible(scroller: HTMLElement, content: HTMLElement): { key: string; offset: number } | null {
+  const top = scroller.getBoundingClientRect().top;
+  for (const el of Array.from(content.querySelectorAll<HTMLElement>("[data-row-key]"))) {
+    const box = el.getBoundingClientRect();
+    if (box.bottom > top) return { key: el.dataset["rowKey"] ?? "", offset: box.top - top };
+  }
+  return null;
+}
+
+/** Scroll so the row sits as far below the window's top as it did. A row that is gone leaves the window as it is. */
+function restore(scroller: HTMLElement, held: { key: string; offset: number }): void {
+  const row = Array.from(scroller.querySelectorAll<HTMLElement>("[data-row-key]")).find((el) => el.dataset["rowKey"] === held.key);
+  if (row === undefined) return;
+  const now = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+  scroller.scrollTop += now - held.offset;
 }

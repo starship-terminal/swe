@@ -17,6 +17,7 @@ const SCENES = {
   "work-group-expanded": "scene=default&click=Worked%20for",
   "tool-expanded": "scene=default&click=Worked%20for|Edit%20src%2Fapp.py",
   streaming: "scene=streaming",
+  "stopped-tool": "scene=stopped-tool&click=Worked%20%C2%B7",
   empty: "scene=empty",
   loading: "scene=loading",
   offline: "scene=offline",

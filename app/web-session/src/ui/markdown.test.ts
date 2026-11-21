@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseInline, parseMarkdown, safeHref } from "./markdown";
+import { INLINE_READ_MAX, MAX_DEPTH, parseInline, parseMarkdown, safeHref, type Block } from "./markdown";
 
 describe("inline Markdown", () => {
   it("reads code, bold, italic and links, and keeps the words around them", () => {
@@ -98,5 +98,48 @@ describe("block Markdown", () => {
 
   it("ends a paragraph where a list starts", () => {
     expect(parseMarkdown("Steps:\n- one\n- two").map((b) => b.t)).toEqual(["paragraph", "list"]);
+  });
+});
+
+describe("hostile text", () => {
+  const depthOf = (blocks: Block[]): number =>
+    1 + Math.max(0, ...blocks.map((b) => (b.t === "quote" ? depthOf(b.blocks) : b.t === "list" ? Math.max(0, ...b.items.map((i) => depthOf(i.blocks))) : 0)));
+
+  it("reads ten thousand quote markers without overflowing the stack, nesting no deeper than the cap", () => {
+    const blocks = parseMarkdown(">".repeat(10_000) + " hi");
+    expect(depthOf(blocks)).toBeLessThanOrEqual(MAX_DEPTH + 1);
+    // What is deeper than the cap stays as text, so nothing the person wrote is lost.
+    expect(JSON.stringify(blocks)).toContain("hi");
+  });
+
+  it("reads deeply nested lists, and quotes mixed with lists, within the cap", () => {
+    const lists = Array.from({ length: 5000 }, (_, i) => `${"  ".repeat(i)}- item`).join("\n");
+    expect(depthOf(parseMarkdown(lists))).toBeLessThanOrEqual(MAX_DEPTH + 1);
+    const mixed = Array.from({ length: 3000 }, () => "> - ").join("") + "x";
+    expect(() => parseMarkdown(mixed)).not.toThrow();
+  });
+
+  it("reads formatting inside formatting only so deep", () => {
+    const nested = "[".repeat(2000) + "x" + "](https://a.test)".repeat(1);
+    expect(() => parseInline(nested)).not.toThrow();
+    expect(() => parseInline("**".repeat(5000))).not.toThrow();
+  });
+
+  it("reads a hundred kilobytes of code spans in well under a second, and leaves what is past the cap as text", () => {
+    const big = "`a` ".repeat(25_000);
+    const t0 = performance.now();
+    const out = parseInline(big);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(out.filter((n) => n.t === "code").length).toBeLessThanOrEqual(INLINE_READ_MAX / 4 + 1);
+    const last = out[out.length - 1];
+    expect(last?.t).toBe("text");
+    const full = parseMarkdown("`a` ".repeat(25_000));
+    expect(full).toHaveLength(1);
+  });
+
+  it("does not take long over many marks that never close", () => {
+    const t0 = performance.now();
+    parseInline("* [ ` _ ".repeat(12_000));
+    expect(performance.now() - t0).toBeLessThan(1000);
   });
 });

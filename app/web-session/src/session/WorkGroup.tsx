@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { CheckpointItem, ThinkingItem, ToolItem } from "../core";
 import { Collapsible, cx, Icon, Spinner, type IconName } from "../ui";
@@ -6,18 +6,35 @@ import { clip, diffLines, diffStat, formatDuration, plural } from "./format";
 import type { WorkEntry, WorkGroup } from "./model";
 import { toolTitle } from "./model";
 
-/** Open and closed state by id: a person's own choice, kept while the view lives, wins over the default. */
-export function useToggles() {
+/**
+ * Open and closed state, kept for the life of the view: a person's own choice wins over a group's
+ * default. An id is one string, or a list (a work group's entries): the choice is kept for each of them
+ * and read from the first that has one, so a group keeps it when it grows at the end (a running group) or
+ * at the front (an older page of history joined it). `onToggle` runs when the person makes a choice.
+ */
+export function useToggles(onToggle?: () => void) {
   const [choices, setChoices] = useState<Record<string, boolean>>({});
-  const isOpen = useCallback((id: string, fallback: boolean) => choices[id] ?? fallback, [choices]);
-  const set = useCallback((id: string, open: boolean) => setChoices((held) => ({ ...held, [id]: open })), []);
-  return { isOpen, set };
+  const notify = useRef(onToggle);
+  notify.current = onToggle;
+  const isOpen = useCallback(
+    (id: string | readonly string[], fallback: boolean) => {
+      for (const one of typeof id === "string" ? [id] : id) {
+        const held = choices[one];
+        if (held !== undefined) return held;
+      }
+      return fallback;
+    },
+    [choices],
+  );
+  const set = useCallback((id: string | readonly string[], open: boolean) => {
+    const ids = typeof id === "string" ? [id] : id;
+    setChoices((held) => ({ ...held, ...Object.fromEntries(ids.map((one) => [one, open])) }));
+    notify.current?.();
+  }, []);
+  return useMemo(() => ({ isOpen, set }), [isOpen, set]);
 }
 
 export type Toggles = ReturnType<typeof useToggles>;
-
-const SHOWN_CHARS = 6000;
-const SHOWN_DIFF_LINES = 300;
 
 function toolIcon(name: string | undefined): IconName {
   const lower = (name ?? "").toLowerCase();
@@ -27,7 +44,7 @@ function toolIcon(name: string | undefined): IconName {
 }
 
 function Text({ text, label }: { text: string; label: string }) {
-  const { text: shown, hidden } = clip(text, SHOWN_CHARS);
+  const { text: shown, hidden } = clip(text);
   return (
     <div>
       <p className="mb-1 text-xs text-muted">{label}</p>
@@ -49,13 +66,14 @@ function stringify(input: unknown): string {
 }
 
 function Diff({ diff }: { diff: string }) {
-  const lines = diffLines(diff);
-  const shown = lines.slice(0, SHOWN_DIFF_LINES);
+  // Cut as any text is (lines, then characters): a diff that is one very long line is cut too.
+  const { text: shown, hidden } = clip(diff);
+  const lines = diffLines(shown);
   return (
     <>
       <pre className="max-h-64 overflow-auto rounded-block border border-border bg-subtle py-1.5 font-mono text-xs leading-5">
         <code className="block min-w-max">
-          {shown.map((line, index) => (
+          {lines.map((line, index) => (
             <span
               key={index}
               className={cx(
@@ -70,7 +88,7 @@ function Diff({ diff }: { diff: string }) {
           ))}
         </code>
       </pre>
-      {lines.length > shown.length ? <p className="mt-1 text-xs text-muted">{plural(lines.length - shown.length, "more line")} not shown.</p> : null}
+      {hidden > 0 ? <p className="mt-1 text-xs text-muted">{plural(hidden, "more character")} not shown.</p> : null}
     </>
   );
 }
@@ -104,7 +122,7 @@ function ToolDetails({ tool }: { tool: ToolItem }) {
   );
 }
 
-function StatusMark({ status }: { status: ToolItem["status"] }) {
+function StatusMark({ status }: { status: ToolItem["status"] | "stopped" }) {
   switch (status) {
     case "running":
       return <Spinner />;
@@ -113,15 +131,18 @@ function StatusMark({ status }: { status: ToolItem["status"] }) {
     case "error":
       return <Icon className="size-3.5 shrink-0 text-danger-text" name="alert" />;
     case "cancelled":
+    case "stopped":
       return <Icon className="size-3.5 shrink-0 text-muted" name="x" />;
   }
 }
 
-const STATUS_WORD: Record<ToolItem["status"], string> = { running: "Running", ok: "Done", error: "Failed", cancelled: "Cancelled" };
+const STATUS_WORD: Record<ToolItem["status"] | "stopped", string> = { running: "Running", ok: "Done", error: "Failed", cancelled: "Cancelled", stopped: "Stopped" };
 
-function ToolRow({ tool, toggles }: { tool: ToolItem; toggles: Toggles }) {
+function ToolRow({ tool, ended, toggles }: { tool: ToolItem; ended: boolean; toggles: Toggles }) {
   const id = `tool-${tool.seq}`;
   const open = toggles.isOpen(id, false);
+  // A call still "running" in a turn that ended never finished: it is shown stopped, not spinning for ever.
+  const shown = tool.status === "running" && ended ? "stopped" : tool.status;
   return (
     <Collapsible
       buttonClassName="min-h-8 px-1.5 py-1 text-sm"
@@ -130,11 +151,10 @@ function ToolRow({ tool, toggles }: { tool: ToolItem; toggles: Toggles }) {
         <>
           <Icon className="size-3.5 shrink-0 text-muted" name={toolIcon(tool.name)} />
           <span className="min-w-0 flex-1 truncate">{toolTitle(tool)}</span>
-          <StatusMark status={tool.status} />
-          <span className="sr-only"> {STATUS_WORD[tool.status]}</span>
+          <StatusMark status={shown} />
+          <span className="sr-only"> {STATUS_WORD[shown]}</span>
         </>
       }
-      label={`Details of ${toolTitle(tool)}`}
       onToggle={(next) => toggles.set(id, next)}
       open={open}
     >
@@ -157,7 +177,6 @@ function ThinkingRow({ item, toggles }: { item: ThinkingItem; toggles: Toggles }
           </span>
         </>
       }
-      label="Thinking"
       onToggle={(next) => toggles.set(id, next)}
       open={open}
     >
@@ -180,10 +199,10 @@ function CheckpointRow({ item }: { item: CheckpointItem }) {
   );
 }
 
-function Entry({ entry, toggles }: { entry: WorkEntry; toggles: Toggles }) {
+function Entry({ entry, ended, toggles }: { entry: WorkEntry; ended: boolean; toggles: Toggles }) {
   switch (entry.kind) {
     case "tool":
-      return <ToolRow tool={entry} toggles={toggles} />;
+      return <ToolRow ended={ended} tool={entry} toggles={toggles} />;
     case "thinking":
       return <ThinkingRow item={entry} toggles={toggles} />;
     case "checkpoint":
@@ -209,7 +228,8 @@ function detail(group: WorkGroup): string {
  * both, and stays: the group does not close itself under someone reading it.
  */
 export function WorkGroupView({ group, toggles }: { group: WorkGroup; toggles: Toggles }) {
-  const open = toggles.isOpen(group.id, group.running);
+  const ids = group.seqs.map((seq) => `work-${seq}`);
+  const open = toggles.isOpen(ids, group.running);
   return (
     <Collapsible
       buttonClassName="min-h-9 px-1.5 py-1.5 text-sm"
@@ -222,13 +242,12 @@ export function WorkGroupView({ group, toggles }: { group: WorkGroup; toggles: T
           {group.failed > 0 ? <span className="shrink-0 text-xs text-danger-text"> {group.failed} failed</span> : null}
         </>
       }
-      label="Steps"
-      onToggle={(next) => toggles.set(group.id, next)}
+      onToggle={(next) => toggles.set(ids, next)}
       open={open}
     >
       <div className="px-1 pb-1">
         {group.entries.map((entry) => (
-          <Entry key={`${entry.kind}-${entry.seq}`} entry={entry} toggles={toggles} />
+          <Entry key={`${entry.kind}-${entry.seq}`} entry={entry} ended={group.ended} toggles={toggles} />
         ))}
       </div>
     </Collapsible>

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import { cx } from "./cx";
 import { parseMarkdown, type Block, type Inline } from "./markdown";
@@ -117,7 +117,7 @@ function align(value: "left" | "right" | "center" | null | undefined) {
   return value === null || value === undefined ? undefined : { textAlign: value };
 }
 
-/** An agent's reply drawn as prose. The text is never HTML: it becomes React elements. */
-export function Prose({ text, className }: { text: string; className?: string }) {
+/** An agent's reply drawn as prose. The text is never HTML: it becomes React elements. Drawn again only when its text changes. */
+export const Prose = memo(function Prose({ text, className }: { text: string; className?: string }) {
   return <div className={cx("sv-prose text-sm leading-6 break-words", className)}>{blocks(parseMarkdown(text))}</div>;
-}
+});
