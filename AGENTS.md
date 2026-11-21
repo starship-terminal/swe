@@ -178,5 +178,8 @@ Each entry records a trap that already shipped as a bug or cost a long debug. Be
 - **App performance**: no filesystem calls on the main actor for Plugins and Skills (`LatestBuild`), slow ledger reads off the `Ledger` actor, timers scan through `backgroundScan` (never `load`), and the window shell never measures a page (`PanelFrame`).
 - **Scratch app builds** register with LaunchServices: unregister them with `lsregister -u` after testing, or widgets break.
 - **Managed shell rc** (`APIKeys/ShellStartup.swift`): a home-manager `.zshrc` resolves into a read-only store; `writable()` gates the button and the write, and `sources()` follows drop-in globs.
+- **Protocol fixtures** (`scripts/record_protocol.py`): never record against the real `~/.claude` or another real config folder (Claude's plan mode writes plan files there); the recorder uses throwaway ones. Read every new fixture and run gitleaks before you commit it ([docs/testing.md](docs/testing.md#session-adapter-tests-fixtures-fakes-and-the-recorder)).
+- **Session v2 schema** (`remote/adapters/events.py`): `remote/schema/session_v2.json` is generated from it. After a change, run `python3 -m swe.remote.schema --write`; `tests/test_remote_sse_v2.py` fails on a stale file.
+- **Hub and satellite agent** (`remote/hub.py`, `remote/agent.py`): `hub.py` imports `agent.py` at module level, so `agent.py` may import `hub` only inside a function.
 
 Add a new gotcha to the matching doc, and a one-liner here only if an agent would otherwise walk into it.

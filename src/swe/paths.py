@@ -421,9 +421,14 @@ def remote_dir_for(home: Path | None = None) -> Path:
     ``pairing.json`` (pairing settings: owner auto-approve, off by default),
     ``machine.json`` (this machine's stable remote id), ``pair_tokens.json``
     (one-time pairing hand-offs), ``cursors/`` (per-session transcript read
-    offsets), ``journal/`` (per-session event logs) and ``inbox/`` (staged
-    phone uploads). Regenerable except devices.json, which is why the whole
-    tree stays out of the hub repo's git.
+    offsets), ``journal/`` (per-session event logs), ``inbox/`` (staged
+    phone uploads), ``remote.sqlite`` (the session runtime's store:
+    sessions, keepers, launches and command receipts), ``keepers/<slug>/``
+    (one folder per session's keeper: ``keeper.json``, ``spec.json``,
+    ``keeper.out`` and ``log/``, its event log), ``local.json`` (the loopback API's token and
+    address, mode 600) and, on a satellite, ``agent-kept.json``. Regenerable
+    except devices.json, remote.sqlite and the keepers' logs, which is why
+    the whole tree stays out of the hub repo's git.
     """
     return data_dir_for(home) / REMOTE_SUBDIR
 
