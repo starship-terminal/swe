@@ -1,6 +1,6 @@
 {
   "hash_rule": "app/web-session/scripts/source-hash.mjs",
-  "source_hash": "10a71ce6f71c53f6482265b067f560ee204eb498efc91052eba88202fba241fb",
+  "source_hash": "3bb3c7171165cc7471f38fb76318f7140b1ab6902021bdb01fcc476bc26c9d94",
   "sources": {
     "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
     "package.json": "cb9b7879ea6c06714a7ca2fe19e1d3de1eef288fab335122c39db4037073781d",
@@ -82,8 +82,8 @@
     "src/ui/StateArrow.tsx": "cca809b9e590438688991bbb7094bad884240aa2ac22143df9992bc16884a44a",
     "src/ui/cx.ts": "1cbdf30d761f7a8bf449b60b50e7e00edd4e9b13b341e2040a7d070d7fb80139",
     "src/ui/index.ts": "9fc67a580676b48f492435040cb0a1c652c30b179b9a3f6486b882ddab3d2517",
-    "src/ui/markdown.test.ts": "8d050d7d24b560522d2cc34a073c97bd513d5aed96c16482dcfbf55e44987837",
-    "src/ui/markdown.ts": "382092416cd56919c224b5faf0fa73516ee3180041c51c19845917886dc1cd71",
+    "src/ui/markdown.test.ts": "72771275c42be5185f795681522edd817b18f72677f61ae2847f3fbedf147576",
+    "src/ui/markdown.ts": "7073388750a97d580f689a788db4fffc80f6f90c12814c30ef2a659781d13d86",
     "tsconfig.json": "3e1f35695a154b6afcb73b5b784cc80988dc7ced8e8d4a2223d4da9f06270a58",
     "vite.config.ts": "f68bf1a948475c30d6674dc63c8c0c9b64faf653de9be18dbc63910adb8be362"
   },

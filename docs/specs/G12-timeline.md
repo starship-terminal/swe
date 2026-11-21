@@ -329,7 +329,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (557 tests, the core's 75 new ones from G31 included), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (559 tests, the core's 75 new ones from G31 included), `pnpm build` | pass |
 | `tests.test_webapp_session_view`, `tests.test_session_view_fixtures` | pass |
 | The built page, served as static files, with a real `fetch`: `/session/index.html?key=claude%3Anope` asks `GET /v1/sessions/claude%3Anope/events?v=2`, gets 404 and shows "Session gone" | pass |
 | 56 screenshots, 14 scenes x desktop and phone x light and dark, taken again after the review fixes | the changed ones read (tool-expanded, stopped-tool, loading, the outbox scenes, default); findings fixed along the way (bubble width, the caret on its own line, a connecting banner said three times, a detached arrow, a diff's blank last row, a skeleton invisible in dark) |

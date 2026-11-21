@@ -83,6 +83,24 @@ describe("block Markdown", () => {
     expect(dash.items[0]?.blocks[0]).toEqual({ t: "code", lang: "", text: "z", open: false });
   });
 
+  it("reads a code fence that opens beside a list marker as code in that item", () => {
+    const [list] = parseMarkdown("- ```py\n  x = 1\n  ```\n- plain");
+    if (list?.t !== "list") throw new Error("not a list");
+    expect(list.items).toHaveLength(2);
+    expect(list.items[0]?.children).toEqual([]);
+    expect(list.items[0]?.blocks).toEqual([{ t: "code", lang: "py", text: "x = 1", open: false }]);
+    expect(list.items[1]?.children).toEqual([{ t: "text", text: "plain" }]);
+    // Nothing leaks out of the list: no stray fence, no paragraph after it.
+    expect(parseMarkdown("1. ```\n   ls\n   ```\n2. next").map((b) => b.t)).toEqual(["list"]);
+  });
+
+  it("reads a quote or a nested list that opens beside a list marker as a block in that item", () => {
+    const [list] = parseMarkdown("- > quoted\n- - inner");
+    if (list?.t !== "list") throw new Error("not a list");
+    expect(list.items[0]?.blocks[0]?.t).toBe("quote");
+    expect(list.items[1]?.blocks[0]?.t).toBe("list");
+  });
+
   it("reads quotes and tables", () => {
     expect(parseMarkdown("> a\n> b")[0]).toMatchObject({ t: "quote" });
     const [table] = parseMarkdown("| a | b |\n|---|--:|\n| 1 | 2 |\n| 3 |");

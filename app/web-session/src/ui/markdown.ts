@@ -277,7 +277,10 @@ function parseLines(lines: string[], depth: number, budget: Budget): Block[] {
           inner.push(following.slice(Math.min(indentOf(following), content)));
           i++;
         }
-        items.push({ children: parseInline(first), blocks: parseLines(inner, depth + 1, budget) });
+        // An item whose first line opens a block of its own ("- ```py", "- > quote", "- 1. nested") reads that line with
+        // the lines under it as blocks, so a fence that opens beside the marker closes at its own closing fence.
+        if (startsBlock(first, inner[0])) items.push({ children: [], blocks: parseLines([first, ...inner], depth + 1, budget) });
+        else items.push({ children: parseInline(first), blocks: parseLines(inner, depth + 1, budget) });
       }
       blocks.push({ t: "list", ordered, start, items });
       continue;
