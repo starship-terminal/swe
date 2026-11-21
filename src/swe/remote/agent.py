@@ -1020,6 +1020,15 @@ class RemoteAgent:
                 # Said with the question too: a hub that already took
                 # this release must not start the copy over.
                 entry["released"] = True
+            else:
+                # The requests still open here. A hub that restarted
+                # knows open requests only from events it published
+                # before, and the upload resumes after those.
+                session = self.local.runtime.session(key)
+                entry["pending"] = {
+                    rid: float(event.get("ts") or time.time())
+                    for rid, event in list(
+                        (session.pending if session else {}).items())}
             return entry, False
         batch: list[dict] = []
         if acked < head:
@@ -2318,6 +2327,7 @@ class SatelliteKeepers:
                 # From here the hub numbers this journal itself again:
                 # the satellite's tailer has the session back.
                 self._mirrors.discard(key)
+        self._restore_pending(key, entry.get("pending"))
         if dropped:
             state.bus.publish(key, {"type": "journal.truncated", "seq": 0})
             sync = getattr(state, "sync", None)
@@ -2350,6 +2360,26 @@ class SatelliteKeepers:
         return row is not None and row.state == "closed" \
             and isinstance(head, int) and not isinstance(head, bool) \
             and head <= row.last_seq
+
+    def _restore_pending(self, key: str, pending) -> None:
+        """Set the session's open requests to what the satellite says
+        are open, when it says (the question that opens an upload
+        after either side restarted). As for a local keeper's welcome:
+        the inbox and a v2 stream's state have them again, and nothing
+        is announced a second time. Events that follow in the upload
+        add and retire requests as usual."""
+        if not isinstance(pending, dict):
+            return
+        open_ = {}
+        for rid, asked in list(pending.items())[:64]:
+            if isinstance(rid, str) and 0 < len(rid) <= 200 \
+                    and isinstance(asked, (int, float)) \
+                    and not isinstance(asked, bool):
+                open_[rid] = float(asked)
+        try:
+            self.state.restore_approvals(key, open_)
+        except Exception:
+            logger.exception("restoring the open requests of %s", key)
 
     def _to_v2(self, key: str, event: dict) -> None:
         """Hand one event just journaled to the session's open v2

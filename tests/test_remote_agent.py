@@ -4265,6 +4265,54 @@ class TestSatelliteRestart(SatelliteCase):
         self.assertEqual(self.sends(), ["hello", "while away"])
         self.assertEqual(self.store().get_command("h1").result["ok"], True)
 
+    def test_an_open_approval_is_back_in_the_inbox_after_a_hub_restart(self):
+        # The inbox drops a request asked more than a day ago by the
+        # wall clock, so the keeper's clock starts at the present.
+        self.clock.t = time.time()
+        key = self.start([fake.ask("run ls?", options=OPTIONS),
+                          fake.say("done")])
+        rid = self.sat.event("approval.requested")["data"]["request_id"]
+        self.settle(key)
+        hub_key = self.listed(key)
+        self.push()
+        self.assertEqual(self.srv.state.pending_approvals, {hub_key: rid})
+
+        self.kill_hub(self.srv)
+        self.feed = Feed(self)
+        self.srv = srv = self.hub()
+        self.agent.hub = f"http://127.0.0.1:{srv.port}"
+        # The new hub copies the same journal, and knows nothing of
+        # the request: it was announced by the hub before it.
+        self.assertTrue(agent_mod.mirrored(srv.state, hub_key))
+        self.assertEqual(srv.state.pending_approvals, {})
+        told = Stream(self, srv.state, hub.GLOBAL_KEY)
+        self.back()
+        self.push()
+        self.assertEqual(srv.state.pending_approvals, {hub_key: rid})
+        status, inbox = self.call("GET", "/v1/inbox")
+        self.assertIn(hub_key, [item.get("key") for item in inbox["items"]])
+        # A v2 stream's state lists it, and nothing was said twice.
+        state = srv.state.sync.state_frame(hub_key, 0, [])
+        self.assertEqual(state["data"]["pending"], [rid])
+        said = []
+        while not told.q.empty():
+            said.append(told.q.get()["type"])
+        self.assertEqual(said, ["machine.online"])
+        # It can still be answered through the new hub.
+        status, out = self.post(hub_key, "approval", {
+            "request_id": rid, "decision": "allow", "client_id": "a1"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.deliver()
+        self.finished()
+        self.sat.event("turn.ended", status="completed")
+        self.settle(key)
+        self.push()
+        self.assertEqual(srv.state.pending_approvals, {})
+        # A malformed list restores nothing it should not.
+        self.kept({"sessions": [{"key": key, "head": 0, "pending": {
+            "": 1.0, "ok": "x", "r9": True, "x" * 201: 1.0}}]})
+        self.assertEqual(srv.state.pending_approvals, {})
+
     def test_a_release_cut_off_by_a_restart_still_reaches_the_hub(self):
         key = self.start([fake.say("one")])
         self.sat.event("turn.ended")

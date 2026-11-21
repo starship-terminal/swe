@@ -135,6 +135,12 @@ and is answered `{"ok": true, "acked": {"claude:<id>": 41}, "released":
   it when the satellite's tailer first uploaded it, so it is stored
   and not published again: its notification would be raised twice and
   an approval long answered would reopen.
+- **Open requests after a restart.** The question that opens an
+  upload carries `pending`: the request ids still open on the
+  satellite, with when each was asked. The hub sets the session's open
+  requests to that (`HubState.restore_approvals`, as a local keeper's
+  `welcome` does), so a hub that restarted has them in its inbox and
+  in a v2 stream's state again without announcing them twice.
 - **Whose commands.** A copied `command.receipt` or `command.result`
   changes a stored command only when that command was stored for this
   machine and this session. A satellite cannot settle a command held
@@ -323,7 +329,7 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 
 | Check | Result |
 |---|---|
-| `tests.test_remote_agent` (221 tests, 49 new) | pass |
+| `tests.test_remote_agent` (222 tests, 50 new) | pass |
 | Full suite against a throwaway HOME | pass (see the PR) |
 | Against an installed `swe` (`pip install -e .` in a fresh venv), two throwaway HOMEs on one Mac, `swe remote serve` in one and `swe remote agent` in the other, harness.json on the satellite pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py` (`FAKE_CLAUDE_MODE=approval`): a launch on the satellite asked for on the hub; an approval and a send from the hub answered by the satellite's keeper; `kill -9` the agent with an approval open, a message sent meanwhile answered `held` (its retry `duplicate`, a Stop 409 `machine_offline`); the agent started again, the approval answered, the held message run once; 55 events, seqs 1..55, the satellite's journal and the hub's copy both equal to the keeper's log; then the hub stopped and the satellite's loopback API listing the session and running one more turn, 401 without the token or with a paired credential, 404 for `/v1/devices`; `local.json` mode 0600 and its token in no other file under either HOME, logs included; detach ends the keeper | pass |
 
