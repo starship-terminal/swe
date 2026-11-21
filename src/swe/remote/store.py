@@ -1049,6 +1049,11 @@ class Store:
                 (_result(result, row[1]), now, now, command_id))
             return True
 
+    def now(self) -> float:
+        """The store's clock, which stamps ``received_at`` and sets
+        every deadline: for a caller that works out a command's age."""
+        return self._clock()
+
     def get_command(self, command_id: str) -> Command | None:
         rows = self._read(f"SELECT {_COMMAND_COLS} FROM commands "
                           "WHERE command_id = ?", (command_id,))

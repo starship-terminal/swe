@@ -2201,6 +2201,13 @@ class SatelliteKeepers:
     on its command stream. A hold past its deadline is rejected
     (``expired``) and never delivered.
 
+    The claim is a write to the store and the hand-over a write to the
+    stream's journal, and a hub can stop between the two. So a claimed
+    command with no result is checked against the stream the first
+    time its machine is flushed after the hub starts (and after a
+    flush that ended early), and one the stream does not hold is put
+    there then, in its place among the held ones (``_claimed_not_sent``).
+
     All of it needs the hub's store, so it is off unless the hub's own
     session runtime is on (``remote.session_view``).
     """
@@ -2211,7 +2218,14 @@ class SatelliteKeepers:
         self._machine_locks: dict[str, threading.Lock] = {}
         # Hub keys (``key@machine``) whose journal copies a satellite's.
         self._mirrors: set[str] = set()
+        # Machines with a claimed command that has not been checked
+        # against their stream since this hub started, or since a
+        # flush of theirs ended early. ``_walked`` is False until the start-up
+        # read of the store worked: until then every machine counts.
+        self._unchecked: set[str] = set()
+        self._walked = False
         self._load()
+        self._walk()
         self._thread: threading.Thread | None = None
         if self.store is not None \
                 and getattr(state, "hosts_satellites", True):
@@ -2237,6 +2251,29 @@ class SatelliteKeepers:
         for row in rows:
             if row.machine != self.state.machine_id and row.state != "closed":
                 self._mirrors.add(row.key)
+
+    def _walk(self) -> None:
+        """Once after the hub starts, walk ``Store.unfinished()`` and
+        note each satellite with a claimed command (``queued``) that
+        has no result. The hub before this one may have stopped between
+        a claim and its hand-over; ``_flush`` finds out, when the
+        machine is next flushed. The hub's own sessions are checked
+        against their keepers instead (``SessionRuntime._reconcile``).
+        """
+        store = self.store
+        if store is None or self._walked:
+            return
+        try:
+            open_ = store.unfinished()
+        except Exception:
+            logger.exception("reading the commands with no result")
+            return
+        with self._lock:
+            self._unchecked.update(
+                cmd.machine for cmd in open_
+                if cmd.status == "queued" and cmd.machine
+                and cmd.machine != self.state.machine_id)
+            self._walked = True
 
     def mirrored(self, key: str) -> bool:
         return key in self._mirrors
@@ -2637,8 +2674,12 @@ class SatelliteKeepers:
 
     def _flush(self, mid: str) -> None:
         """Deliver ``mid``'s held commands, oldest first, each claimed
-        once. Caller holds the machine's lock, so two flushes cannot
-        interleave and the order on the wire is the order of arrival."""
+        once, and with them any command claimed before and never put
+        on the stream. Caller holds the machine's lock, so two flushes
+        cannot interleave and the order on the wire is the order of
+        arrival. A store or stream that fails ends the flush: nothing
+        behind the command it failed on overtakes it, and the next
+        flush carries on from there."""
         from swe.remote.store import StoreError
 
         store = self.store
@@ -2646,29 +2687,138 @@ class SatelliteKeepers:
             return
         self._expire()
         try:
+            owed = self._claimed_not_sent(store, mid)
             held = store.list_held(mid)
         except StoreError:
             logger.exception("listing %s's held commands", mid)
             return
-        for cmd in held:
+        for cmd in sorted((*owed, *held), key=lambda c: c.id):
             try:
+                # A held message's deadline is the store's to keep
+                # (the claim below refuses one that ran out).
+                if (cmd.status != "held" or cmd.op not in HELD_OPS) \
+                        and self._too_late(store, cmd):
+                    continue
                 # The claim: of two deliveries of one command, one
                 # wins. A hold that ran out meanwhile cannot be claimed.
-                if not store.transition(cmd.command_id, "queued"):
+                if cmd.status == "held" \
+                        and not store.transition(cmd.command_id, "queued"):
                     continue
-            except (StoreError, ValueError):
+            except StoreError:
+                logger.exception("claiming %s", cmd.command_id)
+                self._owe(mid)
+                return
+            except ValueError:
                 logger.exception("claiming %s", cmd.command_id)
                 continue
-            local_key, _mid = protocol.split_remote_key(cmd.session)
-            sent = self.state.queue_command(mid, "kept", "", {
+            if not self._hand_over(mid, cmd):
+                self._owe(mid)
+                return
+        with self._lock:
+            self._unchecked.discard(mid)
+
+    def _owe(self, mid: str) -> None:
+        """A flush of ``mid`` ended early: its claimed commands are
+        checked against its stream again on the next one."""
+        with self._lock:
+            self._unchecked.add(mid)
+
+    def _claimed_not_sent(self, store, mid: str) -> list:
+        """``mid``'s commands that were claimed and never handed over:
+        ``queued``, no result, and not among the ``kept`` commands on
+        its stream. Empty, and nothing read, once the machine has been
+        checked since the hub started and no flush ended early since.
+
+        ``accepted`` means the machine answered, so those are never
+        here. The stream's journal is a ring, and what it dropped it
+        cannot vouch for: a command counts as never sent only when the
+        ring still reaches back to its claim (nothing was ever dropped,
+        or the oldest entry left is older than the claim). One claimed
+        before that is left as it is; the machine has most likely had
+        it. Caller holds the machine's lock."""
+        with self._lock:
+            if self._walked and mid not in self._unchecked:
+                return []
+        if mid == self.state.machine_id:
+            return []
+        claimed = [cmd for cmd in store.unfinished(machine=mid)
+                   if cmd.status == "queued"]
+        if not claimed:
+            return []
+        events, _cut = self.state.journal.read_since(
+            self.state.sat_journal_key(mid), 0)
+        sent = set()
+        for event in events:
+            data = event.get("data")
+            if isinstance(data, dict) and data.get("op") == "kept":
+                sent.add(data.get("id"))
+        whole = not events or events[0].get("seq") == 1
+        since = events[0].get("ts") if events else None
+        owed = []
+        for cmd in claimed:
+            if cmd.command_id in sent:
+                continue
+            if whole or (isinstance(since, (int, float))
+                         and not isinstance(since, bool)
+                         and since <= cmd.updated_at):
+                owed.append(cmd)
+        return owed
+
+    def _too_late(self, store, cmd) -> bool:
+        """Whether a command about to go on the stream is past the age
+        a satellite would run it at, counted from when it arrived: the
+        24 hour hold for a message or an answer, ten minutes for
+        anything else (a Stop that late would act on a turn it was
+        never meant for). True once it is rejected and announced, and
+        for one that finished meanwhile. The satellite's own check
+        (``_kept_refusal``) cannot do this for a command that waited
+        on the hub: it reads the time the command went on the stream.
+        Not asked for a held message (the store keeps its deadline,
+        the same 24 hours). A control is stored ``held`` only for the
+        moment before its claim, and one a hub left that way is
+        caught here."""
+        from swe.remote import store as store_mod
+
+        limit = store_mod.HOLD_S if cmd.op in HELD_OPS else KEPT_FRESH_S
+        if store.now() - cmd.received_at < limit:
+            return False
+        note = ("expired: the hub stopped before this was sent, and it "
+                "is too old to send now")
+        if store.transition(cmd.command_id, "rejected", reason=note):
+            self._announce(cmd, note)
+        return True
+
+    def _hand_over(self, mid: str, cmd) -> bool:
+        """Put one claimed command on ``mid``'s stream. False when it
+        is not there afterwards and is still owed. The journal reports
+        no failed write (``Journal.append`` returns the event either
+        way), so the stream is read back."""
+        local_key, _mid = protocol.split_remote_key(cmd.session)
+        state = self.state
+        try:
+            sent = state.queue_command(mid, "kept", "", {
                 "session": local_key,
                 "route": _KEPT_ROUTES.get(cmd.op, cmd.op),
                 "id": cmd.command_id,
                 "body": {**cmd.payload, "command_id": cmd.command_id},
                 "device": cmd.device or "",
             })
-            if sent is None:
-                self._reject(cmd, f"{mid} is too far behind; not sent")
+        except Exception:
+            logger.exception("putting %s on %s's stream",
+                             cmd.command_id, mid)
+            return False
+        if sent is None:
+            self._reject(cmd, f"{mid} is too far behind; not sent")
+            return True
+        seq = sent.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            written, _cut = state.journal.read_since(
+                state.sat_journal_key(mid), seq - 1)
+            if any(event.get("seq") == seq for event in written):
+                return True
+        logger.error("%s was not written to %s's stream",
+                     cmd.command_id, mid)
+        return False
 
     def _reject(self, cmd, note: str) -> None:
         from swe.remote.store import StoreError
@@ -2708,17 +2858,23 @@ class SatelliteKeepers:
 
     def tick(self) -> None:
         """One pass of the timer: reject the holds that ran out, and
-        deliver what is still held for a machine that is back."""
+        deliver what is still held, or was claimed and never sent, for
+        a machine that is back."""
         from swe.remote.store import StoreError
 
         store = self.store
         if store is None:
             return
         self._expire()
+        self._walk()
         try:
             machines = {cmd.machine for cmd in store.list_held()}
         except StoreError:
             return
+        with self._lock:
+            # And the machines owed a command that was claimed and may
+            # never have reached their stream.
+            machines |= self._unchecked
         for mid in sorted(machines):
             if mid and self.state.machine_online(mid):
                 with self._machine_lock(mid):

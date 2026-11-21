@@ -16,7 +16,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from urllib.parse import quote
 
 from swe.paths import config_file_for
@@ -30,6 +30,7 @@ from swe.remote.adapters import fake
 from swe.remote.hub import HubState, make_server
 from swe.remote.keeper import discovery
 from swe.remote.keeper.log import read_log
+from swe.remote.store import StoreError
 from swe.sessions.models import Session
 
 from tests._tempdir import temp_dir
@@ -4330,6 +4331,447 @@ class TestSatelliteRestart(SatelliteCase):
         self.push()
         self.assertEqual(agent._kept, {})
         self.assertFalse(agent_mod.mirrored(self.srv.state, hub_key))
+
+
+class _WatchedLock:
+    """A lock that says when a second taker is waiting for it."""
+
+    def __init__(self) -> None:
+        self.inner = threading.Lock()
+        self.waiting = threading.Event()
+
+    def __enter__(self) -> None:
+        if not self.inner.acquire(blocking=False):
+            self.waiting.set()
+            self.inner.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.inner.release()
+
+
+class TestSatelliteClaimedNotSent(SatelliteCase):
+    """A command the hub claimed (``held`` to ``queued``) and never put
+    on the machine's stream is put there once, in its place, the next
+    time that machine's commands are flushed."""
+
+    running = TestSatelliteCommands.running
+
+    def hold(self, hub_key: str, *ids: str) -> None:
+        for cid in ids:
+            status, out = self.post(hub_key, "message",
+                                    {"text": f"say {cid}", "client_id": cid})
+            self.assertEqual((status, out["receipt"]), (202, "held"), cid)
+
+    def dies_before_the_stream(self) -> None:
+        """From here this hub claims a command and never puts it on a
+        stream: what a hub that stops between the two leaves behind."""
+        def dead(*args, **kwargs):
+            raise RuntimeError("the hub stopped here")
+
+        self.srv.state.queue_command = dead
+
+    def restart_hub(self) -> None:
+        """End the hub the way a crash does and start another over the
+        same home."""
+        self.kill_hub(self.srv)
+        self.feed = Feed(self)
+        self.srv = self.hub()
+        self.store()._clock = self.clock
+        self.agent.hub = f"http://127.0.0.1:{self.srv.port}"
+
+    def side(self):
+        return agent_mod.satellite_keepers(self.srv.state)
+
+    def on_stream(self) -> list[str]:
+        return [f["data"]["id"] for f in self.stream()
+                if f["data"].get("op") == "kept"]
+
+    def claimed_and_lost(self, hub_key: str, *ids: str) -> None:
+        """Hold ``ids``, then have the hub claim the first and stop."""
+        self.hold(hub_key, *ids)
+        self.dies_before_the_stream()
+        with patch.object(agent_mod.logger, "exception") as self.logged:
+            self.back()
+        self.assertEqual(
+            [self.store().get_command(cid).status for cid in ids],
+            ["queued"] + ["held"] * (len(ids) - 1))
+        self.assertEqual(self.on_stream(), [])
+
+    def test_a_message_claimed_by_a_hub_that_died_is_delivered_once(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.claimed_and_lost(hub_key, "h1")
+        self.restart_hub()
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1"])
+        self.assertEqual(self.store().get_command("h1").status, "queued")
+        # Saying "back" again, the timer, or another restart puts
+        # nothing there twice.
+        self.back()
+        self.side().tick()
+        self.restart_hub()
+        self.back()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("h1")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "say h1"])
+        self.push()
+        self.feed.result("h1")
+        self.assertEqual(self.store().get_command("h1").result["ok"], True)
+
+    def test_a_hand_over_that_fails_is_made_again_without_a_restart(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        put = self.srv.state.queue_command
+        self.claimed_and_lost(hub_key, "h1", "h2")
+        self.assertIn(call("putting %s on %s's stream", "h1", self.mid),
+                      self.logged.mock_calls)
+        self.srv.state.queue_command = put
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+        self.side().tick()
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+
+    def test_a_command_sent_before_the_crash_is_not_sent_twice(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "again", "client_id": "m1"})
+        self.assertEqual(out["receipt"], "queued")
+        # One the satellite has read and one it has not: both are on
+        # the stream, so neither is put there again.
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("m1")
+        status, out = self.post(hub_key, "message",
+                                {"text": "and again", "client_id": "m2"})
+        self.assertEqual(self.on_stream(), ["m1", "m2"])
+        self.restart_hub()
+        self.assertEqual([c.command_id for c in self.store().unfinished(
+            machine=self.mid)], ["m1", "m2"])
+        self.back()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["m1", "m2"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.sat.result("m2")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "again", "and again"])
+
+    def test_a_command_the_machine_ran_put_on_the_stream_again_runs_once(self):
+        # A stream journal that was deleted holds nothing, so what the
+        # machine already read is put on it again. The satellite's own
+        # store answers that, and the keeper is not asked twice.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.online()
+        self.post(hub_key, "message", {"text": "again", "client_id": "m1"})
+        # The satellite runs it, and the hub stops before it hears so:
+        # the command stays ``queued`` there.
+        report = self.agent._report_kept
+        self.agent._report_kept = lambda *args: False
+        self.assertEqual(self.deliver(), 1)
+        self.sat.result("m1")
+        self.settle(key)
+        self.agent._report_kept = report
+        self.restart_hub()
+        self.assertEqual(self.store().get_command("m1").status, "queued")
+        self.srv.state.journal.drop(hub.HubState.sat_journal_key(self.mid))
+        self.agent._done_cmd_seq = self.agent._last_cmd_seq = 0
+        self.back()
+        self.assertEqual(self.on_stream(), ["m1"])
+        self.assertEqual(self.deliver(), 1)
+        self.finished()
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "again"])
+        self.assertEqual(self.store().get_command("m1").status, "accepted")
+
+    def test_order_is_kept_among_claimed_and_still_held_commands(self):
+        key, hub_key = self.running(
+            [fake.say("1")], [fake.say("2")], [fake.say("3")],
+            [fake.say("4")], [fake.say("5")])
+        self.claimed_and_lost(hub_key, "h1", "h2", "h3")
+        self.restart_hub()
+        # One sent to the new hub goes behind all three.
+        self.online()
+        status, out = self.post(hub_key, "message",
+                                {"text": "say h4", "client_id": "h4"})
+        self.assertEqual((status, out["receipt"]), (202, "queued"))
+        self.assertEqual(self.on_stream(), ["h1", "h2", "h3", "h4"])
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1", "h2", "h3", "h4"])
+        self.assertEqual(self.deliver(), 4)
+        self.finished(4)
+        self.sat.result("h4")
+        self.settle(key)
+        self.assertEqual(self.sends(), [
+            "hello", "say h1", "say h2", "say h3", "say h4"])
+
+    def test_an_expired_hold_is_never_delivered_after_a_restart(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.claimed_and_lost(hub_key, "h1", "h2")
+        self.clock.advance(24 * 3600.0)
+        self.restart_hub()
+        frames = Stream(self, self.srv.state, hub_key)
+        self.back()
+        self.side().tick()
+        # The one still held ran out, and so did the one claimed: its
+        # 24 hours count from when it arrived, not from the claim.
+        # (Holds are swept before the stream is checked.)
+        for cid in ("h2", "h1"):
+            gone = self.store().get_command(cid)
+            self.assertEqual((gone.status, gone.result["ok"]),
+                             ("rejected", False), cid)
+            told = frames.frame("command.result", client_id=cid)
+            self.assertEqual((told["data"]["ok"], told["data"]["op"]),
+                             (False, "message"))
+            self.assertNotIn("seq", told)
+        self.assertIn("expired", self.store().get_command("h1").reason)
+        self.assertEqual(self.on_stream(), [])
+        self.assertEqual(self.deliver(), 0)
+        self.assertEqual(self.sends(), ["hello"])
+
+    def test_a_claimed_message_a_second_short_of_its_day_is_delivered(self):
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.claimed_and_lost(hub_key, "h1")
+        self.clock.advance(24 * 3600.0 - 1)
+        self.restart_hub()
+        self.back()
+        self.assertEqual(self.on_stream(), ["h1"])
+
+    def test_a_command_with_a_result_is_never_touched(self):
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        text = {"text": "done already", "mode": "queue", "attachments": []}
+        # Not on the stream, and finished: one with its result, one
+        # refused, one accepted by the machine and since answered.
+        store.record_command("r1", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        store.set_result("r1", {"ok": True})
+        store.record_command("r2", session=hub_key, op="send",
+                             status="rejected", payload=text,
+                             machine=self.mid, reason="no")
+        store.record_command("r3", session=hub_key, op="send",
+                             status="accepted", payload=text,
+                             machine=self.mid)
+        store.set_result("r3", {"ok": False, "note": "it failed"})
+        # Accepted with no result yet: the machine has it.
+        store.record_command("r4", session=hub_key, op="send",
+                             status="accepted", payload=text,
+                             machine=self.mid)
+        # And one that is owed, so the machine's stream is checked.
+        store.record_command("r5", session=hub_key, op="send",
+                             status="queued", payload=text,
+                             machine=self.mid)
+        before = [store.get_command(cid) for cid in ("r1", "r2", "r3", "r4")]
+        self.restart_hub()
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        self.back()
+        self.side().tick()
+        store = self.store()
+        self.assertEqual(
+            [store.get_command(cid) for cid in ("r1", "r2", "r3", "r4")],
+            before)
+        self.assertEqual(self.on_stream(), ["r5"])
+        self.assertEqual(self.side()._unchecked, set())
+
+    def test_a_claimed_stop_is_not_delivered_late(self):
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        # What a hub that stopped mid-request leaves for a control: it
+        # is never held, so it was claimed while the machine was up.
+        for cid in ("s1", "s2"):
+            store.record_command(cid, session=hub_key, op="control",
+                                 status="queued", payload={"op": "interrupt"},
+                                 machine=self.mid)
+            self.clock.advance(agent_mod.KEPT_FRESH_S / 2 + 1)
+        self.restart_hub()
+        frames = Stream(self, self.srv.state, hub_key)
+        self.back()
+        late = self.store().get_command("s1")
+        self.assertEqual((late.status, late.result["ok"]),
+                         ("rejected", False))
+        told = frames.frame("command.result", client_id="s1")
+        self.assertEqual(told["data"]["ok"], False)
+        # One still inside the ten minutes a satellite allows a Stop
+        # goes out.
+        self.assertEqual(self.on_stream(), ["s2"])
+        self.assertEqual(self.stream()[-1]["data"]["route"], "control")
+
+    def test_a_held_stop_is_not_delivered_late_either(self):
+        # A control is stored ``held`` for the moment before its
+        # claim. One a hub left that way must not go out with the
+        # machine's next flush hours later, as a held message would.
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        for cid in ("s1", "s2"):
+            store.record_command(cid, session=hub_key, op="control",
+                                 status="held", payload={"op": "interrupt"},
+                                 machine=self.mid, reason="machine asleep")
+            self.clock.advance(agent_mod.KEPT_FRESH_S / 2 + 1)
+        frames = Stream(self, self.srv.state, hub_key)
+        self.back()
+        late = self.store().get_command("s1")
+        self.assertEqual((late.status, late.result["ok"]),
+                         ("rejected", False))
+        self.assertEqual(
+            frames.frame("command.result", client_id="s1")["data"]["ok"],
+            False)
+        self.assertEqual(self.on_stream(), ["s2"])
+
+    def test_a_stream_write_that_fails_quietly_is_made_again(self):
+        # ``Journal.append`` reports no failed write: it returns the
+        # event either way. The stream is read back after each put.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        self.hold(hub_key, "h1", "h2")
+        state = self.srv.state
+        path = state.journal._file(hub.HubState.sat_journal_key(self.mid))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()  # nothing can be appended to it, or read from it
+        with self.assertLogs(agent_mod.logger, "ERROR") as logs:
+            self.back()
+        self.assertIn(f"h1 was not written to {self.mid}'s stream",
+                      logs.output[0])
+        # The flush ended there: the second is still held, behind it.
+        self.assertEqual(
+            [self.store().get_command(c).status for c in ("h1", "h2")],
+            ["queued", "held"])
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        path.rmdir()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["h1", "h2"])
+        self.assertEqual(self.side()._unchecked, set())
+        self.assertEqual(self.deliver(), 2)
+        self.finished(2)
+        self.sat.result("h2")
+        self.settle(key)
+        self.assertEqual(self.sends(), ["hello", "say h1", "say h2"])
+
+    def test_a_rejection_the_store_refused_is_made_again(self):
+        key, hub_key = self.running([fake.say("one")])
+        self.claimed_and_lost(hub_key, "h1")
+        self.clock.advance(24 * 3600.0)
+        self.restart_hub()
+        store = self.store()
+        move = store.transition
+
+        def busy(*args, **kwargs):
+            raise StoreError("database is locked")
+
+        store.transition = busy
+        with self.assertLogs(agent_mod.logger, "ERROR"):
+            self.back()
+        self.assertEqual(store.get_command("h1").status, "queued")
+        self.assertEqual(self.side()._unchecked, {self.mid})
+        store.transition = move
+        self.side().tick()
+        self.assertEqual(store.get_command("h1").status, "rejected")
+        self.assertEqual(self.on_stream(), [])
+
+    def cut_stream(self, keep_from: int) -> None:
+        """Drop the stream's entries before seq ``keep_from``, as the
+        ring does when it is full."""
+        path = self.srv.state.journal._file(
+            hub.HubState.sat_journal_key(self.mid))
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        path.write_text("".join(
+            line for line in lines if json.loads(line)["seq"] >= keep_from),
+            encoding="utf-8")
+
+    def test_a_ring_that_dropped_entries_does_not_vouch_for_older_claims(self):
+        # The stream's journal keeps its newest entries only. A command
+        # claimed before the oldest one left may have been on it, and
+        # read by the machine, long ago: it is neither sent again nor
+        # rejected on the word of a journal that cannot know.
+        key, hub_key = self.running([fake.say("one")], [fake.say("two")])
+        text = {"text": "long ago", "mode": "queue", "attachments": []}
+        store = self.store()
+        store.record_command("old", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        for _n in range(3):
+            self.srv.state.queue_command(self.mid, "tail", "", {})
+        self.cut_stream(2)
+        self.clock.advance(48 * 3600.0)
+        # One claimed after the oldest entry left is owed: the ring
+        # reaches back to its claim. (The store's clock is ahead of
+        # the wall clock the stream's entries are stamped by.)
+        self.clock.t = max(self.clock.t, time.time()) + 60
+        store.record_command("new", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        before = store.get_command("old")
+        self.restart_hub()
+        self.back()
+        self.side().tick()
+        self.assertEqual(self.on_stream(), ["new"])
+        self.assertEqual(self.store().get_command("old"), before)
+
+    def test_another_machines_commands_are_left_alone(self):
+        key, hub_key = self.running([fake.say("one")])
+        store = self.store()
+        text = {"text": "theirs", "mode": "queue", "attachments": []}
+        store.record_command("o1", session="claude:x@other", op="send",
+                             status="queued", payload=text, machine="other")
+        # The hub's own keeper sessions are checked against their
+        # keepers (G8), never put on a stream.
+        store.record_command("o2", session="claude:mine", op="send",
+                             status="queued", payload=text,
+                             machine=self.srv.state.machine_id)
+        # And one of this machine's, so its stream is checked.
+        store.record_command("o3", session=hub_key, op="send",
+                             status="queued", payload=text, machine=self.mid)
+        self.restart_hub()
+        state, side = self.srv.state, self.side()
+        self.assertEqual(side._unchecked, {"other", self.mid})
+        self.back()
+        side.tick()
+        # Nor does a flush of the hub's own machine put anything on a
+        # stream.
+        with side._machine_lock(state.machine_id):
+            side._flush(state.machine_id)
+        self.assertEqual(self.on_stream(), ["o3"])
+        for mid in ("other", state.machine_id):
+            self.assertEqual(state.journal.read_since(
+                hub.HubState.sat_journal_key(mid), 0)[0], [])
+        self.assertEqual(
+            [self.store().get_command(c).status for c in ("o1", "o2")],
+            ["queued", "queued"])
+        # The other machine is checked when it is back, not before.
+        self.assertEqual(side._unchecked, {"other"})
+
+    def test_two_flushes_at_once_do_not_interleave(self):
+        key, hub_key = self.running(
+            [fake.say("1")], [fake.say("2")], [fake.say("3")],
+            [fake.say("4")])
+        self.claimed_and_lost(hub_key, "h1", "h2", "h3")
+        self.restart_hub()
+        self.online()
+        side = self.side()
+        lock = side._machine_locks[self.mid] = _WatchedLock()
+        put = self.srv.state.queue_command
+        inside, release = threading.Event(), threading.Event()
+
+        def slow(*args, **kwargs):
+            inside.set()
+            release.wait(WAIT)  # held until the second flush is waiting
+            return put(*args, **kwargs)
+
+        self.srv.state.queue_command = slow
+        flushes = [threading.Thread(target=side.tick),
+                   threading.Thread(target=self.kept, args=({"hello": True},))]
+        try:
+            flushes[0].start()
+            self.assertTrue(inside.wait(WAIT))
+            flushes[1].start()
+            # The second waits for the machine's lock while the first
+            # is mid-flush, and nothing is on the stream yet.
+            self.assertTrue(lock.waiting.wait(WAIT))
+            self.assertEqual(self.on_stream(), [])
+        finally:
+            release.set()
+            for thread in flushes:
+                thread.join(WAIT)
+        self.assertEqual(self.on_stream(), ["h1", "h2", "h3"])
 
 
 class TestLocalApi(SatelliteCase):

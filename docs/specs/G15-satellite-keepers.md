@@ -264,8 +264,65 @@ The `kept` command:
 | When they go | on the first upload after the command stream comes back (`hello: true`), before any command sent after it, and from the hub's timer every 60 seconds |
 | Order | arrival order (`list_held`), under a per-machine lock, so two flushes cannot interleave |
 | Once | `transition(id, "queued")` is the claim; a second flush finds nothing held |
+| Claimed, never sent | a command that is `queued` with no result and is not on the machine's stream is put there by the next flush, in its place among the held ones (below) |
 | Expiry | `expire_held()` runs before every flush and on the timer. A hold past its deadline is `rejected` with reason `expired`, is never put on the stream, and open streams get a `command.result {ok: false}` with no seq. A retry of its id answers the expiry |
 | Backlog | a machine more than `MAX_SAT_PENDING` commands behind gets no more: the command is `rejected` and the request answers 429 |
+
+### A hub that stops between the claim and the stream
+
+The claim is a write to `remote.sqlite` and the hand-over a write to
+the stream's journal (`_sat_<machine>`). No transaction covers both, so
+a hub can stop, or the journal write can fail, with a command claimed
+and not handed over. Its retry answers `duplicate`, `queued`, and
+before this check nothing sent it.
+
+- **At start** the hub walks `Store.unfinished()` once
+  (`SatelliteKeepers._walk`) and notes each satellite that has a
+  `queued` command with no result.
+- **A flush that ends early notes the machine too.** A flush ends at
+  the first command the store would not claim or reject (a
+  `StoreError`) or the stream did not take, so nothing behind that
+  command overtakes it. `Journal.append` returns the event whether or
+  not the write worked, so after each put the hub reads the stream
+  back (`_hand_over`) and counts a command that is not there as not
+  sent.
+- **At the next flush of a noted machine** (its `hello` upload, a write
+  for it, or the 60 second timer once it is online) the hub reads the
+  stream's journal and collects the `id` of every `kept` command on it
+  (`_claimed_not_sent`). A `queued` command with no result whose id is
+  not there was never handed over.
+- **Those commands and the held ones go out as one list, by arrival
+  order** (the store's row id), under the machine's lock. A held one is
+  claimed first, as before. The machine is then checked, and the
+  journal is not read again until the hub restarts or a flush ends
+  early.
+- **Age counts from arrival.** A message or an answer that arrived 24
+  hours ago or more, or anything else that arrived ten minutes ago or
+  more (`KEPT_FRESH_S`), is `rejected` and announced with no seq, and
+  is not put on the stream. The satellite cannot apply its own limit
+  here: it reads the time the command went on the stream. The ten
+  minutes apply to a control still `held` as well. A control is stored
+  `held` only for the moment before its claim, and one a hub left that
+  way would otherwise go out with the machine's next flush, up to a
+  day late.
+- **Never touched:** a command with a result, an `accepted` one (the
+  machine answered it), a command stored for another machine, and the
+  hub's own sessions, which G8 checks against their keepers.
+
+**What the ring cannot vouch for.** The stream's journal is a ring: its
+newest 2,000 entries, at most 8 MB, are kept. A command missing from
+it counts as never sent only when the ring still reaches back to the
+command's claim: nothing was ever dropped (the first entry is seq 1,
+or the journal is empty), or the oldest entry left is older than the
+claim. A `queued` command claimed before that is left as it is. The
+machine has most likely read it, and rejecting it could call a
+message that ran expired.
+
+A command put on the stream twice all the same (a stream journal that
+was deleted, a write that reached a connected satellite and not the
+disk) is applied once: the satellite's store knows the id and answers
+the stored receipt (`_kept_refusal`, "Already run"), so its keeper is
+not asked twice.
 
 ## The loopback API
 
@@ -330,6 +387,7 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 | Check | Result |
 |---|---|
 | `tests.test_remote_agent` (222 tests, 50 new) | pass |
+| `tests.test_remote_agent.TestSatelliteClaimedNotSent` (15 tests, added with the check for a command claimed and never sent; 14 fail without it) | pass |
 | Full suite against a throwaway HOME | pass (see the PR) |
 | Against an installed `swe` (`pip install -e .` in a fresh venv), two throwaway HOMEs on one Mac, `swe remote serve` in one and `swe remote agent` in the other, harness.json on the satellite pointing `capabilities.session.argv` at `tests/fakes/fake_claude.py` (`FAKE_CLAUDE_MODE=approval`): a launch on the satellite asked for on the hub; an approval and a send from the hub answered by the satellite's keeper; `kill -9` the agent with an approval open, a message sent meanwhile answered `held` (its retry `duplicate`, a Stop 409 `machine_offline`); the agent started again, the approval answered, the held message run once; 55 events, seqs 1..55, the satellite's journal and the hub's copy both equal to the keeper's log; then the hub stopped and the satellite's loopback API listing the session and running one more turn, 401 without the token or with a paired credential, 404 for `/v1/devices`; `local.json` mode 0600 and its token in no other file under either HOME, logs included; detach ends the keeper | pass |
 
@@ -369,9 +427,18 @@ Run on 2026-11-21, macOS 27.3, Python 3.15.2.
 - **Fork** of a satellite keeper session still takes the tmux path.
 - **A satellite's launch is not held.** `launch` and `attach` still
   wait in the command stream's journal with no deadline, as before.
-- **A hub that dies between claiming a held command and putting it on
-  the stream** leaves it `queued` and undelivered. The window is two
-  adjacent statements; nothing replays it.
+- **A command claimed and not handed over waits for the next flush.**
+  After a hub restart that is the machine's reconnect, or the timer
+  within 60 seconds of it. A Stop or an option change that waited ten
+  minutes or more is rejected, not sent.
+- **A claim older than the stream's ring is not checked.** A command
+  claimed and lost, on a stream that has since dropped every entry
+  from before the claim, stays `queued`. That takes 2,000 newer
+  entries (or 8 MB) on that machine's stream before its first flush
+  after the restart, and a machine 2,000 commands behind is sent no
+  more.
+- **A command lost before this check existed** is delivered after
+  whatever the hub sent later, if it is under 24 hours old.
 - **Clocks.** The ten-minute limit on a late Stop compares the hub's
   timestamp with the satellite's clock. Two machines whose clocks
   disagree by more than that refuse each other's controls.
