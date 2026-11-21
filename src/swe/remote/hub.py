@@ -62,6 +62,7 @@ from swe.remote import (
     tsid,
     usage as usage_mod,
 )
+from swe.remote import agent as agent_mod
 from swe.remote import fork as fork_mod
 from swe.remote import issues as issues_mod
 from swe.remote import pulls as pulls_mod
@@ -672,7 +673,7 @@ class HubState:
             # Check and append as one step: a keeper taking the session
             # over reads the journal's last seq under this same lock.
             with self.journal.hold(key):
-                if not self.runtime.owns(key):
+                if not (self.runtime.owns(key) or agent_mod.mirrored(self, key)):
                     written = self.journal.append(key, event)
         if written is None:
             # A keeper numbers this session's journal: an event of the
@@ -2768,6 +2769,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "accepted": accepted})
             return
 
+        if path == "/v1/agent/kept":  # agent.py: satellite keeper sessions
+            agent_mod.kept_route(self, device_id)
+            return
+
         if path == "/v1/sessions":
             self._launch()
             return
@@ -2818,7 +2823,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             remote_mid = row.get("machine_id")
             if remote_mid and remote_mid != self._state.machine_id:
-                self._forward(key, remote_mid, action, row)
+                if not agent_mod.to_keeper(self, key, action, row, device_id):
+                    self._forward(key, remote_mid, action, row)
                 return
             if action == "attachments":
                 self._stage_attachment(key)
