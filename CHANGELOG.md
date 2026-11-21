@@ -53,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Droid limits on a Mac with no Homebrew.** `bundle-swe.sh` copied `libcrypto.3.dylib` from Homebrew's OpenSSL and only warned when it was missing, so the app installed with Droid auth decryption off. It now builds OpenSSL 3.5.9 LTS from source checked against a pinned checksum, for the host architecture and macOS 26, and fails the build if that dylib cannot be produced or loaded. `SWE_LIBCRYPTO` still points the build at another library, with its licence found beside it as before.
+
 - **A message for a satellite is no longer lost when the hub stops while sending it.** Behind `remote.session_view`, the hub marks a held message or approval answer as claimed and then puts it on the machine's command stream. A hub that stopped between the two left the message marked as sent with nothing sent, and a retry answered "queued". The hub now checks its claimed commands against each machine's stream after it starts, and after a hand-over that failed, and sends what is missing once, in arrival order with the messages still held. One that arrived more than 24 hours ago is rejected as expired. See [docs/specs/G15-satellite-keepers.md](docs/specs/G15-satellite-keepers.md).
 
 - **Leaving a skill with Save all refreshes the Skills list.** The unsaved-changes prompt's Save all wrote SKILL.md without telling the page, so the list kept the old description until Refresh. It now reads the skills again when any file was written, also when another file failed to save, as the editor's own Save does.

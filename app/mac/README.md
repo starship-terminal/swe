@@ -20,7 +20,12 @@ The app runs `swe … --json`. `build-app.sh` puts a copy of `swe` inside
 the bundle (`Contents/Resources/swe`, with a standalone Python 3.13 from
 python-build-standalone; see `script/bundle-swe.sh`), so a Mac with no
 Python or swe installed still works. The first build downloads that
-Python (about 25 MB, pinned by checksum) into `~/.swe/cache/build/python`.
+Python (about 25 MB, pinned by checksum) into `~/.swe/cache/build/python`,
+and builds `libcrypto.3.dylib` for the Droid limits decryptor there from
+OpenSSL's pinned source (also checked by checksum; a few minutes, once per
+architecture). `SWE_LIBCRYPTO` points the build at another
+`libcrypto.3.dylib` instead; its `LICENSE.txt` must sit in that OpenSSL's
+prefix or be named by `SWE_LIBCRYPTO_LICENSE`.
 Settings › Files can point the app at another `swe` instead, such as an
 editable install you're working on. `swift run` builds have no bundle and
 use the `swe` on your login shell's PATH.
