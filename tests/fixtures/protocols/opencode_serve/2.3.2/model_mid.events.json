@@ -1,0 +1,824 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.266,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ],
+    "steer_effect": "after_tool"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.266,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.266,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "reply_finishes"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.654,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.654,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.654,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.262,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "1  \nStarting with one small step.\n\n2  \nTwo ideas are better than one.\n\n3  \n",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.355,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 5.1200000000000004e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.369,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Three is a classic number for a reason.\n\n4  \nFour corners make a square complete.\n\n5  \n",
+   "seq": 2,
+   "offset": 75,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.474,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Five fingers help you count with ease.\n\n6  \nSix steps can take you a long way.\n\n",
+   "seq": 3,
+   "offset": 162,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.575,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "7  \nSeven days make a full week.\n\n8  \nEight looks like a twist turned sideways.\n\n",
+   "seq": 4,
+   "offset": 242,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.689,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "9  \nNine is close to ten and feels like almost there.\n\n10  \nTen marks a ",
+   "seq": 5,
+   "offset": 323,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.79,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "clean milestone.\n\n11  \nEleven is one more than ten.\n\n12  \nTwelve divides nicely and ",
+   "seq": 6,
+   "offset": 395,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.899,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "feels orderly.\n\n13  \nThirteen is adventurous—sometimes unlucky, often memorable.\n\n14  \nFourteen ",
+   "seq": 7,
+   "offset": 479,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.002,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "is two sevens working together.\n\n15  \nFifteen is a halfway-feeling between ten ",
+   "seq": 8,
+   "offset": 575,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.011,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-mini",
+     "mid_turn": "reply_finishes"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.105,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "and twenty.\n\n16  \nSixteen is a strong square number.\n\n17  \nSeventeen is one ",
+   "seq": 9,
+   "offset": 654,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.208,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "step into the next set.\n\n18  \nEighteen brings you to another full cycle.\n\n",
+   "seq": 10,
+   "offset": 730,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.31,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "19  \nNineteen is one less than twenty.\n\n",
+   "seq": 11,
+   "offset": 804,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.415,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "20  \nTwenty is the start of a bigger round.\n\n21  \nTwenty-one ",
+   "seq": 12,
+   "offset": 844,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.516,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "keeps the momentum going.\n\n22  \nTwenty-two adds a little more each time.\n\n23  \n",
+   "seq": 13,
+   "offset": 905,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.62,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Twenty-three is just before the threes turn into thirties.\n\n24  \nTwenty-four is ",
+   "seq": 14,
+   "offset": 984,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.725,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "days in a long weekend of ideas.\n\n25  \nTwenty-five is another perfect square.\n\n26  \n",
+   "seq": 15,
+   "offset": 1064,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.83,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Twenty-six moves forward with steady pace.\n\n27  \nTwenty-seven is three times nine—nice ",
+   "seq": 16,
+   "offset": 1148,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.931,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "symmetry.\n\n28  \nTwenty-eight is close to the next round of counts.\n\n29  \n",
+   "seq": 17,
+   "offset": 1235,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.034,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Twenty-nine is nearly at thirty.\n\n30  \nThirty feels like a new chapter.\n\n31  \nThirty-one ",
+   "seq": 18,
+   "offset": 1308,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.14,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "is thirty plus one more.\n\n32  \nThirty-two doubles a memorable number.\n\n33  \nThirty-three is ",
+   "seq": 19,
+   "offset": 1397,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.244,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "three threes.\n\n34  \nThirty-four keeps the pattern moving.\n\n35  \nThirty-five is five times ",
+   "seq": 20,
+   "offset": 1489,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.347,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "seven.\n\n36  \nThirty-six is a square of six.\n\n37  \nThirty-seven keeps things just slightly ",
+   "seq": 21,
+   "offset": 1579,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.453,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "ahead.\n\n38  \nThirty-eight adds one more to the story.\n\n39  \nThirty-nine is one step ",
+   "seq": 22,
+   "offset": 1669,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.555,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "from forty.\n\n40  \nForty is a round number with big energy.\n\n41  \n",
+   "seq": 23,
+   "offset": 1753,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.659,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Forty-one is the next bold step.\n\n42  \nForty-two is a famously memorable number.\n\n",
+   "seq": 24,
+   "offset": 1818,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.763,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "43  \nForty-three is building toward the next decade.\n\n44  \nForty-four brings ",
+   "seq": 25,
+   "offset": 1900,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.865,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "a neat pair of pairs.\n\n45  \nForty-five sits right in the middle of extremes.\n\n46  \n",
+   "seq": 26,
+   "offset": 1977,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.973,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Forty-six continues the steady climb.\n\n47  \nForty-seven is almost halfway to fifty.\n\n",
+   "seq": 27,
+   "offset": 2060,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.077,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "48  \nForty-eight is two dozen times two.\n\n49  \nForty-nine is another perfect ",
+   "seq": 28,
+   "offset": 2145,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.18,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "square.\n\n50  \nFifty is a major milestone.\n\n51  \nFifty-one keeps the momentum ",
+   "seq": 29,
+   "offset": 2222,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.289,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "strong.\n\n52  \nFifty-two is a full set plus two.\n\n53  \nFifty-three is one ",
+   "seq": 30,
+   "offset": 2299,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.396,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "more than fifty-two.\n\n54  \nFifty-four is six nines in a ",
+   "seq": 31,
+   "offset": 2372,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.502,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "neat rhythm.\n\n55  \nFifty-five is five times eleven.\n\n56  \nFifty-six keeps pace ",
+   "seq": 32,
+   "offset": 2428,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.61,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "and purpose.\n\n57  \nFifty-seven is one step closer to the end.\n\n58  \n",
+   "seq": 33,
+   "offset": 2507,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.711,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Fifty-eight is getting very near sixty.\n\n59  \nFifty-nine is almost the final line.\n\n60  \n",
+   "seq": 34,
+   "offset": 2575,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.761,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Sixty completes the count—great ",
+   "seq": 35,
+   "offset": 2664,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.761,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "work!",
+   "seq": 36,
+   "offset": 2696,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.761,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "1  \nStarting with one small step.\n\n2  \nTwo ideas are better than one.\n\n3  \nThree is a classic number for a reason.\n\n4  \nFour corners make a square complete.\n\n5  \nFive fingers help you count with ease.\n\n6  \nSix steps can take you a long way.\n\n7  \nSeven days make a full week.\n\n8  \nEight looks like a twist turned sideways.\n\n9  \nNine is close to ten and feels like almost there.\n\n10  \nTen marks a clean milestone.\n\n11  \nEleven is one more than ten.\n\n12  \nTwelve divides nicely and feels orderly.\n\n13  \nThirteen is adventurous—sometimes unlucky, often memorable.\n\n14  \nFourteen is two sevens working together.\n\n15  \nFifteen is a halfway-feeling between ten and twenty.\n\n16  \nSixteen is a strong square number.\n\n17  \nSeventeen is one step into the next set.\n\n18  \nEighteen brings you to another full cycle.\n\n19  \nNineteen is one less than twenty.\n\n20  \nTwenty is the start of a bigger round.\n\n21  \nTwenty-one keeps the momentum going.\n\n22  \nTwenty-two adds a little more each time.\n\n23  \nTwenty-three is just before the threes turn into thirties.\n\n24  \nTwenty-four is days in a long weekend of ideas.\n\n25  \nTwenty-five is another perfect square.\n\n26  \nTwenty-six moves forward with steady pace.\n\n27  \nTwenty-seven is three times nine—nice symmetry.\n\n28  \nTwenty-eight is close to the next round of counts.\n\n29  \nTwenty-nine is nearly at thirty.\n\n30  \nThirty feels like a new chapter.\n\n31  \nThirty-one is thirty plus one more.\n\n32  \nThirty-two doubles a memorable number.\n\n33  \nThirty-three is three threes.\n\n34  \nThirty-four keeps the pattern moving.\n\n35  \nThirty-five is five times seven.\n\n36  \nThirty-six is a square of six.\n\n37  \nThirty-seven keeps things just slightly ahead.\n\n38  \nThirty-eight adds one more to the story.\n\n39  \nThirty-nine is one step from forty.\n\n40  \nForty is a round number with big energy.\n\n41  \nForty-one is the next bold step.\n\n42  \nForty-two is a famously memorable number.\n\n43  \nForty-three is building toward the next decade.\n\n44  \nForty-four brings a neat pair of pairs.\n\n45  \nForty-five sits right in the middle of extremes.\n\n46  \nForty-six continues the steady climb.\n\n47  \nForty-seven is almost halfway to fifty.\n\n48  \nForty-eight is two dozen times two.\n\n49  \nForty-nine is another perfect square.\n\n50  \nFifty is a major milestone.\n\n51  \nFifty-one keeps the momentum strong.\n\n52  \nFifty-two is a full set plus two.\n\n53  \nFifty-three is one more than fifty-two.\n\n54  \nFifty-four is six nines in a neat rhythm.\n\n55  \nFifty-five is five times eleven.\n\n56  \nFifty-six keeps pace and purpose.\n\n57  \nFifty-seven is one step closer to the end.\n\n58  \nFifty-eight is getting very near sixty.\n\n59  \nFifty-nine is almost the final line.\n\n60  \nSixty completes the count—great work!"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.816,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 5283,
+   "output_tokens": 650,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0019203
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.816,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 8.162
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000008.816,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.33,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Reply only with: after"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.33,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000009.33,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Reply only with: after"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.6,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "after",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.6,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "after"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.646,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 5943,
+   "output_tokens": 7,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00644505
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.646,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 1.316
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.646,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000010.646,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

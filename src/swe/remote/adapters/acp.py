@@ -320,15 +320,18 @@ class AcpState(SessionCore):
 
     def options(self) -> dict:
         """The agent's models and modes, each sent at once with
-        ``session/set_model`` or ``session/set_mode``. What a prompt in
-        progress does with a change is not recorded: ``unverified``."""
+        ``session/set_model`` or ``session/set_mode``. A mode set while
+        a prompt runs leaves its reply to finish (``reply_finishes``,
+        plan_mode_mid). A model set then was taken and the reply went
+        on, but the recording's agent lists one model, so no switch
+        could be seen: ``unverified`` (model_mid)."""
         return {
             "model": opts.string_option(self.model, opts.UNVERIFIED,
                                         choices=self.model_choices),
             "permission_mode": opts.string_option(
-                self.mode, opts.UNVERIFIED, choices=self.mode_choices),
+                self.mode, opts.REPLY_FINISHES, choices=self.mode_choices),
             "plan_mode": opts.flag_option(self.mode == PLAN_MODE,
-                                          opts.UNVERIFIED),
+                                          opts.REPLY_FINISHES),
         }
 
     def mode_set(self, mode: str) -> list:

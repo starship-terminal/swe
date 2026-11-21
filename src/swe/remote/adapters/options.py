@@ -21,6 +21,7 @@ from swe.remote.adapters import events as ev
 from swe.remote.adapters.base import Caps
 
 NEXT_TURN = "next_turn"
+REPLY_FINISHES = "reply_finishes"
 UNVERIFIED = "unverified"
 
 

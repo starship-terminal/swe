@@ -342,6 +342,44 @@ def sc_attach(spawn, work, ctx):
             [os.path.join(os.path.realpath(work), "notes.txt")])))
 
 
+def _mid_prompt(d, method: str, params: dict, ctx: dict) -> None:
+    """Send ``method`` once the reply streams, and note what the prompt
+    in progress did (G32): the answer, the chunks after it, how the
+    prompt ended."""
+    start = d.mark()
+    rpc_id = d.start_turn(_COUNT)
+    d.wait_chunks(start, 8)
+    before = sum(1 for e in d.log[start:] if e["dir"] == "in"
+                 and _chunk_text(e.get("msg")))
+    answer = d.call(method, {"sessionId": d.session, **params})
+    ctx["answered"] = "error" not in answer
+    done = d.until_done(rpc_id, start)
+    ctx["stop"] = _stop(done)
+    ctx["chunks_before_change"] = before
+    ctx["chunks_after_change"] = sum(
+        1 for e in d.log[start:] if e["dir"] == "in"
+        and _chunk_text(e.get("msg"))) - before
+
+
+def sc_model_mid(spawn, work, ctx):
+    """``session/set_model`` during an open ``session/prompt``."""
+    d = spawn()
+    d.open()
+    listed = list(adapter.model_ids(d.info).values())
+    _mid_prompt(d, "session/set_model", {"modelId": listed[0]}, ctx)
+
+
+def sc_plan_mode_mid(spawn, work, ctx):
+    """``session/set_mode`` plan during an open ``session/prompt``, then
+    back."""
+    d = spawn()
+    d.open()
+    before = adapter.current_mode(d.info)
+    _mid_prompt(d, "session/set_mode", {"modeId": "plan"}, ctx)
+    d.set_mode(before or "default")
+    ctx["stop_after"] = _stop(d.turn("Reply with exactly: back"))
+
+
 def sc_error(spawn, work, ctx):
     """A turn that fails: a model the provider does not have."""
     d = spawn(OPENAI_MODEL="no-such-model-for-the-recorder")
@@ -358,6 +396,8 @@ SCENARIOS = {
     "resume": sc_resume,
     "plan_mode": sc_plan_mode,
     "model": sc_model,
+    "model_mid": sc_model_mid,
+    "plan_mode_mid": sc_plan_mode_mid,
     "attach": sc_attach,
     "error": sc_error,
 }

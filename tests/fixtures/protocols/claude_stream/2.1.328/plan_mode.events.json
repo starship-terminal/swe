@@ -15,7 +15,8 @@
     "options": [
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -40,7 +41,7 @@
    "options": {
     "model": {
      "value": "haiku",
-     "mid_turn": "unverified",
+     "mid_turn": "reply_finishes",
      "choices": [
       {
        "id": "default"
@@ -61,11 +62,11 @@
     },
     "permission_mode": {
      "value": "default",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": false,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }
@@ -80,7 +81,7 @@
    "options": {
     "model": {
      "value": "haiku",
-     "mid_turn": "unverified",
+     "mid_turn": "reply_finishes",
      "choices": [
       {
        "id": "default"
@@ -101,11 +102,11 @@
     },
     "permission_mode": {
      "value": "plan",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": true,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }
@@ -154,7 +155,7 @@
    "options": {
     "model": {
      "value": "haiku",
-     "mid_turn": "unverified",
+     "mid_turn": "reply_finishes",
      "choices": [
       {
        "id": "default"
@@ -176,11 +177,11 @@
     },
     "permission_mode": {
      "value": "plan",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": true,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }
@@ -912,7 +913,7 @@
    "options": {
     "model": {
      "value": "haiku",
-     "mid_turn": "unverified",
+     "mid_turn": "reply_finishes",
      "choices": [
       {
        "id": "default"
@@ -934,11 +935,11 @@
     },
     "permission_mode": {
      "value": "default",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": false,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }

@@ -70,11 +70,17 @@ TASK_STATUSES = frozenset({"running", "completed", "failed", "stopped"})
 QUEUE_MODES = frozenset({"queue", "steer"})
 RECEIPT_STATUSES = frozenset({"accepted", "duplicate", "queued",
                               "rejected", "held"})
-# What a change of option does to a turn in progress (G32):
-# ``next_turn`` is proven to leave it alone (the adapter sends the change
-# with the next turn); ``unverified`` is sent to the agent at once, and
-# what the agent then does to the reply in progress is not recorded.
-MID_TURN = frozenset({"next_turn", "unverified"})
+# What a change of option does to a turn in progress (G32), each from a
+# recording: ``next_turn`` leaves the whole turn alone (the adapter sends
+# the change with the next turn); ``reply_finishes`` is sent at once,
+# and the reply being written runs on to its end unchanged, the change
+# taking hold after it; ``unverified`` is sent at once and nothing
+# recorded shows what it does to the reply in progress.
+MID_TURN = frozenset({"next_turn", "reply_finishes", "unverified"})
+# What a steer does to the turn in progress: ``base.STEER_EFFECTS``
+# (events.py imports nothing from base, so the values are spelled here
+# too; a test holds the two equal).
+STEER_EFFECTS = frozenset({"stops_reply", "after_tool", "next_turn"})
 # The options ``session.options`` can carry, and which take a flag.
 OPTION_NAMES = ("model", "effort", "permission_mode", "plan_mode")
 FLAG_OPTIONS = frozenset({"plan_mode"})
@@ -100,6 +106,7 @@ ENUMS: dict[tuple[str, str], frozenset] = {
     ("queue.updated", "items[].mode"): QUEUE_MODES,
     ("command.receipt", "status"): RECEIPT_STATUSES,
     ("notify", "kind"): NOTIFY_KINDS,
+    ("session.caps", "caps.steer_effect"): STEER_EFFECTS,
     ("session.options", "options.model.mid_turn"): MID_TURN,
     ("session.options", "options.effort.mid_turn"): MID_TURN,
     ("session.options", "options.permission_mode.mid_turn"): MID_TURN,
@@ -237,7 +244,8 @@ _OPTIONS = _Obj({}, {name: (_FLAG_OPTION if name in FLAG_OPTIONS
                             else _STRING_OPTION)
                      for name in OPTION_NAMES})
 _CAPS = _Obj({"steer": BOOL, "plan_mode": BOOL, "rollback": BOOL,
-              "fork": BOOL, "stop_task": BOOL, "options": STRS})
+              "fork": BOOL, "stop_task": BOOL, "options": STRS},
+             {"steer_effect": _Enum(STEER_EFFECTS)})
 
 # type -> the ``data`` object's schema.
 SCHEMAS: dict[str, _Obj] = {

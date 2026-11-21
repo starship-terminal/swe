@@ -76,6 +76,13 @@ OPTION_NAMES = frozenset({"model", "effort", "plan_mode", "permission_mode"})
 # and ``Unsupported.feature`` use.
 FEATURES = ("steer", "plan_mode", "rollback", "fork", "stop_task")
 
+# What a steer does to the turn in progress (``Caps.steer_effect``, G32),
+# from each adapter's recordings: ``stops_reply`` cuts the reply being
+# written and answers the message at once; ``after_tool`` stops nothing
+# and takes the message in when the agent's current step (the reply, or
+# a running command) ends; ``next_turn`` holds it for the next turn.
+STEER_EFFECTS = frozenset({"stops_reply", "after_tool", "next_turn"})
+
 # Approval decisions an ``Answer`` may carry, as v1 already spells them.
 DECISIONS = frozenset({"allow", "deny", "always"})
 
@@ -125,6 +132,10 @@ class Caps:
     fork: bool = False
     stop_task: bool = False
     options: frozenset = frozenset()
+    # What a steer does (``STEER_EFFECTS``), set by the adapter from
+    # what its recordings prove; "" when nothing proves it or there is
+    # no steer. Never read from harness.json.
+    steer_effect: str = ""
 
     def __post_init__(self) -> None:
         opts = frozenset(self.options)
@@ -132,6 +143,8 @@ class Caps:
         if unknown:
             raise ValueError(f"unknown option names: {sorted(unknown)}")
         object.__setattr__(self, "options", opts)
+        if self.steer_effect and self.steer_effect not in STEER_EFFECTS:
+            raise ValueError(f"unknown steer effect {self.steer_effect!r}")
 
     def supports(self, feature: str) -> bool:
         """Whether ``feature`` (one of ``FEATURES``) is on."""
@@ -153,15 +166,22 @@ class Caps:
     def narrowed(self, other: "Caps") -> "Caps":
         """Only what both ``self`` and ``other`` allow: harness.json's
         ceiling met with what the harness's handshake reported."""
+        steer = self.steer and other.steer
         return Caps(**{f: getattr(self, f) and getattr(other, f)
                        for f in FEATURES},
-                    options=self.options & other.options)
+                    options=self.options & other.options,
+                    steer_effect=(self.steer_effect or other.steer_effect)
+                    if steer else "")
 
     def as_dict(self) -> dict:
-        """The JSON shape ``session.caps`` carries."""
+        """The JSON shape ``session.caps`` carries; ``steer_effect``
+        only when known."""
         out: dict[str, Any] = {f.name: getattr(self, f.name)
-                               for f in fields(self) if f.name != "options"}
+                               for f in fields(self)
+                               if f.name not in ("options", "steer_effect")}
         out["options"] = sorted(self.options)
+        if self.steer_effect:
+            out["steer_effect"] = self.steer_effect
         return out
 
 

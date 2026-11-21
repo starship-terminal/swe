@@ -1,0 +1,444 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.285,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ],
+    "steer_effect": "after_tool"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.285,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.285,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "reply_finishes"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.708,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "openai/gpt-6.1-terra",
+       "label": "GPT-6.1 Terra"
+      },
+      {
+       "id": "openai/gpt-6.1-terra-fast",
+       "label": "GPT-6.1 Terra Fast"
+      },
+      {
+       "id": "openai/gpt-6.1-terra-pro",
+       "label": "GPT-6.1 Terra Pro"
+      },
+      {
+       "id": "opencode/flint-40b-free",
+       "label": "Flint 40B Free"
+      },
+      {
+       "id": "opencode/nemotron-3.5-super-vl-free",
+       "label": "Nemotron 3.5 Super VL Free"
+      },
+      {
+       "id": "opencode/beam-free",
+       "label": "Beam Free"
+      },
+      {
+       "id": "openai/gpt-6.1-sol",
+       "label": "GPT-6.1 Sol"
+      },
+      {
+       "id": "openai/gpt-6.1-sol-fast",
+       "label": "GPT-6.1 Sol Fast"
+      },
+      {
+       "id": "openai/gpt-6.1-sol-pro",
+       "label": "GPT-6.1 Sol Pro"
+      },
+      {
+       "id": "openai/gpt-6.1-sol-ultrafast",
+       "label": "GPT-6.1 Sol Ultrafast"
+      },
+      {
+       "id": "openai/gpt-6-luna",
+       "label": "GPT-6 Luna"
+      },
+      {
+       "id": "openai/gpt-6-luna-fast",
+       "label": "GPT-6 Luna Fast"
+      },
+      {
+       "id": "openai/gpt-6-luna-pro",
+       "label": "GPT-6 Luna Pro"
+      },
+      {
+       "id": "openai/gpt-6-sol",
+       "label": "GPT-6 Sol"
+      },
+      {
+       "id": "openai/gpt-6-sol-fast",
+       "label": "GPT-6 Sol Fast"
+      },
+      {
+       "id": "openai/gpt-6-sol-pro",
+       "label": "GPT-6 Sol Pro"
+      },
+      {
+       "id": "opencode/mimo-v2.6-flash-free",
+       "label": "MiMo-V2.6-Flash Free"
+      },
+      {
+       "id": "opencode/deepseek-v4.1-flash-free",
+       "label": "DeepSeek V4.1 Flash Free"
+      },
+      {
+       "id": "openai/gpt-6-astra",
+       "label": "GPT-6 Astra"
+      },
+      {
+       "id": "openai/gpt-6-astra-fast",
+       "label": "GPT-6 Astra Fast"
+      },
+      {
+       "id": "openai/gpt-6-astra-pro",
+       "label": "GPT-6 Astra Pro"
+      },
+      {
+       "id": "openai/gpt-6-astra-ultrafast",
+       "label": "GPT-6 Astra Ultrafast"
+      },
+      {
+       "id": "opencode/glm-5.3-flash-free",
+       "label": "GLM-5.3-Flash Free"
+      },
+      {
+       "id": "opencode/nemotron-3.5-lightning-free",
+       "label": "Nemotron 3.5 Lightning Free"
+      },
+      {
+       "id": "openai/gpt-5.6-cyber",
+       "label": "GPT-5.6 Cyber"
+      },
+      {
+       "id": "openai/gpt-daybreak-red-latest",
+       "label": "Daybreak Red"
+      },
+      {
+       "id": "openai/gpt-daybreak-blue-latest",
+       "label": "Daybreak Blue"
+      },
+      {
+       "id": "openai/gpt-5.6",
+       "label": "GPT-5.6"
+      },
+      {
+       "id": "openai/gpt-5.6-fast",
+       "label": "GPT-5.6 Fast"
+      },
+      {
+       "id": "openai/gpt-5.6-pro",
+       "label": "GPT-5.6 Pro"
+      },
+      {
+       "id": "openai/gpt-5.6-terra",
+       "label": "GPT-5.6 Terra"
+      },
+      {
+       "id": "openai/gpt-5.6-terra-fast",
+       "label": "GPT-5.6 Terra Fast"
+      },
+      {
+       "id": "openai/gpt-5.6-terra-pro",
+       "label": "GPT-5.6 Terra Pro"
+      },
+      {
+       "id": "openai/gpt-5.6-luna",
+       "label": "GPT-5.6 Luna"
+      },
+      {
+       "id": "openai/gpt-5.6-luna-fast",
+       "label": "GPT-5.6 Luna Fast"
+      },
+      {
+       "id": "openai/gpt-5.6-luna-pro",
+       "label": "GPT-5.6 Luna Pro"
+      },
+      {
+       "id": "openai/gpt-5.6-sol",
+       "label": "GPT-5.6 Sol"
+      },
+      {
+       "id": "openai/gpt-5.6-sol-fast",
+       "label": "GPT-5.6 Sol Fast"
+      },
+      {
+       "id": "openai/gpt-5.6-sol-pro",
+       "label": "GPT-5.6 Sol Pro"
+      },
+      {
+       "id": "opencode/nemotron-3-ultra-free",
+       "label": "Nemotron 3 Ultra Free"
+      },
+      {
+       "id": "openai/chat-latest",
+       "label": "Chat Latest"
+      },
+      {
+       "id": "openai/gpt-5.5",
+       "label": "GPT-5.5"
+      },
+      {
+       "id": "openai/gpt-5.5-fast",
+       "label": "GPT-5.5 Fast"
+      },
+      {
+       "id": "openai/gpt-5.5-pro",
+       "label": "GPT-5.5 Pro"
+      },
+      {
+       "id": "openai/gpt-5.4-mini",
+       "label": "GPT-5.4 mini"
+      },
+      {
+       "id": "openai/gpt-5.4-mini-fast",
+       "label": "GPT-5.4 mini Fast"
+      },
+      {
+       "id": "openai/gpt-5.4-mini-flex",
+       "label": "GPT-5.4 mini Flex"
+      },
+      {
+       "id": "openai/gpt-5.4-nano",
+       "label": "GPT-5.4 nano"
+      },
+      {
+       "id": "openai/gpt-5.4-nano-flex",
+       "label": "GPT-5.4 nano Flex"
+      },
+      {
+       "id": "openai/gpt-5.4",
+       "label": "GPT-5.4"
+      },
+      {
+       "id": "openai/gpt-5.4-fast",
+       "label": "GPT-5.4 Fast"
+      },
+      {
+       "id": "openai/gpt-5.4-pro",
+       "label": "GPT-5.4 Pro"
+      },
+      {
+       "id": "openai/gpt-audio-1.5",
+       "label": "GPT-Audio-1.5"
+      },
+      {
+       "id": "openai/gpt-5.3-codex-spark",
+       "label": "GPT-5.3 Codex Spark"
+      },
+      {
+       "id": "openai/gpt-5.3-codex",
+       "label": "GPT-5.3 Codex"
+      },
+      {
+       "id": "openai/gpt-5.3-codex-fast",
+       "label": "GPT-5.3 Codex Fast"
+      },
+      {
+       "id": "openai/gpt-5.2-pro",
+       "label": "GPT-5.2 Pro"
+      },
+      {
+       "id": "openai/gpt-5.2",
+       "label": "GPT-5.2"
+      },
+      {
+       "id": "openai/gpt-5.2-fast",
+       "label": "GPT-5.2 Fast"
+      },
+      {
+       "id": "openai/gpt-5.2-flex",
+       "label": "GPT-5.2 Flex"
+      },
+      {
+       "id": "openai/gpt-5.1",
+       "label": "GPT-5.1"
+      },
+      {
+       "id": "openai/gpt-5.1-fast",
+       "label": "GPT-5.1 Fast"
+      },
+      {
+       "id": "openai/gpt-5.1-flex",
+       "label": "GPT-5.1 Flex"
+      },
+      {
+       "id": "opencode/big-pickle",
+       "label": "Big Pickle"
+      },
+      {
+       "id": "openai/gpt-5-search-api",
+       "label": "GPT-5 Search API"
+      },
+      {
+       "id": "openai/gpt-5-pro",
+       "label": "GPT-5 Pro"
+      },
+      {
+       "id": "openai/gpt-5",
+       "label": "GPT-5"
+      },
+      {
+       "id": "openai/gpt-5-fast",
+       "label": "GPT-5 Fast"
+      },
+      {
+       "id": "openai/gpt-5-flex",
+       "label": "GPT-5 Flex"
+      },
+      {
+       "id": "openai/gpt-5-mini",
+       "label": "GPT-5 Mini"
+      },
+      {
+       "id": "openai/gpt-5-mini-fast",
+       "label": "GPT-5 Mini Fast"
+      },
+      {
+       "id": "openai/gpt-5-mini-flex",
+       "label": "GPT-5 Mini Flex"
+      },
+      {
+       "id": "openai/gpt-5-nano",
+       "label": "GPT-5 Nano"
+      },
+      {
+       "id": "openai/gpt-5-nano-flex",
+       "label": "GPT-5 Nano Flex"
+      },
+      {
+       "id": "openai/o3-pro",
+       "label": "o3-pro"
+      },
+      {
+       "id": "openai/o3",
+       "label": "o3"
+      },
+      {
+       "id": "openai/o3-fast",
+       "label": "o3 Fast"
+      },
+      {
+       "id": "openai/o3-flex",
+       "label": "o3 Flex"
+      },
+      {
+       "id": "openai/gpt-4.1",
+       "label": "GPT-4.1"
+      },
+      {
+       "id": "openai/gpt-4.1-fast",
+       "label": "GPT-4.1 Fast"
+      },
+      {
+       "id": "openai/gpt-4.1-mini",
+       "label": "GPT-4.1 mini"
+      },
+      {
+       "id": "openai/gpt-4.1-mini-fast",
+       "label": "GPT-4.1 mini Fast"
+      },
+      {
+       "id": "openai/gpt-4o-2024-11-20",
+       "label": "GPT-4o (2024-11-20)"
+      },
+      {
+       "id": "openai/gpt-4o-2024-08-06",
+       "label": "GPT-4o (2024-08-06)"
+      },
+      {
+       "id": "openai/gpt-4o-mini",
+       "label": "GPT-4o mini"
+      },
+      {
+       "id": "openai/gpt-4o-mini-fast",
+       "label": "GPT-4o mini Fast"
+      },
+      {
+       "id": "openai/gpt-4o",
+       "label": "GPT-4o"
+      },
+      {
+       "id": "openai/gpt-4o-fast",
+       "label": "GPT-4o Fast"
+      }
+     ]
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.708,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

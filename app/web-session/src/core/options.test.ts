@@ -301,6 +301,53 @@ describe("setOption", () => {
     expect(t.state().sessionOptions.model).toMatchObject({ pending: { value: "opus", commandId: "id2" }, error: null });
   });
 
+  it("a snapshot that replaces the state on a live stream (an overflow) has its skipped result looked up", async () => {
+    const t = setup();
+    t.transport.on(LOOKUP, () => ({
+      status: 200,
+      body: { ok: true, session: T, command_id: "id1", op: "set_option", receipt: "accepted", result: { ok: true }, received_at: 1, updated_at: 2 },
+    }));
+    t.state().start();
+    await t.catchUp();
+    await t.state().setOption("model", "sonnet");
+    // Still caught up: the hub sends a snapshot in place of what overflowed, then its state frame.
+    await t.send(snapshotFrame(snap(30, { options: offered("sonnet") })), env("session.state", { state: "idle", live: [], pending: [], head: 30, epoch: 0 }, { seq: 0 }));
+    await drain();
+    expect(t.transport.calls.filter((c) => c.path.startsWith(LOOKUP))).toHaveLength(1);
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "sonnet", pending: null });
+    // The next change of the option is sent, not held behind a change that never settles.
+    await t.state().setOption("model", "haiku");
+    expect(t.posts.map((p) => p.value)).toEqual(["sonnet", "haiku"]);
+  });
+
+  it("a post answered after a catch-up that came while it was out is looked up", async () => {
+    const t = setup();
+    t.transport.on(LOOKUP, () => ({
+      status: 200,
+      body: { ok: true, session: T, command_id: "id1", op: "set_option", receipt: "accepted", result: { ok: false, note: "refused late" }, received_at: 1, updated_at: 2 },
+    }));
+    t.state().start();
+    await t.catchUp();
+    let release: () => void = () => {};
+    t.answer.next = (body) =>
+      new Promise((resolve) => {
+        release = () => resolve({ status: 200, body: { ok: true, receipt: "accepted", command_id: body.command_id } });
+      });
+    const sent = t.state().setOption("model", "sonnet");
+    await drain();
+    // The stream drops and catches up again while the post is out: the catch-up cannot look it up yet.
+    t.timers.advance(10_000);
+    t.transport.last.end({ kind: "closed" });
+    await drain();
+    await t.catchUp(20);
+    expect(t.transport.calls.filter((c) => c.path.startsWith(LOOKUP))).toHaveLength(0);
+    release();
+    await sent;
+    await drain();
+    expect(t.transport.calls.filter((c) => c.path.startsWith(LOOKUP))).toHaveLength(1);
+    expect(t.state().sessionOptions.model).toMatchObject({ pending: null, error: { message: "refused late" } });
+  });
+
   it("a network failure ends the change with the reason", async () => {
     const t = setup();
     t.answer.next = () => {

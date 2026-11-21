@@ -85,6 +85,9 @@ CLIENT_BUFFER = 8192
 SEND_TIMEOUT_S = ipc.SEND_TIMEOUT_S
 REPLAY_PAGE = 500
 # Command ids remembered for ``duplicate`` answers.
+# The permission mode that is plan mode, where an agent offers both
+# (Claude's ``set_permission_mode``, ACP's ``session/set_mode``).
+PLAN_MODE_ID = "plan"
 RECENT_COMMANDS = 4096
 # How far back a starting keeper reads its log for the queue and the
 # recent command ids.
@@ -1271,15 +1274,26 @@ class Keeper:
     def _show_remembered(self, name: str, value: Any) -> None:
         """With no agent to ask, ``session.options`` says the value the
         next start will use (the start then says what the agent made of
-        it). Choosing a permission mode leaves plan mode, as in
-        ``_remember``."""
+        it). Plan mode is the permission mode ``plan`` wherever both are
+        offered (Claude, ACP), so the two move together: choosing a
+        permission mode sets plan mode to whether it is ``plan``, and
+        plan mode on shows ``plan``; off shows the mode the next start
+        goes back to, or "" when none was named."""
         shown = {k: dict(v) for k, v in self._shown_options.items()
                  if isinstance(v, dict)}
         if name not in shown:
             return
         changes = {name: value}
         if name == "permission_mode" and "plan_mode" in shown:
-            changes["plan_mode"] = False
+            changes["plan_mode"] = value == PLAN_MODE_ID
+        elif name == "plan_mode" and "permission_mode" in shown:
+            if value:
+                changes["permission_mode"] = PLAN_MODE_ID
+            elif shown["permission_mode"].get("value") == PLAN_MODE_ID:
+                back = self._options.get("permission_mode",
+                                         self.spec.permission_mode)
+                changes["permission_mode"] = back \
+                    if isinstance(back, str) and back != PLAN_MODE_ID else ""
         for key, new in changes.items():
             shown[key]["value"] = new
             shown[key].pop("reported", None)

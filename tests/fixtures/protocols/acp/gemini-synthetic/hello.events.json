@@ -39,7 +39,7 @@
    "options": {
     "permission_mode": {
      "value": "default",
-     "mid_turn": "unverified",
+     "mid_turn": "reply_finishes",
      "choices": [
       {
        "id": "default",

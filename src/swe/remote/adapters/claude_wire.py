@@ -92,8 +92,12 @@ RECORDED_VERSION = "2.1.328"
 # (the steer, steer_tool and steer_approval fixtures); conversation
 # rollback has no wire form (``rewind_files`` restores files only);
 # effort has a spawn flag but no mid-session control request.
+# ``steer_effect``: a steer cuts the reply in progress, kills a running
+# tool call and withdraws an open approval (steer, steer_tool,
+# steer_approval).
 PROVEN = Caps(steer=True, plan_mode=True, fork=True, stop_task=True,
-              options=frozenset({"model", "permission_mode"}))
+              options=frozenset({"model", "permission_mode"}),
+              steer_effect="stops_reply")
 
 # A feature that needs a protocol capability string in the init
 # message's ``capabilities`` array: when the array lacks it (or the CLI
@@ -781,20 +785,21 @@ class StreamState:
     def options(self) -> dict:
         """Every option this CLI could offer, as ``session.options``
         carries it; :meth:`_sync_options` keeps the ones caps allow.
-        Each is sent to the CLI at once, and what a reply in progress
-        does with a change is not recorded: ``unverified``."""
+        Each is sent to the CLI at once; one sent while a reply streams
+        leaves that reply to finish as it started (``reply_finishes``:
+        set_model_mid and plan_mode_mid, 2.1.330)."""
         if self.model:
             value = self._alias.get(self.model) or self.model
         else:
             value = self.asked_model or self._default_choice()
         return {
             "model": opts.string_option(
-                value, opts.UNVERIFIED, choices=self.model_choices,
+                value, opts.REPLY_FINISHES, choices=self.model_choices,
                 reported=self.model),
             "permission_mode": opts.string_option(self.permission_mode,
-                                                  opts.UNVERIFIED),
+                                                  opts.REPLY_FINISHES),
             "plan_mode": opts.flag_option(self.permission_mode == "plan",
-                                          opts.UNVERIFIED),
+                                          opts.REPLY_FINISHES),
         }
 
     def _default_choice(self) -> str:

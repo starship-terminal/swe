@@ -2716,8 +2716,9 @@ class TestCodexAdapterStart(_CodexCase):
         self.assertEqual(adapter.capabilities, codex_wire.PROVEN)
         self.assertFalse(adapter.capabilities.plan_mode)
         self.assertFalse(adapter.capabilities.stop_task)
+        # The steer's effect is the adapter's own (G32).
         self.assertEqual(self.adapter(caps=Caps(steer=True)).capabilities,
-                         Caps(steer=True))
+                         Caps(steer=True, steer_effect="stops_reply"))
 
     def test_start_handshakes_and_names_the_session(self):
         adapter, sink, sid = self.started(spec={
@@ -2740,8 +2741,10 @@ class TestCodexAdapterStart(_CodexCase):
         first, *rest = self.sent()
         self.assertEqual(first["argv"], [])
         self.assertEqual(first["env"]["EXTRA"], "1")
+        # model/list last: the server's models for the picker (G32).
         self.assertEqual([m.get("method") for m in rest],
-                         ["initialize", "initialized", "thread/start"])
+                         ["initialize", "initialized", "thread/start",
+                          "model/list"])
         self.assertEqual(rest[0]["params"]["clientInfo"]["name"], "swe")
         self.assertEqual(rest[2]["params"], {
             "cwd": adapter._spec.cwd, "model": "gpt-x",
@@ -3286,8 +3289,10 @@ class TestCodexAdapterOptions(_CodexCase):
         adapter, sink, _sid = self.started(spec={"effort": "low"})
         adapter.set_option("model", "gpt-y")
         adapter.set_option("permission_mode", "never")
-        self.assertEqual(self.sent_methods()[-1], "thread/start",
-                         "nothing is written until a turn starts")
+        # The start's model/list (G32) is the last line: nothing is
+        # written until a turn starts.
+        self.assertEqual(self.sent_methods()[-2:],
+                         ["thread/start", "model/list"])
         self.wait_turn(sink, adapter.send_turn(TurnInput("one")))
         first = self.sent()[-1]["params"]
         self.assertEqual((first["model"], first["effort"],
@@ -4685,8 +4690,9 @@ class TestOpencodeAdapterStart(_OpencodeCase):
         self.assertEqual(adapter.capabilities, opencode_wire.PROVEN)
         self.assertFalse(adapter.capabilities.stop_task)
         self.assertFalse(adapter.capabilities.can_set("permission_mode"))
+        # The steer's effect is the adapter's own (G32).
         self.assertEqual(self.adapter(caps=Caps(steer=True)).capabilities,
-                         Caps(steer=True))
+                         Caps(steer=True, steer_effect="after_tool"))
 
     def test_start_binds_loopback_with_a_password_and_names_the_session(self):
         adapter, sink, sid = self.started(spec={
@@ -4740,9 +4746,11 @@ class TestOpencodeAdapterStart(_OpencodeCase):
 
     def test_an_effort_with_no_model_goes_on_the_servers_model(self):
         _adapter, _sink, _sid = self.started(spec={"effort": "high"})
+        # Then the server's model list, for the picker (G32).
         self.assertEqual(self.sent_paths(), [
-            ("POST", "/api/session"), ("POST", "/model")])
-        self.assertEqual(self.sent()[-1]["body"], {"model": {
+            ("POST", "/api/session"), ("POST", "/model"),
+            ("GET", "/api/model")])
+        self.assertEqual(self.sent()[-2]["body"], {"model": {
             "providerID": "fake", "id": "model-1", "variant": "high"}})
         self.assertNotIn("model", self.sent()[0]["body"])
 
@@ -4765,7 +4773,9 @@ class TestOpencodeAdapterStart(_OpencodeCase):
             "resume_id": "ses_older00000000000000001"})
         self.assertEqual(sid, "ses_older00000000000000001")
         self.assertEqual(self.sent()[0]["method"], "GET")
-        self.assertEqual(len(self.sent()), 1, "a resume changes no model")
+        # The second request is the model list (G32), not a change.
+        self.assertEqual([r["method"] for r in self.sent()], ["GET", "GET"],
+                         "a resume changes no model")
         adapter.close(0.5)
         forked, sink, sid = self.started(spec={
             "resume_id": "ses_older00000000000000001", "fork": True,

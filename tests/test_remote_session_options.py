@@ -65,7 +65,7 @@ class TestClaude(unittest.TestCase):
         # The handshake's own list, in its order: nothing written here.
         self.assertEqual([c["id"] for c in first["choices"]],
                          ["default", "opus", "fable", "sonnet", "haiku"])
-        self.assertEqual(first["mid_turn"], "unverified")
+        self.assertEqual(first["mid_turn"], "reply_finishes")
         # The CLI answers ``sonnet`` with ``claude-sonnet-5-5``; the
         # listed id is the value, the resolved one ``reported``.
         self.assertEqual(_values(events, "model"),
@@ -239,6 +239,198 @@ class TestOpencode(unittest.TestCase):
         self.assertEqual(_options(out)[-1]["plan_mode"]["value"], False)
 
 
+def _notes(adapter: str, version: str, scenario: str) -> dict:
+    return _lines(adapter, version, scenario)[0]["notes"]
+
+
+class TestMidTurn(unittest.TestCase):
+    """What a change sent while a reply streams does, from the G32
+    recordings (each a counting reply, the change sent after its first
+    deltas)."""
+
+    def test_claude_model_the_reply_finishes_on_the_old_model(self):
+        lines = _lines("claude_stream", "2.1.330", "set_model_mid")
+        models = [line["msg"]["message"]["model"] for line in lines
+                  if line.get("dir") == "in"
+                  and line.get("msg", {}).get("type") == "assistant"]
+        # The reply in progress, then the next turn's.
+        self.assertEqual(models, ["claude-haiku-5-5", "claude-sonnet-5-5"])
+        notes = lines[0]["notes"]
+        self.assertEqual((notes["answered"], notes["result_before_answer"],
+                          notes["stop_reason"], notes["reply_lines"]),
+                         ("success", False, "end_turn", 150))
+        events = claude_wire.replay(lines)
+        self.assertEqual(_values(events, "model"), ["haiku", "sonnet"])
+        changed = next(i for i, e in enumerate(events)
+                       if e["type"] == "session.options"
+                       and e["data"]["options"]["model"]["value"] == "sonnet")
+        reply = next(i for i, e in enumerate(events)
+                     if e["type"] == "message.completed"
+                     and e["data"]["kind"] == "assistant")
+        self.assertLess(changed, reply, "the change was taken mid-reply")
+        self.assertEqual(_options(events)[0]["model"]["mid_turn"],
+                         "reply_finishes")
+
+    def test_claude_plan_mode_the_reply_finishes(self):
+        notes = _notes("claude_stream", "2.1.330", "plan_mode_mid")
+        self.assertEqual((notes["answered"], notes["result_before_answer"],
+                          notes["stop_reason"], notes["reply_lines"]),
+                         ("success", False, "end_turn", 150))
+        events = claude_wire.replay(_lines("claude_stream", "2.1.330",
+                                           "plan_mode_mid"))
+        self.assertEqual(_values(events, "plan_mode"), [False, True, False])
+        for option in _options(events)[0].values():
+            self.assertEqual(option["mid_turn"], "reply_finishes")
+
+    def test_acp_mode_the_reply_finishes(self):
+        notes = _notes("acp", "qwen-code-0.28.0", "plan_mode_mid")
+        self.assertTrue(notes["answered"])
+        self.assertEqual(notes["stop"], "end_turn")
+        self.assertGreater(notes["chunks_after_change"], 0, "not cut")
+        events = acp.replay(_lines("acp", "qwen-code-0.28.0",
+                                   "plan_mode_mid"))
+        self.assertEqual(_values(events, "plan_mode"), [False, True, False])
+        shown = _options(events)[0]
+        self.assertEqual((shown["permission_mode"]["mid_turn"],
+                          shown["plan_mode"]["mid_turn"]),
+                         ("reply_finishes", "reply_finishes"))
+
+    def test_acp_model_stays_unverified(self):
+        # Taken mid-prompt and the reply went on, but the recording's
+        # agent lists one model: it was set to the one it ran, so no
+        # switch could show.
+        notes = _notes("acp", "qwen-code-0.28.0", "model_mid")
+        self.assertEqual((notes["answered"], notes["stop"]),
+                         (True, "end_turn"))
+        self.assertGreater(notes["chunks_after_change"], 0)
+        events = acp.replay(_lines("acp", "qwen-code-0.28.0", "model_mid"))
+        self.assertEqual(len(_options(events)[0]["model"]["choices"]), 1)
+        self.assertEqual(_options(events)[0]["model"]["mid_turn"],
+                         "unverified")
+
+    def test_opencode_model_the_step_finishes_on_the_old_model(self):
+        notes = _notes("opencode_serve", "2.3.2", "model_mid")
+        self.assertEqual(notes["answer_status"], 204)
+        self.assertEqual(notes["end"], "session.execution.succeeded")
+        self.assertGreater(notes["deltas_after_change"], 0, "not cut")
+        self.assertEqual([s["model"]["id"] for s in notes["steps"]],
+                         ["gpt-5.4-nano"])
+        self.assertEqual([m["id"] for m in notes["next_steps"]],
+                         ["gpt-5.4-mini"])
+        events = opencode_wire.replay(_lines("opencode_serve", "2.3.2",
+                                             "model_mid"))
+        self.assertEqual(_values(events, "model"),
+                         ["openai/gpt-5.4-nano", "openai/gpt-5.4-mini"])
+        self.assertEqual(_options(events)[0]["model"]["mid_turn"],
+                         "reply_finishes")
+
+    def test_opencode_plan_mode_the_step_finishes_then_one_runs_as_plan(self):
+        notes = _notes("opencode_serve", "2.3.2", "plan_mode_mid")
+        self.assertGreater(notes["deltas_after_change"], 0, "not cut")
+        # The step in progress ran as build to its end; the switch then
+        # ran a step of its own, as plan, in the same execution.
+        self.assertEqual([s["agent"] for s in notes["steps"]],
+                         ["build", "plan"])
+        events = opencode_wire.replay(_lines("opencode_serve", "2.3.2",
+                                             "plan_mode_mid"))
+        self.assertEqual(_values(events, "plan_mode"), [False, True, False])
+        self.assertEqual(
+            [e["data"]["status"] for e in events if e["type"] == "turn.ended"],
+            ["completed", "completed"], "one turn for the reply and the step")
+
+
+class TestModelLists(unittest.TestCase):
+    """The lists Codex and opencode give when asked (G32 recordings):
+    ids and display names, nothing else kept."""
+
+    def test_codex_model_list(self):
+        events = codex_wire.replay(_lines("codex_appserver", "0.171.0",
+                                          "model_list"))
+        model = _options(events)[-1]["model"]
+        self.assertEqual(len(model["choices"]), 11)
+        self.assertEqual(model["choices"][0], {"id": "gpt-6.2-sol",
+                                               "label": "GPT-6.2-Sol"})
+        self.assertIn("gpt-5.6-luna", [c["id"] for c in model["choices"]])
+        self.assertEqual(model["value"], "gpt-5.6-luna")
+
+    def test_opencode_model_list(self):
+        lines = _lines("opencode_serve", "2.3.2", "providers")
+        self.assertEqual(lines[0]["notes"]["paths"], {
+            "/api/config/providers": 404, "/api/provider": 200,
+            "/api/model": 200})
+        events = opencode_wire.replay(lines)
+        model = _options(events)[-1]["model"]
+        self.assertEqual(model["value"], "openai/gpt-5.4-nano")
+        ids = [c["id"] for c in model["choices"]]
+        self.assertIn("openai/gpt-5.4-nano", ids)
+        self.assertTrue(all("/" in i for i in ids))
+        # Nothing but ids and names was committed.
+        for line in lines:
+            body = (line.get("http") or {}).get("body") or {}
+            for item in body.get("data") or [] \
+                    if isinstance(body.get("data"), list) else []:
+                self.assertLessEqual(set(item), {"id", "providerID", "name"})
+
+    def test_a_server_that_lists_nothing_leaves_the_value_alone(self):
+        st = codex_wire.ThreadState("codex:x", clock=lambda: 1.0,
+                                    run_id="aaaa0001")
+        st.thread_settings({"model": "m"})
+        st.start_events(codex_wire.PROVEN, "t")
+        st.model_list({})
+        self.assertNotIn("choices", st.options()["model"])
+        self.assertEqual(opencode_wire.model_choices({"data": [
+            {"id": "x"}, {"providerID": "p", "id": "y", "name": "Y"}]}),
+            [{"id": "p/y", "label": "Y"}])
+
+
+class TestSteerEffect(unittest.TestCase):
+    """``caps.steer_effect``: what a steer does to the turn in progress,
+    from each adapter's steer recordings; absent where nothing proves
+    it."""
+
+    def caps(self, events: list[dict]) -> dict:
+        return [e for e in events if e["type"] == "session.caps"][-1][
+            "data"]["caps"]
+
+    def test_claude_cuts_the_reply(self):
+        caps = self.caps(claude_wire.replay(_lines(
+            "claude_stream", "2.1.328", "steer")))
+        self.assertEqual((caps["steer"], caps["steer_effect"]),
+                         (True, "stops_reply"))
+
+    def test_codex_cuts_the_reply(self):
+        caps = self.caps(codex_wire.replay(_lines(
+            "codex_appserver", "0.170.0", "steer")))
+        self.assertEqual((caps["steer"], caps["steer_effect"]),
+                         (True, "stops_reply"))
+
+    def test_opencode_waits_for_the_step(self):
+        caps = self.caps(opencode_wire.replay(_lines(
+            "opencode_serve", "2.3.2", "steer")))
+        self.assertEqual((caps["steer"], caps["steer_effect"]),
+                         (True, "after_tool"))
+
+    def test_acp_has_no_steer_and_no_effect(self):
+        caps = self.caps(acp.replay(_lines("acp", "qwen-code-0.28.0",
+                                           "hello")))
+        self.assertFalse(caps["steer"])
+        self.assertNotIn("steer_effect", caps)
+
+    def test_no_steer_no_effect(self):
+        # Claude before an init lists interrupt_send_now_v1: steer off.
+        narrowed = claude_wire.PROVEN.narrowed(Caps(options=frozenset()))
+        self.assertEqual(narrowed.steer_effect, "")
+        self.assertNotIn("steer_effect", narrowed.as_dict())
+        self.assertEqual(Caps(steer=True).narrowed(claude_wire.PROVEN)
+                         .steer_effect, "stops_reply")
+        with self.assertRaises(ValueError):
+            Caps(steer=True, steer_effect="maybe")
+
+    def test_one_set_of_values(self):
+        from swe.remote.adapters import base
+        self.assertEqual(base.STEER_EFFECTS, ev.STEER_EFFECTS)
+
+
 class TestOptionsView(unittest.TestCase):
     def test_only_what_the_caps_allow_and_only_on_a_change(self):
         view = opts.OptionsView()
@@ -350,6 +542,29 @@ class TestKeeper(KeeperCase):
         shown = self.status(feed)["options"]
         self.assertEqual((shown["permission_mode"]["value"],
                           shown["plan_mode"]["value"]), ("default", False))
+
+    def test_while_parked_plan_mode_and_the_plan_permission_mode_agree(self):
+        keeper = self.keeper(self.plan())
+        feed = self.connect(keeper)
+        feed.live()
+        self.adapters[0].agent_sets("permission_mode", "default")
+        feed.client.request("park", command_id="p")
+        feed.result("p")
+
+        def shown():
+            options = self.status(feed)["options"]
+            return (options["permission_mode"]["value"],
+                    options["plan_mode"]["value"])
+
+        for cid, name, value, want in (
+                ("a", "permission_mode", "plan", ("plan", True)),
+                ("b", "permission_mode", "default", ("default", False)),
+                ("c", "plan_mode", True, ("plan", True)),
+                ("d", "plan_mode", False, ("default", False))):
+            feed.client.request("set_option", command_id=cid, name=name,
+                                value=value)
+            feed.result(cid)
+            self.assertEqual(shown(), want, (name, value))
 
     def test_a_new_keeper_reads_the_options_back_from_the_log(self):
         keeper = self.keeper(self.plan())

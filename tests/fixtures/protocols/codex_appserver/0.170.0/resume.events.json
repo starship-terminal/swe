@@ -16,7 +16,8 @@
      "effort",
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -226,7 +227,8 @@
      "effort",
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -451,7 +453,8 @@
      "effort",
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },

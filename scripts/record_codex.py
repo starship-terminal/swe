@@ -355,6 +355,16 @@ def sc_options(spawn, work, ctx):
     ctx["files"] = sorted(os.listdir(work))
 
 
+def sc_model_list(spawn, work, ctx):
+    """``model/list`` after ``thread/start``, as the adapter asks it:
+    the server's own list of models (G32)."""
+    d = spawn()
+    d.open()
+    answer = d.call("model/list", {})
+    ctx["listed"] = "error" not in answer
+    ctx["models"] = len(((answer.get("result") or {}).get("data")) or [])
+
+
 def sc_attach(spawn, work, ctx):
     """An image as a ``localImage`` input item, and a file named in the
     text."""
@@ -406,6 +416,7 @@ SCENARIOS = {
     "resume": sc_resume,
     "rollback": sc_rollback,
     "options": sc_options,
+    "model_list": sc_model_list,
     "attach": sc_attach,
     "error": sc_error,
 }
@@ -443,6 +454,14 @@ def reduce(msg):
             kept["thread"] = {k: body["thread"][k] for k in _THREAD_KEEP
                               if k in body["thread"]}
             return {**msg, "result": kept}
+        if isinstance(body.get("data"), list) and all(
+                isinstance(m, dict) and "displayName" in m
+                for m in body["data"]):
+            # model/list: ids and display names only (G32).
+            return {**msg, "result": {
+                "data": [{k: m[k] for k in ("id", "model", "displayName")
+                          if k in m} for m in body["data"]],
+                "nextCursor": body.get("nextCursor")}}
         if "userAgent" in body:
             return {**msg, "result": {k: body[k] for k in _INIT_KEEP
                                       if k in body}}

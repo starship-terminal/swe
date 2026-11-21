@@ -68,8 +68,12 @@ MIN_VERSION = "0.170.0"
 # ``plan_mode`` (``collaborationMode``, experimental API only) and
 # ``stop_task`` (no request stops one sub-agent) stay off whatever
 # harness.json says.
+# ``steer_effect``: the server abandons the reply it was writing and
+# answers the steer in the same turn (steer); a running command goes on
+# (steer_tool) and an open approval holds it back (steer_approval).
 PROVEN = Caps(steer=True, rollback=True, fork=True,
-              options=frozenset({"model", "effort", "permission_mode"}))
+              options=frozenset({"model", "effort", "permission_mode"}),
+              steer_effect="stops_reply")
 
 # ``approvalPolicy`` values: what ``permission_mode`` means on Codex.
 APPROVAL_POLICIES = ("untrusted", "on-request", "never")
@@ -186,6 +190,11 @@ def _thread_fields(*, cwd: str = "", model: str = "",
     if approval_policy in APPROVAL_POLICIES:
         out["approvalPolicy"] = approval_policy
     return out
+
+
+def model_list(rpc_id: Any) -> dict:
+    """``model/list``: the models the server offers (one page)."""
+    return request(rpc_id, "model/list", {})
 
 
 def thread_start(rpc_id: Any, **fields: str) -> dict:
@@ -481,19 +490,29 @@ class ThreadState(SessionCore):
     """
 
     def options(self) -> dict:
-        """No request lists the models or efforts in what is recorded,
-        so only the value in force is sent; the approval policies are
-        the v2 API's enum, the only values ``set_option`` takes. Every
-        change waits for the next ``turn/start``: a turn in progress
-        runs on what it started with (``next_turn``)."""
+        """The models ``model/list`` names (model_list, 0.171.0); the
+        effort as its value only; the approval policies are the v2 API's
+        enum, the only values ``set_option`` takes. Every change waits
+        for the next ``turn/start``: a turn in progress runs on what it
+        started with (``next_turn``)."""
         get = self.settings.get
         return {
-            "model": opts.string_option(get("model", ""), opts.NEXT_TURN),
+            "model": opts.string_option(get("model", ""), opts.NEXT_TURN,
+                                        choices=self.model_choices or None),
             "effort": opts.string_option(get("effort", ""), opts.NEXT_TURN),
             "permission_mode": opts.string_option(
                 get("permission_mode", ""), opts.NEXT_TURN,
                 choices=[opts.choice(p) for p in APPROVAL_POLICIES]),
         }
+
+    def model_list(self, answer: Any) -> list:
+        """A ``model/list`` answer: its models become the choices."""
+        data = answer.get("data") if isinstance(answer, dict) else None
+        self.model_choices = [
+            opts.choice(m.get("model") or m["id"], m.get("displayName"))
+            for m in data if isinstance(m, dict) and text_of(m.get("id"))
+        ] if isinstance(data, list) else []
+        return self.options_events()
 
     def thread_settings(self, answer: Any) -> None:
         """What a ``thread/start``, ``resume`` or ``fork`` answer says
@@ -517,6 +536,8 @@ class ThreadState(SessionCore):
         # approval policy the next turn runs with, as the thread's
         # answer reported them and ``set_option`` changed them.
         self.settings: dict[str, str] = {}
+        # ``model/list``'s answer, as ``session.options`` choices.
+        self.model_choices: list[dict] = []
         # our turn id -> the server's, for ``thread/revert``
         self.native_turns: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -1150,6 +1171,7 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
     states: dict[int, ThreadState] = {}
     thread_rpc: dict[int, Any] = {}
     reverts: set = set()
+    lists: set = set()
     for line in lines[1:] if header else lines:
         proc = line.get("proc", 0)
         if isinstance(line.get("t"), (int, float)):
@@ -1167,6 +1189,8 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
         if line.get("dir") == "out":
             if msg.get("method") == "thread/revert":
                 reverts.add((proc, msg.get("id")))
+            elif msg.get("method") == "model/list":
+                lists.add((proc, msg.get("id")))
             out.extend(_replay_outgoing(state, msg, thread_rpc, proc))
             continue
         fed = state.feed(msg)
@@ -1179,6 +1203,9 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
                 state.thread_settings(ack.body)
                 out.extend(state.start_events(ALL_CAPS.narrowed(PROVEN),
                                               session_ref(thread)))
+            elif ack.ok and (proc, ack.request_id) in lists:
+                # What ``CodexAppServerAdapter`` does with the answer.
+                out.extend(state.model_list(ack.body))
             elif ack.ok and (proc, ack.request_id) in reverts:
                 # What ``CodexAppServerAdapter.rollback`` emits.
                 out.extend(state.moved(ack.body.get("thread")))

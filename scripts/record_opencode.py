@@ -514,6 +514,59 @@ def sc_plan_mode(spawn, work, ctx):
         if e.get("type") == "session.step.started" and d.mine(e)]
 
 
+def _mid_prompt(d, request, what: str, ctx: dict) -> None:
+    """Post ``request`` once the reply streams, and note what the
+    execution in progress did (G32)."""
+    start = d.mark()
+    d.prompt(_COUNT)
+    d.wait_delta(start, 8)
+    before = sum(1 for e in d.events(start)
+                 if e.get("type") == "session.text.delta")
+    status, _body = d.call(request)
+    ctx["answer_status"] = status
+    ctx["end"] = d.until_done(start)["type"]
+    time.sleep(0.5)
+    events = d.events(start)
+    ctx["deltas_after_change"] = sum(
+        1 for e in events if e.get("type") == "session.text.delta") - before
+    ctx["steps"] = [{k: e["data"].get(k) for k in ("model", "agent")}
+                    for e in events if e.get("type") == "session.step.started"
+                    and d.mine(e)]
+
+
+def sc_model_mid(spawn, work, ctx):
+    """``POST .../model`` while a prompt runs, then a turn after it."""
+    d = spawn()
+    d.open()
+    _mid_prompt(d, wire.select_model(d.session, wire.model_ref(
+        "openai/gpt-5.4-mini", RECORDER_EFFORT)), "model", ctx)
+    start = d.mark()
+    d.turn("Reply only with: after")
+    ctx["next_steps"] = [e["data"].get("model") for e in d.events(start)
+                         if e.get("type") == "session.step.started"
+                         and d.mine(e)]
+
+
+def sc_plan_mode_mid(spawn, work, ctx):
+    """``POST .../agent`` plan while a prompt runs, then back."""
+    d = spawn()
+    d.open()
+    _mid_prompt(d, wire.select_agent(d.session, wire.PLAN_AGENT), "plan",
+                ctx)
+    d.ok(wire.select_agent(d.session, wire.BUILD_AGENT), "build")
+    d.turn("Reply only with: back")
+
+
+def sc_providers(spawn, work, ctx):
+    """The server's own lists: ``GET /api/config/providers`` (1.x's
+    path), ``GET /api/provider`` and ``GET /api/model``."""
+    d = spawn()
+    d.open()
+    for path in ("/api/config/providers", "/api/provider", "/api/model"):
+        status, _body = d.call(wire.Request("GET", path, None))
+        ctx.setdefault("paths", {})[path] = status
+
+
 def sc_attach(spawn, work, ctx):
     """Files as ``file://`` attachments: an image, then a text file."""
     path = os.path.join(work, "square.png")
@@ -569,6 +622,9 @@ SCENARIOS = {
     "attach": sc_attach,
     "error": sc_error,
     "own_id": sc_own_id,
+    "model_mid": sc_model_mid,
+    "plan_mode_mid": sc_plan_mode_mid,
+    "providers": sc_providers,
 }
 
 
@@ -583,6 +639,26 @@ def _strip_native(value):
         return {k: _strip_native(v) for k, v in value.items()
                 if k != "native"}
     return value
+
+
+def _providers(data):
+    """A provider or model list cut down to ids and names (G32): a
+    provider entry carries settings (base URLs, keys) and a model entry
+    costs and limits, and nothing but ids and names is committed. None
+    for anything that is neither."""
+    listed = data.get("providers") if isinstance(data, dict) else data
+    if not isinstance(listed, list) or not listed or not all(
+            isinstance(p, dict) and isinstance(p.get("id"), str)
+            for p in listed):
+        return None
+    if all("providerID" in p for p in listed):
+        return [{k: p[k] for k in ("id", "providerID", "name")
+                 if isinstance(p.get(k), str)} for p in listed]
+    if all("package" in p or "settings" in p or "models" in p
+           for p in listed):
+        return [{k: p[k] for k in ("id", "name") if isinstance(p.get(k), str)}
+                for p in listed]
+    return None
 
 
 def reduce(entry: dict) -> dict:
@@ -604,6 +680,9 @@ def reduce(entry: dict) -> dict:
             return {**entry, "http": {**http, "body": {
                 "version": body["version"]}}}
         data = body.get("data")
+        providers = _providers(data)
+        if providers is not None:
+            return {**entry, "http": {**http, "body": {"data": providers}}}
         if isinstance(data, dict) and "projectID" in data:
             # A session object: the id, its model and where it forked.
             body = {"data": {k: data[k] for k in _SESSION_KEEP

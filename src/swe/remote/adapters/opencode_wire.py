@@ -74,8 +74,11 @@ MIN_VERSION = "2.3.2"
 # The caps this module can deliver, each proven by a recording.
 # ``stop_task`` has no request and stays off whatever harness.json says;
 # opencode has no session-wide permission mode.
+# ``steer_effect``: nothing is cut; the steer is delivered when the
+# current step ends, the reply (steer) or a running command (steer_tool).
 PROVEN = Caps(steer=True, plan_mode=True, rollback=True, fork=True,
-              options=frozenset({"model", "effort"}))
+              options=frozenset({"model", "effort"}),
+              steer_effect="after_tool")
 
 # Basic auth: the user name is fixed, the password is the child's
 # ``PASSWORD_ENV``.
@@ -178,6 +181,25 @@ def create_session(cwd: str, *, model: str = "", effort: str = "",
     if is_session_id(session_id):
         body["id"] = session_id
     return Request("POST", "/api/session", body)
+
+
+def list_models() -> Request:
+    """``GET /api/model``: every model the server can run, each with its
+    ``providerID``, ``id`` and ``name`` (providers recording, 2.3.2)."""
+    return Request("GET", "/api/model")
+
+
+def model_choices(body: Any) -> list[dict]:
+    """``session.options`` choices from a ``GET /api/model`` answer: the
+    ``provider/model`` ref a session takes, and the server's name."""
+    data = body.get("data") if isinstance(body, dict) else None
+    out = []
+    for m in data if isinstance(data, list) else ():
+        if isinstance(m, dict) and text_of(m.get("providerID")) \
+                and text_of(m.get("id")):
+            out.append(opts.choice(f"{m['providerID']}/{m['id']}",
+                                   m.get("name")))
+    return out
 
 
 def get_session(session_id: str) -> Request:
@@ -405,6 +427,8 @@ class ServeState(SessionCore):
         super().__init__(session, **kw)
         self.model: dict = {}
         self.agent = ""
+        # The server's models, as ``session.options`` choices (G32).
+        self.model_choices: list[dict] = []
         # our turn id -> the id of its user message, for a revert
         self.turn_messages: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -560,18 +584,23 @@ class ServeState(SessionCore):
         return fed
 
     def options(self) -> dict:
-        """The model (``provider/model``), its variant as the effort,
-        and the ``plan`` agent as plan mode. Nothing recorded lists the
-        server's models or variants, so only the value in force is
-        sent. Each change is posted at once; what a prompt in progress
-        does with it is not recorded (``unverified``)."""
+        """The model (``provider/model``) with the server's list
+        (``GET /api/model``), its variant as the effort (value only: the
+        list's variants are not kept), and the ``plan`` agent as plan
+        mode. Each change is posted at once, and the step being run
+        finishes as it started (``reply_finishes``): model_mid ran its
+        one step on the old model and the next turn on the new one;
+        plan_mode_mid's next step, in the same execution, ran as
+        ``plan``. The effort is the model ref's variant, the same
+        request as a model change."""
         return {
             "model": opts.string_option(model_name(self.model),
-                                        opts.UNVERIFIED),
+                                        opts.REPLY_FINISHES,
+                                        choices=self.model_choices or None),
             "effort": opts.string_option(
-                text_of(self.model.get("variant")), opts.UNVERIFIED),
+                text_of(self.model.get("variant")), opts.REPLY_FINISHES),
             "plan_mode": opts.flag_option(self.agent == PLAN_AGENT,
-                                          opts.UNVERIFIED),
+                                          opts.REPLY_FINISHES),
         }
 
     def model_selected(self, ref: Any) -> list:
@@ -995,6 +1024,9 @@ def _replay_answer(state: ServeState, request: dict, http: dict) -> list:
         return []
     sent = request.get("body") if isinstance(request.get("body"), dict) \
         else {}
+    if ok and path == "/api/model":
+        state.model_choices = model_choices(body)
+        return state.options_events()
     if ok and path.endswith("/model"):
         return state.model_selected(sent.get("model"))
     if ok and path.endswith("/agent"):

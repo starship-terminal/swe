@@ -206,6 +206,8 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   let optionsSupported: boolean | null = null;
   let optionWork: OptionsWork = {};
   let optionInputs: unknown[] = [];
+  // Counts catch-ups and snapshots: a post answered after one may have had its result skipped by it.
+  let catchUps = 0;
 
   const store = createStore<SessionStoreState>()((set, get) => {
     const setSession = (session: SessionState) => set({ session });
@@ -291,6 +293,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
     const sendOption = async (name: OptionName, value: string | boolean): Promise<ActionResult> => {
       const commandId = newId();
       const mine = generation;
+      const seen = catchUps;
       setWork(name, { sending: { commandId, value, posted: false }, error: optionWork[name]?.error ?? null });
       let response: JsonResponse;
       try {
@@ -306,9 +309,12 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         if (mine !== generation) return { ok: true, commandId, receipt };
         const work = optionWork[name];
         if (work?.sending?.commandId === commandId) setWork(name, { ...work, sending: { ...work.sending, posted: true } });
-        // A result that came down the stream before this answer has settled it already (`ingest`).
+        // A result that came down the stream before this answer has settled it already (`ingest`). One a catch-up
+        // or snapshot skipped while the post was out is looked up, as the catch-up could not (it was not posted yet).
         if (receipt === "rejected") {
           settleOption(name, commandId, typeof body.reason === "string" && body.reason !== "" ? body.reason : "The hub refused the change.");
+        } else if (catchUps !== seen && get().session.caughtUp) {
+          void lookUpOptions();
         }
         return { ok: true, commandId, receipt };
       }
@@ -347,7 +353,14 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       if ((frame.type === "command.result" || frame.type === "command.receipt") && frame.command_id) {
         optionCommandSettled(frame.command_id);
       }
-      if (!before.caughtUp && state.caughtUp) void lookUpOptions();
+      // A catch-up, or a snapshot that replaced the state on a live stream (an overflow, an epoch change), carries
+      // no command results: a change whose result it skipped is looked up.
+      if ((!before.caughtUp && state.caughtUp) || (frame.type === "session.snapshot" && state.caughtUp)) {
+        catchUps++;
+        void lookUpOptions();
+      } else if (frame.type === "session.snapshot") {
+        catchUps++;
+      }
       refreshOptions();
       for (const effect of effects) {
         if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);

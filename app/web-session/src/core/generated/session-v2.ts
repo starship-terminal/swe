@@ -64,6 +64,7 @@ export type Caps = {
   fork: boolean;
   stop_task: boolean;
   options: string[];
+  steer_effect?: "after_tool" | "next_turn" | "stops_reply";
 };
 
 export type OptionChoice = {
@@ -74,14 +75,14 @@ export type OptionChoice = {
 
 export type StringOption = {
   value: string;
-  mid_turn: "next_turn" | "unverified";
+  mid_turn: "next_turn" | "reply_finishes" | "unverified";
   choices?: OptionChoice[];
   reported?: string;
 };
 
 export type FlagOption = {
   value: boolean;
-  mid_turn: "next_turn" | "unverified";
+  mid_turn: "next_turn" | "reply_finishes" | "unverified";
 };
 
 export type SessionOptions = {

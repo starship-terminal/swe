@@ -15,7 +15,8 @@
     "options": [
      "effort",
      "model"
-    ]
+    ],
+    "steer_effect": "after_tool"
    }
   }
  },
@@ -40,15 +41,15 @@
    "options": {
     "model": {
      "value": "openai/gpt-5.4-nano",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "effort": {
      "value": "low",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": false,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }
@@ -63,15 +64,15 @@
    "options": {
     "model": {
      "value": "openai/gpt-5.4-nano",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "effort": {
      "value": "low",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": true,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }
@@ -416,15 +417,15 @@
    "options": {
     "model": {
      "value": "openai/gpt-5.4-nano",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "effort": {
      "value": "low",
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     },
     "plan_mode": {
      "value": false,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }

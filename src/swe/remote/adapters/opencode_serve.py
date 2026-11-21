@@ -377,6 +377,12 @@ class OpencodeServeAdapter:
                     state.model = dict(ref)
             if spec.plan_mode and self._caps.plan_mode:
                 self._plan(True, self._init_timeout)
+            if self._caps.can_set("model"):
+                # The server's own list for the picker (G32); a server
+                # that does not serve it leaves the value alone.
+                listed = self._call(wire.list_models(), self._init_timeout)
+                if listed.ok:
+                    state.model_choices = wire.model_choices(listed.body)
             if state.done:
                 raise AdapterError("opencode exited", code="agent_down")
             # Last: a start that fails above has emitted nothing.

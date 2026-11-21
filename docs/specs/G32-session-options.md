@@ -33,21 +33,21 @@ written here. An option the caps do not allow is not offered at all.
 
 | Adapter | Option | Listed | Value in force from | Sent | A turn in progress | A refusal |
 |---|---|---|---|---|---|---|
-| claude_stream 2.1.328 | `model` | yes: `initialize` answer `models[].value` (with `displayName` and `description` where sent; 2.1.328 sends `value` only) | the CLI's `init` message and the `set_model` answer (resolved ids), shown as the listed id that was asked for (`reported` keeps the CLI's) | at once, `set_model` | not recorded: `unverified` | the CLI's control error: `command.result` `ok: false`, note `claude refused set_model: <its error>` |
-| | `permission_mode` | no | `current_permission_mode`, `init`, `system status`, the `set_permission_mode` answer | at once | `unverified` | as above |
-| | `plan_mode` | (a flag) | `permission_mode` is `plan`; the CLI leaving it after an approved plan is seen (`plan_approve`) | at once, `set_permission_mode plan` and back | `unverified` | as above |
+| claude_stream (2.1.328, mid-turn 2.1.330) | `model` | yes: `initialize` answer `models[].value` (with `displayName` and `description` where sent; these versions send `value` only) | the CLI's `init` message and the `set_model` answer (resolved ids), shown as the listed id that was asked for (`reported` keeps the CLI's) | at once, `set_model` | `reply_finishes`: the reply in progress ran to its end on the old model, the next turn on the new one (`set_model_mid`) | the CLI's control error: `command.result` `ok: false`, note `claude refused set_model: <its error>` |
+| | `permission_mode` | no | `current_permission_mode`, `init`, `system status`, the `set_permission_mode` answer | at once | `reply_finishes` (`plan_mode_mid`) | as above |
+| | `plan_mode` | (a flag) | `permission_mode` is `plan`; the CLI leaving it after an approved plan is seen (`plan_approve`) | at once, `set_permission_mode plan` and back | `reply_finishes`: answered at once, the reply ran on to all 150 lines (`plan_mode_mid`) | as above |
 | | `effort` | | not offered: a spawn flag only, no control request (G7) | | | `unsupported` receipt |
-| acp (qwen-code 0.28.0) | `model` | yes: `session/new` `models.availableModels` (`modelId`, `name`, `description`) | `currentModelId`, then each `session/set_model` the agent took | at once | `unverified` | an unlisted value: `bad_request` from the adapter before anything is sent; the agent's JSON-RPC error otherwise |
-| | `permission_mode` | yes: `modes.availableModes` (`id`, `name`, `description`) | `currentModeId`, `current_mode_update`, each `session/set_mode` taken | at once | `unverified` | as above |
-| | `plan_mode` | (a flag) | the mode is `plan` | at once, `session/set_mode` | `unverified` | as above |
+| acp (qwen-code 0.28.0) | `model` | yes: `session/new` `models.availableModels` (`modelId`, `name`, `description`) | `currentModelId`, then each `session/set_model` the agent took | at once | `unverified`: taken mid-prompt and the reply went on (`model_mid`), but the recording's agent lists one model, so no switch could show | an unlisted value: `bad_request` from the adapter before anything is sent; the agent's JSON-RPC error otherwise |
+| | `permission_mode` | yes: `modes.availableModes` (`id`, `name`, `description`) | `currentModeId`, `current_mode_update`, each `session/set_mode` taken | at once | `reply_finishes`: taken mid-prompt, the reply ran on (939 chunks after) and ended `end_turn` (`plan_mode_mid`) | as above |
+| | `plan_mode` | (a flag) | the mode is `plan` | at once, `session/set_mode` | `reply_finishes` (`plan_mode_mid`) | as above |
 | | `effort` | | not offered: no wire form | | | `unsupported` |
-| codex_appserver 0.170.0 | `model` | no: no fixture records `model/list` | the `thread/start` answer's `model`, then each value `set_option` kept | with the next `turn/start` | `next_turn`: nothing is sent until then, and the server keeps it for later turns (`options`) | none when set; a model the provider lacks fails the next turn (G16) |
-| | `effort` | no | the answer's `reasoningEffort`, then each kept value | next `turn/start` | `next_turn` | as above |
+| codex_appserver (0.170.0; list 0.171.0) | `model` | yes: `model/list` after `thread/start` (`model`, `displayName`; one page) | the `thread/start` answer's `model`, then each value `set_option` kept | with the next `turn/start` | `next_turn`: nothing is sent until then, and the server keeps it for later turns (`options`) | none when set; a model the provider lacks fails the next turn (G16) |
+| | `effort` | no (`model/list` names efforts per model; only ids and names were kept) | the answer's `reasoningEffort`, then each kept value | next `turn/start` | `next_turn` | as above |
 | | `permission_mode` | the v2 API's `approvalPolicy` enum (`untrusted`, `on-request`, `never`): the only values `set_option` takes | the answer's `approvalPolicy`, then each kept value | next `turn/start` | `next_turn` | another value: `bad_request` |
 | | `plan_mode` | | not offered (experimental API only) | | | `unsupported` |
-| opencode_serve 2.3.2 | `model` | no: no fixture records the server's provider list | the session's `model` ref as `provider/model`, `session.model.selected`, each `POST .../model` taken | at once | `unverified` | a name with no provider: `bad_request`; any other is taken and fails the next turn (G16) |
-| | `effort` | no | the model ref's `variant` | at once, with the model | `unverified` | no model yet: `bad_request` |
-| | `plan_mode` | (a flag) | the session's agent is `plan`; `session.agent.selected` | at once, `POST .../agent` | `unverified` | the server's HTTP error |
+| opencode_serve 2.3.2 | `model` | yes: `GET /api/model` (`providerID`, `id`, `name`), as `provider/model` refs; `/api/config/providers` is 404 on 2.x (`providers`) | the session's `model` ref as `provider/model`, `session.model.selected`, each `POST .../model` taken | at once | `reply_finishes`: the step in progress ran on the old model, the next turn on the new (`model_mid`) | a name with no provider: `bad_request`; any other is taken and fails the next turn (G16) |
+| | `effort` | no (the list's variants were not kept) | the model ref's `variant` | at once, with the model | `reply_finishes`: the same request as a model change | no model yet: `bad_request` |
+| | `plan_mode` | (a flag) | the session's agent is `plan`; `session.agent.selected` | at once, `POST .../agent` | `reply_finishes`: the step in progress ran to its end as `build`, then the server ran one more step, as `plan`, in the same execution (`plan_mode_mid`) | the server's HTTP error |
 | | `permission_mode` | | not offered: rules, not a mode (G16) | | | `unsupported` |
 
 Every adapter emits `session.options` after `session.caps` and
@@ -57,29 +57,49 @@ we made, or one the agent made by itself.
 ### A change during a turn
 
 `mid_turn` on each option is what a client can say about a change made
-while a reply is being written:
+while a reply is being written. Each value comes from a recording:
 
-- `next_turn` (Codex): proven. The adapter sends the change only with
-  the next `turn/start`, so the turn in progress runs on what it
-  started with.
-- `unverified` (Claude, ACP, opencode): the change is sent to the agent
-  at once, and no recording covers one sent mid-turn. Whether the reply
-  in progress switches, is cut, or finishes as it was is not known.
-  The keeper does not hold or refuse a mid-turn change. Between turns
-  every recording shows the next turn running on the new value.
+- `next_turn` (Codex): the adapter sends the change only with the next
+  `turn/start`, so the whole turn in progress runs on what it started
+  with.
+- `reply_finishes` (Claude, ACP's modes, opencode): the change is sent
+  at once and taken; the reply being written is neither cut nor
+  switched and runs to its end. The change takes hold after it: the
+  next turn in every recording, and on opencode a plan switch also ran
+  one more step, as `plan`, inside the same turn.
+- `unverified` (ACP's model): nothing recorded shows a switch.
 
-The recordings that would settle the `unverified` rows, not made here
-because they run the real CLIs on Kai's account:
+The keeper does not hold or refuse a mid-turn change.
 
-1. claude_stream: `set_model` and `set_permission_mode` (plan, then
-   back) sent while a reply streams.
-2. acp (qwen-code): `session/set_model` and `session/set_mode plan`
-   during an open `session/prompt`.
-3. opencode_serve: `POST .../model` and `POST .../agent` during a
-   prompt.
-4. For lists: codex `model/list`, and opencode's provider list
-   (`GET /config/providers`). Until then those adapters send the value
-   only.
+The G32 recordings, each one short counting prompt in a throwaway
+folder with a throwaway config home and no tools used:
+
+| Recording | CLI | What it shows |
+|---|---|---|
+| `claude_stream/2.1.330/set_model_mid` | Claude Code 2.1.330, haiku | `set_model sonnet` after the first delta: answered at once, the reply ran to all 150 lines on haiku (`end_turn`), the next turn on sonnet |
+| `claude_stream/2.1.330/plan_mode_mid` | the same | `set_permission_mode plan` mid-reply: answered at once, the reply ran to all 150 lines |
+| `acp/qwen-code-0.28.0/model_mid`, `plan_mode_mid` | qwen 0.28.0, gpt-4o-mini | both taken mid-prompt; 904 and 939 chunks came after the change; `end_turn` |
+| `opencode_serve/2.3.2/model_mid`, `plan_mode_mid` | opencode 2.3.2, gpt-5.4-nano | 204 at once; the step finished; the next turn ran on gpt-5.4-mini; the plan switch ran one more step as `plan` in the same execution |
+| `codex_appserver/0.171.0/model_list` | codex 0.171.0 | 11 models, ids and display names |
+| `opencode_serve/2.3.2/providers` | opencode 2.3.2 | `/api/config/providers` 404, `/api/provider` (2 providers), `/api/model` (88 models); ids and names only |
+
+The recorders cut each list down to ids and names before writing, so
+no base URL, key, cost or limit is committed.
+
+## Steer (`caps.steer_effect`)
+
+`session.caps` also says what a steer does to the turn in progress,
+so the composer can label its steer control truthfully. It is
+optional, set by the adapter from what its steer recordings prove
+(`PROVEN.steer_effect`), never from harness.json, and dropped when
+steer is off.
+
+| Value | Means | Adapters |
+|---|---|---|
+| `stops_reply` | the reply being written is cut and the message answered at once, in the same turn | Claude (a running tool call is killed too and an open approval withdrawn: G7 `steer`, `steer_tool`, `steer_approval`); Codex (a running command goes on and an open approval holds the steer back: G16 `steer`, `steer_tool`, `steer_approval`) |
+| `after_tool` | nothing is cut; the message lands when the current step, the reply or a running command, ends | opencode (G16 `steer`, `steer_tool`) |
+| `next_turn` | the message waits for the next turn | none today |
+| absent | no steer, or nothing proves what it does | ACP; Claude before an init lists `interrupt_send_now_v1` |
 
 ## The wire
 
@@ -91,10 +111,10 @@ because they run the real CLIs on Kai's account:
 ```json
 {"v": 2, "type": "session.options", "session": "claude:…", "seq": 12, "ts": …,
  "data": {"options": {
-   "model": {"value": "sonnet", "reported": "claude-sonnet-5-5", "mid_turn": "unverified",
+   "model": {"value": "sonnet", "reported": "claude-sonnet-5-5", "mid_turn": "reply_finishes",
              "choices": [{"id": "default"}, {"id": "opus"}, {"id": "sonnet"}, {"id": "haiku"}]},
-   "permission_mode": {"value": "default", "mid_turn": "unverified"},
-   "plan_mode": {"value": false, "mid_turn": "unverified"}}}}
+   "permission_mode": {"value": "default", "mid_turn": "reply_finishes"},
+   "plan_mode": {"value": false, "mid_turn": "reply_finishes"}}}}
 ```
 
 | Field | |
@@ -103,7 +123,7 @@ because they run the real CLIs on Kai's account:
 | `value` | the value in force: a string ("" when the agent has not named one yet), or a flag for `plan_mode` |
 | `choices[]` | `{id, label?, description?}`, the agent's own list in its order; absent when it lists none |
 | `reported` | the agent's own spelling of `value` when it differs |
-| `mid_turn` | `next_turn` or `unverified`, above |
+| `mid_turn` | `next_turn`, `reply_finishes` or `unverified`, above |
 
 It is sent at start and on a change, never on a timer or a state
 frame: the options of a long session cost one event per change.
@@ -203,16 +223,17 @@ session's own agent:
 
 | The sheet shows | From |
 |---|---|
-| a list of models with a check on the one in force | `model.choices`, check where `id === model.value`; when `choices` is null (Codex, opencode) the value alone, with no list |
+| a list of models with a check on the one in force | `model.choices`, check where `id === model.value`; when `choices` is null (a server that did not answer its list request) the value alone |
 | a name and a line under each model | `label ?? id`, `description` |
-| a Default badge | the entry whose id is `default` (Claude lists one); the others name no default today (Codex's `model/list` has `isDefault`, once recorded) |
+| a Default badge | the entry whose id is `default` (Claude lists one); the others name no default (Codex's `model/list` has `isDefault`, but only ids and names were kept from the recording) |
 | a search field | filters `choices` by id and label on the page; nothing on the wire |
 | effort | `effort` when offered (Codex, opencode), value only |
 | plan mode | `plan_mode` as a switch |
 | a spinner on the row being changed | `pending.value` (and `pending.commandId` null: "next") |
 | an error line under the row | `error.message` |
 | disabled rows and why | `canChange`, `message` |
-| "applies to the next turn" | `turnOpen && midTurn === "next_turn"`; for `unverified` while a turn runs, say the change is sent now and its effect on the current reply is not known |
+| what a change does mid-turn | when `turnOpen`: `next_turn` "applies to the next turn"; `reply_finishes` "the current reply finishes first"; `unverified` "sent now; its effect on the current reply is not known" |
+| the steer control's label | `caps.steer_effect` (see "Steer") |
 
 Models of other agents are out of scope: switching agent is a new
 session.
@@ -234,9 +255,18 @@ then sort them first. `recent_models` could stand in for "recent".
 
 ## Limits
 
-- Codex and opencode list no values: the picker shows the value only
-  until a recording proves their list requests.
-- Mid-turn changes on Claude, ACP and opencode are `unverified`.
+- Each list is fetched once, at the agent's start (Codex's first page
+  only); a model the server adds later shows after the next start.
+- opencode's list is every model of every provider the server knows
+  (88 in the recording, about 5 KB per `session.options`).
+- Efforts are listed nowhere: the lists' per-model efforts and variants
+  were not kept (only ids and names may be committed from a provider's
+  answer), so `effort` shows its value only.
+- ACP's model change mid-turn stays `unverified` until an agent that
+  lists two models is recorded.
+- `reply_finishes` is proven for a counting reply with no tool calls; a
+  turn that goes on to further steps may take the change at its next
+  step (opencode's plan switch did).
 - Claude's model is the session's setting as `init` and `set_model`
   report it, not the model of each reply: in plan mode the CLI answered
   with another model than the session's (G7), and that is not shown.
@@ -256,6 +286,8 @@ then sort them first. `recent_models` could stand in for "recent".
 
 ## Interface changes to earlier milestones
 
+- G3: `Caps.steer_effect` (and `base.STEER_EFFECTS`), set in each
+  adapter's `PROVEN`; `session.caps` carries it when known.
 - G3: a new event type `session.options`; every adapter emits it at
   start, after `session.caps` and `session.state` (the start triple),
   so fixture goldens gained it (`record_protocol.py golden`, only
@@ -266,6 +298,11 @@ then sort them first. `recent_models` could stand in for "recent".
   bookkeeping type; `/v1/status` lists `session_options`.
 - G11: `SessionState.options`, `sessionOptions` and `setOption` in the
   store.
+- Codex asks `model/list` after `thread/start`, and opencode `GET
+  /api/model` after the session opens, each bounded by the start's
+  timeout; a refusal leaves the value alone.
+- `scripts/record_protocol.py`, `record_acp.py`, `record_codex.py`,
+  `record_opencode.py`: the G32 scenarios above.
 - `tests/fakes/fake_codex.py` answers `thread/start` with the model and
   policy it was asked for, as the real server does.
 

@@ -1,0 +1,9618 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.055,
+  "data": {
+   "caps": {
+    "steer": false,
+    "plan_mode": true,
+    "rollback": false,
+    "fork": false,
+    "stop_task": false,
+    "options": [
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.055,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.055,
+  "data": {
+   "options": {
+    "model": {
+     "value": "$runtime|openai|gpt-4o-mini(openai)",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "$runtime|openai|gpt-4o-mini(openai)",
+       "label": "gpt-4o-mini"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "auto",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "plan",
+       "label": "Plan",
+       "description": "Analyze only, do not modify files or execute commands"
+      },
+      {
+       "id": "default",
+       "label": "Default",
+       "description": "Require approval for file edits or shell commands"
+      },
+      {
+       "id": "auto-edit",
+       "label": "Auto Edit",
+       "description": "Automatically approve file edits"
+      },
+      {
+       "id": "auto",
+       "label": "Auto",
+       "description": "LLM classifier auto-approves safe actions, blocks risky ones"
+      },
+      {
+       "id": "yolo",
+       "label": "YOLO",
+       "description": "Automatically approve all tools"
+      }
+     ]
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.055,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.055,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.055,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.8,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "1. ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.827,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "One: ",
+   "seq": 2,
+   "offset": 3,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.827,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "The ",
+   "seq": 3,
+   "offset": 8,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.849,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "starting ",
+   "seq": 4,
+   "offset": 12,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.875,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "point, ",
+   "seq": 5,
+   "offset": 21,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.895,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "signifying ",
+   "seq": 6,
+   "offset": 28,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.895,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "unity ",
+   "seq": 7,
+   "offset": 39,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.908,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 8,
+   "offset": 45,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.93,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "beginnings.\n",
+   "seq": 9,
+   "offset": 49,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.954,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "2. ",
+   "seq": 10,
+   "offset": 61,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.988,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Two: ",
+   "seq": 11,
+   "offset": 64,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.988,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 12,
+   "offset": 69,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.006,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "duality ",
+   "seq": 13,
+   "offset": 80,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.027,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 14,
+   "offset": 88,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.028,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "balance ",
+   "seq": 15,
+   "offset": 92,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.063,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 16,
+   "offset": 100,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.064,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 17,
+   "offset": 103,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.124,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "world ",
+   "seq": 18,
+   "offset": 107,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.124,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "around ",
+   "seq": 19,
+   "offset": 113,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.185,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "us.\n",
+   "seq": 20,
+   "offset": 120,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.241,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "3. ",
+   "seq": 21,
+   "offset": 124,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.303,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Three: ",
+   "seq": 22,
+   "offset": 127,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.367,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Symbolizes ",
+   "seq": 23,
+   "offset": 134,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.429,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "creativity ",
+   "seq": 24,
+   "offset": 145,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.429,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 25,
+   "offset": 156,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.457,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "expression, ",
+   "seq": 26,
+   "offset": 160,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.477,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 27,
+   "offset": 172,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.478,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "found ",
+   "seq": 28,
+   "offset": 178,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.492,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 29,
+   "offset": 184,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.492,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "art ",
+   "seq": 30,
+   "offset": 187,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.499,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 31,
+   "offset": 191,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.529,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "nature.\n",
+   "seq": 32,
+   "offset": 195,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.559,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "4. ",
+   "seq": 33,
+   "offset": 203,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.574,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Four: ",
+   "seq": 34,
+   "offset": 206,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.575,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 35,
+   "offset": 212,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.611,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "foundational ",
+   "seq": 36,
+   "offset": 214,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.632,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number, ",
+   "seq": 37,
+   "offset": 227,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.632,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "commonly ",
+   "seq": 38,
+   "offset": 235,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.65,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "associated ",
+   "seq": 39,
+   "offset": 244,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.65,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 40,
+   "offset": 255,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.666,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "stability ",
+   "seq": 41,
+   "offset": 260,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.667,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 42,
+   "offset": 270,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.688,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "order.\n",
+   "seq": 43,
+   "offset": 274,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.71,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "5. ",
+   "seq": 44,
+   "offset": 281,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.724,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Five: ",
+   "seq": 45,
+   "offset": 284,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.743,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 46,
+   "offset": 290,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.743,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "change ",
+   "seq": 47,
+   "offset": 301,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.773,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 48,
+   "offset": 308,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.805,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "adaptability, ",
+   "seq": 49,
+   "offset": 312,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.805,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 50,
+   "offset": 326,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.823,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "seen ",
+   "seq": 51,
+   "offset": 332,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.823,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 52,
+   "offset": 337,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.839,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "nature's ",
+   "seq": 53,
+   "offset": 340,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.875,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "cycles.\n",
+   "seq": 54,
+   "offset": 349,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.901,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "6. ",
+   "seq": 55,
+   "offset": 357,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.929,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Six: ",
+   "seq": 56,
+   "offset": 360,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.941,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 57,
+   "offset": 365,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.941,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 58,
+   "offset": 367,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.962,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "representing ",
+   "seq": 59,
+   "offset": 374,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.963,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "harmony ",
+   "seq": 60,
+   "offset": 387,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.986,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 61,
+   "offset": 395,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.005,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "family, ",
+   "seq": 62,
+   "offset": 399,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.006,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linking ",
+   "seq": 63,
+   "offset": 407,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.015,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 64,
+   "offset": 415,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.055,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "nurturing.\n",
+   "seq": 65,
+   "offset": 418,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.077,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "7. ",
+   "seq": 66,
+   "offset": 429,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.098,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Seven: ",
+   "seq": 67,
+   "offset": 432,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.098,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 68,
+   "offset": 439,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.103,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "considered ",
+   "seq": 69,
+   "offset": 445,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.103,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 70,
+   "offset": 456,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.138,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "lucky ",
+   "seq": 71,
+   "offset": 458,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.158,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number, ",
+   "seq": 72,
+   "offset": 464,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.159,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "it ",
+   "seq": 73,
+   "offset": 472,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.174,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "symbolizes ",
+   "seq": 74,
+   "offset": 475,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.198,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "introspection ",
+   "seq": 75,
+   "offset": 486,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.198,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 76,
+   "offset": 500,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.216,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "spirituality.\n",
+   "seq": 77,
+   "offset": 504,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.237,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "8. ",
+   "seq": 78,
+   "offset": 518,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.261,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Eight: ",
+   "seq": 79,
+   "offset": 521,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.278,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 80,
+   "offset": 528,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.279,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "strength ",
+   "seq": 81,
+   "offset": 539,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.291,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 82,
+   "offset": 548,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.314,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "performance, ",
+   "seq": 83,
+   "offset": 552,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.314,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 84,
+   "offset": 565,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.333,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "associated ",
+   "seq": 85,
+   "offset": 571,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.333,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 86,
+   "offset": 582,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.341,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "material ",
+   "seq": 87,
+   "offset": 587,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.377,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "success.\n",
+   "seq": 88,
+   "offset": 596,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.388,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "9. ",
+   "seq": 89,
+   "offset": 605,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.491,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Nine: ",
+   "seq": 90,
+   "offset": 608,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.491,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Symbolizes ",
+   "seq": 91,
+   "offset": 614,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.491,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "completion ",
+   "seq": 92,
+   "offset": 625,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.502,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 93,
+   "offset": 636,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.504,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "fulfillment, ",
+   "seq": 94,
+   "offset": 640,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.504,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 95,
+   "offset": 653,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.531,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linked ",
+   "seq": 96,
+   "offset": 659,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.531,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 97,
+   "offset": 666,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.564,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "humanitarianism.\n",
+   "seq": 98,
+   "offset": 669,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.585,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "10. ",
+   "seq": 99,
+   "offset": 686,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.607,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Ten: ",
+   "seq": 100,
+   "offset": 690,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.608,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "The ",
+   "seq": 101,
+   "offset": 695,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.624,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "base ",
+   "seq": 102,
+   "offset": 699,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.624,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 103,
+   "offset": 704,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.644,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "our ",
+   "seq": 104,
+   "offset": 707,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.644,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "decimal ",
+   "seq": 105,
+   "offset": 711,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.665,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "system, ",
+   "seq": 106,
+   "offset": 719,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.68,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "denoting ",
+   "seq": 107,
+   "offset": 727,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.701,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 108,
+   "offset": 736,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.702,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "complete ",
+   "seq": 109,
+   "offset": 738,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.735,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "set.\n",
+   "seq": 110,
+   "offset": 747,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.752,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "11. ",
+   "seq": 111,
+   "offset": 752,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.779,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Eleven: ",
+   "seq": 112,
+   "offset": 756,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.792,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 113,
+   "offset": 764,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.793,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "intuition ",
+   "seq": 114,
+   "offset": 775,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.819,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 115,
+   "offset": 785,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.859,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "insight, ",
+   "seq": 116,
+   "offset": 789,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.86,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 117,
+   "offset": 798,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.875,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linked ",
+   "seq": 118,
+   "offset": 804,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.875,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 119,
+   "offset": 811,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.894,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 120,
+   "offset": 814,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.894,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "higher ",
+   "seq": 121,
+   "offset": 816,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.912,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "understanding.\n",
+   "seq": 122,
+   "offset": 823,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.952,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "12. ",
+   "seq": 123,
+   "offset": 838,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.989,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twelve: ",
+   "seq": 124,
+   "offset": 842,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.006,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 125,
+   "offset": 850,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.006,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 126,
+   "offset": 852,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.019,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 127,
+   "offset": 859,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.181,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "wholeness, ",
+   "seq": 128,
+   "offset": 862,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.182,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "seen ",
+   "seq": 129,
+   "offset": 873,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.191,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 130,
+   "offset": 878,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.191,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "time ",
+   "seq": 131,
+   "offset": 881,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.227,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 132,
+   "offset": 886,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.228,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "twelve ",
+   "seq": 133,
+   "offset": 891,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.247,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "months ",
+   "seq": 134,
+   "offset": 898,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.247,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 135,
+   "offset": 905,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.266,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 136,
+   "offset": 908,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.288,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "year.\n",
+   "seq": 137,
+   "offset": 910,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.316,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "13. ",
+   "seq": 138,
+   "offset": 916,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.339,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirteen: ",
+   "seq": 139,
+   "offset": 920,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.359,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 140,
+   "offset": 930,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.359,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "viewed ",
+   "seq": 141,
+   "offset": 936,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.391,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 142,
+   "offset": 943,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.398,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "superstition, ",
+   "seq": 143,
+   "offset": 948,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.419,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "it ",
+   "seq": 144,
+   "offset": 962,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.419,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "can ",
+   "seq": 145,
+   "offset": 965,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.438,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "symbolize ",
+   "seq": 146,
+   "offset": 969,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.46,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "transformation.\n",
+   "seq": 147,
+   "offset": 979,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.481,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "14. ",
+   "seq": 148,
+   "offset": 995,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.517,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fourteen: ",
+   "seq": 149,
+   "offset": 999,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.556,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 150,
+   "offset": 1009,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.556,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "balance ",
+   "seq": 151,
+   "offset": 1020,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.575,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 152,
+   "offset": 1028,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.576,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "diplomacy ",
+   "seq": 153,
+   "offset": 1032,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.593,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 154,
+   "offset": 1042,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.633,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "relationships.\n",
+   "seq": 155,
+   "offset": 1045,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.65,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "15. ",
+   "seq": 156,
+   "offset": 1060,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.673,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifteen: ",
+   "seq": 157,
+   "offset": 1064,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.683,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 158,
+   "offset": 1073,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.683,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 159,
+   "offset": 1075,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.692,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "that ",
+   "seq": 160,
+   "offset": 1082,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.693,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "signifies ",
+   "seq": 161,
+   "offset": 1087,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.723,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "creativity ",
+   "seq": 162,
+   "offset": 1097,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.723,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 163,
+   "offset": 1108,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.74,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "energy, ",
+   "seq": 164,
+   "offset": 1112,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.759,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 165,
+   "offset": 1120,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.76,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "reflecting ",
+   "seq": 166,
+   "offset": 1126,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.778,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "adventure.\n",
+   "seq": 167,
+   "offset": 1137,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.809,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "16. ",
+   "seq": 168,
+   "offset": 1148,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.874,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Sixteen: ",
+   "seq": 169,
+   "offset": 1152,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.874,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 170,
+   "offset": 1161,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.895,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "maturity ",
+   "seq": 171,
+   "offset": 1172,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.895,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 172,
+   "offset": 1181,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.917,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 173,
+   "offset": 1185,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.917,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "onset ",
+   "seq": 174,
+   "offset": 1189,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.943,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 175,
+   "offset": 1195,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.97,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "responsibility.\n",
+   "seq": 176,
+   "offset": 1198,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.988,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "17. ",
+   "seq": 177,
+   "offset": 1214,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.006,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Seventeen: ",
+   "seq": 178,
+   "offset": 1218,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.023,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 179,
+   "offset": 1229,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.024,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "associated ",
+   "seq": 180,
+   "offset": 1235,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.055,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 181,
+   "offset": 1246,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.055,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "freedom ",
+   "seq": 182,
+   "offset": 1251,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.072,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 183,
+   "offset": 1259,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.099,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "independence.\n",
+   "seq": 184,
+   "offset": 1263,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.122,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "18. ",
+   "seq": 185,
+   "offset": 1277,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.181,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Eighteen: ",
+   "seq": 186,
+   "offset": 1281,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.181,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 187,
+   "offset": 1291,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.202,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "turning ",
+   "seq": 188,
+   "offset": 1293,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.202,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "point ",
+   "seq": 189,
+   "offset": 1301,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.213,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 190,
+   "offset": 1307,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.234,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "life, ",
+   "seq": 191,
+   "offset": 1310,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.234,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "associated ",
+   "seq": 192,
+   "offset": 1316,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.26,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 193,
+   "offset": 1327,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.261,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "adulthood ",
+   "seq": 194,
+   "offset": 1332,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.287,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 195,
+   "offset": 1342,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.287,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "making ",
+   "seq": 196,
+   "offset": 1346,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.304,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "decisions.\n",
+   "seq": 197,
+   "offset": 1353,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.325,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "19. ",
+   "seq": 198,
+   "offset": 1364,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.362,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Nineteen: ",
+   "seq": 199,
+   "offset": 1368,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.377,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 200,
+   "offset": 1378,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.377,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "completion ",
+   "seq": 201,
+   "offset": 1389,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.396,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 202,
+   "offset": 1400,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.396,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 203,
+   "offset": 1404,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.407,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "culmination ",
+   "seq": 204,
+   "offset": 1408,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.407,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 205,
+   "offset": 1420,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.426,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "efforts.\n",
+   "seq": 206,
+   "offset": 1423,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.441,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "20. ",
+   "seq": 207,
+   "offset": 1432,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.47,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty: ",
+   "seq": 208,
+   "offset": 1436,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.485,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 209,
+   "offset": 1444,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.485,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "round ",
+   "seq": 210,
+   "offset": 1446,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.503,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 211,
+   "offset": 1452,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.504,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "that ",
+   "seq": 212,
+   "offset": 1459,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.528,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "signifies ",
+   "seq": 213,
+   "offset": 1464,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.529,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "two ",
+   "seq": 214,
+   "offset": 1474,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.544,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "decades ",
+   "seq": 215,
+   "offset": 1478,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.545,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 216,
+   "offset": 1486,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.565,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "existence.\n",
+   "seq": 217,
+   "offset": 1489,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.571,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "21. ",
+   "seq": 218,
+   "offset": 1500,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.626,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-one: ",
+   "seq": 219,
+   "offset": 1504,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.627,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "The ",
+   "seq": 220,
+   "offset": 1516,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.649,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "legal ",
+   "seq": 221,
+   "offset": 1520,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.649,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "age ",
+   "seq": 222,
+   "offset": 1526,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 223,
+   "offset": 1530,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "adulthood ",
+   "seq": 224,
+   "offset": 1533,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.691,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 225,
+   "offset": 1543,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.692,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "many ",
+   "seq": 226,
+   "offset": 1546,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.716,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "cultures, ",
+   "seq": 227,
+   "offset": 1551,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.737,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "marking ",
+   "seq": 228,
+   "offset": 1561,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.763,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "independence.\n",
+   "seq": 229,
+   "offset": 1569,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.792,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "22. ",
+   "seq": 230,
+   "offset": 1583,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.811,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-two: ",
+   "seq": 231,
+   "offset": 1587,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.834,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 232,
+   "offset": 1599,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.835,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "master ",
+   "seq": 233,
+   "offset": 1601,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.845,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 234,
+   "offset": 1608,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.846,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 235,
+   "offset": 1615,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.886,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "numerology, ",
+   "seq": 236,
+   "offset": 1618,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.886,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "representing ",
+   "seq": 237,
+   "offset": 1630,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.905,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "intuition ",
+   "seq": 238,
+   "offset": 1643,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.906,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 239,
+   "offset": 1653,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.951,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "understanding.\n",
+   "seq": 240,
+   "offset": 1657,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000007.969,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "23. ",
+   "seq": 241,
+   "offset": 1672,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.003,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-three: ",
+   "seq": 242,
+   "offset": 1676,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.003,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 243,
+   "offset": 1690,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.023,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 244,
+   "offset": 1692,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.023,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linked ",
+   "seq": 245,
+   "offset": 1699,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.041,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 246,
+   "offset": 1706,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.041,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "curiosity ",
+   "seq": 247,
+   "offset": 1709,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.068,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 248,
+   "offset": 1719,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.09,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "exploration.\n",
+   "seq": 249,
+   "offset": 1723,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.105,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "24. ",
+   "seq": 250,
+   "offset": 1736,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.122,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-four: ",
+   "seq": 251,
+   "offset": 1740,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.15,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 252,
+   "offset": 1753,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.15,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "associated ",
+   "seq": 253,
+   "offset": 1759,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.169,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 254,
+   "offset": 1770,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.169,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 255,
+   "offset": 1775,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.196,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 256,
+   "offset": 1779,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.197,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 257,
+   "offset": 1786,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.225,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "hours ",
+   "seq": 258,
+   "offset": 1789,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.225,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 259,
+   "offset": 1795,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.249,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 260,
+   "offset": 1798,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.285,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "day, ",
+   "seq": 261,
+   "offset": 1800,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.301,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "signifying ",
+   "seq": 262,
+   "offset": 1805,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.327,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "completeness.\n",
+   "seq": 263,
+   "offset": 1816,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.343,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "25. ",
+   "seq": 264,
+   "offset": 1830,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.36,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-five: ",
+   "seq": 265,
+   "offset": 1834,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.38,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 266,
+   "offset": 1847,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.38,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 267,
+   "offset": 1858,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.392,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "quarter ",
+   "seq": 268,
+   "offset": 1860,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.392,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 269,
+   "offset": 1868,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.407,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 270,
+   "offset": 1871,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.442,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "century, ",
+   "seq": 271,
+   "offset": 1873,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.442,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 272,
+   "offset": 1882,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.457,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "celebrated ",
+   "seq": 273,
+   "offset": 1888,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.457,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 274,
+   "offset": 1899,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.473,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "milestones.\n",
+   "seq": 275,
+   "offset": 1902,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.491,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "26. ",
+   "seq": 276,
+   "offset": 1914,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.526,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-six: ",
+   "seq": 277,
+   "offset": 1918,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.526,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 278,
+   "offset": 1930,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.546,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 279,
+   "offset": 1932,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.546,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 280,
+   "offset": 1939,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.563,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "exploration, ",
+   "seq": 281,
+   "offset": 1942,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.58,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "suggesting ",
+   "seq": 282,
+   "offset": 1955,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.58,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 283,
+   "offset": 1966,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.599,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "mingling ",
+   "seq": 284,
+   "offset": 1970,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.614,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 285,
+   "offset": 1979,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.634,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "ideas.\n",
+   "seq": 286,
+   "offset": 1982,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.648,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "27. ",
+   "seq": 287,
+   "offset": 1989,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.684,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-seven: ",
+   "seq": 288,
+   "offset": 1993,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.705,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 289,
+   "offset": 2007,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.705,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "connected ",
+   "seq": 290,
+   "offset": 2013,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.718,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 291,
+   "offset": 2023,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.718,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "creative ",
+   "seq": 292,
+   "offset": 2026,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.738,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "thinking ",
+   "seq": 293,
+   "offset": 2035,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.738,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 294,
+   "offset": 2044,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.764,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "inspiration.\n",
+   "seq": 295,
+   "offset": 2048,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.795,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "28. ",
+   "seq": 296,
+   "offset": 2061,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.84,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-eight: ",
+   "seq": 297,
+   "offset": 2065,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.84,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 298,
+   "offset": 2079,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.849,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "cycles, ",
+   "seq": 299,
+   "offset": 2090,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.866,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "as ",
+   "seq": 300,
+   "offset": 2098,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.866,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "seen ",
+   "seq": 301,
+   "offset": 2101,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.886,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 302,
+   "offset": 2106,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.886,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 303,
+   "offset": 2109,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.902,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "lunar ",
+   "seq": 304,
+   "offset": 2113,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.932,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "phases.\n",
+   "seq": 305,
+   "offset": 2119,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.95,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "29. ",
+   "seq": 306,
+   "offset": 2127,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.972,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Twenty-nine: ",
+   "seq": 307,
+   "offset": 2131,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.992,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Usually ",
+   "seq": 308,
+   "offset": 2144,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000008.992,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "signifies ",
+   "seq": 309,
+   "offset": 2152,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.011,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "growth ",
+   "seq": 310,
+   "offset": 2162,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.012,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 311,
+   "offset": 2169,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.028,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 312,
+   "offset": 2173,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.028,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "potential ",
+   "seq": 313,
+   "offset": 2177,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.052,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "for ",
+   "seq": 314,
+   "offset": 2187,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.052,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "new ",
+   "seq": 315,
+   "offset": 2191,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.09,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "beginnings.\n",
+   "seq": 316,
+   "offset": 2195,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.114,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "30. ",
+   "seq": 317,
+   "offset": 2207,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.169,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty: ",
+   "seq": 318,
+   "offset": 2211,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.172,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 319,
+   "offset": 2219,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.202,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "maturity, ",
+   "seq": 320,
+   "offset": 2230,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.202,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 321,
+   "offset": 2240,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.224,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "milestone ",
+   "seq": 322,
+   "offset": 2242,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.224,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 323,
+   "offset": 2252,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.242,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "personal ",
+   "seq": 324,
+   "offset": 2255,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.26,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "development.\n",
+   "seq": 325,
+   "offset": 2264,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.287,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "31. ",
+   "seq": 326,
+   "offset": 2277,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.302,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-one: ",
+   "seq": 327,
+   "offset": 2281,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.325,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 328,
+   "offset": 2293,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.326,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "unique ",
+   "seq": 329,
+   "offset": 2295,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.352,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number, ",
+   "seq": 330,
+   "offset": 2302,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.367,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 331,
+   "offset": 2310,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.367,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linked ",
+   "seq": 332,
+   "offset": 2316,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.373,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 333,
+   "offset": 2323,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.374,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "diversity ",
+   "seq": 334,
+   "offset": 2328,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.403,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 335,
+   "offset": 2338,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.422,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "change.\n",
+   "seq": 336,
+   "offset": 2342,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.442,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "32. ",
+   "seq": 337,
+   "offset": 2350,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.463,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-two: ",
+   "seq": 338,
+   "offset": 2354,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.483,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Signifies ",
+   "seq": 339,
+   "offset": 2366,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.511,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "strength ",
+   "seq": 340,
+   "offset": 2376,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.511,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 341,
+   "offset": 2385,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.535,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "diversity ",
+   "seq": 342,
+   "offset": 2388,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.535,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 343,
+   "offset": 2398,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.557,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "collective ",
+   "seq": 344,
+   "offset": 2402,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.574,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "efforts.\n",
+   "seq": 345,
+   "offset": 2413,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.594,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "33. ",
+   "seq": 346,
+   "offset": 2422,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.614,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-three: ",
+   "seq": 347,
+   "offset": 2426,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.647,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 348,
+   "offset": 2440,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.647,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "master ",
+   "seq": 349,
+   "offset": 2442,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.666,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 350,
+   "offset": 2449,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.667,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 351,
+   "offset": 2456,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.705,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "numerology, ",
+   "seq": 352,
+   "offset": 2459,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.705,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "representing ",
+   "seq": 353,
+   "offset": 2471,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.736,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "compassion ",
+   "seq": 354,
+   "offset": 2484,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.737,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 355,
+   "offset": 2495,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.779,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "altruism.\n",
+   "seq": 356,
+   "offset": 2499,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.797,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "34. ",
+   "seq": 357,
+   "offset": 2509,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.82,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-four: ",
+   "seq": 358,
+   "offset": 2513,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.846,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Linked ",
+   "seq": 359,
+   "offset": 2526,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.846,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 360,
+   "offset": 2533,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.874,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "determination ",
+   "seq": 361,
+   "offset": 2538,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.874,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 362,
+   "offset": 2552,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.888,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "building ",
+   "seq": 363,
+   "offset": 2556,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.902,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "foundations.\n",
+   "seq": 364,
+   "offset": 2565,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.919,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "35. ",
+   "seq": 365,
+   "offset": 2578,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.935,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-five: ",
+   "seq": 366,
+   "offset": 2582,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.96,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 367,
+   "offset": 2595,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.96,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "exploration ",
+   "seq": 368,
+   "offset": 2606,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.975,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 369,
+   "offset": 2618,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000009.975,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "seeking ",
+   "seq": 370,
+   "offset": 2622,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.0,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "new ",
+   "seq": 371,
+   "offset": 2630,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.0,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "opportunities ",
+   "seq": 372,
+   "offset": 2634,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.02,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 373,
+   "offset": 2648,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.037,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "life.\n",
+   "seq": 374,
+   "offset": 2651,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.054,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "36. ",
+   "seq": 375,
+   "offset": 2657,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.083,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-six: ",
+   "seq": 376,
+   "offset": 2661,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.103,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Symbolizes ",
+   "seq": 377,
+   "offset": 2673,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.132,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "unity ",
+   "seq": 378,
+   "offset": 2684,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.132,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 379,
+   "offset": 2690,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.157,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 380,
+   "offset": 2694,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.157,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "completion ",
+   "seq": 381,
+   "offset": 2698,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.174,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 382,
+   "offset": 2709,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.174,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "complex ",
+   "seq": 383,
+   "offset": 2712,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.19,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "tasks.\n",
+   "seq": 384,
+   "offset": 2720,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.208,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "37. ",
+   "seq": 385,
+   "offset": 2727,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.273,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-seven: ",
+   "seq": 386,
+   "offset": 2731,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.296,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Suggests ",
+   "seq": 387,
+   "offset": 2745,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.297,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "spiritual ",
+   "seq": 388,
+   "offset": 2754,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.318,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "growth ",
+   "seq": 389,
+   "offset": 2764,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.318,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 390,
+   "offset": 2771,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.337,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "enlightenment.\n",
+   "seq": 391,
+   "offset": 2775,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.36,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "38. ",
+   "seq": 392,
+   "offset": 2790,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.43,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-eight: ",
+   "seq": 393,
+   "offset": 2794,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.43,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 394,
+   "offset": 2808,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.467,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "balance ",
+   "seq": 395,
+   "offset": 2819,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.467,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "between ",
+   "seq": 396,
+   "offset": 2827,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.502,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "material ",
+   "seq": 397,
+   "offset": 2835,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.503,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 398,
+   "offset": 2844,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.516,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "spiritual ",
+   "seq": 399,
+   "offset": 2848,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.54,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "aspects.\n",
+   "seq": 400,
+   "offset": 2858,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.555,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "39. ",
+   "seq": 401,
+   "offset": 2867,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.565,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Thirty-nine: ",
+   "seq": 402,
+   "offset": 2871,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.59,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 403,
+   "offset": 2884,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.591,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "connected ",
+   "seq": 404,
+   "offset": 2890,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.617,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 405,
+   "offset": 2900,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.618,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "completion ",
+   "seq": 406,
+   "offset": 2903,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.632,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 407,
+   "offset": 2914,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.632,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "reflection ",
+   "seq": 408,
+   "offset": 2918,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.658,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "on ",
+   "seq": 409,
+   "offset": 2929,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.658,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 410,
+   "offset": 2932,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.697,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "past.\n",
+   "seq": 411,
+   "offset": 2936,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.733,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "40. ",
+   "seq": 412,
+   "offset": 2942,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.759,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty: ",
+   "seq": 413,
+   "offset": 2946,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.785,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 414,
+   "offset": 2953,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.785,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 415,
+   "offset": 2955,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.805,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "representing ",
+   "seq": 416,
+   "offset": 2962,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.805,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "maturity ",
+   "seq": 417,
+   "offset": 2975,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.84,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 418,
+   "offset": 2984,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.84,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 419,
+   "offset": 2988,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.872,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "rich ",
+   "seq": 420,
+   "offset": 2992,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.872,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "experiences ",
+   "seq": 421,
+   "offset": 2997,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.9,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 422,
+   "offset": 3009,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.926,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "life.\n",
+   "seq": 423,
+   "offset": 3012,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000010.947,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "41. ",
+   "seq": 424,
+   "offset": 3018,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.06,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-one: ",
+   "seq": 425,
+   "offset": 3022,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.074,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Denotes ",
+   "seq": 426,
+   "offset": 3033,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.079,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "exploration ",
+   "seq": 427,
+   "offset": 3041,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.079,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 428,
+   "offset": 3053,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.082,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 429,
+   "offset": 3056,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.082,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "self ",
+   "seq": 430,
+   "offset": 3060,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.091,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 431,
+   "offset": 3065,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.092,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "personal ",
+   "seq": 432,
+   "offset": 3069,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.094,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "beliefs.\n",
+   "seq": 433,
+   "offset": 3078,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.111,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "42. ",
+   "seq": 434,
+   "offset": 3087,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.117,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-two: ",
+   "seq": 435,
+   "offset": 3091,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.117,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 436,
+   "offset": 3102,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.126,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 437,
+   "offset": 3113,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.126,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "meaning ",
+   "seq": 438,
+   "offset": 3117,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.151,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 439,
+   "offset": 3125,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.152,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "life ",
+   "seq": 440,
+   "offset": 3128,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.166,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 441,
+   "offset": 3133,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.166,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "various ",
+   "seq": 442,
+   "offset": 3136,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.183,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "contexts, ",
+   "seq": 443,
+   "offset": 3144,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.201,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 444,
+   "offset": 3154,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.22,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "humorous.\n",
+   "seq": 445,
+   "offset": 3160,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.246,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "43. ",
+   "seq": 446,
+   "offset": 3170,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.269,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-three: ",
+   "seq": 447,
+   "offset": 3174,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.28,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Connected ",
+   "seq": 448,
+   "offset": 3187,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.28,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 449,
+   "offset": 3197,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.305,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 450,
+   "offset": 3200,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.305,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "idea ",
+   "seq": 451,
+   "offset": 3204,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.324,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 452,
+   "offset": 3209,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.324,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "personal ",
+   "seq": 453,
+   "offset": 3212,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.342,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "freedom ",
+   "seq": 454,
+   "offset": 3221,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.342,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 455,
+   "offset": 3229,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.366,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "independence.\n",
+   "seq": 456,
+   "offset": 3233,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.387,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "44. ",
+   "seq": 457,
+   "offset": 3247,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.422,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-four: ",
+   "seq": 458,
+   "offset": 3251,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.422,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 459,
+   "offset": 3263,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.442,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "master ",
+   "seq": 460,
+   "offset": 3265,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.443,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 461,
+   "offset": 3272,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.457,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 462,
+   "offset": 3279,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.472,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "numerology, ",
+   "seq": 463,
+   "offset": 3282,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.492,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "symbolizing ",
+   "seq": 464,
+   "offset": 3294,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.506,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "balance ",
+   "seq": 465,
+   "offset": 3306,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.506,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 466,
+   "offset": 3314,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.522,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "foundation.\n",
+   "seq": 467,
+   "offset": 3318,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.544,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "45. ",
+   "seq": 468,
+   "offset": 3330,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.585,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-five: ",
+   "seq": 469,
+   "offset": 3334,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.586,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 470,
+   "offset": 3346,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.602,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "dynamic ",
+   "seq": 471,
+   "offset": 3357,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.602,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "change ",
+   "seq": 472,
+   "offset": 3365,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.617,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 473,
+   "offset": 3372,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.617,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "embracing ",
+   "seq": 474,
+   "offset": 3376,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.633,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "new ",
+   "seq": 475,
+   "offset": 3386,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.648,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "challenges.\n",
+   "seq": 476,
+   "offset": 3390,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "46. ",
+   "seq": 477,
+   "offset": 3402,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.688,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-six: ",
+   "seq": 478,
+   "offset": 3406,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.709,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Often ",
+   "seq": 479,
+   "offset": 3417,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.71,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linked ",
+   "seq": 480,
+   "offset": 3423,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.719,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 481,
+   "offset": 3430,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.719,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "adaptability ",
+   "seq": 482,
+   "offset": 3435,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.74,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 483,
+   "offset": 3448,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.757,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "resourcefulness.\n",
+   "seq": 484,
+   "offset": 3452,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.774,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "47. ",
+   "seq": 485,
+   "offset": 3469,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.835,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-seven: ",
+   "seq": 486,
+   "offset": 3473,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.852,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Denotes ",
+   "seq": 487,
+   "offset": 3486,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.894,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "introspection ",
+   "seq": 488,
+   "offset": 3494,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.895,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 489,
+   "offset": 3508,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.938,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "understanding ",
+   "seq": 490,
+   "offset": 3512,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.939,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "deeper ",
+   "seq": 491,
+   "offset": 3526,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000011.967,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "truths.\n",
+   "seq": 492,
+   "offset": 3533,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.015,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "48. ",
+   "seq": 493,
+   "offset": 3541,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.208,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-eight: ",
+   "seq": 494,
+   "offset": 3545,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.209,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 495,
+   "offset": 3558,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.266,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 496,
+   "offset": 3569,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.267,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "cycle ",
+   "seq": 497,
+   "offset": 3573,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.27,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 498,
+   "offset": 3579,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.27,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "creation ",
+   "seq": 499,
+   "offset": 3582,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.275,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 500,
+   "offset": 3591,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.276,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 501,
+   "offset": 3595,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.28,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "ongoing ",
+   "seq": 502,
+   "offset": 3599,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.285,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "journey.\n",
+   "seq": 503,
+   "offset": 3607,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.294,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "49. ",
+   "seq": 504,
+   "offset": 3616,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.295,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Forty-nine: ",
+   "seq": 505,
+   "offset": 3620,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.296,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Suggests ",
+   "seq": 506,
+   "offset": 3632,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.298,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "reflection ",
+   "seq": 507,
+   "offset": 3641,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.298,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "on ",
+   "seq": 508,
+   "offset": 3652,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.305,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "accomplishments ",
+   "seq": 509,
+   "offset": 3655,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.305,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 510,
+   "offset": 3671,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.305,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "future ",
+   "seq": 511,
+   "offset": 3675,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.34,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "goals.\n",
+   "seq": 512,
+   "offset": 3682,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.362,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "50. ",
+   "seq": 513,
+   "offset": 3689,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.392,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty: ",
+   "seq": 514,
+   "offset": 3693,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.393,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 515,
+   "offset": 3700,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.411,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "milestone ",
+   "seq": 516,
+   "offset": 3702,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.412,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "marking ",
+   "seq": 517,
+   "offset": 3712,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.427,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "half ",
+   "seq": 518,
+   "offset": 3720,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.427,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 519,
+   "offset": 3725,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.443,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "century ",
+   "seq": 520,
+   "offset": 3727,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.443,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 521,
+   "offset": 3735,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.459,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "experiences ",
+   "seq": 522,
+   "offset": 3738,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.46,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 523,
+   "offset": 3750,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.474,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "stories.\n",
+   "seq": 524,
+   "offset": 3754,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.479,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "51. ",
+   "seq": 525,
+   "offset": 3763,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.53,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-one: ",
+   "seq": 526,
+   "offset": 3767,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.531,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 527,
+   "offset": 3778,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.549,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 528,
+   "offset": 3789,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.549,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "thirst ",
+   "seq": 529,
+   "offset": 3791,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.566,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "for ",
+   "seq": 530,
+   "offset": 3798,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.566,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "knowledge ",
+   "seq": 531,
+   "offset": 3802,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.597,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 532,
+   "offset": 3812,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.597,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "continuous ",
+   "seq": 533,
+   "offset": 3816,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.611,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "learning.\n",
+   "seq": 534,
+   "offset": 3827,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.632,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "52. ",
+   "seq": 535,
+   "offset": 3837,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.659,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-two: ",
+   "seq": 536,
+   "offset": 3841,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.659,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Linked ",
+   "seq": 537,
+   "offset": 3852,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.678,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "with ",
+   "seq": 538,
+   "offset": 3859,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.678,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "cycles ",
+   "seq": 539,
+   "offset": 3864,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.693,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 540,
+   "offset": 3871,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.708,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "routines, ",
+   "seq": 541,
+   "offset": 3875,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.709,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 542,
+   "offset": 3885,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.743,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "seen ",
+   "seq": 543,
+   "offset": 3891,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.743,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "in ",
+   "seq": 544,
+   "offset": 3896,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.75,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 545,
+   "offset": 3899,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.75,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "context ",
+   "seq": 546,
+   "offset": 3903,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.774,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 547,
+   "offset": 3911,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.795,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "time.\n",
+   "seq": 548,
+   "offset": 3914,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.816,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "53. ",
+   "seq": 549,
+   "offset": 3920,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.84,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-three: ",
+   "seq": 550,
+   "offset": 3924,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.864,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 551,
+   "offset": 3937,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.865,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "creativity ",
+   "seq": 552,
+   "offset": 3948,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.896,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 553,
+   "offset": 3959,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.898,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 554,
+   "offset": 3963,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.923,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "fusion ",
+   "seq": 555,
+   "offset": 3967,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.924,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 556,
+   "offset": 3974,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.947,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "ideas.\n",
+   "seq": 557,
+   "offset": 3977,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000012.967,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "54. ",
+   "seq": 558,
+   "offset": 3984,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.011,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-four: ",
+   "seq": 559,
+   "offset": 3988,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.029,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Suggests ",
+   "seq": 560,
+   "offset": 4000,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.03,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "a ",
+   "seq": 561,
+   "offset": 4009,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.07,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "focus ",
+   "seq": 562,
+   "offset": 4011,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.071,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "on ",
+   "seq": 563,
+   "offset": 4017,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.095,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "collaborations ",
+   "seq": 564,
+   "offset": 4020,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.096,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 565,
+   "offset": 4035,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.123,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "partnerships.\n",
+   "seq": 566,
+   "offset": 4039,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.144,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "55. ",
+   "seq": 567,
+   "offset": 4053,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.193,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-five: ",
+   "seq": 568,
+   "offset": 4057,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.193,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 569,
+   "offset": 4069,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.213,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "master ",
+   "seq": 570,
+   "offset": 4071,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.214,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "number ",
+   "seq": 571,
+   "offset": 4078,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.223,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "indicating ",
+   "seq": 572,
+   "offset": 4085,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.224,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "transformation ",
+   "seq": 573,
+   "offset": 4096,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.253,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 574,
+   "offset": 4111,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.273,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "change.\n",
+   "seq": 575,
+   "offset": 4115,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.317,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "56. ",
+   "seq": 576,
+   "offset": 4123,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.335,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-six: ",
+   "seq": 577,
+   "offset": 4127,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.345,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 578,
+   "offset": 4138,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.346,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 579,
+   "offset": 4149,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.348,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "blending ",
+   "seq": 580,
+   "offset": 4153,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.349,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 581,
+   "offset": 4162,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.361,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "past ",
+   "seq": 582,
+   "offset": 4165,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.362,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "experiences ",
+   "seq": 583,
+   "offset": 4170,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.383,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "into ",
+   "seq": 584,
+   "offset": 4182,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.383,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 585,
+   "offset": 4187,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.422,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "present.\n",
+   "seq": 586,
+   "offset": 4191,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.441,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "57. ",
+   "seq": 587,
+   "offset": 4200,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.473,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-seven: ",
+   "seq": 588,
+   "offset": 4204,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.511,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Symbolizes ",
+   "seq": 589,
+   "offset": 4217,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.543,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "introspection ",
+   "seq": 590,
+   "offset": 4228,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.544,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 591,
+   "offset": 4242,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.598,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "exploring ",
+   "seq": 592,
+   "offset": 4246,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.599,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "personal ",
+   "seq": 593,
+   "offset": 4256,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.609,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "beliefs.\n",
+   "seq": 594,
+   "offset": 4265,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.624,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "58. ",
+   "seq": 595,
+   "offset": 4274,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.634,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-eight: ",
+   "seq": 596,
+   "offset": 4278,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.639,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Suggests ",
+   "seq": 597,
+   "offset": 4291,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.64,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "adaptability ",
+   "seq": 598,
+   "offset": 4300,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.665,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 599,
+   "offset": 4313,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.666,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "overcoming ",
+   "seq": 600,
+   "offset": 4317,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.74,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "challenges.\n",
+   "seq": 601,
+   "offset": 4328,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.749,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "59. ",
+   "seq": 602,
+   "offset": 4340,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.769,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Fifty-nine: ",
+   "seq": 603,
+   "offset": 4344,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.769,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Represents ",
+   "seq": 604,
+   "offset": 4356,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.788,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "reflection ",
+   "seq": 605,
+   "offset": 4367,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.789,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "on ",
+   "seq": 606,
+   "offset": 4378,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.806,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "what ",
+   "seq": 607,
+   "offset": 4381,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.806,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "has ",
+   "seq": 608,
+   "offset": 4386,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.826,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "been ",
+   "seq": 609,
+   "offset": 4390,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.827,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "achieved ",
+   "seq": 610,
+   "offset": 4395,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.849,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 611,
+   "offset": 4404,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.851,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "areas ",
+   "seq": 612,
+   "offset": 4408,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.862,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 613,
+   "offset": 4414,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.878,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "grow.\n",
+   "seq": 614,
+   "offset": 4417,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.897,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "60. ",
+   "seq": 615,
+   "offset": 4423,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.913,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "Sixty: ",
+   "seq": 616,
+   "offset": 4427,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.931,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "A ",
+   "seq": 617,
+   "offset": 4434,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.933,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "full ",
+   "seq": 618,
+   "offset": 4436,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.955,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "circle, ",
+   "seq": 619,
+   "offset": 4441,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.982,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "often ",
+   "seq": 620,
+   "offset": 4449,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000013.983,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "linked ",
+   "seq": 621,
+   "offset": 4455,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.008,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "to ",
+   "seq": 622,
+   "offset": 4462,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.009,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "wisdom ",
+   "seq": 623,
+   "offset": 4465,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.026,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "and ",
+   "seq": 624,
+   "offset": 4472,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.027,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "the ",
+   "seq": 625,
+   "offset": 4476,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.102,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "culmination ",
+   "seq": 626,
+   "offset": 4480,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.103,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "of ",
+   "seq": 627,
+   "offset": 4492,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.131,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "life's ",
+   "seq": 628,
+   "offset": 4495,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000014.218,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 12827,
+   "output_tokens": 913,
+   "cache_read_tokens": 0,
+   "context_tokens": 12827,
+   "context_window": 128000
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000014.29,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "lessons.",
+   "seq": 629,
+   "offset": 4502,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000014.29,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:m1",
+   "kind": "assistant",
+   "text": "1. One: The starting point, signifying unity and beginnings.\n2. Two: Represents duality and balance in the world around us.\n3. Three: Symbolizes creativity and expression, often found in art and nature.\n4. Four: A foundational number, commonly associated with stability and order.\n5. Five: Represents change and adaptability, often seen in nature's cycles.\n6. Six: A number representing harmony and family, linking to nurturing.\n7. Seven: Often considered a lucky number, it symbolizes introspection and spirituality.\n8. Eight: Represents strength and performance, often associated with material success.\n9. Nine: Symbolizes completion and fulfillment, often linked to humanitarianism.\n10. Ten: The base of our decimal system, denoting a complete set.\n11. Eleven: Represents intuition and insight, often linked to a higher understanding.\n12. Twelve: A number of wholeness, seen in time with twelve months in a year.\n13. Thirteen: Often viewed with superstition, it can symbolize transformation.\n14. Fourteen: Represents balance and diplomacy in relationships.\n15. Fifteen: A number that signifies creativity and energy, often reflecting adventure.\n16. Sixteen: Represents maturity and the onset of responsibility.\n17. Seventeen: Often associated with freedom and independence.\n18. Eighteen: A turning point in life, associated with adulthood and making decisions.\n19. Nineteen: Represents completion and the culmination of efforts.\n20. Twenty: A round number that signifies two decades of existence.\n21. Twenty-one: The legal age of adulthood in many cultures, marking independence.\n22. Twenty-two: A master number in numerology, representing intuition and understanding.\n23. Twenty-three: A number linked to curiosity and exploration.\n24. Twenty-four: Often associated with the number of hours in a day, signifying completeness.\n25. Twenty-five: Represents a quarter of a century, often celebrated in milestones.\n26. Twenty-six: A number of exploration, suggesting the mingling of ideas.\n27. Twenty-seven: Often connected to creative thinking and inspiration.\n28. Twenty-eight: Represents cycles, as seen in the lunar phases.\n29. Twenty-nine: Usually signifies growth and the potential for new beginnings.\n30. Thirty: Represents maturity, a milestone in personal development.\n31. Thirty-one: A unique number, often linked with diversity and change.\n32. Thirty-two: Signifies strength in diversity and collective efforts.\n33. Thirty-three: A master number in numerology, representing compassion and altruism.\n34. Thirty-four: Linked with determination and building foundations.\n35. Thirty-five: Represents exploration and seeking new opportunities in life.\n36. Thirty-six: Symbolizes unity and the completion of complex tasks.\n37. Thirty-seven: Suggests spiritual growth and enlightenment.\n38. Thirty-eight: Represents balance between material and spiritual aspects.\n39. Thirty-nine: Often connected to completion and reflection on the past.\n40. Forty: A number representing maturity and the rich experiences of life.\n41. Forty-one: Denotes exploration of the self and personal beliefs.\n42. Forty-two: Represents the meaning of life in various contexts, often humorous.\n43. Forty-three: Connected to the idea of personal freedom and independence.\n44. Forty-four: A master number in numerology, symbolizing balance and foundation.\n45. Forty-five: Represents dynamic change and embracing new challenges.\n46. Forty-six: Often linked with adaptability and resourcefulness.\n47. Forty-seven: Denotes introspection and understanding deeper truths.\n48. Forty-eight: Represents the cycle of creation and the ongoing journey.\n49. Forty-nine: Suggests reflection on accomplishments and future goals.\n50. Fifty: A milestone marking half a century of experiences and stories.\n51. Fifty-one: Represents a thirst for knowledge and continuous learning.\n52. Fifty-two: Linked with cycles and routines, often seen in the context of time.\n53. Fifty-three: Represents creativity and the fusion of ideas.\n54. Fifty-four: Suggests a focus on collaborations and partnerships.\n55. Fifty-five: A master number indicating transformation and change.\n56. Fifty-six: Represents the blending of past experiences into the present.\n57. Fifty-seven: Symbolizes introspection and exploring personal beliefs.\n58. Fifty-eight: Suggests adaptability and overcoming challenges.\n59. Fifty-nine: Represents reflection on what has been achieved and areas to grow.\n60. Sixty: A full circle, often linked to wisdom and the culmination of life's lessons."
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000014.29,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 13.235
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000014.29,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000014.29,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

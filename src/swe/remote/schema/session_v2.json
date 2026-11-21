@@ -188,6 +188,14 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "steer_effect": {
+          "type": "string",
+          "enum": [
+            "after_tool",
+            "next_turn",
+            "stops_reply"
+          ]
         }
       },
       "required": [
@@ -229,6 +237,7 @@
           "type": "string",
           "enum": [
             "next_turn",
+            "reply_finishes",
             "unverified"
           ]
         },
@@ -259,6 +268,7 @@
           "type": "string",
           "enum": [
             "next_turn",
+            "reply_finishes",
             "unverified"
           ]
         }

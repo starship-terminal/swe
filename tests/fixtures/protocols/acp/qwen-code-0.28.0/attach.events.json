@@ -50,7 +50,7 @@
     },
     "permission_mode": {
      "value": "auto",
-     "mid_turn": "unverified",
+     "mid_turn": "reply_finishes",
      "choices": [
       {
        "id": "plan",
@@ -81,7 +81,7 @@
     },
     "plan_mode": {
      "value": false,
-     "mid_turn": "unverified"
+     "mid_turn": "reply_finishes"
     }
    }
   }

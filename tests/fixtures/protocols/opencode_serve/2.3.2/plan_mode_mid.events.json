@@ -1,0 +1,935 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.14,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": true,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model"
+    ],
+    "steer_effect": "after_tool"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.14,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "ses_01"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.14,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "reply_finishes"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.367,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.367,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.367,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Count slowly from 1 to 60, one number per line, with a short sentence about each number."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.293,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "cost_usd": 5.1200000000000004e-05
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000001.46,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "1  \nA good start: today begins at 1.\n\n2  \n",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000001.566,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Now we’re at 2, building momentum.\n\n3  \nAt 3, ideas take shape.\n\n",
+   "seq": 2,
+   "offset": 42,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000001.677,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "4  \nNumber 4 brings steadier progress.\n\n5  \nAt 5, the pace feels a bit stronger.\n\n6  \nSix is ",
+   "seq": 3,
+   "offset": 107,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000001.78,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "where consistency really matters.\n\n7  \nSeven is a small milestone—keep going.\n\n8  \nAt ",
+   "seq": 4,
+   "offset": 200,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000001.882,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "8, you’re gaining confidence.\n\n9  \nNine is close to a full round.\n\n10  \nTen marks a ",
+   "seq": 5,
+   "offset": 286,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000001.985,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "clean halfway-style checkpoint.\n\n11  \nAt 11, detail becomes important.\n\n12  \nTwelve is where patterns ",
+   "seq": 6,
+   "offset": 370,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.093,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "start showing.\n\n13  \nThirteen reminds us to stay curious.\n\n14  \nAt 14, you’re progressing ",
+   "seq": 7,
+   "offset": 472,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.198,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "smoothly.\n\n15  \nFifteen is a halfway-to-something moment.\n\n16  \nSixteen signals strong, ",
+   "seq": 8,
+   "offset": 562,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.209,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "reply_finishes"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": true,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.312,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "steady effort.\n\n17  \nAt 17, keep your focus on the next step.\n\n18  \nEighteen adds more ",
+   "seq": 9,
+   "offset": 650,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.418,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "momentum.\n\n19  \nAt 19, small gains keep compounding.\n\n20  \nTwenty is a major ",
+   "seq": 10,
+   "offset": 737,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.519,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "mid-run landmark.\n\n21  \nAt 21, you’re clearly moving forward.\n\n22  \nTwenty-two ",
+   "seq": 11,
+   "offset": 814,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.624,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "builds on what you already did.\n\n23  \nAt 23, aim for continued improvement.\n\n24  \n",
+   "seq": 12,
+   "offset": 893,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.729,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Twenty-four is a quarter-way feeling.\n\n25  \nAt 25, you’ve reached a nice benchmark.\n\n",
+   "seq": 13,
+   "offset": 975,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.832,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "26  \nTwenty-six keeps the rhythm going.\n\n27  \nAt 27, stay steady and intentional.\n\n28  \n",
+   "seq": 14,
+   "offset": 1060,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000002.937,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Twenty-eight is almost the high stretch.\n\n29  \nAt 29, don’t rush—just continue.\n\n",
+   "seq": 15,
+   "offset": 1148,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.042,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "30  \nThirty is a powerful round number.\n\n31  \nAt 31, you’re past the halfway hump.\n\n",
+   "seq": 16,
+   "offset": 1229,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.15,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "32  \nThirty-two shows your persistence.\n\n33  \nAt 33, keep it moving.\n\n34  \n",
+   "seq": 17,
+   "offset": 1313,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.254,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Thirty-four keeps building your momentum.\n\n35  \nAt 35, you’re well into the climb.\n\n36  \n",
+   "seq": 18,
+   "offset": 1388,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.355,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Thirty-six is where effort feels rewarding.\n\n37  \nAt 37, stay consistent.\n\n38  \nThirty-eight continues ",
+   "seq": 19,
+   "offset": 1477,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.46,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "the upward trend.\n\n39  \nAt 39, you’re close to the top third.\n\n40  \n",
+   "seq": 20,
+   "offset": 1580,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.563,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Forty is another strong checkpoint.\n\n41  \nAt 41, focus on finishing strong.\n\n42  \n",
+   "seq": 21,
+   "offset": 1648,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.667,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Forty-two is where persistence pays off.\n\n43  \nAt 43, keep your attention on the ",
+   "seq": 22,
+   "offset": 1730,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.769,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "goal.\n\n44  \nForty-four keeps the steady rhythm.\n\n45  \nAt 45, half the work ",
+   "seq": 23,
+   "offset": 1811,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.877,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "is done twice over.\n\n46  \nForty-six is another step forward.\n\n47  \nAt ",
+   "seq": 24,
+   "offset": 1886,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000003.98,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "47, you’re nearing the finish line.\n\n48  \nForty-eight feels like real progress.\n\n49  \nAt ",
+   "seq": 25,
+   "offset": 1956,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.082,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "49, almost there—don’t stop.\n\n50  \nFifty is a major celebration point.\n\n51  \nAt ",
+   "seq": 26,
+   "offset": 2045,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.191,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "51, keep going with confidence.\n\n52  \nFifty-two brings you deeper into the range.\n\n",
+   "seq": 27,
+   "offset": 2125,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.306,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "53  \nAt 53, trust the process.\n\n54  \nFifty-four means you’re still accelerating.\n\n",
+   "seq": 28,
+   "offset": 2208,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.407,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "55  \nAt 55, consistency is your superpower.\n\n56  \nFifty-six is a strong ",
+   "seq": 29,
+   "offset": 2290,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.508,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "late-stage marker.\n\n57  \nAt 57, stay calm and keep moving.\n\n58  \nFifty-eight ",
+   "seq": 30,
+   "offset": 2362,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.614,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "is almost the final stretch.\n\n59  \nAt 59, you’re one away from 60.\n\n60  \n",
+   "seq": 31,
+   "offset": 2439,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.68,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "Sixty—finish strong and take a well-earned ",
+   "seq": 32,
+   "offset": 2512,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000004.68,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "pause.",
+   "seq": 33,
+   "offset": 2555,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.68,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02:0",
+   "kind": "assistant",
+   "text": "1  \nA good start: today begins at 1.\n\n2  \nNow we’re at 2, building momentum.\n\n3  \nAt 3, ideas take shape.\n\n4  \nNumber 4 brings steadier progress.\n\n5  \nAt 5, the pace feels a bit stronger.\n\n6  \nSix is where consistency really matters.\n\n7  \nSeven is a small milestone—keep going.\n\n8  \nAt 8, you’re gaining confidence.\n\n9  \nNine is close to a full round.\n\n10  \nTen marks a clean halfway-style checkpoint.\n\n11  \nAt 11, detail becomes important.\n\n12  \nTwelve is where patterns start showing.\n\n13  \nThirteen reminds us to stay curious.\n\n14  \nAt 14, you’re progressing smoothly.\n\n15  \nFifteen is a halfway-to-something moment.\n\n16  \nSixteen signals strong, steady effort.\n\n17  \nAt 17, keep your focus on the next step.\n\n18  \nEighteen adds more momentum.\n\n19  \nAt 19, small gains keep compounding.\n\n20  \nTwenty is a major mid-run landmark.\n\n21  \nAt 21, you’re clearly moving forward.\n\n22  \nTwenty-two builds on what you already did.\n\n23  \nAt 23, aim for continued improvement.\n\n24  \nTwenty-four is a quarter-way feeling.\n\n25  \nAt 25, you’ve reached a nice benchmark.\n\n26  \nTwenty-six keeps the rhythm going.\n\n27  \nAt 27, stay steady and intentional.\n\n28  \nTwenty-eight is almost the high stretch.\n\n29  \nAt 29, don’t rush—just continue.\n\n30  \nThirty is a powerful round number.\n\n31  \nAt 31, you’re past the halfway hump.\n\n32  \nThirty-two shows your persistence.\n\n33  \nAt 33, keep it moving.\n\n34  \nThirty-four keeps building your momentum.\n\n35  \nAt 35, you’re well into the climb.\n\n36  \nThirty-six is where effort feels rewarding.\n\n37  \nAt 37, stay consistent.\n\n38  \nThirty-eight continues the upward trend.\n\n39  \nAt 39, you’re close to the top third.\n\n40  \nForty is another strong checkpoint.\n\n41  \nAt 41, focus on finishing strong.\n\n42  \nForty-two is where persistence pays off.\n\n43  \nAt 43, keep your attention on the goal.\n\n44  \nForty-four keeps the steady rhythm.\n\n45  \nAt 45, half the work is done twice over.\n\n46  \nForty-six is another step forward.\n\n47  \nAt 47, you’re nearing the finish line.\n\n48  \nForty-eight feels like real progress.\n\n49  \nAt 49, almost there—don’t stop.\n\n50  \nFifty is a major celebration point.\n\n51  \nAt 51, keep going with confidence.\n\n52  \nFifty-two brings you deeper into the range.\n\n53  \nAt 53, trust the process.\n\n54  \nFifty-four means you’re still accelerating.\n\n55  \nAt 55, consistency is your superpower.\n\n56  \nFifty-six is a strong late-stage marker.\n\n57  \nAt 57, stay calm and keep moving.\n\n58  \nFifty-eight is almost the final stretch.\n\n59  \nAt 59, you’re one away from 60.\n\n60  \nSixty—finish strong and take a well-earned pause."
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000004.746,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 5287,
+   "output_tokens": 668,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.0019436
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.244,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "Sure—here’s a plan for how we’ll proceed:\n\n1. **Confirm requirements**: You ",
+   "seq": 1,
+   "offset": 0,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.346,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "tell me what you want next (e.g., another list, different pacing, different sentence ",
+   "seq": 2,
+   "offset": 76,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.448,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "style/length).\n2. **Choose formatting rules**: Decide the exact output format (one number per ",
+   "seq": 3,
+   "offset": 161,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.564,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "line, sentence length, any themes).\n3. **Generate the content**: Produce the full response ",
+   "seq": 4,
+   "offset": 255,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.665,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "following those rules.\n4. **Quick check**: Verify count/order and that each number has ",
+   "seq": 5,
+   "offset": 346,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.721,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "exactly one sentence.\n\nWhat would you like to do ",
+   "seq": 6,
+   "offset": 433,
+   "done": false
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000005.721,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "next?",
+   "seq": 7,
+   "offset": 482,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.721,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_04:0",
+   "kind": "assistant",
+   "text": "Sure—here’s a plan for how we’ll proceed:\n\n1. **Confirm requirements**: You tell me what you want next (e.g., another list, different pacing, different sentence style/length).\n2. **Choose formatting rules**: Decide the exact output format (one number per line, sentence length, any themes).\n3. **Generate the content**: Produce the full response following those rules.\n4. **Quick check**: Verify count/order and that each number has exactly one sentence.\n\nWhat would you like to do next?"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.776,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 470,
+   "output_tokens": 114,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00229274
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.776,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 5.409
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000005.776,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.296,
+  "data": {
+   "options": {
+    "model": {
+     "value": "openai/gpt-5.4-nano",
+     "mid_turn": "reply_finishes"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.3,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "text": "Reply only with: back"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.3,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.3,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "t-00000001-2:user",
+   "kind": "user",
+   "text": "Reply only with: back"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000006.701,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:0",
+   "kind": "assistant",
+   "text": "back",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.701,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "id": "msg_07:0",
+   "kind": "assistant",
+   "text": "back"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.792,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "input_tokens": 640,
+   "output_tokens": 5,
+   "cache_read_tokens": 5632,
+   "cache_write_tokens": 0,
+   "cost_usd": 0.00253963
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.792,
+  "turn_id": "t-00000001-2",
+  "data": {
+   "status": "completed",
+   "duration_s": 0.492
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.792,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000006.792,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

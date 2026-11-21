@@ -312,6 +312,18 @@ class CodexAppServerAdapter:
         if not self.version:
             self.version = str(thread.get("cliVersion") or "")
             self._check_version()
+        if self._caps.can_set("model") \
+                and isinstance(self._state, wire.ThreadState):
+            # The server's own list for the picker (G32); a server that
+            # refuses it leaves the value alone.
+            try:
+                listed = self._call(wire.model_list(self._rpc_id()),
+                                    self._init_timeout)
+            except AdapterError as exc:
+                if exc.code == "agent_down":
+                    raise
+                listed = {}
+            self._state.model_list(listed)
         return thread
 
     def _check_version(self) -> None:
