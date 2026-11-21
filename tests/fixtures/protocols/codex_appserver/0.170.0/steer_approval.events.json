@@ -1,0 +1,279 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.729,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ]
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.729,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-11-21T11-48-33-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.778,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "text": "Run the shell command `touch asked.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.778,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.778,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user",
+   "kind": "user",
+   "text": "Run the shell command `touch asked.txt` in the current folder, then reply with just: done"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.started",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.646,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "name": "shell",
+   "summary": "shell · touch asked.txt",
+   "input": {
+    "command": "touch asked.txt",
+    "cwd": "/work"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.requested",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.646,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "kind": "command",
+   "prompt": "/bin/zsh -lc 'touch asked.txt'",
+   "options": [
+    {
+     "id": "allow",
+     "label": "Allow",
+     "kind": "allow"
+    },
+    {
+     "id": "deny",
+     "label": "Deny",
+     "kind": "deny"
+    }
+   ],
+   "call_id": "exec-00000000-0000-4000-8000-000000000004"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.646,
+  "data": {
+   "state": "waiting"
+  }
+ },
+ {
+  "v": 2,
+  "type": "approval.resolved",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000024.654,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "request_id": "00000001-0",
+   "source": "user",
+   "decision": "deny"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000024.654,
+  "data": {
+   "state": "running"
+  }
+ },
+ {
+  "v": 2,
+  "type": "tool.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000024.669,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "call_id": "exec-00000000-0000-4000-8000-000000000004",
+   "status": "cancelled",
+   "name": "shell",
+   "output": ""
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000024.681,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10774,
+   "output_tokens": 105,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 10771,
+   "context_tokens": 10879,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000024.683,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "t-00000001-1:user2",
+   "kind": "user",
+   "text": "Do not run that. Reply only with the word: steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000026.498,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 10924,
+   "output_tokens": 100,
+   "cache_read_tokens": 10771,
+   "cache_write_tokens": 150,
+   "context_tokens": 11024,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.delta",
+  "session": "fixture:1",
+  "ts": 1760000027.478,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "steered",
+   "seq": 1,
+   "offset": 0,
+   "done": true
+  }
+ },
+ {
+  "v": 2,
+  "type": "message.completed",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000027.478,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "id": "msg_02",
+   "kind": "assistant",
+   "text": "steered"
+  }
+ },
+ {
+  "v": 2,
+  "type": "usage.updated",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000027.496,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "input_tokens": 11069,
+   "output_tokens": 18,
+   "cache_read_tokens": 10921,
+   "cache_write_tokens": 145,
+   "context_tokens": 11087,
+   "context_window": 258400
+  }
+ },
+ {
+  "v": 2,
+  "type": "turn.ended",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000027.536,
+  "turn_id": "t-00000001-1",
+  "data": {
+   "status": "completed",
+   "duration_s": 26.758
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000027.536,
+  "data": {
+   "state": "idle"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000027.536,
+  "data": {
+   "state": "closed"
+  }
+ }
+]
