@@ -734,6 +734,33 @@ describe("reload or a second tab while a post is on its way (review 4)", () => {
     });
   }
 
+  it("stop() while a post is out: the answer reaches the restarted store, and nothing is posted twice", async () => {
+    for (const factory of [new IDBFactory(), null]) {
+      const timers = new FakeTimers();
+      const a = page(factory, timers);
+      let answer: (r: { status: number; body: unknown }) => void = () => {};
+      let posts = 0;
+      a.transport.on("/message", () => {
+        posts++;
+        return new Promise((resolve) => (answer = resolve));
+      }, "POST");
+      a.store.getState().start();
+      catchUp(a.transport, {});
+      await drain();
+      await a.store.getState().send({ text: "hello" });
+      await drain();
+      a.store.getState().stop();
+      a.store.getState().start();
+      catchUp(a.transport, {});
+      await drain();
+      answer({ status: 202, body: { ok: true, queued: true } });
+      await drain();
+      expect(posts).toBe(1);
+      expect(a.store.getState().outbox.entries, String(factory)).toMatchObject([{ status: "sent", path: "legacy" }]);
+      a.store.getState().stop();
+    }
+  });
+
   it("a 404 that comes before the stored entries are loaded fails them", async () => {
     const factory = new IDBFactory();
     const timers = new FakeTimers();

@@ -87,6 +87,8 @@ export interface OutboxOptions {
   initial?: OutboxEntry[];
   /** This page's claim owner (default: random). Two tabs must never share one. */
   owner?: string;
+  /** The answer to a post that was out when this outbox closed: `settled` when it removed the entry. */
+  onLate?(entry: OutboxEntry, settled: boolean): void;
   onChange(view: OutboxView): void;
 }
 
@@ -112,21 +114,13 @@ function errorText(response: JsonResponse): string {
   return typeof message === "string" && message !== "" ? message : `The hub answered ${response.status}`;
 }
 
-function randomOwner(): string {
+/** A claim owner for one page: random, never shared between tabs. */
+export function randomOwner(): string {
   const bytes = new Uint8Array(8);
   const crypto = globalThis.crypto as Crypto | undefined;
   if (crypto?.getRandomValues) crypto.getRandomValues(bytes);
   else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
   return `p-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-
-/**
- * What a 503 means, by its error code. `store_failed` is raised before anything was stored, so a repeat is
- * safe anywhere; `keeper_failed` (the keeper did not answer, possibly after the request reached it) and any
- * code this client does not know may mean the send was applied.
- */
-function unavailableIsSafe(response: JsonResponse): boolean {
-  return errorCode(response) === "store_failed";
 }
 
 function errorCode(response: JsonResponse): string {
@@ -156,6 +150,8 @@ export class Outbox {
   /** Sends whose first write has not finished: not deliverable yet, but not to be lost by a restart. */
   private unwritten: OutboxEntry[] = [];
   private readonly owner: string;
+  /** Close the storage once the answer of the post that was out at `close()` is written. */
+  private closeAfterLate = false;
   /** Set once the session is known not to exist (or the hub too old): entries loaded later end at once. */
   private gone: string | null = null;
 
@@ -204,7 +200,9 @@ export class Outbox {
     this.closed = true;
     this.clearRetry();
     this.clearAge();
-    this.options.storage.close();
+    // A post on its way still gets its answer written (see `deliver`); the storage closes after that.
+    if (this.inFlight === null) this.options.storage.close();
+    else this.closeAfterLate = true;
   }
 
   /** Put a send in the outbox. It has its id, and is on disk if there is a disk, when this resolves. */
@@ -403,8 +401,12 @@ export class Outbox {
       return "done";
     }
     const response = await this.post(attempted);
+    if (this.closed) {
+      await this.late(attempted, response);
+      return "done";
+    }
     const now = this.current(entry.commandId);
-    if (now === undefined) return "done"; // a result came first, or the outbox closed
+    if (now === undefined) return "done"; // a result came first
     if (response === null) return this.unsure(now, "The hub did not answer");
     const { status } = response;
     if (status >= 200 && status < 300) {
@@ -432,7 +434,7 @@ export class Outbox {
       await this.save({ ...now, lastError: "This device is not signed in to the hub" });
       return "paused";
     }
-    if (status === 429 || status === 425 || (status === 503 && unavailableIsSafe(response))) {
+    if (status === 429 || status === 425) {
       // The hub said not now before it stored or queued anything: a repeat is safe on any path.
       await this.save({ ...now, lastError: errorText(response) });
       return "retry";
@@ -446,6 +448,47 @@ export class Outbox {
     // The hub looked at it and said no: a repeat gets the same answer.
     await this.fail(now, status === 404 ? SESSION_GONE : errorText(response));
     return "done";
+  }
+
+  /**
+   * The answer to a post that was out when the outbox closed (the store stopped). Nothing in this outbox's state
+   * changes, but storage learns what the hub said, the claim is released, and `onLate` hands the entry to the
+   * outbox that replaced this one, so the next start sees the truth at once instead of waiting out a stale claim.
+   */
+  private async late(attempted: OutboxEntry, response: JsonResponse | null): Promise<void> {
+    const { claim: _released, ...entry } = attempted;
+    let outcome: OutboxEntry | null = { ...entry, ambiguous: true };
+    if (response !== null && response.status >= 200 && response.status < 300) {
+      const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData };
+      const result = body.result;
+      if (result !== undefined && result !== null && typeof result === "object" && (result.ok === true || result.cancelled === true)) {
+        outcome = null;
+      } else {
+        const keeper = typeof body.receipt === "string";
+        outcome = { ...entry, status: "sent", path: keeper ? "keeper" : "legacy", sentAt: this.options.timers.now() };
+        if (keeper) outcome.receipt = body.receipt as string;
+        delete outcome.ambiguous;
+      }
+    }
+    try {
+      if (outcome === null) await this.options.storage.remove(entry.commandId);
+      else await this.options.storage.put(outcome);
+    } finally {
+      if (this.closeAfterLate) this.options.storage.close();
+      this.options.onLate?.(outcome ?? { ...entry, status: "sent" }, outcome === null);
+    }
+  }
+
+  /** An entry the outbox that this one replaced finished posting after it closed. */
+  adoptLate(entry: OutboxEntry, settled: boolean): void {
+    if (this.closed || !this.list.some((e) => e.commandId === entry.commandId)) return;
+    if (settled) {
+      void this.drop(entry.commandId);
+      return;
+    }
+    this.replace(entry);
+    this.scheduleAge();
+    void this.flush();
   }
 
   /** An answer that may mean the hub applied the send: repeat it only where the hub de-duplicates. */
@@ -500,6 +543,18 @@ export class Outbox {
         if (now - (entry.endedAt ?? entry.createdAt) >= TERMINAL_KEPT_MS) await this.drop(entry.commandId);
       } else if (entry.status === "waiting") {
         if (now - entry.createdAt >= OUTBOX_TTL_MS) await this.fail(entry, NOT_SENT_IN_TIME);
+        else if (entry.claim !== undefined && now - entry.claim.at >= CLAIM_STALE_MS && this.inFlight !== entry.commandId) {
+          // An abandoned claim is resolved here, whether or not this page may post: the entry becomes
+          // `ambiguous` (its post may have reached the hub) and its own deadlines apply from now on.
+          const resolved = await this.options.storage.abandon(entry, now, CLAIM_STALE_MS);
+          if (this.closed) return;
+          if (resolved === undefined) {
+            this.list = this.list.filter((e) => e.commandId !== entry.commandId);
+            this.changed();
+          } else {
+            this.adopt(resolved);
+          }
+        }
       } else if (entry.path === "legacy") {
         if (now - (entry.sentAt ?? entry.createdAt) >= LEGACY_CONFIRM_MS) await this.end(entry, "unconfirmed", LEGACY_UNCONFIRMED);
       } else if (now - entry.createdAt >= OUTBOX_TTL_MS) {
@@ -515,8 +570,8 @@ export class Outbox {
   }
 
   private deadline(entry: OutboxEntry): number {
-    if (entry.status === "waiting" && entry.claim !== undefined && entry.claim.owner !== this.owner) {
-      // Another tab's claim: look again when it would be stale (or at the send's own deadline, if sooner).
+    if (entry.status === "waiting" && entry.claim !== undefined) {
+      // A claim: look again when it would be stale (or at the send's own deadline, if sooner).
       return Math.min(entry.claim.at + CLAIM_STALE_MS, entry.createdAt + OUTBOX_TTL_MS);
     }
     if (TERMINAL.has(entry.status)) return (entry.endedAt ?? entry.createdAt) + TERMINAL_KEPT_MS;
@@ -524,17 +579,21 @@ export class Outbox {
     return entry.createdAt + OUTBOX_TTL_MS;
   }
 
+  /**
+   * Arm the timer for the next deadline strictly in the future. A deadline at or before now is one the pass that
+   * just ran could not act on (a claim this page is posting, say): it is looked at again on the next pass, and
+   * never re-armed at 0 ms, which would spin.
+   */
   private scheduleAge(): void {
     this.clearAge();
     if (this.closed || this.list.length === 0) return;
-    const next = Math.min(...this.list.map((entry) => this.deadline(entry)));
-    this.ageTimer = this.options.timers.setTimeout(
-      () => {
-        this.ageTimer = null;
-        void this.flush();
-      },
-      Math.max(0, next - this.options.timers.now()),
-    );
+    const now = this.options.timers.now();
+    const future = this.list.map((entry) => this.deadline(entry)).filter((at) => at > now);
+    if (future.length === 0) return;
+    this.ageTimer = this.options.timers.setTimeout(() => {
+      this.ageTimer = null;
+      void this.flush();
+    }, Math.min(...future) - now);
   }
 
   private clearAge(): void {

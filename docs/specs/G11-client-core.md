@@ -247,16 +247,17 @@ Every transition:
 | (new) | `send()` | `waiting`, written to storage before anything else happens |
 | `waiting` | may not post (offline, row not seen yet, unauthorized, gone, outdated) | stays `waiting`; `sends[]` says why |
 | `waiting` | this page claims it to post (one read-write transaction: the claim and the counted attempt are on disk before the request leaves) | posted |
-| `waiting` | another page claimed it less than `CLAIM_STALE_MS` (60 s) ago | stays `waiting`, left alone ("being sent from another tab"); looked at again when the claim would be stale |
-| `waiting` | its claim is older than that, or is this page's own from before a reload (abandoned: the post may have reached the hub) | `ambiguous`, then the repeat rule below decides: posted again where the row says keeper, else `failed` "may or may not have been sent" |
+| `waiting` | it holds a claim less than `CLAIM_STALE_MS` (60 s) old: another tab's, or this page's from before its store was stopped and started again | stays `waiting`, left alone ("being sent from another tab"); looked at again when the claim would be stale |
+| `waiting` | its claim is older than that (abandoned: a page closed with the post out, so it may have reached the hub). A reloaded page has a new owner id, so it sees the old page's claim as another page's and waits out this limit | the deadline pass itself resolves it, whether or not this page may post: the claim is removed and the entry marked `ambiguous`, atomically. When this page may post, the repeat rule below decides: posted again where the row says keeper, else `failed` "may or may not have been sent" |
+| `waiting` (this page's post out) | the store is stopped | the answer is still written to storage and the claim released; the outbox that replaces this one takes the entry as the answer left it, at once |
 | `waiting` | the claim finds it `sent` or ended by another page, or gone from storage | taken as storage has it |
 | `waiting` | post answered 2xx with a `receipt` | `sent`, `path: keeper` |
 | `waiting` | post answered 2xx without one | `sent`, `path: legacy` |
 | `waiting` | post answered 2xx with the stored `result` | removed if ok or cancelled, else `failed` with its note |
-| `waiting` | no answer, 408, a 5xx other than a 503 `store_failed`, and the row says `mode: keeper` | `waiting`, `ambiguous`, tried again with backoff under the same id |
+| `waiting` | no answer, 408, any 5xx (every 503 included), and the row says `mode: keeper` | `waiting`, `ambiguous`, tried again with backoff under the same id |
 | `waiting` | the same, and the row does not say keeper | `failed`: "may or may not have been sent: check the session, and send it again if it did not arrive" |
 | `waiting` (`ambiguous`) | its retry comes and the row no longer says keeper | `failed`, the same reason; nothing is posted |
-| `waiting` | 429, 425, or a 503 `store_failed` (the hub said not now before it stored or queued anything) | `waiting`, tried again with backoff, on any path |
+| `waiting` | 429, 425 (the hub said not now before it stored or queued anything) | `waiting`, tried again with backoff, on any path |
 | `waiting` | 409 `duplicate_client_id` (the legacy path still holds a send under this id: an earlier post got there) | `sent`, `path: legacy` |
 | `waiting` | 401, 403 | `waiting`; the outbox pauses until `wake()` |
 | `waiting` | 404 | `failed`: "this session no longer exists" |
@@ -288,7 +289,7 @@ answer with (`hub.py` `_send_message`, `_kept`, `_forward`;
 | 409 | `duplicate_client_id` | the legacy path still holds a send under this id | `sent`, legacy |
 | 422 | `bad_command`, `bad_attachment` | the command or an attachment is invalid | `failed`, the hub's message |
 | 429 | `backlog_full` | too many waiting, before this one was queued | retried, any path |
-| 503 | `store_failed` | the store could not record it: nothing was applied | retried, any path |
+| 503 | `store_failed` | the hub's store could not record it. Not always "nothing was applied": a satellite's keeper route answers it from `get_command` after `record_command` stored the command, and its `_flush` may have delivered it (`agent.py`) | `ambiguous`: retried only where the row says keeper |
 | 503 | `keeper_failed` | the keeper did not answer, possibly after the request reached it ("not known to have been applied") | `ambiguous`: retried only where the row says keeper |
 | 503 | any other code | not known | `ambiguous`, the same |
 | 408, 500, 502, 504, other 5xx, no answer | | a proxy, a crash, a timeout, a lost connection | `ambiguous`, the same |
@@ -315,6 +316,11 @@ Other rules:
   new outbox.
 - **Order.** Sends go oldest first, one at a time: one that cannot go holds
   back the ones behind it.
+- **The deadline timer never spins.** It is armed only for the next
+  deadline strictly in the future. A deadline at or before now is one the
+  pass could not act on (this page's own post still out), and is looked at
+  on the next pass. The test timers throw on any zero-delay timer, so every
+  test in the suite guards this.
 - **One page posts an entry.** Tabs of one browser share the database, and
   a claim (`{owner, at}` on the entry) decides which page posts it. A tab
   learns of another tab's new sends only when it loads; results reach every
@@ -467,7 +473,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 259 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 263 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 

@@ -12,7 +12,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
 
 import { gate, gateSend, type Refusal } from "./gate";
-import { Outbox, SESSION_GONE, type OutboxView, type SendInput } from "./outbox";
+import { Outbox, randomOwner, SESSION_GONE, type OutboxView, type SendInput } from "./outbox";
 import { describeSends, type SendView } from "./sends";
 import { DeferredStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
 import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
@@ -133,6 +133,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
   // What the outbox held when the store was stopped: a store started again keeps unsent messages
   // even when there is no database to read them back from.
   let carried: OutboxEntry[] = [];
+  const owner = randomOwner();
   let generation = 0;
   let wasLive = false;
   let snapshotBusy = false;
@@ -310,6 +311,10 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
             environment.online() &&
             get().session.loaded &&
             !["unauthorized", "gone", "outdated", "offline"].includes(get().connection.state),
+          // One owner for every outbox this store makes: a claim from before a stop() is this page's own.
+          owner,
+          // A post that was out when the store stopped answers to the outbox that replaced it.
+          onLate: (entry, settled) => outbox?.adoptLate(entry, settled),
           // A repeat is safe only where the hub de-duplicates by id: a session a keeper holds.
           keeperHeld: () => get().session.row?.["mode"] === "keeper",
           ...(options.backoff === undefined ? {} : { backoff: options.backoff }),

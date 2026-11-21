@@ -41,7 +41,15 @@ export class FakeTimers implements Timers {
     return this.time;
   }
 
+  /** Timers armed with no delay. Nothing in the core needs one; one that re-arms itself at 0 ms spins. */
+  zeroDelay = 0;
+
   setTimeout(callback: () => void, ms: number): unknown {
+    if (ms <= 0) {
+      // A guard for the whole suite: every test that uses these timers fails on a zero-delay timer.
+      this.zeroDelay++;
+      throw new Error(`a timer was armed with a delay of ${ms} ms: a timer that re-arms at 0 ms spins`);
+    }
     const timer = { id: this.next++, at: this.time + Math.max(0, ms), callback };
     this.timers.push(timer);
     return timer.id;

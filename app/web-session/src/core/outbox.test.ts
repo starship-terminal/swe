@@ -141,6 +141,7 @@ describe("a new send", () => {
       put: (entry) => new Promise<void>((resolve) => (finish = () => void inner.put(entry).then(resolve))),
       remove: (id) => inner.remove(id),
       claim: (...args) => inner.claim(...args),
+      abandon: (...args) => inner.abandon(...args),
       close: () => inner.close(),
     };
     const outbox = await t.make(slow);
@@ -329,14 +330,11 @@ describe("answers that are not 2xx", () => {
     }
   });
 
-  it("429, 425 and a 503 store_failed say not now before anything is stored: tried again on any path", async () => {
-    for (const status of [429, 425, 503]) {
+  it("429 and 425 say not now before anything is stored: tried again on any path", async () => {
+    for (const status of [429, 425]) {
       const t = setup();
       legacy(t);
       t.hub.status = status;
-      if (status === 503) {
-        t.transport.on("/message", () => ({ status: 503, body: { error: { code: "store_failed", message: "refused 503" } } }), "POST");
-      }
       const outbox = await t.make();
       await outbox.send({ text: "x" });
       await drain();
@@ -638,6 +636,7 @@ describe("surviving a reload, a restart and a broken database", () => {
       put: (entry) => new Promise<void>((resolve) => (finish = () => void inner.put(entry).then(resolve))),
       remove: (id) => inner.remove(id),
       claim: (...args) => inner.claim(...args),
+      abandon: (...args) => inner.abandon(...args),
       close: () => {},
     };
     const first = await t.make(slow);
@@ -692,6 +691,7 @@ describe("surviving a reload, a restart and a broken database", () => {
       },
       remove: async () => {},
       claim: (entry, owner, now, staleMs) => new MemoryStorage().claim(entry, owner, now, staleMs),
+      abandon: (entry, now, staleMs) => new MemoryStorage().abandon(entry, now, staleMs),
       close: () => {},
     };
     const t = setup({ storage: new FallbackStorage(broken, (note) => notes.push(note)) });
@@ -796,6 +796,91 @@ describe("one page posts an entry (claims)", () => {
   });
 });
 
+describe("the deadline timer never spins", () => {
+  it("a stale claim is resolved by the deadline pass itself while this page may not post", async () => {
+    const t = setup();
+    legacy(t);
+    const storage = await openOutboxStorage(t.factory);
+    const now = t.timers.now();
+    await storage.put({
+      commandId: "x1", session: KEY, text: "x", attachments: [], mode: "queue", createdAt: now,
+      status: "waiting", attempts: 1, claim: { owner: "a-page-that-closed", at: now },
+    });
+    t.world.canPost = false; // offline, or the row never came
+    await t.make();
+    await drain();
+    t.timers.advance(CLAIM_STALE_MS); // FakeTimers throws on any zero-delay timer
+    await drain();
+    for (let i = 0; i < 20; i++) {
+      t.timers.advance(1);
+      await drain();
+    }
+    expect(t.timers.zeroDelay).toBe(0);
+    expect(t.view().entries[0]).toMatchObject({ status: "waiting", ambiguous: true });
+    expect(t.view().entries[0]?.claim).toBeUndefined();
+    expect((await stored(t.factory))[0]).toMatchObject({ ambiguous: true });
+    // Its own deadline is the next timer, in the future.
+    expect(t.timers.nextIn).toBe(OUTBOX_TTL_MS - CLAIM_STALE_MS - 20);
+    // Once it may post, the repeat rule decides: this path does not de-duplicate.
+    t.world.canPost = true;
+    await t.make();
+    await drain();
+    expect(t.transport.calls).toEqual([]);
+    expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+  });
+
+  it("a deadline the pass cannot act on (this page's own post still out) is not re-armed at 0 ms", async () => {
+    const t = setup();
+    t.transport.on("/message", () => new Promise<JsonResponse>(() => {}), "POST");
+    const outbox = await t.make();
+    await outbox.send({ text: "x" });
+    await drain();
+    t.timers.advance(2 * CLAIM_STALE_MS);
+    await drain();
+    outbox.wake();
+    await drain();
+    expect(t.timers.zeroDelay).toBe(0);
+    expect(t.view().inFlight).toBe("c1");
+  });
+});
+
+describe("stop() while a post is out", () => {
+  it("the hub's answer is still written, and the outbox that replaces this one takes it at once", async () => {
+    for (const legacyPath of [false, true]) {
+      const t = setup();
+      if (legacyPath) legacy(t);
+      let answer: (r: JsonResponse) => void = () => {};
+      t.transport.on("/message", () => new Promise<JsonResponse>((r) => (answer = r)), "POST");
+      const late: [OutboxEntry, boolean][] = [];
+      const first = new Outbox({
+        session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers, random: () => 0.5,
+        newId: () => "c1", owner: "page", keeperHeld: () => t.world.keeper, onLate: (e, settled) => late.push([e, settled]), onChange: () => {},
+      });
+      await first.init();
+      await first.send({ text: "x" });
+      await drain();
+      const carried = first.carry();
+      first.close();
+      const second = new Outbox({
+        session: KEY, storage: await openOutboxStorage(t.factory), transport: t.transport, timers: t.timers, random: () => 0.5,
+        newId: () => "c2", owner: "page", keeperHeld: () => t.world.keeper, initial: carried, onChange: (view) => t.views.push(view),
+      });
+      await second.init();
+      await drain();
+      expect(t.transport.calls, String(legacyPath)).toHaveLength(1); // the claim is fresh: not posted again
+      answer({ status: 202, body: legacyPath ? { ok: true, queued: true } : { receipt: "accepted" } });
+      await drain();
+      expect(late).toHaveLength(1);
+      second.adoptLate(...(late[0] as [OutboxEntry, boolean]));
+      await drain();
+      expect(second.view.entries[0], String(legacyPath)).toMatchObject({ status: "sent", path: legacyPath ? "legacy" : "keeper" });
+      expect((await stored(t.factory))[0]).toMatchObject({ status: "sent" });
+      expect((await stored(t.factory))[0]?.claim).toBeUndefined();
+      expect(t.transport.calls).toHaveLength(1);
+    }
+  });
+});
+
 describe("what a 503 means", () => {
   it("keeper_failed, or a code this client does not know: may have been applied, so the row decides", async () => {
     for (const code of ["keeper_failed", "something_new"]) {
@@ -819,18 +904,25 @@ describe("what a 503 means", () => {
     }
   });
 
-  it("store_failed: nothing was stored, so it is tried again on any path", async () => {
-    const t = setup({ random: () => 0 });
-    legacy(t);
-    let n = 0;
-    t.transport.on("/message", () => (++n === 1 ? { status: 503, body: { error: { code: "store_failed", message: "disk" } } } : { status: 202, body: {} }), "POST");
-    const outbox = await t.make();
-    await outbox.send({ text: "hello" });
-    await drain();
-    t.timers.advance(500);
-    await drain();
-    expect(n).toBe(2);
-    expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "legacy" });
+  it("every 503, store_failed included, may have been applied (a satellite answers it after storing): the row decides", async () => {
+    for (const keeper of [true, false]) {
+      const t = setup({ random: () => 0 });
+      if (!keeper) legacy(t);
+      let n = 0;
+      t.transport.on("/message", () => (++n === 1 ? { status: 503, body: { error: { code: "store_failed", message: "disk" } } } : { status: 202, body: { receipt: "duplicate" } }), "POST");
+      const outbox = await t.make();
+      await outbox.send({ text: "hello" });
+      await drain();
+      t.timers.advance(500);
+      await drain();
+      if (keeper) {
+        expect(n).toBe(2);
+        expect(t.view().entries[0]).toMatchObject({ status: "sent", path: "keeper", receipt: "duplicate" });
+      } else {
+        expect(n).toBe(1);
+        expect(t.view().entries[0]).toMatchObject({ status: "failed", error: MAYBE_SENT });
+      }
+    }
   });
 
   it("409 duplicate_client_id: the legacy path already holds this send, so it is sent", async () => {

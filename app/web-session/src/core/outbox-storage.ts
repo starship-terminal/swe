@@ -74,6 +74,23 @@ export type Claim =
   | { kind: "missing" };
 
 /**
+ * An abandoned claim, resolved without posting: a stale claim is removed and the entry marked `ambiguous` (its
+ * post may have reached the hub), so its own deadlines and the repeat rule apply from here. Anything else is
+ * left as stored.
+ */
+export function decideAbandon(
+  stored: OutboxEntry | undefined,
+  now: number,
+  staleMs: number,
+): { entry: OutboxEntry | undefined; write?: OutboxEntry } {
+  if (stored === undefined || stored.status !== "waiting" || stored.claim === undefined) return { entry: stored };
+  if (now - stored.claim.at < staleMs) return { entry: stored };
+  const { claim: _stale, ...rest } = stored;
+  const abandoned: OutboxEntry = { ...rest, ambiguous: true };
+  return { entry: abandoned, write: abandoned };
+}
+
+/**
  * The claim rule, the same for every storage: given the entry as stored, may `owner` post it now? An
  * abandoned claim (another page's, older than `staleMs`, or this page's own) means an earlier post may have
  * reached the hub, so the entry comes back `ambiguous` and the outbox's repeat rule decides.
@@ -90,7 +107,8 @@ export function decideClaim(
   if (stored.status !== "waiting") return { claim: { kind: "settled", entry: stored } };
   let entry = stored;
   if (entry.claim !== undefined) {
-    if (entry.claim.owner !== owner && now - entry.claim.at < staleMs) return { claim: { kind: "busy", entry } };
+    // A fresh claim is a post on its way: another tab's, or this page's from before its outbox restarted.
+    if (now - entry.claim.at < staleMs) return { claim: { kind: "busy", entry } };
     entry = { ...entry, ambiguous: true };
   }
   const claimed: OutboxEntry = { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } };
@@ -111,6 +129,8 @@ export interface OutboxStorage {
    * stored (memory) decides on.
    */
   claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim>;
+  /** Resolve a stale claim on an entry, atomically, by `decideAbandon`. Answers the entry as it now stands. */
+  abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined>;
   close(): void;
 }
 
@@ -128,6 +148,9 @@ export class MemoryStorage implements OutboxStorage {
   /** In memory there are no other pages to coordinate with: the outbox's own copy decides. */
   async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
     return decideClaim(entry, owner, now, staleMs).claim;
+  }
+  async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
+    return decideAbandon(entry, now, staleMs).entry;
   }
   close(): void {}
 }
@@ -168,6 +191,10 @@ export class DeferredStorage implements OutboxStorage {
 
   async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
     return (await this.ready).claim(entry, owner, now, staleMs);
+  }
+
+  async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
+    return (await this.ready).abandon(entry, now, staleMs);
   }
 
   close(): void {
@@ -234,6 +261,23 @@ class IndexedDbStorage implements OutboxStorage {
     });
     await finished;
     return claim;
+  }
+
+  async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
+    const tx = this.db.transaction(STORE, "readwrite");
+    const finished = done(tx);
+    const store = tx.objectStore(STORE);
+    const result = await new Promise<OutboxEntry | undefined>((resolve, reject) => {
+      const read = store.get(entry.commandId);
+      read.onerror = () => reject(read.error ?? new Error("IndexedDB read failed"));
+      read.onsuccess = () => {
+        const decided = decideAbandon(read.result as OutboxEntry | undefined, now, staleMs);
+        if (decided.write !== undefined) store.put(decided.write);
+        resolve(decided.entry);
+      };
+    });
+    await finished;
+    return result;
   }
 
   close(): void {
@@ -305,6 +349,15 @@ export class FallbackStorage implements OutboxStorage {
     } catch (error) {
       this.fail(error);
       return this.inner.claim(entry, owner, now, staleMs);
+    }
+  }
+
+  async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
+    try {
+      return await this.inner.abandon(entry, now, staleMs);
+    } catch (error) {
+      this.fail(error);
+      return this.inner.abandon(entry, now, staleMs);
     }
   }
 
