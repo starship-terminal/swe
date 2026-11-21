@@ -36,6 +36,7 @@ moves it.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import sys
@@ -135,7 +136,7 @@ class Recorder(V2Case):
                    for snap in self.snapshots):
             self.take_snapshot(key, last)
         fixture = {
-            "scenario": name, "about": about,
+            "scenario": name, "about": inspect.cleandoc(about),
             "connections": [c.view() for c in self.connections],
             "snapshots": self.snapshots,
         }
