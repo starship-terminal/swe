@@ -1,0 +1,40 @@
+// What the timeline (G12) and the composer (G13) import: the store, its
+// types, and the pure reducer and selectors for views and tests that want
+// them. The wire types are generated from the hub's schema.
+export { createSessionStore, useSessionStore } from "./store";
+export type {
+  ActionResult,
+  SendResult,
+  SessionStore,
+  SessionStoreOptions,
+  SessionStoreState,
+} from "./store";
+export { fetchTransport, sessionPath } from "./transport";
+export type { Transport } from "./transport";
+export type { ConnectionState, ConnectionStatus, Environment, Timers } from "./supervisor";
+export type { OutboxView, SendInput } from "./outbox";
+export type { OutboxEntry } from "./outbox-storage";
+export type { Refusal, RefusalReason } from "./gate";
+export { readOnlyReason } from "./gate";
+export { reduce, reduceAll } from "./reducer";
+export { emptySession } from "./state";
+export type {
+  CheckpointInfo,
+  CheckpointItem,
+  CommandRecord,
+  CompactedItem,
+  ErrorItem,
+  LiveText,
+  MessageItem,
+  Notice,
+  RequestEvent,
+  RequestItem,
+  Resolution,
+  SessionState,
+  TaskInfo,
+  ThinkingItem,
+  TimelineItem,
+  ToolItem,
+  TurnInfo,
+} from "./state";
+export * from "./types";

@@ -1,0 +1,370 @@
+// The session store: ties the reducer, the connection supervisor and the
+// outbox together. It is the only thing the timeline (G12) and the composer
+// (G13) import from the core.
+//
+//   const store = createSessionStore({ sessionKey, transport });
+//   store.getState().start();
+//   const items = useSessionStore(store, (s) => s.session.items);
+//
+// Everything with a side effect is injected (transport, timers, randomness,
+// environment, IndexedDB), so a test builds a store over scripted ones.
+import { createStore, type StoreApi } from "zustand/vanilla";
+import { useStore } from "zustand";
+
+import { gate, gateSend, type Refusal } from "./gate";
+import { Outbox, type OutboxView, type SendInput } from "./outbox";
+import { DeferredStorage, openOutboxStorage, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { applyHistory, applyLive, beginConnection, reduce } from "./reducer";
+import { emptySession, type SessionState } from "./state";
+import {
+  backoffDelay,
+  browserEnvironment,
+  realTimers,
+  Supervisor,
+  type BackoffOptions,
+  type ConnectionStatus,
+  type Environment,
+  type Timers,
+} from "./supervisor";
+import { sessionPath, type JsonResponse, type Transport } from "./transport";
+import type { Frame, MessagesPage, Snapshot, Status } from "./types";
+
+export interface SessionStoreOptions {
+  sessionKey: string;
+  transport: Transport;
+  timers?: Timers;
+  random?: () => number;
+  environment?: Environment;
+  /** Opens the outbox's storage. Default: IndexedDB, or memory when that is missing or throws. */
+  openStorage?: () => Promise<OutboxStorage>;
+  /** A fresh command id: 1 to 64 characters of letters, digits, `_` and `-`. */
+  newId?: () => string;
+  backoff?: BackoffOptions;
+  silenceMs?: number;
+}
+
+/** What an action that reaches the hub answers with. */
+export type ActionResult =
+  | { ok: true; commandId: string; receipt: string }
+  | Refusal
+  | { ok: false; reason: "refused"; message: string; status: number }
+  | { ok: false; reason: "network"; message: string };
+
+export type SendResult = { ok: true; entry: OutboxEntry } | Refusal;
+
+export interface SessionStoreState {
+  /** What the frames add up to. */
+  session: SessionState;
+  /** The state of the connection. */
+  connection: ConnectionStatus;
+  /** Sends not yet delivered, and whether they survive a reload. */
+  outbox: OutboxView;
+  /** `start` has run and not been stopped. */
+  started: boolean;
+
+  /** Open the stream and the outbox. Safe to call twice. */
+  start(): void;
+  /** Close everything. The store can be started again. */
+  stop(): void;
+  /** Check the connection now: the page came back, the network changed, or the native shell woke the app. */
+  wake(): void;
+
+  /** Queue a message for the session. It is kept until the hub has it, through a reload. */
+  send(input: SendInput): Promise<SendResult>;
+  /** Answer an approval or a question. `decision` is allow, deny, always, or the number of a menu row. Needs a live connection. */
+  respond(requestId: string, decision: string): Promise<ActionResult>;
+  /** Stop the turn. Needs a live connection. */
+  interrupt(): Promise<ActionResult>;
+  /** Restore the files to a checkpoint. Needs a live connection. */
+  restore(checkpointId: string): Promise<ActionResult>;
+  /** Edit, cancel, or send now (steer) a message in the queue. Needs a live connection. */
+  queueAction(op: "edit" | "cancel" | "steer", commandId: string, text?: string): Promise<ActionResult>;
+  /** Load the page of timeline before the oldest one held. */
+  loadOlder(): Promise<void>;
+  /** Forget a send (a failed one the person dismissed). */
+  discardSend(commandId: string): Promise<void>;
+  /** Send a failed message again as a new one. */
+  retrySend(commandId: string): Promise<SendResult | undefined>;
+  /** Why a gated action cannot run right now, or null when it can: for a view to disable a control and say why. */
+  refusal(): Refusal | null;
+}
+
+export type SessionStore = StoreApi<SessionStoreState>;
+
+/** A hook over a store, for the React views: `useSessionStore(store, (s) => s.session.items)`. */
+export function useSessionStore<T>(store: SessionStore, selector: (state: SessionStoreState) => T): T {
+  return useStore(store, selector);
+}
+
+function defaultNewId(): string {
+  const bytes = new Uint8Array(12);
+  const crypto = globalThis.crypto as Crypto | undefined;
+  if (crypto?.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  // randomUUID needs a secure context, and the hub is often plain http on a LAN.
+  return `w-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function refusedFrom(response: JsonResponse): ActionResult {
+  const body = response.body as { error?: { message?: unknown } } | undefined;
+  const text = body?.error?.message;
+  const message = typeof text === "string" && text !== "" ? text : `The hub answered ${response.status}`;
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, reason: "unauthorized", message: "This device is not signed in to the hub." };
+  }
+  return { ok: false, reason: "refused", message, status: response.status };
+}
+
+const SNAPSHOT_TRIES = 5;
+
+export function createSessionStore(options: SessionStoreOptions): SessionStore {
+  const timers = options.timers ?? realTimers;
+  const random = options.random ?? Math.random;
+  const newId = options.newId ?? defaultNewId;
+  const environment = options.environment ?? browserEnvironment();
+  const key = options.sessionKey;
+  const transport = options.transport;
+
+  let supervisor: Supervisor | null = null;
+  let outbox: Outbox | null = null;
+  let generation = 0;
+  let knownBoot: string | null = null;
+  let wasLive = false;
+  let snapshotBusy = false;
+  let snapshotWanted: { reason: "hole" | "epoch" } | null = null;
+  let snapshotTimer: unknown = null;
+
+  const store = createStore<SessionStoreState>()((set, get) => {
+    const setSession = (session: SessionState) => set({ session });
+
+    const ingest = (frame: Frame): void => {
+      const before = get().session;
+      const { state, effects } = reduce(before, frame);
+      set({ session: state });
+      if (frame.type === "session.snapshot") {
+        noteBoot(frame.data.boot_id);
+      } else if (frame.type === "command.result" && frame.command_id !== undefined) {
+        const result = { ok: frame.data.ok, ...(frame.data.note === undefined ? {} : { note: frame.data.note }) };
+        outbox?.noteResult(frame.command_id, {
+          ...result,
+          ...(frame.data.cancelled === undefined ? {} : { cancelled: frame.data.cancelled }),
+        });
+      }
+      for (const effect of effects) {
+        if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);
+      }
+    };
+
+    const noteBoot = (boot: string): void => {
+      if (knownBoot !== null && knownBoot !== boot) outbox?.hubRestarted();
+      knownBoot = boot;
+    };
+
+    // -- the snapshot a hole or an epoch change asks for -----------------
+
+    const wantSnapshot = (reason: "hole" | "epoch"): void => {
+      // An epoch change needs the whole snapshot, which covers a hole too.
+      if (snapshotBusy) {
+        snapshotWanted = { reason: snapshotWanted?.reason === "epoch" ? "epoch" : reason };
+        return;
+      }
+      void fetchSnapshot(reason, 1);
+    };
+
+    const fetchSnapshot = async (reason: "hole" | "epoch", attempt: number): Promise<void> => {
+      snapshotBusy = true;
+      const mine = generation;
+      let body: unknown;
+      try {
+        const response = await transport.json(sessionPath(key, "snapshot"));
+        if (response.status >= 200 && response.status < 300) body = response.body;
+      } catch {
+        // Retried below.
+      }
+      if (mine !== generation) return;
+      if (body !== undefined && body !== null && typeof body === "object") {
+        const snapshot = body as Snapshot;
+        if (reason === "epoch") {
+          ingest({ v: 2, type: "session.snapshot", session: key, ts: timers.now() / 1000, data: snapshot });
+        } else {
+          setSession(applyLive(get().session, snapshot.live));
+        }
+        snapshotBusy = false;
+        const next = snapshotWanted;
+        snapshotWanted = null;
+        if (next !== null) wantSnapshot(next.reason);
+        return;
+      }
+      if (attempt >= SNAPSHOT_TRIES) {
+        // The next catch-up's state frame restores the text; so does the message's completion.
+        snapshotBusy = false;
+        snapshotWanted = null;
+        return;
+      }
+      snapshotTimer = timers.setTimeout(() => {
+        snapshotTimer = null;
+        if (mine === generation) void fetchSnapshot(reason, attempt + 1);
+      }, backoffDelay(attempt, random, options.backoff));
+    };
+
+    // -- the connection --------------------------------------------------
+
+    const onStatus = (connection: ConnectionStatus): void => {
+      set({ connection });
+      const live = connection.state === "live";
+      if (live && !wasLive) {
+        outbox?.wake();
+        // A hub that restarted may not have the results of commands it acknowledged. The status
+        // route says which boot it is on without a credential.
+        void (async () => {
+          try {
+            const response = await transport.json("/v1/status");
+            const boot = (response.body as Partial<Status> | undefined)?.boot_id;
+            if (typeof boot === "string") noteBoot(boot);
+          } catch {
+            // Not worth surfacing: the snapshot carries it too.
+          }
+        })();
+      }
+      wasLive = live;
+    };
+
+    const gated = async (
+      send: (commandId: string) => Promise<JsonResponse>,
+    ): Promise<ActionResult> => {
+      const refusal = gate(get().connection, get().session);
+      if (refusal !== null) return refusal;
+      const commandId = newId();
+      let response: JsonResponse;
+      try {
+        response = await send(commandId);
+      } catch (error) {
+        return { ok: false, reason: "network", message: error instanceof Error ? error.message : "The hub could not be reached" };
+      }
+      if (response.status >= 200 && response.status < 300) {
+        const receipt = (response.body as { receipt?: unknown } | undefined)?.receipt;
+        return { ok: true, commandId, receipt: typeof receipt === "string" ? receipt : "accepted" };
+      }
+      return refusedFrom(response);
+    };
+
+    const post = (tail: string, body: Record<string, unknown>) =>
+      transport.json(sessionPath(key, tail), { method: "POST", body });
+
+    return {
+      session: emptySession(),
+      connection: { state: "connecting", attempt: 0, since: timers.now(), retryAt: null, detail: "" },
+      outbox: { entries: [], persistent: false, note: "", paused: null },
+      started: false,
+
+      start() {
+        if (get().started) return;
+        generation++;
+        set({ started: true });
+        const storage = new DeferredStorage((options.openStorage ?? (() => openOutboxStorage()))());
+        outbox = new Outbox({
+          session: key,
+          storage,
+          transport,
+          timers,
+          random,
+          newId,
+          ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
+          onChange: (view) => set({ outbox: view }),
+        });
+        void outbox.init();
+        supervisor = new Supervisor({
+          transport,
+          timers,
+          random,
+          environment,
+          sessionKey: key,
+          cursor: () => {
+            const { cursor, epoch } = get().session;
+            return { last: cursor, epoch };
+          },
+          onFrame: ingest,
+          onConnecting: () => setSession(beginConnection(get().session)),
+          onStatus,
+          ...(options.backoff === undefined ? {} : { backoff: options.backoff }),
+          ...(options.silenceMs === undefined ? {} : { silenceMs: options.silenceMs }),
+        });
+        supervisor.start();
+        set({ connection: supervisor.status });
+      },
+
+      stop() {
+        if (!get().started) return;
+        generation++;
+        supervisor?.stop();
+        supervisor = null;
+        outbox?.close();
+        outbox = null;
+        if (snapshotTimer !== null) timers.clearTimeout(snapshotTimer);
+        snapshotTimer = null;
+        snapshotBusy = false;
+        snapshotWanted = null;
+        wasLive = false;
+        set({ started: false });
+      },
+
+      wake() {
+        supervisor?.wake();
+        outbox?.wake();
+      },
+
+      async send(input) {
+        const refusal = gateSend(get().connection, get().session);
+        if (refusal !== null) return refusal;
+        if (outbox === null) {
+          return { ok: false, reason: "not_live", message: "The session view has not started." };
+        }
+        return { ok: true, entry: await outbox.send(input) };
+      },
+
+      respond: (requestId, decision) =>
+        gated((commandId) => post("approval", { request_id: requestId, decision, command_id: commandId })),
+
+      interrupt: () => gated((commandId) => post("control", { op: "interrupt", command_id: commandId })),
+
+      restore: (checkpointId) =>
+        gated((commandId) => post("restore", { checkpoint_id: checkpointId, command_id: commandId })),
+
+      queueAction: (op, queuedId, text) =>
+        gated((commandId) =>
+          post("queue", {
+            client_id: queuedId,
+            op,
+            command_id: commandId,
+            ...(op === "edit" && text !== undefined ? { text } : {}),
+          }),
+        ),
+
+      async loadOlder() {
+        const { hasMore, nextBefore } = get().session;
+        if (!hasMore || nextBefore === null) return;
+        const mine = generation;
+        try {
+          const response = await transport.json(`${sessionPath(key, "messages")}?v=2&before=${nextBefore}&limit=100`);
+          if (mine !== generation || response.status < 200 || response.status >= 300) return;
+          setSession(applyHistory(get().session, response.body as MessagesPage));
+        } catch {
+          // The button stays; try again.
+        }
+      },
+
+      async discardSend(commandId) {
+        await outbox?.discard(commandId);
+      },
+
+      async retrySend(commandId) {
+        const entry = await outbox?.retry(commandId);
+        return entry === undefined ? undefined : { ok: true, entry };
+      },
+
+      refusal: () => gate(get().connection, get().session),
+    };
+  });
+
+  return store;
+}

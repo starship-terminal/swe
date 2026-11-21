@@ -144,7 +144,7 @@
 
 - id: G11
   title: "Client core: reducer, supervisor, outbox"
-  status: todo
+  status: done
   depends_on: [G9, G10]
   owns: ["app/web-session/src/core/**", "tests/fixtures/session-view/**"]
   questions: []

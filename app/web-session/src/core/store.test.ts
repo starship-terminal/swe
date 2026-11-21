@@ -1,0 +1,425 @@
+import { IDBFactory } from "fake-indexeddb";
+import { describe, expect, it } from "vitest";
+
+import { createSessionStore, type SessionStore } from "./store";
+import { openOutboxStorage, MemoryStorage } from "./outbox-storage";
+import { FakeEnvironment, FakeTimers, FakeTransport, loadFixture, snapshotFrame, type Fixture } from "./test-support";
+import type { Frame, Snapshot } from "./types";
+
+const KEY = "claude:session-1";
+const BASE = "/v1/sessions/claude%3Asession-1";
+
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+const drain = async () => {
+  for (let i = 0; i < 5; i++) await settle();
+};
+
+function boot(
+  over: { factory?: IDBFactory; online?: boolean; memory?: boolean; transport?: FakeTransport; timers?: FakeTimers } = {},
+) {
+  const timers = over.timers ?? new FakeTimers();
+  const transport = over.transport ?? new FakeTransport();
+  const environment = new FakeEnvironment();
+  environment.isOnline = over.online ?? true;
+  const factory = over.factory ?? new IDBFactory();
+  let ids = 0;
+  const store: SessionStore = createSessionStore({
+    sessionKey: KEY,
+    transport,
+    timers,
+    random: () => 0,
+    environment,
+    openStorage: over.memory ? async () => new MemoryStorage("no database in tests") : () => openOutboxStorage(factory),
+    newId: () => `id${++ids}`,
+  });
+  return { store, transport, timers, environment, factory, state: () => store.getState() };
+}
+
+/** The calls to the session's own routes (the status check a reconnect makes is left out). */
+const api = (t: { transport: FakeTransport }) => t.transport.calls.filter((c) => c.path !== "/v1/status");
+
+const frames = (fixture: Fixture, connection = 0, from = 0, to?: number): Frame[] =>
+  (fixture.connections[connection] as Fixture["connections"][number]).frames.slice(from, to);
+
+/** Start a store and play a fixture's first connection into it. */
+function playing(name: string, over: Parameters<typeof boot>[0] = {}) {
+  const t = boot(over);
+  const fixture = loadFixture(name);
+  t.state().start();
+  return { ...t, fixture };
+}
+
+describe("a store over a recorded stream", () => {
+  it("opens the stream, goes live on the first frame and builds the session from the frames", async () => {
+    const t = playing("default");
+    expect(t.transport.last.path).toBe(`${BASE}/events?v=2`);
+    expect(t.state().connection.state).toBe("connecting");
+    t.transport.last.send(...frames(t.fixture));
+    await drain();
+    expect(t.state().connection.state).toBe("live");
+    const { session } = t.state();
+    expect(session.caughtUp).toBe(true);
+    expect(session.loaded).toBe(true);
+    expect(session.phase).toBe("idle");
+    expect(session.items.length).toBeGreaterThan(5);
+    expect(session.cursor).toBe(t.fixture.snapshots[0]?.body.head);
+  });
+
+  it("reconnects asking with the cursor and epoch, and takes the replay", async () => {
+    const t = playing("reconnect");
+    t.transport.last.send(...frames(t.fixture, 0));
+    await drain();
+    expect(t.state().session.live.map((l) => l.text)).toEqual(["Hel"]);
+    t.transport.last.end({ kind: "closed" });
+    expect(t.state().connection.state).toBe("reconnecting");
+    const second = t.fixture.connections[1] as Fixture["connections"][number];
+    expect(t.transport.last.query).toEqual({ v: "2", last: String(second.request.last), epoch: String(second.request.epoch) });
+    // Not caught up again until the state frame.
+    expect(t.state().session.caughtUp).toBe(false);
+    t.transport.last.send(...frames(t.fixture, 1));
+    await drain();
+    expect(t.state().session.items.find((i) => i.kind === "message" && i.role === "assistant")).toMatchObject({ text: "Hello world" });
+    expect(t.state().session.live).toEqual([]);
+    expect(t.state().session.caughtUp).toBe(true);
+  });
+
+  it("recovers a lost delta by fetching the snapshot and resuming from its live[]", async () => {
+    const t = playing("streaming");
+    const all = frames(t.fixture);
+    const lost = all.findIndex((f) => f.type === "message.delta" && f.data.offset === 3);
+    const hole = t.fixture.snapshots[0] as Fixture["snapshots"][number];
+    t.transport.on("/snapshot", () => ({ status: 200, body: hole.body }));
+    // Everything but the third chunk, up to the one after it.
+    const upTo = all.findIndex((f) => f.type === "message.delta" && f.data.offset === 6);
+    t.transport.last.send(...all.slice(0, upTo + 1).filter((_f, i) => i !== lost));
+    await drain();
+    expect(api(t).map((c) => c.path)).toEqual([`${BASE}/snapshot`]);
+    expect(t.state().session.live.map((l) => l.text)).toEqual(["Hello wor"]);
+    expect(t.state().session.stopped).toEqual([]);
+    // The rest arrives as usual.
+    t.transport.last.send(...all.slice(upTo + 1));
+    await drain();
+    expect(t.state().session.live).toEqual([]);
+    expect(t.state().session.items.at(-1)).toMatchObject({ kind: "message", text: "Hello world" });
+    expect(api(t)).toHaveLength(1);
+  });
+
+  it("asks again, with backoff, when the snapshot cannot be fetched", async () => {
+    const t = playing("streaming");
+    const all = frames(t.fixture);
+    const hole = t.fixture.snapshots[0] as Fixture["snapshots"][number];
+    let answered = 0;
+    t.transport.on("/snapshot", () => {
+      answered++;
+      if (answered < 3) throw new TypeError("network down");
+      return { status: 200, body: hole.body };
+    });
+    const lost = all.findIndex((f) => f.type === "message.delta" && f.data.offset === 3);
+    const upTo = all.findIndex((f) => f.type === "message.delta" && f.data.offset === 6);
+    t.transport.last.send(...all.slice(0, upTo + 1).filter((_f, i) => i !== lost));
+    await drain();
+    expect(answered).toBe(1);
+    t.timers.advance(500);
+    await drain();
+    expect(answered).toBe(2);
+    t.timers.advance(1000);
+    await drain();
+    expect(answered).toBe(3);
+    expect(t.state().session.live.map((l) => l.text)).toEqual(["Hello wor"]);
+  });
+
+  it("takes a whole snapshot when a state frame is on another epoch", async () => {
+    const t = playing("epoch_change");
+    const first = frames(t.fixture, 0)[0] as Frame;
+    const body = (frames(t.fixture, 0)[2] as Extract<Frame, { type: "session.snapshot" }>).data;
+    t.transport.on("/snapshot", () => ({ status: 200, body }));
+    t.transport.last.send(first);
+    await drain();
+    expect(t.state().session.epoch).toBe(0);
+    t.transport.last.send({
+      v: 2,
+      type: "session.state",
+      session: KEY,
+      seq: 0,
+      ts: 1,
+      data: { state: "idle", live: [], pending: [], head: body.head, epoch: 1 },
+    });
+    await drain();
+    expect(t.state().session.epoch).toBe(1);
+  });
+});
+
+describe("what needs a live connection", () => {
+  const live = async (name = "approval") => {
+    const t = playing(name);
+    return t;
+  };
+
+  it("refuses an approval, Stop, Restore and a queue action while not live, with a reason", async () => {
+    const t = await live();
+    for (const run of [
+      () => t.state().respond("r1", "allow"),
+      () => t.state().interrupt(),
+      () => t.state().restore("ck-1"),
+      () => t.state().queueAction("steer", "q1"),
+    ]) {
+      expect(await run()).toMatchObject({ ok: false, reason: "not_live", message: expect.stringContaining("Connecting") });
+    }
+    expect(t.transport.calls).toEqual([]);
+    expect(t.state().refusal()?.reason).toBe("not_live");
+  });
+
+  it("says why for each state of the connection", async () => {
+    const t = await live();
+    t.transport.last.send(...frames(t.fixture, 0, 0, 2));
+    t.environment.goOffline();
+    expect(await t.state().interrupt()).toMatchObject({ ok: false, reason: "not_live", message: expect.stringContaining("offline") });
+    t.environment.goOnline();
+    expect(t.state().connection.state).toBe("reconnecting");
+    expect(await t.state().interrupt()).toMatchObject({ ok: false, message: expect.stringContaining("Reconnecting") });
+    t.transport.last.end({ kind: "http", status: 401 });
+    expect(await t.state().interrupt()).toMatchObject({ ok: false, reason: "unauthorized" });
+    t.state().wake();
+    t.transport.last.end({ kind: "http", status: 404 });
+    expect(await t.state().interrupt()).toMatchObject({ ok: false, reason: "gone" });
+    t.state().wake();
+    t.transport.last.send({ type: "session.status", data: {} });
+    expect(await t.state().interrupt()).toMatchObject({ ok: false, reason: "outdated" });
+  });
+
+  it("refuses while the catch-up is not finished: the snapshot has come but not the state frame", async () => {
+    const t = await live();
+    t.transport.last.send(frames(t.fixture, 0)[0] as Frame);
+    expect(t.state().connection.state).toBe("live");
+    expect(await t.state().respond("r1", "allow")).toMatchObject({ ok: false, reason: "catching_up" });
+    t.transport.last.send(frames(t.fixture, 0)[1] as Frame);
+    expect(t.state().refusal()).toBeNull();
+  });
+
+  it("answers an approval once it is live and caught up, with a command id", async () => {
+    const t = await live();
+    t.transport.on("/approval", () => ({ status: 200, body: { ok: true, receipt: "accepted", command_id: "id1" } }), "POST");
+    t.transport.last.send(...frames(t.fixture, 0, 0, 2));
+    expect(await t.state().respond("r1", "allow")).toEqual({ ok: true, commandId: "id1", receipt: "accepted" });
+    expect(t.transport.posts("/approval")).toEqual([{ request_id: "r1", decision: "allow", command_id: "id1" }]);
+  });
+
+  it("posts Stop, Restore and queue actions to their routes", async () => {
+    const t = await live();
+    for (const tail of ["control", "restore", "queue"]) t.transport.on(`/${tail}`, () => ({ status: 200, body: { ok: true } }), "POST");
+    t.transport.last.send(...frames(t.fixture, 0, 0, 2));
+    await t.state().interrupt();
+    await t.state().restore("ck-1");
+    await t.state().queueAction("edit", "q1", "new words");
+    await t.state().queueAction("steer", "q2");
+    expect(t.transport.posts("/control")).toEqual([{ op: "interrupt", command_id: "id1" }]);
+    expect(t.transport.posts("/restore")).toEqual([{ checkpoint_id: "ck-1", command_id: "id2" }]);
+    expect(t.transport.posts("/queue")).toEqual([
+      { client_id: "q1", op: "edit", command_id: "id3", text: "new words" },
+      { client_id: "q2", op: "steer", command_id: "id4" },
+    ]);
+  });
+
+  it("reports what the hub says when it refuses, and a network failure, and never retries", async () => {
+    const t = await live();
+    t.transport.last.send(...frames(t.fixture, 0, 0, 2));
+    t.transport.on("/approval", () => ({ status: 409, body: { error: { code: "approval_failed", message: "that request is no longer open" } } }), "POST");
+    expect(await t.state().respond("r1", "allow")).toEqual({
+      ok: false,
+      reason: "refused",
+      status: 409,
+      message: "that request is no longer open",
+    });
+    t.transport.on("/approval", () => ({ status: 403, body: undefined }), "POST");
+    expect(await t.state().respond("r1", "allow")).toMatchObject({ ok: false, reason: "unauthorized" });
+    t.transport.down = true;
+    expect(await t.state().respond("r1", "allow")).toMatchObject({ ok: false, reason: "network" });
+    expect(api(t)).toHaveLength(3);
+  });
+
+  it("refuses everything on a read-only session, with the reason the row gives", async () => {
+    const t = await live("default");
+    const first = frames(t.fixture)[0] as Extract<Frame, { type: "session.snapshot" }>;
+    t.transport.last.send(
+      { ...first, data: { ...first.data, row: { ...first.data.row, control: "read_only", control_reason: "Started in a terminal" } } },
+      frames(t.fixture)[1] as Frame,
+    );
+    expect(await t.state().interrupt()).toMatchObject({ ok: false, reason: "read_only", message: "Started in a terminal" });
+    expect(await t.state().send({ text: "hi" })).toMatchObject({ ok: false, reason: "read_only" });
+  });
+});
+
+describe("sends", () => {
+  it("are accepted while offline, kept, and sent once the connection is live", async () => {
+    const t = boot({ online: false });
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    t.state().start();
+    expect(t.state().connection.state).toBe("offline");
+    const sent = await t.state().send({ text: "typed on the train" });
+    expect(sent).toMatchObject({ ok: true, entry: { commandId: "id1", status: "pending" } });
+    expect(t.state().outbox.entries).toHaveLength(1);
+    t.transport.down = true;
+    await drain();
+    t.transport.down = false;
+    t.environment.goOnline();
+    t.transport.last.send({ v: 2, type: "ping", session: KEY, ts: 1, data: { ts: 1, head: 0 } });
+    await drain();
+    expect(t.transport.posts("/message").map((b) => b["command_id"])).toContain("id1");
+    expect(t.state().outbox.entries[0]).toMatchObject({ status: "sent" });
+  });
+
+  it("are dropped from the outbox when their command.result comes down the stream", async () => {
+    const t = playing("queued");
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "queued" } }), "POST");
+    t.transport.last.send(...frames(t.fixture, 0, 0, 2));
+    await t.state().send({ text: "then lint it" });
+    await drain();
+    expect(t.state().outbox.entries[0]).toMatchObject({ commandId: "id1", status: "sent" });
+    t.transport.last.send({
+      v: 2,
+      type: "command.result",
+      session: KEY,
+      seq: 0,
+      ts: 2,
+      command_id: "id1",
+      data: { op: "send", ok: true },
+    });
+    await drain();
+    expect(t.state().outbox.entries).toEqual([]);
+    expect(t.state().session.commands["id1"]?.result).toMatchObject({ ok: true });
+  });
+
+  it("are asked about again when the hub's boot id changes", async () => {
+    const t = playing("default");
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    let statusBoot = "boot-1";
+    t.transport.on("/v1/status", () => ({ status: 200, body: { boot_id: statusBoot } }));
+    const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
+    t.transport.last.send(snapshot, state);
+    await t.state().send({ text: "x" });
+    await drain();
+    expect(t.transport.posts("/message")).toHaveLength(1);
+    // The hub restarts: the reconnect gets a snapshot with a new boot id.
+    t.transport.last.end({ kind: "closed" });
+    statusBoot = "boot-2";
+    t.transport.last.send({ ...snapshot, data: { ...snapshot.data, boot_id: "boot-2" } }, state);
+    await drain();
+    expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1", "id1"]);
+  });
+
+  it("are asked about again when the status route shows a new boot id after a reconnect", async () => {
+    const t = playing("default");
+    t.transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    let boot = "boot-1";
+    t.transport.on("/v1/status", () => ({ status: 200, body: { boot_id: boot } }));
+    const [snapshot, state] = frames(t.fixture) as [Frame, Frame];
+    t.transport.last.send(snapshot, state);
+    await t.state().send({ text: "x" });
+    await drain();
+    t.transport.last.end({ kind: "closed" });
+    boot = "boot-2";
+    // A replay: no snapshot, so only the status route can say the hub restarted.
+    t.transport.last.send(frames(t.fixture, 0, 1, 2)[0] as Frame);
+    await drain();
+    expect(t.transport.posts("/message").map((b) => b["command_id"])).toEqual(["id1", "id1"]);
+  });
+
+  it("are refused on a session that is gone", async () => {
+    const t = boot();
+    t.state().start();
+    t.transport.last.end({ kind: "http", status: 404 });
+    expect(await t.state().send({ text: "x" })).toMatchObject({ ok: false, reason: "gone" });
+  });
+
+  it("report that they will not survive a reload when there is no IndexedDB", async () => {
+    const t = boot({ memory: true });
+    t.state().start();
+    await drain();
+    expect(t.state().outbox).toMatchObject({ persistent: false, note: "no database in tests" });
+    const real = boot();
+    real.state().start();
+    await drain();
+    expect(real.state().outbox).toMatchObject({ persistent: true, note: "" });
+  });
+
+  it("survive a reload of the page: a new store over the same database sends them", async () => {
+    const factory = new IDBFactory();
+    const transport = new FakeTransport();
+    transport.down = true;
+    const first = boot({ factory, transport });
+    first.state().start();
+    await first.state().send({ text: "before the reload" });
+    await drain();
+    first.state().stop();
+
+    transport.down = false;
+    transport.on("/message", () => ({ status: 202, body: { receipt: "accepted" } }), "POST");
+    const second = boot({ factory, transport });
+    second.state().start();
+    await drain();
+    expect(transport.posts("/message").map((b) => [b["text"], b["command_id"]])).toContainEqual(["before the reload", "id1"]);
+  });
+});
+
+describe("history", () => {
+  it("loads the page before the oldest held, and stops when there is no more", async () => {
+    const t = playing("default");
+    const [snapshot, state] = frames(t.fixture) as [Extract<Frame, { type: "session.snapshot" }>, Frame];
+    t.transport.last.send({ ...snapshot, data: { ...snapshot.data, has_more: true, next_before: 5 } } as Frame, state);
+    const older = {
+      session: KEY,
+      messages: [{ v: 2, type: "message.completed", session: KEY, seq: 2, ts: 1, turn_id: "t0", data: { id: "o", kind: "user", text: "older" } }],
+      has_more: false,
+      next_before: null,
+    };
+    t.transport.on("/messages", () => ({ status: 200, body: older }));
+    await t.state().loadOlder();
+    expect(api(t)[0]?.path).toBe(`${BASE}/messages?v=2&before=5&limit=100`);
+    expect(t.state().session.items[0]).toMatchObject({ seq: 2, text: "older" });
+    expect(t.state().session.hasMore).toBe(false);
+    await t.state().loadOlder();
+    expect(api(t)).toHaveLength(1);
+  });
+});
+
+describe("start, stop and wake", () => {
+  it("stop() closes the stream and ignores what comes after; start() begins again", async () => {
+    const t = playing("default");
+    t.transport.last.send(...frames(t.fixture).slice(0, 2));
+    const before = t.state().session.applied;
+    const stream = t.transport.last;
+    t.state().stop();
+    expect(stream.closed).toBe(true);
+    expect(t.state().started).toBe(false);
+    stream.send(frames(t.fixture)[2] as Frame);
+    expect(t.state().session.applied).toBe(before);
+    expect(t.timers.pending).toBe(0);
+    t.state().start();
+    expect(t.transport.streams).toHaveLength(2);
+    expect(t.transport.last.query).toEqual({ v: "2", last: String(t.state().session.cursor), epoch: "0" });
+  });
+
+  it("start() twice is one connection", () => {
+    const t = boot();
+    t.state().start();
+    t.state().start();
+    expect(t.transport.streams).toHaveLength(1);
+  });
+
+  it("wake() makes a connection that is backing off try now", async () => {
+    const t = boot();
+    t.state().start();
+    t.transport.last.end({ kind: "error", message: "refused" });
+    expect(t.transport.streams).toHaveLength(1);
+    t.state().wake();
+    expect(t.transport.streams).toHaveLength(2);
+  });
+
+  it("applies a snapshot frame like any other, and exposes the hook's selector input", () => {
+    const t = boot();
+    t.state().start();
+    const body = loadFixture("default").snapshots[0]?.body as Snapshot;
+    t.transport.last.send(snapshotFrame(body));
+    expect(t.state().session.session).toBe(KEY);
+  });
+});

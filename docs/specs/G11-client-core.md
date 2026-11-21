@@ -1,0 +1,422 @@
+# G11: client core (reducer, supervisor, outbox, store)
+
+Status: built, with no UI. It is the session view's data layer: the part
+that turns the hub's v2 stream
+([G9-sync-v2.md](G9-sync-v2.md)) into state a view can draw, keeps the
+stream open, and keeps what the person typed until the hub has it. The
+timeline (G12) and the composer (G13) import the store and nothing else
+from it. The design is G1 section 3, "Client"
+([G1-session-runtime-redesign.md](G1-session-runtime-redesign.md)); the
+toolchain it builds in is G10
+([G10-session-view-toolchain.md](G10-session-view-toolchain.md)).
+
+| File (under `app/web-session/`) | What it holds |
+|---|---|
+| `scripts/gen-types.mjs` | makes `src/core/generated/session-v2.ts` from `src/swe/remote/schema/session_v2.json`; `pnpm gen:types`, `--check` |
+| `src/core/generated/session-v2.ts` | the wire types and the schema's `x-swe` constants (`PROTOCOL`). Generated, never edited |
+| `src/core/types.ts` | `FrameOf`, `seqOf`, `isFrame`, `codePointLength`, and re-exports of the generated names |
+| `src/core/state.ts` | `SessionState`, the timeline item types, `emptySession` |
+| `src/core/reducer.ts` | `reduce(state, frame)`: the rules of G9's "What G11 must know" |
+| `src/core/transport.ts` | the `Transport` interface, the fetch-stream implementation, the SSE parser |
+| `src/core/supervisor.ts` | the connection supervisor: states, backoff, silence, wake |
+| `src/core/outbox.ts`, `outbox-storage.ts` | the send outbox, its IndexedDB and memory storages |
+| `src/core/gate.ts` | when an action needs a live connection, and the reason it gives when refused |
+| `src/core/store.ts` | `createSessionStore`, `useSessionStore`: the zustand store that ties the above together |
+| `src/core/index.ts` | what G12 and G13 import |
+| `src/core/test-support.ts` | fake timers, transport, environment and the fixture loader (tests only) |
+| `scripts/record_session_view.py` | records the fixtures from the hub's own v2 stream |
+| `tests/fixtures/session-view/*.json` | the recordings |
+| `tests/test_session_view_fixtures.py` | records again and holds the committed files equal to it |
+
+## Types
+
+`pnpm gen:types` reads `session_v2.json` and writes
+`src/core/generated/session-v2.ts`: one `export type` per `$defs` entry
+(`Frame`, `Snapshot`, `Row`, every `<Type>Event` and `<Type>Data`) and the
+`PROTOCOL` constant from `x-swe` (`ping_s`, `silence_s`, `replay_max`,
+`snapshot_messages`, the feature names). The generator is about 100 lines
+with no dependency. It reads the part of JSON Schema the hub's schema
+uses and refuses anything else, so a new construct fails loudly instead
+of turning into a wrong type. `generated.test.ts` fails while the
+committed file is not what the schema makes now: after a change to
+`events.py`, run `python3 -m swe.remote.schema --write`, then
+`pnpm gen:types`, and commit both.
+
+`Frame` is the union a stream sends, discriminated by `type`.
+`FrameOf<"message.delta">` names one member.
+
+## The reducer
+
+`reduce(state, frame) -> {state, effects}` is pure: it never changes the
+state it is given, and shares every array and object a frame did not
+touch. `effects` is work only the store can do (`fetch_snapshot`).
+
+What it holds (`SessionState`):
+
+| Field | From |
+|---|---|
+| `cursor`, `epoch`, `bootId` | the highest journaled `seq`, raised to the `head` of every state frame and ping; the epoch of the snapshot or state frame; the snapshot's `boot_id` |
+| `loaded`, `caughtUp` | something to draw has arrived; the state frame that ends a catch-up has arrived on this connection |
+| `row` | `session.snapshot`, `session.row` |
+| `phase`, `phaseReason`, `harnessSessionId` | `session.state` (journaled, or the catch-up's) |
+| `caps` | `session.caps`, the snapshot |
+| `openTurn`, `turns[]` | `turn.started`, `turn.ended` |
+| `items[]` | the timeline, one item per `seq`, in `seq` order: `message`, `thinking`, `tool` (start, update and completion in one item, with `fileEdits`), `request` (an approval or question with its `resolution`), `compacted`, `error`, `checkpoint` |
+| `live[]`, `stopped[]` | the text in progress, and the ids a hole stopped |
+| `pending[]` | the requests still open, as their events |
+| `plan`, `tasks[]`, `checkpoints[]`, `changes`, `queue[]`, `usage` | their events, the last one winning |
+| `commands` | receipts and results by `command_id`, the newest 200 |
+| `lastNotice` | the last `notify`, numbered |
+| `hasMore`, `nextBefore` | whether older timeline exists, and the `before` for it |
+
+The rules:
+
+| Frame | The reducer |
+|---|---|
+| `session.snapshot` | replaces everything the session holds. Keeps `commands`, `lastNotice` and `caughtUp`, which are about the client. Its `pending[]` is the list of open requests, and a request the messages show answered is not open |
+| `session.state` with `live` | the state frame that ends every catch-up: takes `state`, replaces the live text with `live[]` (and clears `stopped`), drops the request cards it does not list (marks them `dropped`; ids it does not know are left alone), raises the cursor to `head`, marks the connection caught up. An `epoch` it does not hold asks the store for a snapshot |
+| `session.state` journaled | takes `state`; ends all live text for idle, agent_down, parked, closed |
+| `session.row` | replaces the row |
+| `ping` | raises the cursor to `head` |
+| `message.delta` | the delta rule below |
+| journaled frames | applied once and in place: a `seq` already held is skipped, a lower one than the highest is inserted where it belongs, and `seq` gaps are fine. The cursor is the highest `seq` seen even for a frame it skipped. A `seq` of 0 never moves it |
+| state events (`session.state`, `session.caps`, `plan.updated`, `queue.updated`, `usage.updated`, `changes.updated`) | an older one arriving after a newer one is ignored. A snapshot marks all of them as of its `head` |
+| `approval.requested`, `input.requested` | the same `seq` is the same request (it can arrive again after a snapshot). A different `seq` under a known id is a new request that reuses it: an agent that restarts counts again from `perm-1` (the fake agent does; see Verification) |
+| `approval.resolved` | closes the request with that id; the first answer stands. An answer that comes before its request is kept until the request shows up |
+| `tool.started` | the same `seq` is the same call; a start that arrives after its completion joins the completion's item; any other is a new call, even under a reused `call_id` |
+| `command.receipt`, `command.result` | recorded by `command_id` |
+| `turn.ended` | ends the turn and all live text |
+| anything else | ignored, so a newer hub's new event types do not break an older view. Its `seq` still counts |
+
+**The delta rule** (G1 section 3, G9 "Delta offsets"). A delta is applied
+to the live text of its `id` like this:
+
+| The delta's `offset` against the text held | The reducer |
+|---|---|
+| equal to its length | appends |
+| behind it, and the delta ends at or before the end | ignores it (text already held, as after a snapshot by `GET`) |
+| anything else | drops it, adds the id to `stopped`, returns `fetch_snapshot` with `reason: "hole"`; later deltas for that id are ignored until `live[]` replaces its text |
+
+**Lengths are code points.** The hub counts an offset with Python's
+`len`, which counts code points, and `String.length` counts UTF-16 units. A
+reply with an emoji in it would read as a hole at its next delta. The
+reducer counts code points (`codePointLength`) and keeps the length of
+each live text beside it. `reducer.test.ts` has the case.
+
+**Message ids and the live text.** A message's live text ends on
+`message.completed` or `thinking.completed` with its `id`, on
+`tool.started` with its `call_id`, on `turn.ended`, on a journaled state
+that is idle, agent_down, parked or closed, and when a state frame's
+`live[]` leaves it out. `message.completed` carries the whole text and
+replaces whatever was streamed.
+
+### Recordings
+
+The reducer tests replay the hub's own output
+(`tests/fixtures/session-view/`, below) and check that the frames add up
+to what the hub says: for every recording, the state built from its
+frames equals the state built from the snapshot the hub took at the end
+(cursor, epoch, phase, caps, plan, tasks, checkpoints, changes, usage,
+queue, pending, live, timeline items, turns). Then each recording has its
+own test: the approval pending then answered, a second device taking the
+pending request from its snapshot, a queued message and a steer, a
+reconnect mid-reply, an overflow recovery, a snapshot on a new epoch.
+Hand-made frames cover what the recordings cannot reach (holes, code
+points, out-of-order and repeated frames, reused ids).
+
+## The connection supervisor
+
+`Supervisor` keeps one session's stream open. Everything with a side
+effect is injected: the `Transport`, `Timers` (`now`, `setTimeout`,
+`clearTimeout`), a `random` function and an `Environment` (online,
+offline, visible). `test-support.ts` has a fake of each, so a test moves
+time by hand and nothing waits.
+
+| State | Means | Leaves it on |
+|---|---|---|
+| `connecting` | opening the first stream, or still failing for the first time | a frame: `live`; a failure: backs off; 401 or 403, 404 or 410, 426, a v1 frame: the terminal states |
+| `live` | a frame has arrived on the open stream | silence, an end of the stream, offline |
+| `reconnecting` | the stream dropped or went silent; trying again | a frame: `live`; three failures in a row: `hub_down` |
+| `offline` | the device has no network; no timer runs | the `online` event |
+| `hub_down` | online, and three attempts in a row failed | a frame |
+| `unauthorized` | 401 or 403; waits for `wake()` (a new credential) | `wake()` |
+| `gone` | 404 or 410: the session does not exist | `wake()` |
+| `outdated` | HTTP 426, or the first frame was not v2 (a hub that does not know `v=2` answers with today's frames) | `wake()` |
+
+- **Connect.** `GET /v1/sessions/<key>/events?v=2`, with
+  `&last=<cursor>&epoch=<epoch>` once the client holds both. The first
+  time there is no cursor, and the first frame is the snapshot.
+- **Silence.** Any frame, a ping included, restarts a 25 s timer
+  (`PROTOCOL.silence_s`; the hub pings every 10 s). When it fires the
+  stream is closed and replaced. A stream that dies after speaking is a
+  drop: `reconnecting`, and the first retry is immediate. A stream that
+  never spoke is a failure and backs off.
+- **Backoff.** The wait before retry `n` is `min(30 s, 1 s * 2^(n-1))`,
+  half of it fixed and half random (`backoffDelay`). The count goes back
+  to 0 when a stream speaks. `status.retryAt` says when the next attempt
+  starts, for a countdown.
+- **Wake** (`wake()`, the page becoming visible, the `online` event, a
+  native shell's call). Whatever waits on a timer, or in a state nothing
+  retries out of, tries now. A live stream that has been quiet 25 s or
+  more is replaced (a device that slept holds a dead socket whose timer
+  never ran). A healthy one is left alone. `online` while live starts the
+  connection over: the network may have changed under the stream.
+- **Offline** is read from `navigator.onLine` and its events. A failure
+  while it says offline is `offline`, not `hub_down`.
+
+`status` is `{state, attempt, since, retryAt, detail}`; `detail` is a few
+words for a tooltip ("HTTP 502", "no frame for 25 s", a network error).
+
+The real transport reads SSE from `fetch` streams, as `chat.js` does
+(`EventSource` cannot send an `Authorization` header). `fetchTransport({
+baseUrl, headers })` takes the credential from a function, read at each
+request. The Mac and iPhone shells inject their own header at the scheme
+handler, so they pass none.
+
+## The outbox
+
+Only sends go through it. An entry
+(`{commandId, session, text, attachments, mode, createdAt, status,
+attempts, receipt?, error?}`) is made when the person sends, with a
+`command_id` that never changes, and written to IndexedDB before the
+first attempt.
+
+| Status | Means |
+|---|---|
+| `pending` | no receipt yet; retried with backoff, oldest first, one at a time (a send that cannot go holds back the ones behind it) |
+| `sent` | the hub gave a receipt (accepted, queued, duplicate, held); waits for its `command.result` |
+| `failed` | the hub refused it (409, 422, 404 ...) or it expired; kept with `error` until the person dismisses it or sends it again as a new message |
+
+- **Retries are safe.** The hub answers a repeated `command_id` with the
+  stored receipt (`duplicate`), and with the stored result when there is
+  one. A lost response, a reload and a hub restart all end the same way:
+  the command was applied once. `outbox.test.ts` has a hub that applies a
+  command once and loses the first response.
+- **A result ends it.** An ok result, or a cancelled one (taken out of the
+  queue, or steered), removes the entry. Any other result marks it failed
+  with the hub's note.
+- **After a restart** (a changed `boot_id`, in a snapshot or in
+  `GET /v1/status` after a reconnect), and after a reload, every `sent`
+  entry is asked about again under its own id: the hub may have lost a
+  result it owed (a failed result has `seq` 0 and is not replayed). A `401`
+  pauses the outbox until `wake()`.
+- **24 hours.** A `pending` entry older than that fails ("Not sent"), and a
+  `sent` one is forgotten: the hub holds a message for a sleeping machine
+  for the same time.
+- **No IndexedDB.** It can be missing, or throw (a private window, blocked
+  site data, a sandboxed frame), when it opens or later. The outbox always
+  keeps its entries in memory and treats the database as a write-through
+  copy. When it fails the storage turns itself into a memory storage and
+  says why: `outbox.persistent` is false and `outbox.note` reads "IndexedDB
+  is not available (...); sends are kept in memory and will not survive a
+  reload". A view should show that note beside the composer.
+- **Not here.** Approvals, Stop, Restore and the queue edits are never
+  queued. See "Gated actions".
+
+## Gated actions
+
+An approval answered from a stale screen can land on a request that has
+moved on, so these need a live connection that has caught up and are
+refused otherwise, with a reason a view can show:
+
+`respond(requestId, decision)`, `interrupt()`, `restore(checkpointId)`,
+`queueAction(op, commandId, text?)`. Each returns
+`{ok: false, reason, message}` without touching the network when
+`gate()` refuses:
+
+| `reason` | When | `message` (the first words) |
+|---|---|---|
+| `not_live` | connecting, reconnecting, offline, hub down | "Connecting to the hub", "Reconnecting", "You are offline", "The hub is not answering" |
+| `catching_up` | live, but the catch-up's state frame has not arrived | "Catching up with the session" |
+| `read_only` | the row says `control` is not `full` | the row's `control_reason` |
+| `unauthorized`, `gone`, `outdated` | the terminal states | |
+
+A request that reaches the hub and is refused returns
+`{ok: false, reason: "refused", status, message}` with the hub's message
+("that request is no longer open"); no answer returns `reason: "network"`.
+None of them is retried. `send` is refused only for `read_only`, `gone`
+and `outdated`: it never waits for a connection.
+
+## The store
+
+```ts
+const store = createSessionStore({ sessionKey, transport: fetchTransport({ baseUrl, headers }) });
+store.getState().start();
+const items = useSessionStore(store, (s) => s.session.items);
+```
+
+`SessionStoreOptions`: `sessionKey`, `transport`, and injectable `timers`,
+`random`, `environment`, `openStorage`, `newId`, `backoff`, `silenceMs`.
+
+`SessionStoreState`:
+
+| Member | |
+|---|---|
+| `session: SessionState` | what the frames add up to |
+| `connection: ConnectionStatus` | the supervisor's status |
+| `outbox: {entries, persistent, note, paused}` | sends not yet delivered |
+| `started: boolean` | |
+| `start()`, `stop()` | open or close the stream and the outbox; `start` twice is one connection; the store can be started again |
+| `wake()` | check the connection now (visibility, network, the native shell's `wake()`) |
+| `send({text, attachments?, mode?}) -> {ok: true, entry} \| Refusal` | into the outbox; `mode` is `queue` (default) or `steer` |
+| `respond(requestId, decision)` | `decision` is `allow`, `deny`, `always`, or the 1-based number of a menu row, as `POST .../approval` takes it |
+| `interrupt()` | Stop: `POST .../control {op: "interrupt"}` |
+| `restore(checkpointId)` | `POST .../restore {checkpoint_id}`: see Schema gaps |
+| `queueAction("edit" \| "cancel" \| "steer", queuedCommandId, text?)` | `POST .../queue` |
+| `loadOlder()` | the page before the oldest held (`GET .../messages?v=2&before=`) |
+| `discardSend(id)`, `retrySend(id)` | dismiss a failed send, or send it again as a new one |
+| `refusal()` | why a gated action cannot run now, or null: for disabling a control and saying why |
+
+Every action that reaches the hub carries a fresh `command_id` in its
+body. What the store does on its own: a hole in the deltas fetches
+`GET .../snapshot` and replaces the live text with its `live[]` (retried
+with backoff, five tries, since the next catch-up's state frame restores
+it anyway); an epoch the client does not hold fetches the snapshot and
+replaces everything; a `command.result` reaches the outbox; going live
+wakes the outbox and checks `GET /v1/status` for a changed `boot_id`.
+
+## Fixtures
+
+`scripts/record_session_view.py` starts the hub of
+`tests/test_remote_sse_v2.py` (a real `HubState` over a throwaway home,
+with a keeper on a thread driving the scripted `FakeAdapter`), opens
+`V2Stream` the way a connection does, plays a scenario and writes every
+frame the stream sends. Nothing in a fixture is hand-written.
+`PYTHONPATH=src:. python3 scripts/record_session_view.py` writes
+`tests/fixtures/session-view/<scenario>.json`; `--check` compares.
+
+| Scenario | Shows |
+|---|---|
+| `default` | a session watched from its first turn: thinking, tools (one with file edits, one failing), plan, a subagent task, a checkpoint made and restored, changes, usage, two replies |
+| `streaming` | a reply in four chunks, a ping, and a snapshot taken after the third chunk (what a client that lost the second one fetches) |
+| `approval` | an approval and a question, answered; a second device connecting while the approval is open |
+| `queued` | a message sent while the agent waits on an approval, queued and then sent |
+| `steer` | a queued message sent now (steer), another taken out of the queue |
+| `reconnect` | a client cut off mid-reply, coming back with its cursor and epoch: the replay, the row, the state frame's `live[]`, the delta that continues it |
+| `overflow` | a stream not read while the agent runs, whose queue overflows: the events it missed, the row, the state frame |
+| `epoch_change` | the journal starting over while a client is connected, and a client reconnecting with the old epoch: a snapshot each time |
+| `failed_turn` | an error, a compaction, a failed turn |
+
+A fixture is `{scenario, about, connections: [{request: {last, epoch},
+frames}], snapshots: [{after: [connection, frame], body}]}`: a client's
+connections in order, and the snapshot the hub gave right after the named
+frame (the last one is the hub's view at the end, which the frames must
+add up to). Everything that varies between runs is replaced with a fixed
+name before writing (the session id, the work folder, the boot id, ids the
+hub invents, device ids, wall-clock times); times come from the fake clock.
+The file puts each frame on its own line, so a hub change reads as a small
+diff.
+
+`tests/test_session_view_fixtures.py` records every scenario again and
+fails when a committed file differs, when a frame fails
+`schema.validate`, when a path of this machine got in, and when recording
+twice gives two results. A hub change that alters what a stream sends must
+change the fixtures in the same commit.
+
+## Dependencies
+
+| Package | Version | Licence | Why |
+|---|---|---|---|
+| zustand | 5.0.16 | MIT | the store (runtime) |
+| fake-indexeddb | 6.2.7 | Apache-2.0 | IndexedDB in the outbox tests (dev only) |
+
+Nothing else was added: the type generator, the SSE parser and the fake
+timers are written here. zustand ships in the bundle only once a view
+imports the store (nothing does yet, so the committed bundle's files are
+unchanged except `build-info.json`, whose source hash covers the new
+sources).
+
+`src/index.css` got one line, `@source not "./core"`. Tailwind scans every
+source file for words that look like utilities, and the core's code and
+comments have plenty ("visible", "fixed"): the first build shipped
+`.visible` and `.fixed` as global class names, which G10's notes warn
+against. `core/` holds no markup, so it is out of the scan.
+
+## Verification
+
+Run on 2026-11-21, macOS 27.3, Node 22.23.1.
+
+| Check | Result |
+|---|---|
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 200 tests), `pnpm build` | pass |
+| `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
+| The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
+
+## Schema gaps
+
+Things the client needed that the hub or the schema does not say. None was
+changed here.
+
+- **Offset unit.** `message.delta.offset` and `live[].text` lengths count
+  code points (Python `len`), and the schema says only `integer`. A client
+  that counts UTF-16 units is wrong on any reply with an emoji.
+- **`row.state` and `row.status` go stale.** A row arrives in the snapshot
+  and in `session.row` (ownership, title, pin changes); neither says the
+  session started or stopped running. Draw the phase from
+  `session.phase`, never from the row.
+- **Restore has no route.** `restore(checkpointId)` posts to
+  `POST /v1/sessions/{key}/restore {checkpoint_id, command_id}`, which G19
+  must provide (G15's notes: a command in `_KEPT_OPS`, not in `HELD_OPS`).
+  Until then the hub answers 404 and the store returns a `refused` result.
+- **A steer is a command of its own.** `queue {op: "steer"}` ends the queued
+  message with `command.result {ok: false, cancelled: true}` and sends its
+  text as a new user message under a new command id. A composer that pairs
+  a queued bubble with the user message by `command_id` will not find it:
+  match on the queue item leaving `queue[]`.
+- **Approval answers by text.** `POST .../approval` takes only `decision`
+  (`allow`, `deny`, `always` or a menu row number). `input.requested` has
+  no route that carries the person's text yet, so a question can be closed
+  but not answered with words.
+- **No v2 event lists an ACP agent's modes or models**
+  ([G1-session-runtime-redesign.md](G1-session-runtime-redesign.md), G20).
+
+## What G12 and G13 must know
+
+- **Import `src/core/index.ts` only.** Create one store per open session
+  with `createSessionStore`, call `start()` when the view mounts and
+  `stop()` when it unmounts. Read it with `useSessionStore(store,
+  selector)`: select the smallest slice you can. A ping makes a new
+  `session` object but leaves `items` and every other array as they were,
+  so `(s) => s.session.items` does not re-render on a ping.
+- **Timeline.** `session.items` is in journal order, one entry per `seq`,
+  with `turnId`. `session.turns` has each turn's start, end, status and
+  duration ("Worked for 2m 29s" is `endedAt - startedAt`, or `durationS`).
+  A `tool` item holds its whole life: `status` (`running`, `ok`, `error`,
+  `cancelled`), `summary`, `input`, the latest `text`, `output`,
+  `fileEdits`. Live text is separate: `session.live` is rendered after the
+  items of its turn and is replaced by the item at `message.completed`.
+  The `id` pairs them (`MessageItem.id`, `LiveText.id`).
+- **No coalescing in the core.** Work groups, prose-first grouping and
+  "N tool calls" belong to G12's selectors over `items`.
+- **Requests.** `session.pending` is the open ones, in the order asked. A
+  `request` item shows the same request with its `resolution` (`source`,
+  `decision`, `by`) once it ends, or `source: "dropped"` when the hub's
+  state frame stopped listing it. Any device can answer; the first answer
+  wins; "Allowed on iPhone" is `resolution.by` (a device id: map it through
+  the devices list).
+- **Composer.** `send()` never waits for a connection and keeps the message
+  through a reload: show it as pending from `outbox.entries` until its
+  user message (same `commandId`) or its `queue[]` entry appears, and show
+  `failed` ones with `error` and the dismiss and resend actions. Show
+  `outbox.note` when `outbox.persistent` is false. Steer is
+  `send({text, mode: "steer"})`; **say that it stops the reply in progress**
+  with one wording for every harness ([G1](G1-session-runtime-redesign.md),
+  "Carried forward from wave 2", and G13's note on [G16](G16-more-adapters.md)).
+  Disable the buttons that need a live connection from
+  `store.refusal()` and show its `message`.
+- **Queued tray.** `session.queue` is the hub's list (`command_id`, `text`,
+  `by`, `mode`, `attachments`). Its actions are `queueAction`.
+- **Read-only.** `readOnlyReason(session.row)` is the text for the bar that
+  replaces the composer, or null.
+- **Connection.** `connection.state` has eight values; the
+  `ConnectionStatusDot` of G1 maps from them. `retryAt` and `detail` are
+  there for a "Reconnecting in 4 s" line.
+- **Native.** The Mac and iPhone shells call `store.getState().wake()` on
+  foreground and network changes. Inside the shells the scheme handler adds
+  the bearer: pass `fetchTransport({baseUrl: ""})` with no `headers`.
+- **Tests.** Drive a view with `FakeTransport`, `FakeTimers` and
+  `FakeEnvironment` from `src/core/test-support.ts`, and the recordings
+  from `tests/fixtures/session-view/` (`loadFixture`).
+- **G10's placeholder.** `SessionShell` still reads no session data (its
+  breadcrumb shows the harness and the id). G12 replaces it using the
+  store.
