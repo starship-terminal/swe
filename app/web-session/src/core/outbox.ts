@@ -22,7 +22,9 @@
 //   send as failed, "may or may not have been sent".
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
-import { CLAIM_STALE_MS, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+import { CLAIM_STALE_MS, furtherAlong, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
+
+export { furtherAlong };
 import { sessionPath, type JsonResponse, type Transport } from "./transport";
 
 /** How long a send that the hub has not taken is worth trying: the time the hub holds a message for a sleeping machine. */
@@ -96,6 +98,9 @@ export interface OutboxOptions {
   onChange(view: OutboxView): void;
 }
 
+/** Why a send waits while the database cannot record its claim. */
+export const STORAGE_DOWN = "Not sent yet: this device's storage did not answer, and sending now could send it twice";
+
 /** How many results for ids it does not hold yet the outbox keeps until its stored sends are loaded. */
 export const EARLY_RESULTS_KEPT = 200;
 
@@ -115,22 +120,6 @@ type Outcome = "done" | "retry" | "paused" | "held";
 
 const TERMINAL = new Set(["failed", "unconfirmed"]);
 
-const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 1, failed: 2, unconfirmed: 2 };
-
-/**
- * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
- * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
- * `sent` over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
- * with attempts+1, so a claim-free copy at the same count is the released one); `ambiguous` over not.
- */
-export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
-  return (
-    STAGE[a.status] - STAGE[b.status] ||
-    a.attempts - b.attempts ||
-    Number(a.claim === undefined) - Number(b.claim === undefined) ||
-    Number(a.ambiguous === true) - Number(b.ambiguous === true)
-  );
-}
 
 function errorText(response: JsonResponse): string {
   const body = response.body as { error?: { message?: unknown } } | undefined;
@@ -222,8 +211,13 @@ export class Outbox {
     try {
       await this.load();
     } catch {
-      // The storage failed while loading (only a storage that throws, not a fallback one): what memory holds stands,
-      // and loading still ends, so the view offers its actions again.
+      // The storage failed while loading (only a storage that throws, not a fallback one): what memory holds stands.
+    }
+    if (this.closed) return;
+    try {
+      await this.applyHeld();
+    } catch {
+      // A storage that throws on writes too: what memory holds stands, and loading still ends.
     }
     if (this.closed) return;
     this.ready = true;
@@ -259,11 +253,18 @@ export class Outbox {
     for (const entry of toWrite) {
       // One the person removed meanwhile stays removed.
       if (this.removed.has(entry.commandId) || !this.list.includes(entry)) continue;
-      await this.options.storage.put(entry);
+      // Compare and write: another page may have moved it on since the load. Its copy then stands, here too.
+      const standing = await this.options.storage.reconcile(entry);
       if (this.closed) return;
+      if (standing !== entry && this.list.includes(entry)) this.replace(standing);
     }
-    // Answers, results that came while loading, and results the session held already, before anything is posted:
-    // a legacy send is never asked about again, so a result missed here would be lost.
+  }
+
+  /**
+   * Answers, results that came while loading, and results the session held already, before anything is posted:
+   * a legacy send is never asked about again, so a result missed here would be lost.
+   */
+  private async applyHeld(): Promise<void> {
     for (const entry of [...this.list]) {
       const result = this.options.knownResult?.(entry.commandId);
       if (result !== undefined && !this.early.has(entry.commandId)) this.early.set(entry.commandId, result);
@@ -506,6 +507,13 @@ export class Outbox {
       this.adopt(claim.entry);
       return "done";
     }
+    if (claim.kind === "unrecorded") {
+      // The database did not take the claim, so another page could post this too: not now. Shown, not written
+      // (a write would drop the claim the entry may hold, which other pages rely on), and tried again.
+      const now = this.current(entry.commandId);
+      if (now !== undefined) this.replace({ ...now, lastError: STORAGE_DOWN });
+      return "retry";
+    }
     if (claim.kind === "busy") {
       // Another tab is posting it: leave it alone, and look again once its claim would be stale.
       this.adopt(claim.entry);
@@ -596,12 +604,13 @@ export class Outbox {
         delete outcome.ambiguous;
       }
     }
+    let standing: OutboxEntry | null = outcome;
     try {
       if (outcome === null) await this.options.storage.remove(entry.commandId);
-      else await this.options.storage.put(outcome);
+      else standing = await this.options.storage.reconcile(outcome);
     } finally {
       if (this.closeAfterLate) this.options.storage.close();
-      this.options.onLate?.(outcome ?? { ...entry, status: "sent" }, outcome === null);
+      this.options.onLate?.(standing ?? { ...entry, status: "sent" }, standing === null);
     }
   }
 
@@ -770,7 +779,9 @@ export class Outbox {
     // Anything written after an answer releases this page's claim.
     const { claim: _released, ...entry } = update;
     this.replace(entry);
-    await this.options.storage.put(entry);
+    // Compare and write: if another page moved it further along meanwhile, its copy stands, here too.
+    const standing = await this.options.storage.reconcile(entry);
+    if (standing !== entry && this.list.some((e) => e === entry)) this.replace(standing);
     this.changed();
     this.scheduleAge(); // its deadline may have changed with its status
   }

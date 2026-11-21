@@ -344,16 +344,21 @@ Other rules:
 - **One page posts an entry.** Tabs of one browser share the database, and
   a claim (`{owner, at}` on the entry) decides which page posts it. A tab
   learns of another tab's new sends only when it loads; results reach every
-  tab on its own stream. In memory (no IndexedDB) there are no other pages to
-  coordinate with: each page holds only its own sends, so a claim always
-  succeeds there.
+  tab on its own stream. A claim the database did not record is not a
+  claim: a page whose database stops answering does not post a send the
+  database may hold (see "When storage fails"). Where there is no database
+  at all, or for a send only this page's memory holds, there are no other
+  pages to coordinate with, so a claim made in memory is the only one.
 - **No IndexedDB.** It can be missing, or throw (a private window, blocked
   site data, a sandboxed frame), when it opens or later. The outbox always
   keeps its entries in memory and treats the database as a write-through
-  copy. When it fails the storage turns itself into a memory storage and
-  says why: `outbox.persistent` is false and `outbox.note` reads "IndexedDB
-  is not available (...); sends are kept in memory and will not survive a
-  reload". A view should show that note beside the composer.
+  copy. When it is missing or does not open, the storage is a memory
+  storage and says why: `outbox.persistent` is false and `outbox.note` reads
+  "IndexedDB is not available (...); sends are kept in memory and will not
+  survive a reload". When it fails later, see "When storage fails": the note
+  reads "IndexedDB failed (...). Sends saved before are not sent until it
+  answers again, and new ones are kept in memory and will not survive a
+  reload until then". A view should show the note beside the composer.
 
 ### Two copies of one send
 
@@ -380,6 +385,55 @@ stored copy. What they can still differ in cannot cause a post:
 `error` and `endedAt` are only shown; two terminal copies (`failed` and
 `unconfirmed`) can only be retried as a new id or dismissed; and two
 `sent` copies at the same count come from the one answer.
+
+### When storage fails
+
+The database can fail after it opened (WebKit's "Connection to Indexed
+Database server lost"). `FallbackStorage` then works by three rules:
+
+1. **One more try on a fresh connection.** An operation that fails is
+   tried once more on a newly opened connection before anything falls
+   back. If that answers, nothing changes for the outbox.
+2. **In fallback, the database first.** Every later operation tries the
+   database again (one fresh connection each). The first one that answers
+   replays what was held, by compare-and-write (`reconcile`, the copy
+   further along wins), and the storage is the database again
+   (`persistent` true, the note cleared).
+3. **A claim the database did not record is not a claim.** For a send the
+   database may hold, the claim answers `unrecorded`: the outbox does not
+   post it, shows "Not sent yet: this device's storage did not answer, and
+   sending now could send it twice. Trying again.", and tries again on its
+   backoff. The entry is not written meanwhile (a write would drop a claim
+   other pages rely on). A send the database cannot hold (first written
+   while in fallback, after a load of its session that answered without
+   it) is claimed and posted from memory: no other page can see it.
+
+"The database may hold it" means a load or a write the database took
+showed the id, or no load of the session has answered yet.
+
+| Operation | The database may hold the id | When it fails, after the fresh try |
+|---|---|---|
+| A send's first write | no (a new id) | held in memory; claimed and posted from memory; written when the database answers. Lost if the page reloads before that (the note says so) |
+| Claim | yes | `unrecorded`: not posted, waiting with the reason above, tried again on the backoff. No other page can post it twice, because the database still shows it unclaimed or claimed by its real poster |
+| Claim | no | claimed in memory and posted |
+| Save after an answer (`sent`, a release, an end) | yes | held, replayed when the database answers. Until then the database shows this page's recorded claim: other pages see it busy, then stale, then post it again only on a keeper row (de-duplicated); on a legacy row they end it "may or may not have been sent" (Limits) |
+| `late()` after `stop()` | yes | as a save after an answer |
+| Abandon a stale claim | yes | resolved in memory (`ambiguous`, no claim), replayed later; the database keeps the stale claim, which every page resolves the same way |
+| Remove (a discard, a delivered result, the terminal cap) | yes | held, replayed when the database answers. If the page reloads first, the next page finds the entry (Limits) |
+| Remove | no | nothing to do |
+| Load | — | answers what memory holds; until a load answers, every send counts as one the database may hold, so none is claimed from memory |
+
+Which writes compare and which may be blind:
+
+| Write | How | Why |
+|---|---|---|
+| A send's first write | blind `put` | a new id: no other copy exists anywhere |
+| `init()`'s write-back of a handed-over copy | `reconcile` | another page may have moved the send on since the load read it |
+| `save()` (every write after an answer or an end) | `reconcile` | another page may have taken a stale claim over meanwhile |
+| `late()` | `reconcile` | the same, and a newer outbox may have written it |
+| Replay after a fallback | `reconcile` | what was held may be older than what other pages wrote since |
+| Claim, abandon | one read-write transaction each | they decide from the stored copy |
+| Remove | blind | it follows a delivered result (every copy is older), or a discard, which is offered only while no post of this page's is out; a post another page has out goes on, and its answer's compare-and-write writes it back as `sent` |
 
 ### What a view reads: `sends`
 
@@ -519,7 +573,7 @@ Run on 2026-11-21, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 291 tests), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (core: 302 tests), `pnpm build` | pass |
 | `tests.test_session_view_fixtures` | pass; recording gives the same bytes on every run |
 | The store against a real hub (a throwaway home, `swe remote serve`, the fake `claude` agent in approval mode, `fetchTransport` over real HTTP): connect, snapshot and state frame, the approval pending, `respond`, the reply, `send`, the second approval, the outbox emptied by `command.result` | pass. It found that the fake agent reuses `perm-1` and `toolu_fake1` in every turn, which the first version of the reducer treated as repeats: ids are now compared with their `seq` |
 
@@ -565,7 +619,8 @@ changed here.
 ## Limits
 
 These are known and left for later. None of them posts a message twice or
-hammers the hub, but each can show the wrong end state or hold a resource.
+hammers the hub. Each can show the wrong end state or hold a resource, and
+one (6) can post, once, a message the person discarded.
 They are not fixed in G11; G13 should know them.
 
 1. **`stop()` during the claim transaction leaves a claim for a send that
@@ -586,6 +641,28 @@ They are not fixed in G11; G13 should know them.
    at all. Suggested fix (G18): a timeout on the open in
    `openOutboxStorage` (a few seconds) that falls back to a memory storage
    with the usual note, as it does when the open fails.
+6. **A removal the database never takes, then a reload.** A discard of a
+   `waiting` send the database holds, made while it does not answer, and
+   the page reloads (or another tab loads) before it answers again: the
+   next page finds the send `waiting` and posts it. That is one post of a
+   message the person discarded, not a repeat; nothing stops it on either
+   path. A delivered result's removal in the same case: the next page
+   finds it `sent`. On a keeper row the recheck settles it; on a legacy
+   row it waits 45 minutes and ends `unconfirmed`. A wrong display, not a
+   repeat.
+7. **A save after an answer the database never takes, then a reload.**
+   The next page finds the send `waiting` with this page's claim: busy,
+   then stale after a minute. On a keeper row it is posted again and the
+   hub de-duplicates it; on a legacy row it ends `failed`, "may or may not
+   have been sent", although it was delivered once. A wrong display, never
+   a second post on the legacy path.
+8. **A `late()` write landing after a discard made after `ready`.** The
+   older outbox's answer writes the send back as `sent`. A later page shows
+   it `sent`; on a legacy row it ends `unconfirmed`. It is never posted
+   again.
+9. **A send only memory holds, then a reload before the database
+   answers.** Its first write failed, so the next page does not know it.
+   It was posted at most once; the note said it would not survive a reload.
 
 ## What G12 and G13 must know
 

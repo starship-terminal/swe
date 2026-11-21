@@ -71,7 +71,12 @@ export type Claim =
   /** It is no longer waiting (another page sent or ended it): this is how it stands. */
   | { kind: "settled"; entry: OutboxEntry }
   /** It is gone from storage (another page saw it through). */
-  | { kind: "missing" };
+  | { kind: "missing" }
+  /**
+   * The database did not answer, and it may know this send: a claim other pages cannot see is not a claim, so
+   * this page must not post it now. It stays waiting and is tried again.
+   */
+  | { kind: "unrecorded"; entry: OutboxEntry };
 
 /**
  * An abandoned claim, resolved without posting: a stale claim is removed and the entry marked `ambiguous` (its
@@ -88,6 +93,23 @@ export function decideAbandon(
   const { claim: _stale, ...rest } = stored;
   const abandoned: OutboxEntry = { ...rest, ambiguous: true };
   return { entry: abandoned, write: abandoned };
+}
+
+const STAGE: Record<OutboxEntry["status"], number> = { waiting: 0, sent: 1, failed: 2, unconfirmed: 2 };
+
+/**
+ * Which of two copies of one send is further along its lifecycle: above 0 when `a` is, below 0 when `b` is, 0 when
+ * the order cannot tell them apart (docs/specs/G11-client-core.md, "Two copies of one send"). In order: terminal over
+ * `sent` over `waiting`; more `attempts`; at equal attempts, no claim over a claim (a claim is only ever written
+ * with attempts+1, so a claim-free copy at the same count is the released one); `ambiguous` over not.
+ */
+export function furtherAlong(a: OutboxEntry, b: OutboxEntry): number {
+  return (
+    STAGE[a.status] - STAGE[b.status] ||
+    a.attempts - b.attempts ||
+    Number(a.claim === undefined) - Number(b.claim === undefined) ||
+    Number(a.ambiguous === true) - Number(b.ambiguous === true)
+  );
 }
 
 /**
@@ -131,6 +153,12 @@ export interface OutboxStorage {
   claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim>;
   /** Resolve a stale claim on an entry, atomically, by `decideAbandon`. Answers the entry as it now stands. */
   abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined>;
+  /**
+   * Compare and write, atomically: read the stored copy, write `entry` only if it is further along (or nothing is
+   * stored), and answer the copy that stands. Every write but a send's first goes through this: a copy chosen from
+   * an earlier read must never overwrite what another page wrote since.
+   */
+  reconcile(entry: OutboxEntry): Promise<OutboxEntry>;
   close(): void;
 }
 
@@ -151,6 +179,9 @@ export class MemoryStorage implements OutboxStorage {
   }
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
     return decideAbandon(entry, now, staleMs).entry;
+  }
+  async reconcile(entry: OutboxEntry): Promise<OutboxEntry> {
+    return entry;
   }
   close(): void {}
 }
@@ -195,6 +226,10 @@ export class DeferredStorage implements OutboxStorage {
 
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
     return (await this.ready).abandon(entry, now, staleMs);
+  }
+
+  async reconcile(entry: OutboxEntry): Promise<OutboxEntry> {
+    return (await this.ready).reconcile(entry);
   }
 
   close(): void {
@@ -280,89 +315,223 @@ class IndexedDbStorage implements OutboxStorage {
     return result;
   }
 
+  async reconcile(entry: OutboxEntry): Promise<OutboxEntry> {
+    const tx = this.db.transaction(STORE, "readwrite");
+    const finished = done(tx);
+    const store = tx.objectStore(STORE);
+    const standing = await new Promise<OutboxEntry>((resolve, reject) => {
+      const read = store.get(entry.commandId);
+      read.onerror = () => reject(read.error ?? new Error("IndexedDB read failed"));
+      read.onsuccess = () => {
+        const stored = read.result as OutboxEntry | undefined;
+        if (stored === undefined || furtherAlong(entry, stored) > 0) {
+          store.put(entry);
+          resolve(entry);
+        } else {
+          resolve(stored);
+        }
+      };
+    });
+    await finished;
+    return standing;
+  }
+
   close(): void {
     this.db.close();
   }
 }
 
-/** Wraps a storage that can fail: the first failure turns it into a memory storage that says why. */
+/**
+ * Wraps the database (docs/specs/G11-client-core.md, "When storage fails"). An operation that fails is tried once
+ * more on a fresh connection (`reopen`); if that fails too the storage is in fallback: what it was asked to write is
+ * held in memory, and every later operation tries the database first. The first one that succeeds replays what was
+ * held (the copy further along wins, see `furtherAlong`) and the storage is the database again.
+ *
+ * While in fallback a claim is made in memory only for a send the database cannot know (first written in fallback,
+ * after a load that did not hold it). Any other claim is `unrecorded`: another page reading the database would
+ * not see it, so posting now could post the send twice.
+ */
 export class FallbackStorage implements OutboxStorage {
   private inner: OutboxStorage;
   private failure = "";
+  /** Ids the database has (from a load or a write it took). */
+  private readonly known = new Set<string>();
+  /** Sessions a load from the database has answered for: an id it did not hold then is not the database's. */
+  private readonly loaded = new Set<string>();
+  /** Writes and removals the database has not taken yet, in the order asked. */
+  private readonly held = new Map<string, OutboxEntry>();
+  private readonly heldRemovals = new Set<string>();
+  private closed = false;
 
   constructor(
     inner: OutboxStorage,
-    private readonly onFallback: (note: string) => void = () => {},
+    /** Told when the storage falls back (with why) and when it is the database again (with ""). */
+    private readonly onChange: (note: string) => void = () => {},
+    /** A fresh connection to the same database, or null when none opens. Without one, `inner` is tried again. */
+    private readonly reopen?: () => Promise<OutboxStorage | null>,
   ) {
     this.inner = inner;
   }
 
   get kind(): "indexeddb" | "memory" {
-    return this.inner.kind;
+    return this.failure === "" ? this.inner.kind : "memory";
   }
 
   get note(): string {
     return this.failure || this.inner.note;
   }
 
-  private fail(error: unknown): void {
-    if (this.inner.kind === "memory") return;
+  /** Run `op` on the database: on the current connection, then once on a fresh one. Undefined when neither answers. */
+  private async disk<T>(op: (db: OutboxStorage) => Promise<T>): Promise<{ value: T } | undefined> {
+    let lastError: unknown;
+    if (this.failure === "") {
+      try {
+        return { value: await op(this.inner) };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (this.closed) return undefined;
+    let fresh: OutboxStorage | null = this.inner;
+    if (this.reopen !== undefined) {
+      try {
+        fresh = await this.reopen();
+      } catch (error) {
+        lastError = error;
+        fresh = null;
+      }
+    }
+    if (fresh !== null) {
+      try {
+        if (this.failure !== "" || this.held.size > 0 || this.heldRemovals.size > 0) await this.replay(fresh);
+        const value = await op(fresh);
+        this.useAgain(fresh);
+        return { value };
+      } catch (error) {
+        lastError = error;
+        if (fresh !== this.inner) this.quietClose(fresh);
+      }
+    }
+    this.fallBack(lastError);
+    return undefined;
+  }
+
+  /** What was held, into the database: a held copy is written where the database has none or an older one. */
+  private async replay(db: OutboxStorage): Promise<void> {
+    // Compare and write each held copy: another page may have moved the entry on while this one could not write.
+    for (const entry of [...this.held.values()]) {
+      await db.reconcile(entry);
+      this.held.delete(entry.commandId);
+      this.known.add(entry.commandId);
+    }
+    for (const id of [...this.heldRemovals]) {
+      await db.remove(id);
+      this.heldRemovals.delete(id);
+      this.known.delete(id);
+    }
+  }
+
+  private useAgain(db: OutboxStorage): void {
+    if (db !== this.inner) {
+      this.quietClose(this.inner);
+      this.inner = db;
+    }
+    if (this.failure !== "") {
+      this.failure = "";
+      this.onChange("");
+    }
+  }
+
+  private fallBack(error: unknown): void {
     const text = error instanceof Error ? error.message : String(error);
-    this.failure = `IndexedDB failed (${text}); sends are kept in memory and will not survive a reload`;
+    const first = this.failure === "";
+    this.failure =
+      `IndexedDB failed (${text}). Sends saved before are not sent until it answers again, ` +
+      "and new ones are kept in memory and will not survive a reload until then";
+    if (first) this.onChange(this.failure);
+  }
+
+  private quietClose(db: OutboxStorage): void {
     try {
-      this.inner.close();
+      db.close();
     } catch {
       // Already broken.
     }
-    this.inner = new MemoryStorage(this.failure);
-    this.onFallback(this.failure);
   }
 
   async load(session: string): Promise<OutboxEntry[]> {
-    try {
-      return await this.inner.load(session);
-    } catch (error) {
-      this.fail(error);
-      return [];
-    }
+    const answer = await this.disk((db) => db.load(session));
+    if (answer === undefined) return [...this.held.values()].filter((entry) => entry.session === session);
+    this.loaded.add(session);
+    for (const entry of answer.value) this.known.add(entry.commandId);
+    return answer.value;
   }
 
   async put(entry: OutboxEntry): Promise<void> {
-    try {
-      await this.inner.put(entry);
-    } catch (error) {
-      this.fail(error);
+    const answer = await this.disk((db) => db.put(entry));
+    if (answer !== undefined) {
+      this.known.add(entry.commandId);
+      return;
     }
+    this.heldRemovals.delete(entry.commandId);
+    this.held.set(entry.commandId, entry);
   }
 
   async remove(commandId: string): Promise<void> {
-    try {
-      await this.inner.remove(commandId);
-    } catch (error) {
-      this.fail(error);
+    const onDisk = this.mayBeOnDisk(this.held.get(commandId) ?? commandId);
+    const answer = await this.disk((db) => db.remove(commandId));
+    this.held.delete(commandId);
+    if (answer !== undefined) {
+      this.known.delete(commandId);
+      return;
     }
+    // A removal the database never takes is a Limit: a later page still finds the entry there.
+    if (onDisk) this.heldRemovals.add(commandId);
+  }
+
+  /** Whether the database may hold this id: it said so, or no load of its session has answered yet. */
+  private mayBeOnDisk(entry: OutboxEntry | string): boolean {
+    if (typeof entry === "string") return this.known.has(entry) || this.loaded.size === 0;
+    return this.known.has(entry.commandId) || !this.loaded.has(entry.session);
   }
 
   async claim(entry: OutboxEntry, owner: string, now: number, staleMs: number): Promise<Claim> {
-    try {
-      return await this.inner.claim(entry, owner, now, staleMs);
-    } catch (error) {
-      this.fail(error);
-      return this.inner.claim(entry, owner, now, staleMs);
+    const answer = await this.disk((db) => db.claim(entry, owner, now, staleMs));
+    if (answer !== undefined) {
+      if (answer.value.kind !== "missing") this.known.add(entry.commandId);
+      return answer.value;
     }
+    if (this.mayBeOnDisk(entry)) return { kind: "unrecorded", entry: this.held.get(entry.commandId) ?? entry };
+    // Only memory has it: no other page can see it, so the claim made here is the only one.
+    const decided = decideClaim(this.held.get(entry.commandId) ?? entry, owner, now, staleMs);
+    if (decided.write !== undefined) this.held.set(entry.commandId, decided.write);
+    return decided.claim;
   }
 
   async abandon(entry: OutboxEntry, now: number, staleMs: number): Promise<OutboxEntry | undefined> {
-    try {
-      return await this.inner.abandon(entry, now, staleMs);
-    } catch (error) {
-      this.fail(error);
-      return this.inner.abandon(entry, now, staleMs);
+    const answer = await this.disk((db) => db.abandon(entry, now, staleMs));
+    if (answer !== undefined) return answer.value;
+    const decided = decideAbandon(this.held.get(entry.commandId) ?? entry, now, staleMs);
+    if (decided.write !== undefined) this.held.set(entry.commandId, decided.write);
+    return decided.entry;
+  }
+
+  async reconcile(entry: OutboxEntry): Promise<OutboxEntry> {
+    const answer = await this.disk((db) => db.reconcile(entry));
+    if (answer !== undefined) {
+      this.known.add(entry.commandId);
+      return answer.value;
     }
+    const held = this.held.get(entry.commandId);
+    const standing = held !== undefined && furtherAlong(held, entry) >= 0 ? held : entry;
+    this.heldRemovals.delete(entry.commandId);
+    this.held.set(entry.commandId, standing);
+    return standing;
   }
 
   close(): void {
-    this.inner.close();
+    this.closed = true;
+    this.quietClose(this.inner);
   }
 }
 
@@ -389,8 +558,8 @@ export async function openOutboxStorage(
     onFallback?.(note);
     return new MemoryStorage(note);
   }
-  try {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+  const openDb = () =>
+    new Promise<IDBDatabase>((resolve, reject) => {
       const open = factory.open(DB_NAME, 1);
       open.onupgradeneeded = () => {
         const created = open.result.createObjectStore(STORE, { keyPath: "commandId" });
@@ -400,7 +569,16 @@ export async function openOutboxStorage(
       open.onerror = () => reject(open.error ?? new Error("IndexedDB could not be opened"));
       open.onblocked = () => reject(new Error("IndexedDB is blocked"));
     });
-    return new FallbackStorage(new IndexedDbStorage(db), onFallback);
+  try {
+    const db = await openDb();
+    const reopen = async () => {
+      try {
+        return new IndexedDbStorage(await openDb());
+      } catch {
+        return null;
+      }
+    };
+    return new FallbackStorage(new IndexedDbStorage(db), onFallback, reopen);
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     const note = `IndexedDB is not available (${text}); sends are kept in memory and will not survive a reload`;

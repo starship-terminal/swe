@@ -12,6 +12,7 @@ import {
   Outbox,
   OUTBOX_TTL_MS,
   SESSION_GONE,
+  STORAGE_DOWN,
   TERMINAL_KEPT_MAX,
   TERMINAL_KEPT_MS,
   type OutboxView,
@@ -144,6 +145,7 @@ describe("a new send", () => {
       remove: (id) => inner.remove(id),
       claim: (...args) => inner.claim(...args),
       abandon: (...args) => inner.abandon(...args),
+      reconcile: (entry) => inner.reconcile(entry),
       close: () => inner.close(),
     };
     const outbox = await t.make(slow);
@@ -685,6 +687,7 @@ describe("surviving a reload, a restart and a broken database", () => {
       remove: (id) => inner.remove(id),
       claim: (...args) => inner.claim(...args),
       abandon: (...args) => inner.abandon(...args),
+      reconcile: (entry) => inner.reconcile(entry),
       close: () => {},
     };
     const first = await t.make(slow);
@@ -740,6 +743,9 @@ describe("surviving a reload, a restart and a broken database", () => {
       remove: async () => {},
       claim: (entry, owner, now, staleMs) => new MemoryStorage().claim(entry, owner, now, staleMs),
       abandon: (entry, now, staleMs) => new MemoryStorage().abandon(entry, now, staleMs),
+      reconcile: async () => {
+        throw new Error("the disk is full");
+      },
       close: () => {},
     };
     const t = setup({ storage: new FallbackStorage(broken, (note) => notes.push(note)) });
@@ -1063,6 +1069,7 @@ describe("the person's actions", () => {
         return new Promise((resolve) => (release = () => void (started ?? inner.claim(...args)).then(resolve)));
       },
       abandon: (...args) => inner.abandon(...args),
+      reconcile: (entry) => inner.reconcile(entry),
       close: () => inner.close(),
     };
     return { storage, release: () => release() };
@@ -1138,6 +1145,10 @@ describe("init(): storage is the truth at start", () => {
       remove: (id) => inner.remove(id),
       claim: (...args) => inner.claim(...args),
       abandon: (...args) => inner.abandon(...args),
+      reconcile: (entry) => {
+        puts++; // a write too: every write after a send's first one compares first
+        return inner.reconcile(entry);
+      },
       close: () => inner.close(),
     };
     return { storage, release: () => release(), puts: () => puts };
@@ -1187,6 +1198,38 @@ describe("init(): storage is the truth at start", () => {
     expect(t.hub.received).toEqual([]);
   });
 
+  it("loading that fails still applies what came while loading: results, what the session holds, a gone session", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    let fail: () => void = () => {};
+    const broken: OutboxStorage = {
+      kind: "memory",
+      note: "",
+      load: () => new Promise((_resolve, reject) => (fail = () => reject(new Error("the database went away")))),
+      put: async () => {},
+      remove: async () => {},
+      claim: async (entry, owner, now) => ({ kind: "claimed", entry: { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } } }),
+      abandon: async (entry) => entry,
+      reconcile: async (entry) => entry,
+      close: () => {},
+    };
+    const outbox = t.build(broken, {
+      initial: [handedOver("x", { status: "sent", path: "legacy", attempts: 1 }), handedOver("y", { status: "sent", path: "legacy", attempts: 1 }), handedOver("z")],
+      knownResult: (id) => (id === "y" ? { ok: false, note: "session stayed busy for 30 min; message not sent" } : undefined),
+    });
+    const loading = outbox.init();
+    outbox.noteResult("x", { ok: true });
+    outbox.sessionGone();
+    fail();
+    await loading;
+    await drain();
+    expect(t.view().loading).toBe(false);
+    expect(t.view().entries.map((e) => [e.commandId, e.status, e.error])).toEqual([
+      ["y", "failed", "session stayed busy for 30 min; message not sent"],
+      ["z", "failed", SESSION_GONE],
+    ]);
+  });
+
   it("loading that fails ends loading, keeps what was handed over, and sends it", async () => {
     const t = setup();
     const broken: OutboxStorage = {
@@ -1199,6 +1242,7 @@ describe("init(): storage is the truth at start", () => {
       remove: async () => {},
       claim: async (entry, owner, now) => ({ kind: "claimed", entry: { ...entry, attempts: entry.attempts + 1, claim: { owner, at: now } } }),
       abandon: async (entry) => entry,
+      reconcile: async (entry) => entry,
       close: () => {},
     };
     const outbox = t.build(broken, { initial: [handedOver("x")] });
@@ -1218,6 +1262,34 @@ describe("init(): storage is the truth at start", () => {
     expect(t.view().entries).toMatchObject([{ commandId: "x", status: "sent" }]);
     expect((await stored(t.factory))[0]).toMatchObject({ status: "sent" });
     outbox.close();
+  });
+
+  it("another tab moves the entry on between the load and the write-back: its copy stands, and this one is not posted", async () => {
+    const t = setup(); // a keeper row: the other tab may post a send whose earlier claim went stale
+    // On disk: a claim from a page that went away. Handed over: this page's copy, released by an answer (a 429)
+    // whose write did not land.
+    await (await openOutboxStorage(t.factory)).put(handedOver("x", { attempts: 1, claim: { owner: "gone", at: 0 } }));
+    const held = await holding(t, "load");
+    const a = t.build(held.storage, { initial: [handedOver("x", { attempts: 1, lastError: "busy" })] });
+    const loading = a.init();
+    await drain(); // a's load has read the claimed copy; its answer waits
+    // The other tab, a minute later, takes the stale claim over and posts; its answer has not come yet.
+    t.transport.on("/message", () => new Promise<JsonResponse>(() => {}), "POST");
+    t.timers.advance(CLAIM_STALE_MS + 1);
+    const b = await t.make(await openOutboxStorage(t.factory));
+    await drain();
+    expect(t.transport.posts("/message")).toHaveLength(1);
+    const theirs = (await stored(t.factory))[0];
+    expect(theirs).toMatchObject({ attempts: 2, ambiguous: true });
+    // Now a merges: its copy beat what it read, but the write-back compares with what is stored now, so the other
+    // tab's claim stands and a leaves the send to it.
+    held.release();
+    await loading;
+    await drain();
+    expect(t.transport.posts("/message")).toHaveLength(1);
+    expect(await stored(t.factory)).toEqual([theirs]);
+    a.close();
+    b.close();
   });
 
   it("a handed-over send storage does not have is written once, and sent", async () => {
@@ -1291,42 +1363,159 @@ describe("two copies of one send: the one further along wins", () => {
     }
   });
 
-  it("an older copy on disk (a claim write that fell back to memory) does not get a sent legacy send posted again", async () => {
-    const t = setup();
-    legacy(t);
-    // The first outbox's database fails at its claim: the claim and the post go on in memory, the disk keeps the first write.
+});
+
+describe("when storage fails", () => {
+  const lost = () => new Error("Connection to Indexed Database server lost");
+  type Op = "load" | "put" | "remove" | "claim" | "abandon";
+  /**
+   * The test's database behind a connection that throws on the operations named, `times` times each (Infinity:
+   * until `heal()`), as a lost WebKit IndexedDB connection does. A FallbackStorage over it, with no fresh
+   * connection to reopen unless `reopen` is given.
+   */
+  async function failing(t: ReturnType<typeof setup>, fails: Partial<Record<Op, number>>, reopen?: () => Promise<OutboxStorage | null>) {
     const real = await openOutboxStorage(t.factory);
-    const flaky = new FallbackStorage({
+    const left = { ...fails };
+    const calls: Op[] = [];
+    const guard = <T,>(op: Op, run: () => Promise<T>): Promise<T> => {
+      calls.push(op);
+      if ((left[op] ?? 0) > 0) {
+        left[op] = (left[op] as number) - 1;
+        return Promise.reject(lost());
+      }
+      return run();
+    };
+    const inner: OutboxStorage = {
       get kind() {
         return real.kind;
       },
       get note() {
         return real.note;
       },
-      load: (session) => real.load(session),
-      put: (entry) => real.put(entry),
-      remove: (id) => real.remove(id),
-      claim: async () => {
-        throw new Error("Connection to Indexed Database server lost");
-      },
-      abandon: (...args) => real.abandon(...args),
-      close: () => real.close(),
-    });
-    const first = await t.make(flaky);
-    await first.send({ text: "rm -rf build" });
+      load: (session) => guard("load", () => real.load(session)),
+      put: (entry) => guard("put", () => real.put(entry)),
+      remove: (id) => guard("remove", () => real.remove(id)),
+      claim: (...args) => guard("claim", () => real.claim(...args)),
+      abandon: (...args) => guard("abandon", () => real.abandon(...args)),
+      reconcile: (entry) => guard("put", () => real.reconcile(entry)),
+      close: () => {},
+    };
+    const notes: string[] = [];
+    const storage = new FallbackStorage(inner, (note) => notes.push(note), reopen);
+    return { storage, notes, calls, heal: () => Object.keys(left).forEach((op) => (left[op as Op] = 0)) };
+  }
+
+  it("a failed write is tried once more on a fresh connection, and nothing falls back when that works", async () => {
+    const t = setup();
+    const fresh = await openOutboxStorage(t.factory);
+    const db = await failing(t, { put: Infinity }, async () => fresh);
+    await db.storage.put(handed("x"));
+    expect(db.notes).toEqual([]);
+    expect(db.storage.kind).toBe("indexeddb");
+    expect(await stored(t.factory)).toMatchObject([{ commandId: "x" }]);
+  });
+
+  it("claim, the database knows the send: not posted while the claim cannot be recorded, posted once when it can", async () => {
+    const t = setup();
+    legacy(t);
+    const db = await failing(t, { claim: 2 });
+    const outbox = await t.make(db.storage);
+    await outbox.send({ text: "rm -rf build" });
     await drain();
-    expect(t.hub.received).toHaveLength(1);
-    expect(t.view().entries).toMatchObject([{ status: "sent", path: "legacy" }]);
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ status: "waiting", attempts: 0, lastError: STORAGE_DOWN }]);
+    expect(t.view().persistent).toBe(false);
     expect(await stored(t.factory)).toMatchObject([{ status: "waiting", attempts: 0 }]);
-    const handed = first.carry();
-    first.close();
-    // The view remounts; the new database opens fine.
-    const second = await t.make(await openOutboxStorage(t.factory), handed);
+    // Each pass tries the database again; the second retry finds it answering.
+    t.timers.advance(1000);
     await drain();
     expect(t.hub.received).toHaveLength(1);
+    expect(t.view()).toMatchObject({ persistent: true, note: "" });
     expect(t.view().entries).toMatchObject([{ status: "sent", path: "legacy" }]);
-    // Storage is corrected, so a later start does not depend on what is handed over.
-    expect(await stored(t.factory)).toMatchObject([{ status: "sent", path: "legacy" }]);
-    second.close();
+    expect(await stored(t.factory)).toMatchObject([{ status: "sent", path: "legacy", attempts: 1 }]);
+    expect(db.notes).toEqual([expect.stringContaining("not sent until it answers again"), ""]);
+  });
+
+  it("first write: a send made while the database is down is claimed and posted from memory, and written once it answers", async () => {
+    const t = setup();
+    legacy(t);
+    const db = await failing(t, { put: 2 }); // the write and its retry
+    const outbox = await t.make(db.storage);
+    await outbox.send({ text: "x" }); // the first write fails: only memory has it
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    expect(t.view().entries).toMatchObject([{ status: "sent" }]);
+    // The answer's write found the database again and took what was held.
+    expect(await stored(t.factory)).toMatchObject([{ status: "sent", attempts: 1 }]);
+  });
+
+  it("save after an answer: held, then written once the database answers, the copy further along winning", async () => {
+    const t = setup();
+    legacy(t);
+    const db = await failing(t, { put: Infinity });
+    const outbox = await t.make(db.storage);
+    // The first write fails too, so the send is only in memory and may go; its answer is held.
+    await outbox.send({ text: "x" });
+    await drain();
+    expect(t.hub.received).toHaveLength(1);
+    expect(await stored(t.factory)).toEqual([]);
+    db.heal();
+    await outbox.send({ text: "y" }); // the next write reaches the database and replays what was held first
+    await drain();
+    expect((await stored(t.factory)).map((e) => [e.text, e.status])).toEqual([
+      ["x", "sent"],
+      ["y", "sent"],
+    ]);
+    expect(t.hub.received).toHaveLength(2);
+  });
+
+  it("remove: held while the database is down, applied once it answers", async () => {
+    const t = setup();
+    t.world.canPost = false;
+    const db = await failing(t, { remove: 2, put: 1 }); // in fallback, each write is one try on the database
+    const outbox = await t.make(db.storage);
+    const entry = await outbox.send({ text: "never mind" }); // written before the failures start
+    await outbox.discard(entry.commandId);
+    expect(await stored(t.factory)).toMatchObject([{ commandId: entry.commandId }]); // the removal is held
+    await outbox.send({ text: "next" }); // this write fails (and its retry) and is held too
+    await outbox.send({ text: "later" }); // this one answers: everything held is replayed first
+    expect((await stored(t.factory)).map((e) => e.text)).toEqual(["next", "later"]);
+  });
+
+  it("abandon: a stale claim resolved in memory, then written once the database answers", async () => {
+    const t = setup();
+    legacy(t);
+    t.world.canPost = false;
+    await (await openOutboxStorage(t.factory)).put(handed("x", { attempts: 1, claim: { owner: "gone", at: 0 } }));
+    const db = await failing(t, { abandon: 2 });
+    const outbox = await t.make(db.storage);
+    t.timers.advance(CLAIM_STALE_MS + 1);
+    await drain();
+    // Resolved here: its post may have reached the hub, and no claim is left on it.
+    expect(t.view().entries).toMatchObject([{ commandId: "x", status: "waiting", ambiguous: true }]);
+    expect(t.view().entries[0]).not.toHaveProperty("claim");
+    expect(t.hub.received).toEqual([]);
+    expect((await stored(t.factory))[0]).toHaveProperty("claim"); // the database still has the stale claim
+    await outbox.send({ text: "y" }); // the database answers: the held copy, further along, replaces it
+    expect((await stored(t.factory)).find((e) => e.commandId === "x")).toMatchObject({ ambiguous: true, attempts: 1 });
+    expect((await stored(t.factory)).find((e) => e.commandId === "x")).not.toHaveProperty("claim");
+  });
+
+  it("load: while no load has answered, no send the database may hold is claimed from memory", async () => {
+    const t = setup();
+    legacy(t);
+    await (await openOutboxStorage(t.factory)).put(handed("x"));
+    const db = await failing(t, { load: 2, claim: 2 });
+    await t.make(db.storage, [handed("x")]); // handed over; the load fails, so the database's copy is unknown
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ commandId: "x", lastError: STORAGE_DOWN }]);
+    t.timers.advance(1000);
+    await drain();
+    expect(t.hub.received.map((b) => b["command_id"])).toEqual(["x"]);
+  });
+
+  const handed = (id: string, over: Partial<OutboxEntry> = {}): OutboxEntry => ({
+    commandId: id, session: KEY, text: id, attachments: [], mode: "queue", createdAt: 1, status: "waiting", attempts: 0, ...over,
   });
 });
