@@ -261,7 +261,7 @@ remote/
   peer.py        # is a loopback peer the Tailscale daemon? gates X-Forwarded-For
   files.py       # @-mention paths under a session's folder (/v1/sessions/{id}/files)
   preview.py     # one .html/.svg file from a session's folder (/v1/sessions/{id}/preview)
-  agent.py       # satellite daemon: dial hub, run local tail/inject
+  agent.py       # satellite daemon: dial hub, run local tail/inject and keepers; the loopback API; the hub's side of satellite keepers
   notify.py      # needs-you/finished/error/GitHub-unread/service-status fan-out via ntfy
   launchd.py     # serve/agent --install: the hub or satellite as a per-user LaunchAgent
   systemd.py     # serve/agent --install on Linux: the hub or satellite as a systemd user unit
@@ -1690,6 +1690,42 @@ A keeper parks its agent after 30 idle minutes and resumes it on the
 next message. `GET /v1/launches/<id>` answers from `remote.sqlite` when
 the hub that took the launch has restarted.
 
+### On a satellite
+
+Full rules: [G15-satellite-keepers.md](specs/G15-satellite-keepers.md).
+The setting is read on each machine for that machine: turn it on on the
+satellite (and restart its agent) for its sessions to run under
+keepers, and on the hub for the hub to copy their timelines and hold
+commands for them.
+
+| What | With a keeper on a satellite |
+|---|---|
+| Launch, attach | the satellite's agent starts the keeper, the way the hub does for its own machine. The hub sends the same `launch` and `attach` commands as before |
+| The timeline | the satellite journals the keeper's events, and uploads them with `POST /v1/agent/kept`. The hub's journal for `key@machine` is a copy: same events, same seqs, stored with `Journal.append_at`, so an upload sent twice lands once. The hub numbers nothing in that journal while it copies it |
+| `message`, `approval`, `control`, `queue`, `command` | stored in the hub's `remote.sqlite` under `command_id`, sent to the satellite as a `kept` command, and given there to the same route the hub runs for its own sessions. Answers 202 with `receipt` (`queued` or `held`) and `command_id` |
+| The machine is asleep | a message or an approval answer is `held` for 24 hours and delivered, in order and once, when the machine's command stream comes back. A hold that runs out is rejected (`expired`) and never delivered. `control`, `queue` and `command` answer 409 `machine_offline` |
+| Agent restart | the keepers run on. The new agent reconnects to them, asks the hub how far each copy reaches, and uploads from there |
+| The hub's session runtime is off | the upload is refused (409 `session_view_off`) and retried every minute; the hub lists the session without a timeline, and commands take the old forwarding path |
+
+## The loopback API
+
+Every machine binds one more listener, on `127.0.0.1` only:
+`swe remote serve` on the hub machine and `swe remote agent` on a
+satellite. It serves the same `/v1` session routes as the hub, through
+the same handler, over that machine's own sessions, so a client on the
+machine (the Mac app) can list, read and drive them with no network
+and with the hub down.
+
+| | |
+|---|---|
+| Address | `http://127.0.0.1:8476`, or the port in `remote.local_port` (`swe config set remote.local_port <n>`; `0` picks a free one). The address bound is written to `local.json` |
+| Who may call | `Authorization: Bearer <token>`, the token in `~/.swe/data/remote/local.json` (mode 0600, made on first use). Being able to read that file is the proof. A paired device's credential is not accepted here, and the token is accepted nowhere else |
+| Routes | `/v1/sessions` and everything under it, `/v1/launches/*`, `/v1/events`, `/v1/status`, `/v1/machines`, `/v1/folders`, `/v1/inbox`, and the static files. Anything else under `/v1` answers 404 |
+| Host | a request whose `Host` is not `127.0.0.1`, `localhost` or `[::1]` (with or without the port) answers 403 `bad_origin` |
+| Port taken | one line on stderr and no local API; the hub or agent runs on |
+
+The token is never printed, logged or returned by a route.
+
 ## Sync v2 — `sync.py`
 
 A second protocol for one session's stream, asked for per request with
@@ -1807,6 +1843,13 @@ fetch + POST events; stdlib covers both). Registers machine metadata —
 hostname, specs, harnesses detected by the existing `discover`
 machinery. Hub stamps every session `machine_id` + reachability; queued
 commands wait in the hub journal until reconnect.
+
+Since G15 the agent also holds this machine's own hub state
+(`RemoteAgent.local`): a journal of every session here, the session
+runtime that runs this machine's keepers, and the loopback API (see
+"On a satellite" and "The loopback API" above). Each event is written
+to that journal and to the uplink outbox. `agent-kept.json` lists the
+keeper sessions whose journal the hub copies.
 
 `swe remote agent --install` keeps it running across reboots and
 logouts (see "Keeping a satellite up" above). The macOS app side is a
