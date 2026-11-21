@@ -23,6 +23,60 @@ import time
 
 PROTOCOL_VERSION = 1
 
+# -- sync v2 (docs/specs/G9-sync-v2.md) -----------------------------
+# The second protocol a client can ask a session stream for: v2 events
+# (``adapters/events.py``), catch-up by ``last`` and ``epoch``, a
+# snapshot, live text recovered apart from the journal, and pings.
+SYNC_VERSION = 2
+# What ``GET /v1/status`` lists as ``protocols``.
+PROTOCOLS = (PROTOCOL_VERSION, SYNC_VERSION)
+# A client asks for v2 with ``?v=2`` or this header.
+VERSION_HEADER = "X-SWE-Protocol"
+# What ``GET /v1/status`` lists as ``features``, for a client that
+# checks before it relies on one. ``session_runtime`` joins the list
+# when the hub runs sessions through keepers.
+FEATURES = ("sync_v2", "snapshot", "live_resume", "delta_offset", "ping",
+            "command_id")
+FEATURE_RUNTIME = "session_runtime"
+# A v2 stream sends ``ping {ts, head}`` this often; a client treats
+# ``SILENCE_S`` with no frame at all as a dead connection.
+PING_S = 10.0
+SILENCE_S = 25.0
+# A catch-up replays at most this many seqs; a wider gap gets a
+# snapshot instead.
+REPLAY_MAX = 500
+# How many timeline events a snapshot carries.
+SNAPSHOT_MESSAGES = 200
+# Frames a v2 stream sends that are not events of ``adapters/events.py``.
+SYNC_FRAME_TYPES = frozenset({"session.snapshot", "session.row", "ping"})
+
+
+def wants_v2(args, headers) -> bool:
+    """Whether a request asks for sync v2: ``?v=2``, or the
+    ``X-SWE-Protocol: 2`` header. ``args`` is ``parse_qs``'s dict;
+    ``headers`` anything with ``get``. Anything else, an unreadable
+    value included, is a client of today's protocol."""
+    values = (args or {}).get("v") or []
+    asked = values[0] if values else None
+    if asked is None and headers is not None:
+        asked = headers.get(VERSION_HEADER)
+    return isinstance(asked, str) and asked.strip() == str(SYNC_VERSION)
+
+
+def sync_frame(frame_type: str, session: str, data: dict, *,
+               ts: float | None = None) -> dict:
+    """One of the v2 stream's own frames (``SYNC_FRAME_TYPES``). It has
+    no ``seq``: nothing in it is journaled, so it never moves a
+    client's cursor."""
+    return {
+        "v": SYNC_VERSION,
+        "type": frame_type,
+        "session": session,
+        "ts": ts if ts is not None else time.time(),
+        "data": data,
+    }
+
+
 # ``client_id`` on a message POST lets the caller match the async
 # ``command.result`` to an optimistic bubble it already drew.
 _CLIENT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
