@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { useSessionStore, type SessionStore } from "../core";
 import { Button, cx, Icon } from "../ui";
 import { AssistantMessage, SendBubble, SystemMessage, UserMessage } from "./Bubbles";
-import { buildRows, rowIdentity, rowsEqual, type Row } from "./model";
+import { buildRows, rowAnchorIds, rowIdentity, rowsEqual, type Row } from "./model";
 import { RowBoundary } from "./RowBoundary";
 import { FooterRow, LiveRow, NoticeRow, RequestRow, WorkingRow } from "./Rows";
 import { describeConnection } from "./connection";
@@ -86,7 +86,7 @@ export function Timeline({ store }: { store: SessionStore }) {
   // The row the person was reading when older history was asked for, where it sat in the window, and the
   // first item then. The position is restored by that row, and only once a page has arrived in front of
   // the first item: what a reply growing at the bottom adds meanwhile does not move it.
-  const anchor = useRef<{ key: string; offset: number; first: number | undefined } | null>(null);
+  const anchor = useRef<{ ids: string[]; offset: number; first: number | undefined } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
   const toEnd = useCallback((smooth: boolean) => {
@@ -216,6 +216,7 @@ export function Timeline({ store }: { store: SessionStore }) {
             key={row.key}
             className={cx(fresh !== null && !fresh.has(row.key) && !fresh.has(rowIdentity(row)) && "sv-enter")}
             data-row-key={row.key}
+            data-row-ids={rowAnchorIds(row).join(" ")}
             data-row-kind={row.kind}
           >
             <RowBoundary resetKey={subject(row)}>
@@ -268,19 +269,25 @@ function subject(row: Row): unknown {
   }
 }
 
-/** The first row with any of it in the window, and how far below the window's top it starts. */
-export function firstVisible(scroller: HTMLElement, content: HTMLElement): { key: string; offset: number } | null {
+/** The first row with any of it in the window, how far below the window's top it starts, and what to find it by. */
+export function firstVisible(scroller: HTMLElement, content: HTMLElement): { ids: string[]; offset: number } | null {
   const top = scroller.getBoundingClientRect().top;
-  for (const el of Array.from(content.querySelectorAll<HTMLElement>("[data-row-key]"))) {
+  for (const el of Array.from(content.querySelectorAll<HTMLElement>("[data-row-ids]"))) {
     const box = el.getBoundingClientRect();
-    if (box.bottom > top) return { key: el.dataset["rowKey"] ?? "", offset: box.top - top };
+    if (box.bottom > top) return { ids: (el.dataset["rowIds"] ?? "").split(" ").filter(Boolean), offset: box.top - top };
   }
   return null;
 }
 
-/** Scroll so the row sits as far below the window's top as it did. A row that is gone leaves the window as it is. */
-function restore(scroller: HTMLElement, held: { key: string; offset: number }): void {
-  const row = Array.from(scroller.querySelectorAll<HTMLElement>("[data-row-key]")).find((el) => el.dataset["rowKey"] === held.key);
+/**
+ * Scroll so the row sits as far below the window's top as it did. The row is found by any of its names (a work
+ * group that older steps joined has another key, and still holds the steps it had). A row that is gone leaves the
+ * window as it is.
+ */
+function restore(scroller: HTMLElement, held: { ids: string[]; offset: number }): void {
+  const row = Array.from(scroller.querySelectorAll<HTMLElement>("[data-row-ids]")).find((el) =>
+    (el.dataset["rowIds"] ?? "").split(" ").some((id) => held.ids.includes(id)),
+  );
   if (row === undefined) return;
   const now = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
   scroller.scrollTop += now - held.offset;

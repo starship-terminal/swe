@@ -319,3 +319,11 @@ export function rowsEqual(a: Row, b: Row): boolean {
     }
   }
 }
+
+/**
+ * Names for finding a row again after the rows were made again with older history in front: an item's key,
+ * and for a work group the `seq` of each of its entries (its own key changes when older steps join its front).
+ */
+export function rowAnchorIds(row: Row): string[] {
+  return row.kind === "work" ? row.seqs.map((seq) => `seq-${seq}`) : [row.key];
+}

@@ -143,3 +143,13 @@ describe("hostile text", () => {
     expect(performance.now() - t0).toBeLessThan(1000);
   });
 });
+
+describe("tables", () => {
+  it("reads formatting in every header cell, however many columns there are", () => {
+    const cols = Array.from({ length: 12 }, (_, i) => `**h${i}**`);
+    const [table] = parseMarkdown(`| ${cols.join(" | ")} |\n|${"---|".repeat(12)}\n| ${cols.map(() => "x").join(" | ")} |`);
+    if (table?.t !== "table") throw new Error("not a table");
+    expect(table.head).toHaveLength(12);
+    for (const cell of table.head) expect(cell[0]?.t).toBe("strong");
+  });
+});

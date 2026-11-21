@@ -107,6 +107,34 @@ describe("older history landing above the reader", () => {
     expect(env.scroller.scrollTop).toBe(250 + 3 * ROW + 60);
   });
 
+  it("finds a work group again when older steps join its front and change its key", async () => {
+    const t = setup();
+    const tool = (seq: number) => [
+      frame("tool.started", seq, { call_id: `c${seq}`, name: "Bash", summary: `step ${seq}` }, { turn_id: "t1" }),
+      frame("tool.completed", seq + 1, { call_id: `c${seq}`, status: "ok", name: "Bash" }, { turn_id: "t1" }),
+    ];
+    const tail = [30, 31, 32, 33, 34, 35].map((seq) => message(seq));
+    await settle(
+      () =>
+        void t.transport.last.send(
+          snapshotFrame({ ...bodyOf("default"), messages: [...tool(20), ...tail] as never, has_more: true, next_before: 20, state: "idle", open_turn: null, head: 98 }),
+          frame("session.state", 0, { state: "idle", live: [], pending: [], head: 98, epoch: 0 }),
+        ),
+    );
+    const scroller = q(t.el, 'main[aria-label="Timeline"]') as HTMLElement;
+    installLayout(scroller);
+    let finish: (r: { status: number; body: unknown }) => void = () => {};
+    t.transport.on("/messages", () => new Promise((resolve) => (finish = resolve)));
+    await scrollTo(scroller, 50); // the work group is the row being read
+    const before = q(t.el, '[data-row-kind="work"]')?.getAttribute("data-row-key");
+    await click(button(t.el, "Load earlier messages"));
+    // An older page: a user message, then steps of the same turn, which join the group at its front.
+    await settle(() => finish({ status: 200, body: { session: "claude:session-1", messages: [frame("message.completed", 5, { id: "u", kind: "user", text: "ask" }, { turn_id: "t1" }), ...tool(10)], has_more: false, next_before: null } }));
+    expect(q(t.el, '[data-row-kind="work"]')?.getAttribute("data-row-key")).not.toBe(before);
+    // The user message added a row above the group: the window moves by its height, though the group's key changed.
+    expect(scroller.scrollTop).toBe(50 + ROW);
+  });
+
   it("leaves the window alone when the page brings nothing", async () => {
     const env = await openWith(SEQS);
     const arrive = await ask(env);

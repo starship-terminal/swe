@@ -197,7 +197,7 @@ function parseLines(lines: string[], depth: number): Block[] {
       }
       blocks.push({
         t: "table",
-        head: head.map(parseInline),
+        head: head.map((cell) => parseInline(cell)),
         align,
         rows: rows.map((row) => head.map((_, c) => parseInline(row[c] ?? ""))),
       });
