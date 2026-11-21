@@ -462,7 +462,7 @@ describe("a sent send is never posted again", () => {
     });
   }
 
-  it("keeper: a result that never comes ends it at 24 hours as sent, its result not seen", async () => {
+  it("keeper: a result that never comes ends it at 24 hours as taken by the hub, its result not seen", async () => {
     const t = setup();
     const outbox = await t.make();
     await outbox.send({ text: "x" });
@@ -470,7 +470,8 @@ describe("a sent send is never posted again", () => {
     t.timers.advance(OUTBOX_TTL_MS + 1);
     await drain();
     expect(t.view().entries).toMatchObject([{ status: "unconfirmed", error: KEEPER_UNCONFIRMED }]);
-    expect(KEEPER_UNCONFIRMED).toBe("Sent. Its result was not seen on this device.");
+    // It claims only what a receipt proves: the hub took it. Not that it was delivered (a held send can expire).
+    expect(KEEPER_UNCONFIRMED).toBe("The hub took this message, but its result was not seen on this device. Check the session before sending it again.");
     expect(t.hub.received).toHaveLength(1);
   });
 });
@@ -1643,5 +1644,106 @@ describe("evidence after a send ended as may or may not have been sent", () => {
     await outbox.send({ text: "x" });
     await drain();
     expect(t.view().entries).toMatchObject([{ status: "failed", error: "machine is too far behind" }]);
+  });
+});
+
+describe("evidence that comes while the post is out", () => {
+  /** A keeper-row send whose post waits until the test answers it. */
+  const posting = async () => {
+    const t = setup();
+    let answer: (r: JsonResponse) => void = () => {};
+    let fail: (e: Error) => void = () => {};
+    t.transport.on("/message", () => new Promise<JsonResponse>((resolve, reject) => ((answer = resolve), (fail = reject))), "POST");
+    const outbox = await t.make();
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    expect(t.view().inFlight).toBe(entry.commandId);
+    const shown = () => describeSends({ outbox: t.view(), connection: { state: "live", attempt: 0, since: 0, retryAt: null, detail: "" }, loaded: true, online: true });
+    return { t, outbox, entry, answer: (r: JsonResponse) => answer(r), lose: () => fail(new TypeError("the answer never arrived")), shown };
+  };
+
+  it("its receipt, then the answer is lost: sent, and no Retry", async () => {
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "accepted");
+    p.lose();
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "sent", path: "keeper", receipt: "accepted" }]);
+    expect(p.shown()).toMatchObject([{ shown: "sent", canRetry: false }]);
+    expect(await stored(p.t.factory)).toMatchObject([{ status: "sent", receipt: "accepted" }]);
+  });
+
+  it("its receipt, then a 503: sent", async () => {
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "queued");
+    p.answer({ status: 503, body: { error: { code: "keeper_failed", message: "no" } } });
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "sent", receipt: "queued" }]);
+  });
+
+  it("an ok result, then the answer is lost: it leaves as delivered", async () => {
+    const p = await posting();
+    p.outbox.noteResult(p.entry.commandId, { ok: true });
+    p.lose();
+    await drain();
+    expect(p.t.view().entries).toEqual([]);
+    expect(await stored(p.t.factory)).toEqual([]);
+  });
+
+  it("a `rejected` receipt, then the answer is lost: failed with the hub's reason, not may-or-may-not", async () => {
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "rejected", "machine is too far behind");
+    p.lose();
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "failed", error: "machine is too far behind" }]);
+    expect(p.t.view().entries[0]?.ambiguous).toBeUndefined();
+  });
+
+  it("its receipt, then stop() before the answer is lost: what is written is sent", async () => {
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "accepted");
+    p.outbox.close();
+    p.lose();
+    await drain();
+    expect(await stored(p.t.factory)).toMatchObject([{ status: "sent", receipt: "accepted" }]);
+  });
+
+  it("its receipt while the claim is being written: settled by the receipt, never posted", async () => {
+    const t = setup();
+    const inner = await openOutboxStorage(t.factory);
+    let release: () => void = () => {};
+    const slow: OutboxStorage = {
+      get kind() {
+        return inner.kind;
+      },
+      get note() {
+        return inner.note;
+      },
+      load: (session) => inner.load(session),
+      put: (entry) => inner.put(entry),
+      remove: (id) => inner.remove(id),
+      claim: (...args) => {
+        const started = inner.claim(...args);
+        return new Promise((resolve) => (release = () => void started.then(resolve)));
+      },
+      abandon: (...args) => inner.abandon(...args),
+      reconcile: (entry) => inner.reconcile(entry),
+      close: () => inner.close(),
+    };
+    const outbox = await t.make(slow);
+    const entry = await outbox.send({ text: "x" });
+    await drain();
+    outbox.noteReceipt(entry.commandId, "accepted"); // another page's post reached the hub
+    release();
+    await drain();
+    expect(t.hub.received).toEqual([]);
+    expect(t.view().entries).toMatchObject([{ status: "sent", receipt: "accepted" }]);
+  });
+
+  it("a stored result in the answer still wins over a receipt", async () => {
+    const p = await posting();
+    p.outbox.noteReceipt(p.entry.commandId, "accepted");
+    p.answer({ status: 202, body: { receipt: "accepted", result: { ok: false, note: "the session is not running" } } });
+    await drain();
+    expect(p.t.view().entries).toMatchObject([{ status: "failed", error: "the session is not running" }]);
   });
 });

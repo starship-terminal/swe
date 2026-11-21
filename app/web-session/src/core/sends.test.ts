@@ -41,6 +41,12 @@ describe("describeSends", () => {
     expect(one({ entries: [entry({ status: "unconfirmed", error: "maybe" })] })).toMatchObject({ shown: "unconfirmed", reason: "maybe", canRetry: true });
   });
 
+  it("a waiting send whose earlier post may have arrived says it is being checked, never that it will be sent", () => {
+    for (const online of [true, false]) {
+      expect(one({ entries: [entry({ ambiguous: true, attempts: 1 })], online })?.reason).toBe("Checking whether this was sent.");
+    }
+  });
+
   it("says the database is down for every waiting send while it is", () => {
     const at = (storageDown: boolean) =>
       describeSends({ outbox: outbox([entry({})], { storageDown }), connection: connection("live"), loaded: true, online: true })[0]?.reason;

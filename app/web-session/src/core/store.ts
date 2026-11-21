@@ -189,7 +189,7 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         outbox?.noteResult(frame.command_id, sendResult(frame.data));
       }
       if (frame.type === "command.receipt" && frame.command_id !== undefined && frame.command_id !== "") {
-        outbox?.noteReceipt(frame.command_id, frame.data.status);
+        outbox?.noteReceipt(frame.command_id, frame.data.status, frame.data.reason);
       }
       for (const effect of effects) {
         if (effect.type === "fetch_snapshot") wantSnapshot(effect.reason);

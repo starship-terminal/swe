@@ -19,7 +19,8 @@
 //   post arrives, and the route that is not the keeper does not de-duplicate.
 //   An answer that may mean "applied" (none at all, 408, a 5xx, an abandoned
 //   claim) ends the send as failed, "may or may not have been sent". Only an
-//   answer that says nothing was stored (429, 425) is tried again.
+//   answer that says nothing was stored (429, 425; 401 and 403 after the
+//   pause) is tried again.
 // - Deadlines run on their own timer, whether or not anything can be posted.
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffOptions, type Timers } from "./supervisor";
 import { CLAIM_STALE_MS, furtherAlong, normalizeEntry, type Claim, type OutboxEntry, type OutboxStorage } from "./outbox-storage";
@@ -50,7 +51,8 @@ export const MAYBE_SENT =
 export const NOT_SENT_IN_TIME = "Not sent: the hub could not be reached for 24 hours.";
 export const LEGACY_UNCONFIRMED =
   "The hub took this message but never said whether it reached the session: check the session, and send it again if it is not there.";
-export const KEEPER_UNCONFIRMED = "Sent. Its result was not seen on this device.";
+export const KEEPER_UNCONFIRMED =
+  "The hub took this message, but its result was not seen on this device. Check the session before sending it again.";
 export const SESSION_GONE = "Not sent: this session no longer exists.";
 export const UNDELIVERED = "The hub could not deliver this message.";
 
@@ -137,6 +139,22 @@ export function randomOwner(): string {
   return `p-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** A 2xx answer that carries the stored result: it settles the send on its own. */
+function carriesResult(response: JsonResponse | null): boolean {
+  if (response === null || response.status < 200 || response.status >= 300) return false;
+  const result = (response.body as { result?: unknown } | undefined)?.result;
+  return result !== undefined && result !== null && typeof result === "object";
+}
+
+/** What a receipt makes of a send: `sent` on the keeper path, or `failed` with the hub's reason when refused. */
+function receiptOutcome(entry: OutboxEntry, receipt: { receipt: string; reason?: string }, now: number): OutboxEntry {
+  const { claim: _claim, error: _error, endedAt: _ended, lastError: _last, ambiguous: _ambiguous, ...rest } = entry;
+  if (receipt.receipt === "rejected") {
+    return { ...rest, status: "failed", error: receipt.reason !== undefined && receipt.reason !== "" ? receipt.reason : UNDELIVERED, endedAt: now };
+  }
+  return { ...rest, status: "sent", path: "keeper", receipt: receipt.receipt, sentAt: now };
+}
+
 function errorCode(response: JsonResponse): string {
   const code = (response.body as { error?: { code?: unknown } } | undefined)?.error?.code;
   return typeof code === "string" ? code : "";
@@ -172,6 +190,8 @@ export class Outbox {
   private ready = false;
   private early = new Map<string, SendResultData>();
   private earlyReceipts = new Map<string, string>();
+  /** A receipt that came for the send this page is claiming or posting: the post's end settles against it. */
+  private receiptInFlight: { commandId: string; receipt: string; reason?: string } | null = null;
   private lateWhileLoading = new Map<string, { entry: OutboxEntry; settled: boolean }>();
   /** Ids this outbox removed while loading (discarded, retried, settled): never taken back from the load or written again. */
   private removed = new Set<string>();
@@ -357,8 +377,13 @@ export class Outbox {
    * waiting, or ended as "may or may not have been sent", is `sent` on this evidence. Held, like a result, while
    * storage loads.
    */
-  noteReceipt(commandId: string, receipt: string): void {
+  noteReceipt(commandId: string, receipt: string, reason?: string): void {
     if (commandId === "") return;
+    if (this.inFlight === commandId) {
+      // Its post is out (or its claim being written): kept, and applied however the post ends.
+      this.receiptInFlight = { commandId, receipt, ...(reason === undefined ? {} : { reason }) };
+      return;
+    }
     if (!this.ready) {
       this.earlyReceipts.delete(commandId);
       if (this.earlyReceipts.size >= EARLY_RESULTS_KEPT) this.earlyReceipts.delete(this.earlyReceipts.keys().next().value as string);
@@ -371,7 +396,7 @@ export class Outbox {
   private async received(commandId: string, receipt: string): Promise<void> {
     if (receipt === "rejected") return; // not taken: the post's own answer, or a result, says why
     const entry = this.list.find((e) => e.commandId === commandId);
-    if (entry === undefined || this.inFlight === commandId) return; // the post's own answer decides
+    if (entry === undefined || this.inFlight === commandId) return; // held by `noteReceipt`, applied when the post ends
     const doubt = entry.status === "failed" && entry.ambiguous === true;
     if (entry.status !== "waiting" && !doubt) return;
     const { error: _error, endedAt: _ended, lastError: _last, ambiguous: _ambiguous, ...rest } = entry;
@@ -472,10 +497,16 @@ export class Outbox {
     }
   }
 
-  /** The entry is not going to be posted after all: it can be discarded again. */
+  /** The entry is not going to be posted after all: it can be discarded again. A receipt held for it applies now. */
   private notPosting(): void {
+    const id = this.inFlight;
     this.inFlight = null;
     this.changed();
+    const held = id === null ? null : this.takeReceipt(id);
+    const entry = id === null ? undefined : this.list.find((e) => e.commandId === id);
+    if (held !== null && entry !== undefined && (entry.status === "waiting" || (entry.status === "failed" && entry.ambiguous === true))) {
+      void this.byReceipt(entry, held);
+    }
   }
 
   /** The entry, if it is still ours to update after an await: not closed, not settled or ended meanwhile. */
@@ -532,6 +563,13 @@ export class Outbox {
     }
     const attempted = claim.entry;
     this.adopt(attempted);
+    const before = this.takeReceipt(entry.commandId);
+    if (before !== null) {
+      // The hub has it already (another page's post): settled by the receipt, not posted.
+      this.notPosting();
+      await this.byReceipt(attempted, before);
+      return "done";
+    }
     if (attempted.ambiguous) {
       this.notPosting();
       // An earlier post may have been applied. No row is sure to de-duplicate a repeat: the hub picks the route
@@ -540,12 +578,19 @@ export class Outbox {
       return "done";
     }
     const response = await this.post(attempted);
+    const receipt = this.takeReceipt(entry.commandId);
     if (this.closed) {
-      await this.late(attempted, response);
+      await this.late(attempted, response, receipt);
       return "done";
     }
     const now = this.current(entry.commandId);
     if (now === undefined) return "done"; // a result came first
+    if (receipt !== null && !carriesResult(response)) {
+      // The stream said the hub took it (or refused it) while the post was out: that settles it, however the
+      // HTTP answer went (lost, 5xx, a timeout).
+      await this.byReceipt(now, receipt);
+      return "done";
+    }
     if (response === null) return this.unsure(now);
     const { status } = response;
     if (status >= 200 && status < 300) {
@@ -599,10 +644,16 @@ export class Outbox {
    * changes, but storage learns what the hub said, the claim is released, and `onLate` hands the entry to the
    * outbox that replaced this one, so the next start sees the truth at once instead of waiting out a stale claim.
    */
-  private async late(attempted: OutboxEntry, response: JsonResponse | null): Promise<void> {
+  private async late(
+    attempted: OutboxEntry,
+    response: JsonResponse | null,
+    receipt: { receipt: string; reason?: string } | null = null,
+  ): Promise<void> {
     const { claim: _released, ...entry } = attempted;
     let outcome: OutboxEntry | null = { ...entry, ambiguous: true };
-    if (response !== null && response.status >= 200 && response.status < 300) {
+    if (receipt !== null && !carriesResult(response)) {
+      outcome = receiptOutcome(entry, receipt, this.options.timers.now());
+    } else if (response !== null && response.status >= 200 && response.status < 300) {
       const body = (response.body ?? {}) as { receipt?: unknown; result?: SendResultData };
       const result = body.result;
       if (result !== undefined && result !== null && typeof result === "object" && (result.ok === true || result.cancelled === true)) {
@@ -622,6 +673,21 @@ export class Outbox {
       if (this.closeAfterLate) this.options.storage.close();
       this.options.onLate?.(standing ?? { ...entry, status: "sent" }, standing === null);
     }
+  }
+
+  /** The receipt held for this id while its post was out, if any; taken, so every exit of the post sees it once. */
+  private takeReceipt(commandId: string): { receipt: string; reason?: string } | null {
+    const held = this.receiptInFlight;
+    if (held === null || held.commandId !== commandId) return null;
+    this.receiptInFlight = null;
+    return held;
+  }
+
+  /** A receipt settles the send: `sent` on the keeper path, or `failed` with the hub's reason when it was refused. */
+  private async byReceipt(entry: OutboxEntry, receipt: { receipt: string; reason?: string }): Promise<void> {
+    const outcome = receiptOutcome(entry, receipt, this.options.timers.now());
+    if (outcome.status === "failed") await this.fail(entry, outcome.error ?? UNDELIVERED);
+    else await this.save(outcome);
   }
 
   /** An entry the outbox that this one replaced finished posting after it closed. */

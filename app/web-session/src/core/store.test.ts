@@ -5,7 +5,7 @@ import { createSessionStore, type SessionStore } from "./store";
 import { FallbackStorage, openOutboxStorage, MemoryStorage, type OutboxStorage } from "./outbox-storage";
 import { KEEPER_UNCONFIRMED, MAYBE_SENT, NOT_SENT_IN_TIME, OUTBOX_TTL_MS, SESSION_GONE, STORAGE_DOWN, TERMINAL_KEPT_MS } from "./outbox";
 import { CLAIM_STALE_MS } from "./outbox-storage";
-import { FakeEnvironment, FakeTimers, FakeTransport, drain, loadFixture, snapshotFrame, type Fixture } from "./test-support";
+import { FakeEnvironment, FakeTimers, FakeTransport, drain, loadFixture, snapshotFrame, until, type Fixture } from "./test-support";
 import type { Frame, Snapshot } from "./types";
 
 const KEY = "claude:session-1";
@@ -1188,5 +1188,76 @@ describe("evidence through the store (review 11)", () => {
     await drain();
     expect(t.state().sends).toMatchObject([{ shown: "sent" }]);
     expect(t.transport.posts("/message")).toHaveLength(1);
+  });
+});
+
+describe("review 12", () => {
+  const T = "local:term-1";
+  const env = (type: string, data: unknown, extra: Record<string, unknown> = {}): Frame =>
+    ({ v: 2, type, session: T, ts: 1, ...extra, data }) as unknown as Frame;
+  const snap = (head: number, row: Record<string, unknown>): Snapshot =>
+    ({
+      session: T, epoch: 0, head, boot_id: "b1", row: { key: T, ...row }, state: "idle", caps: null, open_turn: null,
+      pending: [], queue: [], live: [], plan: null, tasks: [], checkpoints: [], changes: null, usage: null,
+      messages: [], has_more: false, next_before: null,
+    }) as Snapshot;
+  const catchUp = (transport: FakeTransport, row: Record<string, unknown> = {}) =>
+    transport.last.send(snapshotFrame(snap(5, row)), env("session.state", { state: "idle", live: [], pending: [], head: 5, epoch: 0 }, { seq: 0 }));
+  const page = (factory: IDBFactory, answer: () => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>) => {
+    const transport = new FakeTransport();
+    const posts: string[] = [];
+    transport.on("/message", async (_p, r) => {
+      const response = await answer();
+      posts.push(`${String((r.body as { command_id: string }).command_id)}:${response.status}`);
+      return response;
+    }, "POST");
+    const timers = new FakeTimers();
+    const store = createSessionStore({
+      sessionKey: T, transport, timers, random: () => 0, environment: new FakeEnvironment(),
+      openStorage: () => openOutboxStorage(factory), newId: () => "id1",
+    });
+    return { store, transport, timers, posts };
+  };
+
+  it("a held send the hub expired while the page was away does not end reading 'Sent.'", async () => {
+    const factory = new IDBFactory();
+    const held = () => ({ status: 202, body: { ok: true, queued: true, waiting: false, command_id: "id1", client_id: "id1", receipt: "held" } });
+    const a = page(factory, held);
+    a.store.getState().start();
+    catchUp(a.transport, { mode: "keeper", machine_id: "laptop" });
+    await drain();
+    await a.store.getState().send({ text: "run the migration" });
+    await drain();
+    expect(a.store.getState().sends[0]?.reason).toBe("Held by the hub until that machine is back.");
+    a.store.getState().stop(); // the hub expires the hold at 24 h with a seq-0 result no replay carries
+    const b = page(factory, held); // next morning: a fresh load gets a snapshot
+    b.store.getState().start();
+    catchUp(b.transport, { mode: "keeper", machine_id: "laptop" });
+    await drain();
+    b.timers.advance(OUTBOX_TTL_MS + 1000);
+    await drain();
+    const view = b.store.getState().sends[0];
+    expect(view?.shown).toBe("unconfirmed");
+    expect(view?.reason).not.toMatch(/^Sent\./);
+    expect(view?.reason).toBe(KEEPER_UNCONFIRMED);
+  });
+
+  it("a receipt that arrives while the post is out, then the answer is lost (504): sent", async () => {
+    const factory = new IDBFactory();
+    let a: ReturnType<typeof page> | undefined;
+    a = page(factory, async () => {
+      // The keeper stored it and said so on the stream; then the HTTP answer is lost.
+      a!.transport.last.send(env("command.receipt", { status: "accepted" }, { command_id: "id1", seq: 6 }));
+      await drain(); // the receipt is applied before the answer comes back
+      return { status: 504, body: {} };
+    });
+    a.store.getState().start();
+    catchUp(a.transport, { mode: "keeper" });
+    await drain();
+    await a.store.getState().send({ text: "deploy" });
+    await until(() => a!.posts.length === 1, "the post's answer");
+    await drain();
+    expect(a.posts).toEqual(["id1:504"]);
+    expect(a.store.getState().sends).toMatchObject([{ shown: "sent", canRetry: false }]);
   });
 });
