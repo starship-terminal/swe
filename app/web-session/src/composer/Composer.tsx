@@ -478,7 +478,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, confirmMs, chip }: 
             <QueueTray confirmMs={confirmMs} onKeep={keep} settleMs={settleMs} store={store} />
           </Guard>
           <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-            <RequestDock confirmMs={confirmMs} settleMs={settleMs} store={store} />
+            <RequestDock confirmMs={confirmMs} scope={sessionKey} settleMs={settleMs} store={store} />
           </Guard>
         </div>
         {/* In the stack, between what is above the bar and the bar: it does not cover a request that is waiting (the dock

@@ -329,12 +329,12 @@ function pairStore(data) {
  * presenting a dead credential. */
 function pairForget() {
   try { localStorage.removeItem("swe.remote"); localStorage.removeItem(LEGACY_CREDENTIAL_KEY); } catch { }
-  /* The session view keeps the message being typed per session under ``swe.sv.draft.v1:``; they go with the credential. */
+  /* The session view keeps the message being typed per session under ``swe.sv.draft.v1:``; they go with the credential, and so do the answers it has posted (``swe.sv.answer.v1:``). */
   try {
     const stale = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith("swe.sv.draft.v1:")) stale.push(key);
+      if (key && (key.startsWith("swe.sv.draft.v1:") || key.startsWith("swe.sv.answer.v1:"))) stale.push(key);
     }
     for (const key of stale) localStorage.removeItem(key);
   } catch { }

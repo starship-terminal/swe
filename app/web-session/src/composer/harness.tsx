@@ -9,6 +9,7 @@ import { MemoryStorage } from "../core/outbox-storage";
 import { drain, FakeEnvironment, FakeTimers, FakeTransport, loadFixture, snapshotFrame, type Fixture } from "../core/test-support";
 import { Composer, type ComposerProps } from "./Composer";
 import { forgetMemoryDrafts } from "./draft";
+import { forgetMemoryPosted } from "./posted";
 import { forgetKeysDown } from "./Menu";
 
 declare global {
@@ -29,6 +30,7 @@ const stores: SessionStore[] = [];
 beforeEach(() => {
   window.localStorage.clear();
   forgetMemoryDrafts();
+  forgetMemoryPosted();
   forgetKeysDown();
 });
 

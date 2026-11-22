@@ -145,6 +145,11 @@ function longHistory(k: string, from: number, turns: number): Frame[] {
 export function seedDraft(scene: string, key: string): void {
   // Drafts live in the browser's storage, so a scene starts from none (the last one's would still be there).
   writeDraft(key, { text: "", files: [] });
+  // So are the answers a scene posted: one scene must not show another's. The reload scene starts with one, as after a reload.
+  window.localStorage.removeItem(`swe.sv.answer.v1:${key}`);
+  if (scene === "composer-approval-reloaded") {
+    window.localStorage.setItem(`swe.sv.answer.v1:${key}`, JSON.stringify({ "r1\u00008": { d: "allow", l: "Allow", o: "taken", r: "held", a: Date.now() } }));
+  }
   if (scene !== "composer-attachments") return;
   writeDraft(key, {
     text: "Here is the failing log and the config I changed. Can you check the retry settings?",
@@ -268,6 +273,10 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       await type(c, "Run the whole suite and tell me what fails");
       c.store.setState({ send: () => Promise.resolve({ ok: false, reason: "gone", message: "This session no longer exists." } as never) });
       await press(c, "Send message");
+      break;
+    case "composer-approval-reloaded":
+      // The record of Allow, held (that machine is asleep), was put in storage before the page drew (`seedDraft`): a reload.
+      send(...approval.slice(0, 2));
       break;
     case "composer-approval-error":
       send(...approval.slice(0, 2));
@@ -463,7 +472,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       throw new Error(`no composer scene ${scene}`);
   }
   // A request has its answers off for a moment after it appears: the screens wait it out, until the dock says so.
-  if (/approval|input|hostile|acp/.test(scene)) await dockSays(c, scene === "composer-approval-confirm" ? "Ready." : scene === "composer-approval-error" || scene === "composer-approval-offline" ? "" : "You can answer now.");
+  if (/approval|input|hostile|acp/.test(scene)) await dockSays(c, scene === "composer-approval-confirm" ? "Ready." : scene === "composer-approval-reloaded" ? "You answered: Allow." : scene === "composer-approval-error" || scene === "composer-approval-offline" ? "" : "You can answer now.");
   await c.sleep(60);
   return true;
 }

@@ -44,6 +44,7 @@ const SCENES = {
   "composer-queued-menu": "scene=composer-queued-menu",
   "composer-error-note": "scene=composer-error-note",
   "composer-approval-error": "scene=composer-approval-error",
+  "composer-approval-reloaded": "scene=composer-approval-reloaded",
   "composer-over-code": "scene=composer-over-code",
   "composer-over-diff": "scene=composer-over-diff",
   "composer-keyboard": "scene=composer-keyboard",

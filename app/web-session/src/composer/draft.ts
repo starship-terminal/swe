@@ -15,6 +15,7 @@
 // signed-in session does not outlive it on a shared browser.
 
 import { hasCredential } from "../session/credential";
+import { clearAllPosted } from "./posted";
 
 export interface StagedFile {
   ref: string;
@@ -202,6 +203,8 @@ export function sweepDrafts(now = Date.now()): void {
 
 /** Drop every kept draft, on this page and in storage: the device was signed out. */
 export function clearAllDrafts(): void {
+  // What was answered goes with them: it is the same device's, and it must not outlive the sign-in.
+  clearAllPosted();
   memory.clear();
   edited.clear();
   unsaved.clear();

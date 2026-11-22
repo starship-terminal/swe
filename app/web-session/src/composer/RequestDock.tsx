@@ -4,6 +4,7 @@ import { useSessionStore, type RequestEvent, type SessionStore, type TimelineIte
 import { Collapsible, cx, InlineText, Spinner, StateArrow } from "../ui";
 import { AnswerButton } from "./AnswerButton";
 import { answer, decisionFor, postedFor } from "./answer";
+import { prunePosted, subscribePosted } from "./posted";
 import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { usePresses } from "./press";
@@ -129,14 +130,16 @@ function ToolDetails({ tool }: { tool: ToolItem | undefined }) {
  * is on its way (a double click, a held key) is refused by `answer`, which keeps a set of the answers in
  * flight, and is not an error to show: the first press is still doing its work.
  */
-function useAnswering(store: SessionStore, event: RequestEvent, confirmMs: number) {
+function useAnswering(store: SessionStore, scope: string, event: RequestEvent, confirmMs: number) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [, redraw] = useState(0);
   const shown = { requestId: event.data.request_id, seq: event.seq };
   // What was posted for this request lives outside the dock (see answer.ts): a dock drawn again for it knows, and no press of
   // this view can post a second, different decision for it.
-  const posted = postedFor(store, shown);
+  const posted = postedFor(scope, shown);
+  // The record changed in another tab (or was dropped at sign-out): draw again and read it.
+  useEffect(() => subscribePosted(scope, () => redraw((n) => n + 1)), [scope]);
   // A taken answer that the request has not ended after `confirmMs`: said, and nothing more offered (a different answer cannot be sent).
   const [late, setLate] = useState(false);
   useEffect(() => {
@@ -148,7 +151,7 @@ function useAnswering(store: SessionStore, event: RequestEvent, confirmMs: numbe
     setBusy(true);
     setMessage(null);
     try {
-      const outcome = await answer(store, shown, decision, label);
+      const outcome = await answer(store, scope, shown, decision, label);
       if (!outcome.ok && outcome.reason !== "busy" && outcome.reason !== "unknown") setMessage(outcome.message);
     } finally {
       setBusy(false);
@@ -164,7 +167,7 @@ function optionsOf(event: RequestEvent): Option[] {
   return event.type === "approval.requested" ? [{ id: "allow", label: "Allow", kind: "allow" }, { id: "deny", label: "Deny", kind: "deny" }] : [];
 }
 
-function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { store: SessionStore; event: RequestEvent; waiting: number; settleMs: number; confirmMs: number; focusKept: MutableRefObject<boolean> }) {
+function Panel({ store, scope, event, waiting, settleMs, confirmMs, focusKept }: { store: SessionStore; scope: string; event: RequestEvent; waiting: number; settleMs: number; confirmMs: number; focusKept: MutableRefObject<boolean> }) {
   const approval = event.type === "approval.requested";
   const [settling, setSettling] = useState(settleMs > 0);
   useEffect(() => {
@@ -176,10 +179,10 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
   const refusal = useSessionStore(store, (s) => s.refusal()?.message ?? null);
   const callId = event.type === "approval.requested" ? event.data.call_id : undefined;
   const tool = useSessionStore(store, (s) => findTool(s.session.items, callId));
-  const { busy, posted, message, press, late } = useAnswering(store, event, confirmMs);
+  const { busy, posted, message, press, late } = useAnswering(store, scope, event, confirmMs);
   // Once an answer is posted, no other decision can be: the answers stay off. If it may not have arrived, the same one can be sent again.
   const taken = posted?.outcome === "taken";
-  const doubtful = posted?.outcome === "unknown";
+  const doubtful = posted?.outcome === "unknown" && !busy;
   // The standing option that was pressed once, and whether the second press counts yet.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [confirmReady, setConfirmReady] = useState(false);
@@ -406,9 +409,15 @@ function ChoicesInFull({ choices }: { choices: { n: number; text: string }[] }) 
  * ago cannot land on it. The decisions (Allow, Always allow, Deny) are pinned under the request's text, which
  * scrolls above them in its own area with the agent's own choices.
  */
-export function RequestDock({ store, settleMs, confirmMs }: { store: SessionStore; settleMs: number; confirmMs: number }) {
+export function RequestDock({ store, scope, settleMs, confirmMs }: { store: SessionStore; scope: string; settleMs: number; confirmMs: number }) {
   const first = useSessionStore(store, (s) => s.session.pending[0]);
   const waiting = useSessionStore(store, (s) => Math.max(0, s.session.pending.length - 1));
+  // A request that has ended no longer needs its record. Only once the snapshot has loaded: before that nothing is open and every record would go.
+  const loaded = useSessionStore(store, (s) => s.session.loaded);
+  const open = useSessionStore(store, (s) => s.session.pending);
+  useEffect(() => {
+    if (loaded) prunePosted(scope, open.map((request) => ({ requestId: request.data.request_id, seq: request.seq })));
+  }, [loaded, open, scope]);
   // Set by a panel that goes while the keyboard focus is in it: the one that takes its place takes the focus.
   const focusKept = useRef(false);
   useEffect(() => {
@@ -418,7 +427,7 @@ export function RequestDock({ store, settleMs, confirmMs }: { store: SessionStor
   if (first === undefined) return null;
   return (
     <Guard key={`${first.data.request_id}:${first.seq}`} message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-      <Panel confirmMs={confirmMs} event={first} focusKept={focusKept} settleMs={settleMs} store={store} waiting={waiting} />
+      <Panel confirmMs={confirmMs} event={first} focusKept={focusKept} scope={scope} settleMs={settleMs} store={store} waiting={waiting} />
     </Guard>
   );
 }
