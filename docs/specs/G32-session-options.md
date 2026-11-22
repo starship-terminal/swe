@@ -194,7 +194,8 @@ said; an option is there only when the session offers it. Each
 | `value`, `reported?` | the hub's, never this page's guess |
 | `choices` | the agent's list, or null |
 | `midTurn` | as on the wire |
-| `fromNextMessage` | the value changed while the turn in progress runs, and that reply goes on with the old one (`next_turn`, `reply_finishes`): a view says "from your next message" |
+| `changedThisTurn` | the value changed while the turn in progress runs |
+| `fromNextMessage` | it changed this turn and waits for the next message (`next_turn`): a view says "from your next message". With `reply_finishes` it does not wait for a message (opencode's plan switch ran a later step of the same turn): a view says the current reply finishes first |
 | `pending` | `{value, commandId, waiting}` while a change is out; `commandId` null for one behind it, and `waiting` the reason it has not gone yet once the one before it settled (reconnecting, catching up) |
 | `error` | `{value, message}`: the last change that did not take, with the hub's reason as it said it (the 409 message, the result's `note`, a refused receipt's reason, or the network error) |
 | `canChange`, `reason`, `message` | whether `setOption` would send now, and why not |
@@ -243,7 +244,7 @@ session's own agent:
 | the permission mode | `permission_mode.value`, read-only (`reason: display_only`) |
 | an error line under the row | `error.message` |
 | disabled rows and why | `canChange`, `message` |
-| what a change does mid-turn | when `turnOpen`: `next_turn` "applies to the next turn"; `reply_finishes` "the current reply finishes first"; `unverified` "sent now; its effect on the current reply is not known"; after it, `fromNextMessage` "from your next message" |
+| what a change does mid-turn | when `turnOpen`: `next_turn` "applies to the next turn"; `reply_finishes` "the current reply finishes first"; `unverified` "sent now; its effect on the current reply is not known"; after it, `fromNextMessage` "from your next message", or for `reply_finishes` with `changedThisTurn` "after the current reply" |
 | the steer control's label | `caps.steer_effect` (see "Steer") |
 
 Models of other agents are out of scope: switching agent is a new
@@ -303,7 +304,7 @@ then sort them first. `recent_models` could stand in for "recent".
 - The value shown while parked is what the next start will use, before
   the agent has said what it made of it (an ACP agent that does not
   list the model does not take it, and its start says so).
-- `fromNextMessage` is known from changes seen since the last snapshot:
+- `changedThisTurn` and `fromNextMessage` are known from changes seen since the last snapshot:
   a snapshot taken mid-turn does not say when a value changed.
 - A satellite session's options come from the copied journal only: if
   the hub's ring dropped the last `session.options` (4000 events), the

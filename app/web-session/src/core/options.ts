@@ -72,9 +72,12 @@ export interface OptionView<V = string | boolean> {
   /** The values the agent lists, in its order; null when it lists none (show `value` alone). */
   choices: OptionChoice[] | null;
   midTurn: MidTurn;
+  /** The value changed while the turn in progress runs (seen since the last snapshot). */
+  changedThisTurn: boolean;
   /**
-   * The value changed while the turn in progress runs, and that reply goes on with the old one: it applies from the
-   * next message (`next_turn` and `reply_finishes`). A view says "from your next message".
+   * The value changed during this turn and waits for the next message (`next_turn`): a view says "from your next
+   * message". With `reply_finishes` it does not wait for a message (opencode's plan switch ran a later step of the same
+   * turn): a view says the current reply finishes first.
    */
   fromNextMessage: boolean;
   pending: PendingChange<V> | null;
@@ -183,7 +186,8 @@ function view<V extends string | boolean>(
     ...(offered.reported === undefined ? {} : { reported: offered.reported }),
     choices: offered.choices ?? null,
     midTurn: offered.mid_turn,
-    fromNextMessage: offered.mid_turn !== "unverified" && changedThisTurn(session, name),
+    changedThisTurn: changedThisTurn(session, name),
+    fromNextMessage: offered.mid_turn === "next_turn" && changedThisTurn(session, name),
     pending,
     error: (work?.error ?? null) as FailedChange<V> | null,
     canChange: why === null,

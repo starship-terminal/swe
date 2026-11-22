@@ -141,16 +141,21 @@ describe("the selector", () => {
     await t.send(env("turn.started", {}, { seq: t.next(), turn_id: "t1" }));
     await t.send(optionsFrame(t.next(), offered("sonnet")));
     expect(t.state().sessionOptions.model).toMatchObject({ value: "sonnet", fromNextMessage: false });
+    // reply_finishes: changed this turn, but it does not wait for a message (a later step can take it).
     const reply: SessionOptions = { ...offered("opus"), model: { value: "opus", mid_turn: "reply_finishes", choices: CHOICES } };
     await t.send(optionsFrame(t.next(), reply));
-    expect(t.state().sessionOptions.model).toMatchObject({ value: "opus", fromNextMessage: true });
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "opus", changedThisTurn: true, fromNextMessage: false });
+    // next_turn (Codex): the turn in progress keeps the old value; it applies from the next message.
+    const next: SessionOptions = { ...offered("gpt-b"), model: { value: "gpt-b", mid_turn: "next_turn" } };
+    await t.send(optionsFrame(t.next(), next));
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "gpt-b", changedThisTurn: true, fromNextMessage: true });
     await t.send(env("turn.ended", { status: "completed" }, { seq: t.next(), turn_id: "t1" }));
     expect(t.state().sessionOptions.model?.fromNextMessage).toBe(false);
     // A change made between turns is what the next turn starts with: nothing to say once it runs.
     const before: SessionOptions = { ...offered("haiku"), model: { value: "haiku", mid_turn: "reply_finishes", choices: CHOICES } };
     await t.send(optionsFrame(t.next(), before));
     await t.send(env("turn.started", {}, { seq: t.next(), turn_id: "t2" }));
-    expect(t.state().sessionOptions.model).toMatchObject({ value: "haiku", fromNextMessage: false });
+    expect(t.state().sessionOptions.model).toMatchObject({ value: "haiku", changedThisTurn: false, fromNextMessage: false });
   });
 
   it("follows the agent: a value it changed by itself (a plan mode it left) shows when the hub says so", async () => {
