@@ -426,6 +426,28 @@ describe("an edit the hub accepted but the queue has not shown", () => {
     expect(q(m.el, "[data-edit-unconfirmed]")).toBeNull();
   });
 
+  it("does not take another device's change for the edit arriving: the conflict is shown and nothing is saved over it unseen", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200)); // unconfirmed: the editor is back with the saved words
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it three times"); // typed since
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await feed(m, queue(20, { id: "q1", text: "then ship it" })); // another device's edit, not ours and not redacted
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it three times");
+    expect(text(q(m.el, "[data-edit-conflict]"))).toContain("then ship it");
+    expect((btn(m, "Save the edit") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps the saved words, with the conflict, when another device's change arrives while they are still the draft", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    await feed(m, queue(20, { id: "q1", text: "then ship it" }));
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it twice");
+    expect(q(m.el, "[data-edit-conflict]")).not.toBeNull();
+  });
+
   it("puts the words back in the editor, saying so, when the edit never shows", async () => {
     const m = await saved(120);
     await settle(() => wait(200));

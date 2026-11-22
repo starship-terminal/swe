@@ -261,6 +261,14 @@ function Item({
   );
 }
 
+/** What the keeper writes where it hides a secret in the text it takes. */
+const REDACTED = "[REDACTED]";
+
+/** Whether the queue's text is the edit this person saved arriving: the same text, or the same with a secret hidden by the keeper. */
+function arrivedAs(shown: string, saved: string, original: string): boolean {
+  return shown === saved || (shown !== original && shown.includes(REDACTED) && !saved.includes(REDACTED));
+}
+
 /** How far back from the end of the timeline a sent message is looked for. */
 const SENT_LOOKBACK = 300;
 
@@ -341,15 +349,17 @@ export function QueueTray({ store, onKeep, settleMs, confirmMs }: { store: Sessi
       return kept === undefined ? now : { ...now, [id]: { ...kept, pending: true, saved } };
     });
 
-  // An accepted edit that the queue now shows is done: its words are no longer kept aside. What arrives is judged by the queue
-  // having changed from what it showed when the edit began, not by comparing text: the keeper may have changed the text
-  // it took (it hides secrets), so the saved words need not come back as they went. If the draft is still the saved words
-  // they are let go; if the person has typed since (the wait gave up and the editor came back), what they typed is
-  // theirs and the queue's text becomes the new baseline, so reverting to the old text is a change they can save.
+  // An accepted edit that the queue now shows is done: its words are no longer kept aside. It has shown when the queue has the
+  // saved text, or that text as the keeper writes it back (it hides secrets: `[REDACTED]` appears where one was). Any other change is
+  // another device's, and is not taken for this edit: it stays pending, and the conflict it makes is shown, never
+  // saved over unseen. If the draft is still the saved words they are let go; if the person has typed since (the wait gave up
+  // and the editor came back) what they typed is kept and the queue's text becomes the new baseline, so reverting to the old
+  // text is a change they can save.
   useLayoutEffect(() => {
     for (const item of queue) {
       const kept = edits[item.command_id];
-      if (kept === undefined || (kept.pending !== true && kept.unconfirmed !== true) || item.text === kept.original) continue;
+      if (kept === undefined || (kept.pending !== true && kept.unconfirmed !== true) || kept.saved === undefined) continue;
+      if (!arrivedAs(item.text, kept.saved, kept.original)) continue;
       if (kept.text === kept.saved) setEdit(item.command_id, undefined);
       else setEdit(item.command_id, { text: kept.text, original: item.text });
     }
