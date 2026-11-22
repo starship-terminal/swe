@@ -437,7 +437,10 @@ class ServeState(SessionCore):
         # other report is the server's own change, shown at once.
         self._posted_models: list[dict] = []
         self._posted_agents: list[str] = []
-        self._posts = 0  # every post so far, to tell a stale re-read
+        # Bumped by every post, every report, a step's start that names a
+        # value, and every re-read started:
+        # a re-read's answer is used only if nothing came after its ask.
+        self._generation = 0
         # our turn id -> the id of its user message, for a revert
         self.turn_messages: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -617,7 +620,7 @@ class ServeState(SessionCore):
         if isinstance(ref, dict):
             self.model = dict(ref)
             self._posted_models.append(dict(ref))
-            self._posts += 1
+            self._generation += 1
         return self.options_events()
 
     def agent_selected(self, agent: Any) -> list:
@@ -625,25 +628,25 @@ class ServeState(SessionCore):
         if text_of(agent):
             self.agent = agent
             self._posted_agents.append(agent)
-            self._posts += 1
+            self._generation += 1
         return self.options_events()
 
-    @property
-    def posts(self) -> int:
-        return self._posts
-
-    def events_lost(self) -> None:
+    def events_lost(self) -> int:
         """An event the reader had to drop may have been a post's echo:
         no report is taken for an echo any more, so every later one is
-        the server's word."""
+        the server's word. Returns the generation to hand the session
+        re-read (any earlier re-read is overtaken by this one)."""
         self._posted_models.clear()
         self._posted_agents.clear()
+        self._generation += 1
+        return self._generation
 
-    def session_read(self, session: Any, posts: int) -> list:
+    def session_read(self, session: Any, generation: int) -> list:
         """``GET .../session/<id>`` after lost events: the server's
-        current model and agent. A read that ``posts`` show was overtaken
-        by a newer post is not used (that post's answer said more)."""
-        if posts != self._posts or not isinstance(session, dict):
+        current model and agent. An answer overtaken by anything newer
+        (a post, a server report, a later re-read) is not used: what
+        came after it said more."""
+        if generation != self._generation or not isinstance(session, dict):
             return []
         if isinstance(session.get("model"), dict):
             self.model = dict(session["model"])
@@ -736,8 +739,10 @@ class ServeState(SessionCore):
         # our posts and the server's ``*.selected`` reports.
         if not self.model and isinstance(data.get("model"), dict):
             self.model = dict(data["model"])
+            self._generation += 1
         if not self.agent and text_of(data.get("agent")):
             self.agent = data["agent"]
+            self._generation += 1
 
     def _on_step_ended(self, data: dict, fed: Fed) -> None:
         if isinstance(data.get("tokens"), dict):
@@ -927,6 +932,7 @@ class ServeState(SessionCore):
         model = data.get("model")
         if not isinstance(model, dict):
             return
+        self._generation += 1
         for i, posted in enumerate(self._posted_models):
             if _same_ref(model, posted):
                 del self._posted_models[i]  # that post's echo
@@ -938,6 +944,7 @@ class ServeState(SessionCore):
         agent = text_of(data.get("agent"))
         if not agent:
             return
+        self._generation += 1
         if agent in self._posted_agents:
             self._posted_agents.remove(agent)  # that post's echo
             return

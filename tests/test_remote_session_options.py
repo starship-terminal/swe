@@ -351,14 +351,42 @@ class TestOpencodeLateReports(unittest.TestCase):
 
     def test_a_re_read_overtaken_by_a_post_is_not_used(self):
         st = self.state()
-        st.events_lost()
-        posts = st.posts
+        asked = st.events_lost()
         st.model_selected({"providerID": "p", "id": "new"})
         self.assertEqual(st.session_read(
-            {"model": {"providerID": "p", "id": "old"}}, posts), [])
+            {"model": {"providerID": "p", "id": "old"}}, asked), [])
         self.assertEqual(st.model["id"], "new")
+
+    def test_a_re_read_overtaken_by_a_server_report_is_not_used(self):
+        st = self.state()
+        said = self.agent_report(st, "plan")
+        asked = st.events_lost()
+        said += self.agent_report(st, "build")  # the server leaves plan
+        said += st.session_read({"agent": "plan"}, asked)  # an old answer
+        self.assertEqual(_values(said, "plan_mode"), [True, False])
+        self.assertEqual(st.agent, "build")
+
+    def test_a_re_read_overtaken_by_a_steps_start_is_not_used(self):
+        st = opencode_wire.ServeState("oc:x", clock=lambda: 1.0,
+                                      run_id="aaaa0001")
+        st.session_id = "ses_1"
+        st.start_events(ALL_CAPS.narrowed(opencode_wire.PROVEN), "ses_1")
+        asked = st.events_lost()
+        st.feed({"type": "session.step.started", "data": {
+            "sessionID": "ses_1", "agent": "build",
+            "model": {"providerID": "p", "id": "m1"}}})
+        self.assertEqual(st.session_read(
+            {"model": {"providerID": "p", "id": "old"}}, asked), [])
+        self.assertEqual(st.model["id"], "m1")
+
+    def test_of_two_re_reads_only_the_later_is_used(self):
+        st = self.state()
+        first = st.events_lost()
+        second = st.events_lost()
+        self.assertEqual(st.session_read(
+            {"model": {"providerID": "p", "id": "old"}}, first), [])
         said = st.session_read({"model": {"providerID": "p", "id": "x"},
-                                "agent": "plan"}, st.posts)
+                                "agent": "plan"}, second)
         self.assertEqual(_options(said)[-1]["model"]["value"], "p/x")
         self.assertIs(_options(said)[-1]["plan_mode"]["value"], True)
 

@@ -760,12 +760,11 @@ class OpencodeServeAdapter:
             if state is None or state.done or self._closed \
                     or not self._session_id:
                 return
-            state.events_lost()
-            posts = state.posts
-        threading.Thread(target=self._reread_session, args=(posts,),
+            generation = state.events_lost()
+        threading.Thread(target=self._reread_session, args=(generation,),
                          daemon=True, name="opencode-serve-reread").start()
 
-    def _reread_session(self, posts: int) -> None:
+    def _reread_session(self, generation: int) -> None:
         try:
             reply = self._call(wire.get_session(self._session_id))
         except AdapterError:
@@ -775,7 +774,7 @@ class OpencodeServeAdapter:
         with self._lock:
             state = self._state
             if state is not None and not state.done and not self._closed:
-                self._emit(state.session_read(reply.data, posts))
+                self._emit(state.session_read(reply.data, generation))
 
     def _dispatch(self, event: dict) -> None:
         with self._lock:
