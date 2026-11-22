@@ -1,6 +1,6 @@
 {
   "hash_rule": "app/web-session/scripts/source-hash.mjs",
-  "source_hash": "d67377dac219f939f66436c016d5d54f2fdce0becc4869fd1ae41d064da82fa5",
+  "source_hash": "bed74099acd292efd78b45eebf8c3601a1bc28070df3a86ba51625638b6a6cec",
   "sources": {
     "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
     "package.json": "cb9b7879ea6c06714a7ca2fe19e1d3de1eef288fab335122c39db4037073781d",
@@ -18,7 +18,7 @@
     "src/composer/ErrorNote.tsx": "94a4175c4af78d50088c4d98a29871ba6b14f4c3cf52291e10b1d6857ac7cde1",
     "src/composer/Guard.tsx": "a945e596ab116f17fd01e186e5423c7493f2ff82aedf8ccc1391bcbe39a9285d",
     "src/composer/Menu.tsx": "74fcf660fa1b1ead74b5ec149f4ecc1d445884464552422763a62072c2ae6200",
-    "src/composer/QueueTray.tsx": "ff820709811a7660a6658da05f96665a4ea25c43a8c2970ab6ec1fc36fdc4230",
+    "src/composer/QueueTray.tsx": "98f1c1e2915de6b4ccfeafb30358cb26eecab9669bdac14007a964cde3d8d991",
     "src/composer/RequestDock.tsx": "f71f4b12ae5ab7a5b02d3d36284468eb247819ef6163c31c6e34d951924acfcd",
     "src/composer/answer.ts": "f1b88fbbae3c2046760606106812ecfe5dfbced19839c42c02e62e474c860731",
     "src/composer/composer.css": "eef5d3ee32b3bfe3ed1674fcf5393800ae9a87d84fe188bcf117bfa65b8373f4",
@@ -43,7 +43,7 @@
     "src/composer/submit.ts": "3c9f1acc74412f4c0ad47eaeaa214c7f59a40a2eccb09a52077fb964f8e692bf",
     "src/composer/text.test.ts": "3b97d59919b517ffedbb01b3c3cebc374ea026b33bf9a6183befc3a08e316c2b",
     "src/composer/text.ts": "e36edc174d799bbae3ddb83a3b32cdd4825cf15bc93f0e027a8562ce36933333",
-    "src/composer/tray.test.tsx": "14c272969552ba1787d581ddbc08aba493e2dae6256d90ca732a7a518875206c",
+    "src/composer/tray.test.tsx": "cc6132fee06b7d3fce7ba4e9ba84bef271e7576a062b19353386b0876ec760f1",
     "src/composer/upload.ts": "f5b8535c1e9f141c432c6006e7ef81276ee1d09fb57033938a9d5c8016d94e6b",
     "src/composer/useDraft.ts": "dfefd448df64a0c721c3f7b01cbc761878f27e5e2ab78f6f7f476fd58f337052",
     "src/core/gate.ts": "ae37d2483ba08d326d65862ca70926a00fead48641492c44fff4209618b606ef",

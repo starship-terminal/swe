@@ -367,6 +367,65 @@ describe("an edit the hub accepted but the queue has not shown", () => {
     expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it");
   });
 
+  it("lets the person save the reversal of an edit that showed late: the queue's text becomes the baseline", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it"); // the text it began with
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await feed(m, queue(20, { id: "q1", text: "then lint it twice" })); // the earlier save shows, late
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it");
+    expect(q(m.el, "[data-edit-conflict]")).toBeNull();
+    expect((btn(m, "Save the edit") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("does not bring a dismissed edit back when the hub's reply comes after the person dismissed it", async () => {
+    const m = await withQueue();
+    let release: () => void = () => {};
+    m.transport.on("/queue", () => new Promise((resolve) => (release = () => resolve({ status: 200, body: { ok: true } }))), "POST");
+    await click(btn(m, "Edit queued message"));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it twice");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle(() => void (btn(m, "Save the edit") as HTMLButtonElement).click()); // the reply is still on its way
+    await feed(m, queue(20)); // the message left the queue: the words come back in a card
+    expect(q(m.el, "[data-orphan]")).not.toBeNull();
+    await click(btn(m, "Let it go"));
+    expect(q(m.el, "[data-orphan]")).toBeNull();
+    await settle(() => release()); // the reply, late
+    expect(q(m.el, "[data-orphan]")).toBeNull();
+    expect(q(m.el, "[data-edit-pending]")).toBeNull();
+  });
+
+  it("counts an edit as shown when the queue's text came back changed (the keeper hides secrets), not only when it is the same", async () => {
+    const m = await withQueue();
+    await click(btn(m, "Edit queued message"));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then set API_KEY=example");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click(btn(m, "Save the edit"));
+    expect(q(m.el, "[data-edit-pending]")).not.toBeNull();
+    await feed(m, queue(20, { id: "q1", text: "then set API_KEY=[REDACTED]" }));
+    expect(q(m.el, "[data-edit-pending]")).toBeNull();
+    expect(q(m.el, "[data-orphan]")).toBeNull();
+    expect(q(tray(m), "textarea")).toBeNull();
+  });
+
+  it("says no unconfirmed edit and no conflict when the redacted text shows after the wait gave up", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    await feed(m, queue(20, { id: "q1", text: "then lint it [REDACTED]" }));
+    expect(q(tray(m), "textarea")).toBeNull();
+    expect(q(m.el, "[data-edit-conflict]")).toBeNull();
+    expect(q(m.el, "[data-edit-unconfirmed]")).toBeNull();
+  });
+
   it("puts the words back in the editor, saying so, when the edit never shows", async () => {
     const m = await saved(120);
     await settle(() => wait(200));

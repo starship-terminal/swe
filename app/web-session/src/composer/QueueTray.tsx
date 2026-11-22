@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentProps, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type MouseEvent } from "react";
 
 import { useSessionStore, type SessionStore } from "../core";
 import { cx, Icon, Spinner } from "../ui";
@@ -53,6 +53,7 @@ function Item({
   item,
   edit,
   setEdit,
+  onAccepted,
   steerOk,
   steerEffect,
   refusal,
@@ -63,6 +64,8 @@ function Item({
   item: Queued;
   edit: Edit | undefined;
   setEdit(id: string, edit: Edit | undefined): void;
+  /** The hub took the edit with this text: keep the words aside, unless the edit was dismissed meanwhile. */
+  onAccepted(id: string, saved: string): void;
   steerOk: boolean;
   steerEffect: ReturnType<typeof steerEffectOf>;
   refusal: string | null;
@@ -243,7 +246,7 @@ function Item({
               onClick={() => {
                 void run("edit", edit.text).then((ok) => {
                   // Accepted is not applied: the words stay until the queue shows them.
-                  if (ok) setEdit(id, { text: edit.text, original: edit.original, pending: true, saved: edit.text });
+                  if (ok) onAccepted(id, edit.text);
                 });
               }}
             />
@@ -330,12 +333,25 @@ export function QueueTray({ store, onKeep, settleMs, confirmMs }: { store: Sessi
       return next;
     });
 
-  // An accepted edit that the queue now shows is done: its words are no longer kept aside.
-  useEffect(() => {
+  // The hub's reply can come after the person dismissed the edit (the message left, and they moved its words or let them go): a late
+  // reply must not bring it back.
+  const accepted = (id: string, saved: string): void =>
+    setEdits((now) => {
+      const kept = now[id];
+      return kept === undefined ? now : { ...now, [id]: { ...kept, pending: true, saved } };
+    });
+
+  // An accepted edit that the queue now shows is done: its words are no longer kept aside. What arrives is judged by the queue
+  // having changed from what it showed when the edit began, not by comparing text: the keeper may have changed the text
+  // it took (it hides secrets), so the saved words need not come back as they went. If the draft is still the saved words
+  // they are let go; if the person has typed since (the wait gave up and the editor came back), what they typed is
+  // theirs and the queue's text becomes the new baseline, so reverting to the old text is a change they can save.
+  useLayoutEffect(() => {
     for (const item of queue) {
       const kept = edits[item.command_id];
-      // Also after the wait gave up on it (a connection that came back late). It is the saved text arriving, and the draft is still that text: a draft the person has changed since is theirs, and typing text that happens to match the queue is not an echo.
-      if (kept !== undefined && (kept.pending === true || kept.unconfirmed === true) && kept.saved !== undefined && item.text === kept.saved && kept.text === kept.saved) setEdit(item.command_id, undefined);
+      if (kept === undefined || (kept.pending !== true && kept.unconfirmed !== true) || item.text === kept.original) continue;
+      if (kept.text === kept.saved) setEdit(item.command_id, undefined);
+      else setEdit(item.command_id, { text: kept.text, original: item.text });
     }
   }, [queue, edits]);
 
@@ -366,7 +382,7 @@ export function QueueTray({ store, onKeep, settleMs, confirmMs }: { store: Sessi
                   <ul className={cx("flex flex-col gap-1 overflow-y-auto pb-1", editing ? "max-h-72" : "max-h-44")}>
                     {shown.map((item) => (
                       <Guard key={item.command_id} message="This queued message could not be shown." part="queued" resetKey={`${item.text}\u0000${item.mode ?? ""}`}>
-                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} confirmMs={confirmMs} settleMs={settleMs} steerEffect={steerEffect} steerOk={steerOk} store={store} />
+                        <Item edit={edits[item.command_id]} item={item} onAccepted={accepted} refusal={refusal} setEdit={setEdit} confirmMs={confirmMs} settleMs={settleMs} steerEffect={steerEffect} steerOk={steerOk} store={store} />
                       </Guard>
                     ))}
                   </ul>
