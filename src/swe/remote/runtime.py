@@ -148,6 +148,9 @@ class _Owned:
         self.at_refs = at_refs
         self.state = state
         self.caps: dict = {}
+        # The last ``session.options`` (G32): what the session offers
+        # and the values in force. ``options`` above is the launch's.
+        self.offered: dict = {}
         self.queue: list[dict] = []
         # request_id -> the approval.requested or input.requested event
         # still open.
@@ -515,6 +518,8 @@ class SessionRuntime:
             owned.state = state
         if isinstance(welcome.get("caps"), dict):
             owned.caps = welcome["caps"]
+        if isinstance(welcome.get("options"), dict):
+            owned.offered = welcome["options"]
         if isinstance(welcome.get("queue"), list):
             owned.queue = [q for q in welcome["queue"] if isinstance(q, dict)]
         harness_id = welcome.get("harness_session_id")
@@ -793,6 +798,9 @@ class SessionRuntime:
         elif etype == "session.caps":
             if isinstance(data.get("caps"), dict):
                 owned.caps = data["caps"]
+        elif etype == "session.options":
+            if isinstance(data.get("options"), dict):
+                owned.offered = data["options"]
         elif etype == "queue.updated":
             items = data.get("items")
             owned.queue = [q for q in items if isinstance(q, dict)] \

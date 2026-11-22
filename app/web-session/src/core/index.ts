@@ -4,7 +4,9 @@
 export { createSessionStore, useSessionStore } from "./store";
 export type {
   ActionResult,
+  OptionRefusal,
   SendResult,
+  SetOptionResult,
   SessionStore,
   SessionStoreOptions,
   SessionStoreState,
@@ -16,6 +18,17 @@ export type { OutboxView, SendInput } from "./outbox";
 export { LEGACY_CONFIRM_MS, MAYBE_SENT, OUTBOX_TTL_MS, TERMINAL_KEPT_MS } from "./outbox";
 export type { OutboxEntry, SendStatus } from "./outbox-storage";
 export { describeSends } from "./sends";
+export { describeOptions, FEATURE_SESSION_OPTIONS, OPTION_NAMES } from "./options";
+export type {
+  CannotChangeReason,
+  FailedChange,
+  MidTurn,
+  OptionName,
+  OptionValue,
+  OptionView,
+  PendingChange,
+  SessionOptionsView,
+} from "./options";
 export type { SendShown, SendView } from "./sends";
 export type { Refusal, RefusalReason } from "./gate";
 export { readOnlyReason } from "./gate";

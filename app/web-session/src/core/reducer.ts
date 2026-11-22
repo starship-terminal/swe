@@ -77,6 +77,7 @@ const ENDS_LIVE = new Set(["idle", "agent_down", "parked", "closed"]);
 const SINGLETONS = [
   "session.state",
   "session.caps",
+  "session.options",
   "plan.updated",
   "changes.updated",
   "queue.updated",
@@ -568,6 +569,9 @@ function applySnapshot(prev: SessionState, snapshot: Snapshot): SessionState {
   s.phase = snapshot.state;
   s.phaseReason = snapshot.reason ?? null;
   s.caps = snapshot.caps;
+  // A hub without the session_options feature sends no `options`: nothing is known then.
+  s.options = snapshot.options ?? null;
+  s.optionChangedSeq = {};
   s.openTurn = snapshot.open_turn;
   s.live = snapshot.live.map(toLive);
   s.queue = snapshot.queue;
@@ -776,7 +780,8 @@ export function reduce(state: SessionState, frame: Frame): Reduced {
       if (frame.data.head > s.cursor) s.cursor = frame.data.head;
       return { state: s, effects };
     case "session.row":
-      s.row = frame.data.row;
+      // A frame with no row says nothing: the row held stays (G12's header reads it).
+      if (frame.data?.row !== undefined && frame.data.row !== null) s.row = frame.data.row;
       return { state: s, effects };
     case "message.delta":
       applyDelta(s, frame, effects);
@@ -788,6 +793,19 @@ export function reduce(state: SessionState, frame: Frame): Reduced {
       if (!stale(s, frame, "session.caps")) {
         s.caps = frame.data.caps;
         mark(s, frame, "session.caps");
+      }
+      break;
+    case "session.options":
+      if (!stale(s, frame, "session.options")) {
+        const before = s.options;
+        const changed = { ...s.optionChangedSeq };
+        for (const [name, option] of Object.entries(frame.data.options)) {
+          const was = before?.[name as keyof typeof before];
+          if (option !== undefined && was !== undefined && was.value !== option.value) changed[name] = seq;
+        }
+        s.optionChangedSeq = changed;
+        s.options = frame.data.options;
+        mark(s, frame, "session.options");
       }
       break;
     case "plan.updated":

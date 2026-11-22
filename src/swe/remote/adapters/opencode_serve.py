@@ -151,6 +151,10 @@ class OpencodeServeAdapter:
         # Why events were skipped (a bug, never the wire's fault): kept
         # for tests and logs, bounded.
         self.dropped: collections.deque = collections.deque(maxlen=20)
+        # The session re-read after a dropped event (G32): at most one
+        # runs; a drop while it runs asks it for one more read.
+        self._rereading = False
+        self._reread_again = False
 
     # -- small helpers ---------------------------------------------------
 
@@ -374,12 +378,33 @@ class OpencodeServeAdapter:
                     self._ok(wire.select_model(self._session_id, ref),
                              "the model", self._init_timeout)
                     self._model, self._effort = model, effort
+                    state.model = dict(ref)
             if spec.plan_mode and self._caps.plan_mode:
                 self._plan(True, self._init_timeout)
             if state.done:
                 raise AdapterError("opencode exited", code="agent_down")
             # Last: a start that fails above has emitted nothing.
             self._emit(state.start_events(self._caps, self._session_id))
+        if self._caps.can_set("model"):
+            # The server's own list for the picker (G32), asked after the
+            # start so it never holds the start up; it arrives as one more
+            # session.options. A refused or late one leaves the value
+            # alone (the keeper keeps the list it last had).
+            threading.Thread(target=self._fetch_models, daemon=True,
+                             name="opencode-serve-models").start()
+
+    def _fetch_models(self) -> None:
+        try:
+            listed = self._call(wire.list_models())
+        except AdapterError:
+            return
+        if not listed.ok:
+            return
+        with self._lock:
+            state = self._state
+            if state is not None and not state.done and not self._closed:
+                state.model_choices = wire.model_choices(listed.body)
+                self._emit(state.options_events())
 
     def _open_stream(self) -> None:
         """Connect ``GET /api/event`` and start its reader; returns once
@@ -553,6 +578,7 @@ class OpencodeServeAdapter:
                     code="bad_request")
             self._ok(wire.select_model(self._session_id, ref), "the model")
             self._model, self._effort = model, effort
+            self._emit(self._state.model_selected(ref))
 
     def _plan(self, on: bool, timeout: float | None = None) -> None:
         """Switch to opencode's ``plan`` agent, or back to the agent the
@@ -568,7 +594,7 @@ class OpencodeServeAdapter:
         self._ok(wire.select_agent(self._session_id, agent), "the agent",
                  timeout)
         if state is not None:
-            state.agent = agent
+            self._emit(state.agent_selected(agent))
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:
@@ -686,10 +712,14 @@ class OpencodeServeAdapter:
                     break
                 whole = raw.endswith(b"\n")
                 if oversized or not whole:
-                    # A line past the bound: drop the event it is in.
+                    # A line past the bound: drop the event it is in,
+                    # said once however many reads the line takes.
+                    if not oversized:
+                        self.dropped.append(
+                            "an event line over the size bound")
+                        self._events_lost()
                     oversized = not whole
                     parser = wire.SseParser()
-                    self.dropped.append("an event line over the size bound")
                     continue
                 event = parser.feed(raw)
                 if event is None:
@@ -702,6 +732,7 @@ class OpencodeServeAdapter:
                     # An event the state machine choked on must not end
                     # the reader: every later event would be lost.
                     self.dropped.append(f"{type(exc).__name__}: {exc}"[:200])
+                    self._events_lost()
         except (OSError, ValueError, http.client.HTTPException,
                 AttributeError):
             pass
@@ -724,6 +755,50 @@ class OpencodeServeAdapter:
             self._kill()
         except (OSError, AttributeError):
             pass
+
+    def _events_lost(self) -> None:
+        """The reader dropped an event, which may have been a post's
+        echo (G32): forget the posts waiting for one, and read the
+        session's model and agent back once, off the reader's thread.
+        The stream itself never reconnects: when it ends, so does the
+        session."""
+        with self._lock:
+            state = self._state
+            if state is None or state.done or self._closed \
+                    or not self._session_id:
+                return
+            state.events_lost()
+            if self._rereading:
+                self._reread_again = True
+                return
+            self._rereading = True
+        threading.Thread(target=self._reread_session, daemon=True,
+                         name="opencode-serve-reread").start()
+
+    def _reread_session(self) -> None:
+        """Read the session back until no drop asked for another read.
+        Each read is used only if nothing came after its ask (the
+        state's generation)."""
+        while True:
+            with self._lock:
+                state = self._state
+                self._reread_again = False
+                if state is None or state.done or self._closed:
+                    self._rereading = False
+                    return
+                generation = state.generation
+            try:
+                reply = self._call(wire.get_session(self._session_id))
+            except AdapterError:
+                reply = None
+            with self._lock:
+                state = self._state
+                if reply is not None and reply.ok and state is not None \
+                        and not state.done and not self._closed:
+                    self._emit(state.session_read(reply.data, generation))
+                if not self._reread_again:
+                    self._rereading = False
+                    return
 
     def _dispatch(self, event: dict) -> None:
         with self._lock:

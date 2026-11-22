@@ -74,6 +74,7 @@ fields marked `?`; enum values are in `events.ENUMS`.
 |---|---|
 | `session.state` | `state` (starting, idle, running, waiting, agent_down, parked, closed), `reason?`, `harness_session_id?` |
 | `session.caps` | `caps` {steer, plan_mode, rollback, fork, stop_task, options[]} |
+| `session.options` | `options` {model?, effort?, permission_mode?, plan_mode?}: each `{value, mid_turn, choices?, reported?}`, for the names the caps allow; at start and on each change (G32) |
 | `turn.started` | `by?` (device), `text?`; envelope needs `turn_id` |
 | `turn.ended` | `status` (completed, interrupted, failed, keeper_lost), `reason?`, `duration_s?`; envelope needs `turn_id` |
 | `message.delta` | `id`, `kind` (assistant, thinking, tool_use), `text`, `seq` (this message's delta count, a positive integer from 1), `offset?`, `done?` |

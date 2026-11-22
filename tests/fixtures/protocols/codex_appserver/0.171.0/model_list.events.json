@@ -1,0 +1,137 @@
+[
+ {
+  "v": 2,
+  "type": "session.caps",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.34,
+  "data": {
+   "caps": {
+    "steer": true,
+    "plan_mode": false,
+    "rollback": true,
+    "fork": true,
+    "stop_task": false,
+    "options": [
+     "effort",
+     "model",
+     "permission_mode"
+    ],
+    "steer_effect": "stops_reply"
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.34,
+  "data": {
+   "state": "idle",
+   "harness_session_id": "rollout-2026-01-01T00-00-00-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.34,
+  "data": {
+   "options": {
+    "model": {
+     "value": "gpt-5.6-luna",
+     "mid_turn": "next_turn"
+    },
+    "effort": {
+     "value": "",
+     "mid_turn": "next_turn"
+    },
+    "permission_mode": {
+     "value": "never",
+     "mid_turn": "next_turn"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.342,
+  "data": {
+   "options": {
+    "model": {
+     "value": "gpt-5.6-luna",
+     "mid_turn": "next_turn",
+     "choices": [
+      {
+       "id": "gpt-6.2-sol",
+       "label": "GPT-6.2-Sol"
+      },
+      {
+       "id": "gpt-6.2-astra",
+       "label": "GPT-6.2-Astra"
+      },
+      {
+       "id": "gpt-6.1-terra",
+       "label": "GPT-6.1 Terra"
+      },
+      {
+       "id": "gpt-6.1-sol",
+       "label": "GPT-6.1-Sol"
+      },
+      {
+       "id": "gpt-6-astra",
+       "label": "GPT-6-Astra"
+      },
+      {
+       "id": "gpt-6-sol",
+       "label": "GPT-6-Sol"
+      },
+      {
+       "id": "gpt-6-luna",
+       "label": "GPT-6-Luna"
+      },
+      {
+       "id": "gpt-5.6-sol",
+       "label": "GPT-5.6-Sol"
+      },
+      {
+       "id": "gpt-5.6-terra",
+       "label": "GPT-5.6-Terra"
+      },
+      {
+       "id": "gpt-5.6-luna",
+       "label": "GPT-5.6-Luna"
+      },
+      {
+       "id": "gpt-5.5",
+       "label": "GPT-5.5"
+      }
+     ]
+    },
+    "effort": {
+     "value": "",
+     "mid_turn": "next_turn"
+    },
+    "permission_mode": {
+     "value": "never",
+     "mid_turn": "next_turn"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.state",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.342,
+  "data": {
+   "state": "closed"
+  }
+ }
+]

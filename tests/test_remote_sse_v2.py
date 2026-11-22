@@ -1393,6 +1393,14 @@ SAMPLES = {
     "session.caps": ev.session_caps(K, {
         "steer": True, "plan_mode": False, "rollback": False, "fork": True,
         "stop_task": False, "options": ["model"]}),
+    "session.options": ev.session_options(K, {
+        "model": {"value": "haiku", "mid_turn": "unverified",
+                  "choices": [{"id": "haiku", "label": "Haiku",
+                               "description": "fast"}],
+                  "reported": "claude-haiku-5-5"},
+        "effort": {"value": "", "mid_turn": "next_turn"},
+        "permission_mode": {"value": "default", "mid_turn": "unverified"},
+        "plan_mode": {"value": False, "mid_turn": "unverified"}}),
     "turn.started": ev.turn_started(K, "t1", by="phone", text="go"),
     "turn.ended": ev.turn_ended(K, "t1", "completed", duration_s=1.5),
     "message.delta": ev.message_delta(K, "m1", "assistant", "hi", 1,
@@ -1600,7 +1608,7 @@ class TestSchema(unittest.TestCase):
             "features": ["sync_v2", "snapshot", "live_resume",
                          "delta_offset", "ping", "command_id",
                          "require_keeper", "command_lookup",
-                         "session_runtime"]})
+                         "session_options", "session_runtime"]})
 
     def test_the_validator(self):
         root = {"$defs": {

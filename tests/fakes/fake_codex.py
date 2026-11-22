@@ -399,7 +399,12 @@ def handle(msg):
         if MODE == "refuse-thread":
             refuse(rpc_id, "not logged in")
             return
-        answer(rpc_id, {"thread": thread(THREAD), "model": "gpt-test"})
+        # As the real server does (options.jsonl): the model and policy
+        # asked for, or its own default model.
+        answer(rpc_id, {"thread": thread(THREAD),
+                        "model": params.get("model") or "gpt-test",
+                        "approvalPolicy": params.get("approvalPolicy"),
+                        "reasoningEffort": None})
         out({"method": "thread/started", "params": {}})
     elif method == "thread/resume":
         if params.get("threadId") != THREAD:
@@ -432,6 +437,18 @@ def handle(msg):
         answer(rpc_id, {"thread": thread(
             state["thread"], rollout=f"_{REVERTED}")})
         note("thread/reverted")
+    elif method == "model/list" and MODE in ("models", "slow-models"):
+        # The server's models (G32); ``slow-models`` answers 1.5 s later,
+        # long after the adapter's start returned.
+        def listed():
+            answer(rpc_id, {"data": [
+                {"id": "gpt-a", "model": "gpt-a", "displayName": "GPT A"},
+                {"id": "gpt-b", "model": "gpt-b", "displayName": "GPT B"}],
+                "nextCursor": None})
+        if MODE == "slow-models":
+            threading.Timer(1.5, listed).start()
+        else:
+            listed()
     elif rpc_id is not None:
         refuse(rpc_id, f"unknown method {method}", -32601)
 

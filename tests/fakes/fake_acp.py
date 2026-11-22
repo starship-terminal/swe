@@ -58,10 +58,17 @@ OTHER = "99999999-2222-4333-8444-555555555555"
 KEY = "sk-ant-api03-" + "d" * 40
 MODES = [{"id": "plan", "name": "Plan"}, {"id": "default", "name": "Default"},
          {"id": "yolo", "name": "YOLO"}]
+if MODE == "yolo-first":
+    # An agent whose list starts with a mode that asks nothing and has no
+    # ``default``, started in plan mode (G32).
+    MODES = [{"id": "yolo", "name": "YOLO"}, {"id": "auto", "name": "Auto"},
+             {"id": "plan", "name": "Plan"}]
 MODELS = [{"modelId": "prov|model-1", "name": "model-1"},
           {"modelId": "prov|model-2", "name": "model-2"}]
 
-state = {"session": SESSION, "mode": "default", "model": "prov|model-1",
+state = {"session": SESSION,
+         "mode": "plan" if MODE == "yolo-first" else "default",
+         "model": "prov|model-1",
          "prompt": None, "turn_mode": MODE, "pending": None, "n": 0,
          "call": "", "cancelled": False}
 

@@ -31,6 +31,21 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.4,
+  "data": {
+   "options": {
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,

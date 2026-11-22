@@ -762,6 +762,7 @@ const items = useSessionStore(store, (s) => s.session.items);
 | `loadOlder()` | the page before the oldest held (`GET .../messages?v=2&before=`). A page is dropped if, while it was out, the epoch, the boot or the page marker changed (a snapshot replaced what it would extend); the next call pages from the new marker |
 | `discardSend(id)`, `retrySend(id)` | dismiss a failed send, or send it again as a new one |
 | `refusal()` | why a gated action cannot run now, or null: for disabling a control and saying why |
+| `setOption(name, value)`, `sessionOptions` | change a running session's model, effort, permission mode or plan mode, and what a picker reads: [G32](G32-session-options.md) |
 
 Every action that reaches the hub carries a fresh `command_id` in its
 body. What the store does on its own: a hole in the deltas fetches

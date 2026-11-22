@@ -15,7 +15,8 @@
     "options": [
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -28,6 +29,46 @@
   "data": {
    "state": "idle",
    "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.792,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {
@@ -62,6 +103,47 @@
    "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Remember the word kumquat. Reply with exactly: noted"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.575,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-haiku-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {
@@ -156,7 +238,8 @@
     "options": [
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -169,6 +252,46 @@
   "data": {
    "state": "idle",
    "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.838,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "claude-fable-5-2[1m]"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {
@@ -203,6 +326,47 @@
    "id": "t-00000002-1:user",
    "kind": "user",
    "text": "What word did I ask you to remember? Reply with that word only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.094,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "claude-fable-5-2[1m]"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-haiku-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {
@@ -297,7 +461,8 @@
     "options": [
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -310,6 +475,46 @@
   "data": {
    "state": "idle",
    "harness_session_id": "00000000-0000-4000-8000-000000000002"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.521,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "claude-fable-5-2[1m]"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {
@@ -344,6 +549,47 @@
    "id": "t-00000003-1:user",
    "kind": "user",
    "text": "Reply with the remembered word in capital letters only."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.792,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "claude-fable-5-2[1m]"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-haiku-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {

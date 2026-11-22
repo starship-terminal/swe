@@ -15,7 +15,8 @@
     "options": [
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -28,6 +29,46 @@
   "data": {
    "state": "idle",
    "harness_session_id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000002.676,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {
@@ -62,6 +103,47 @@
    "id": "t-00000001-1:user",
    "kind": "user",
    "text": "Use the Write tool to create a file named allowed.txt in the current folder containing the single word yes. Do nothing else."
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000003.171,
+  "data": {
+   "options": {
+    "model": {
+     "value": "haiku",
+     "mid_turn": "reply_finishes",
+     "choices": [
+      {
+       "id": "default"
+      },
+      {
+       "id": "opus"
+      },
+      {
+       "id": "fable"
+      },
+      {
+       "id": "sonnet"
+      },
+      {
+       "id": "haiku"
+      }
+     ],
+     "reported": "claude-haiku-5-5"
+    },
+    "permission_mode": {
+     "value": "default",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
   }
  },
  {

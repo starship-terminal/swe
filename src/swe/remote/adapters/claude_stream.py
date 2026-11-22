@@ -376,6 +376,8 @@ class ClaudeStreamAdapter:
             self._caps = self._caps.narrowed(hs.caps())
             state = self._state
             state.permission_mode = hs.permission_mode
+            state.model_choices = hs.model_choices
+            state.asked_model = spec.model
             if state.done:
                 self._failed = True
                 raise AdapterError("claude exited during the handshake",
@@ -491,7 +493,10 @@ class ClaudeStreamAdapter:
             state = self._live()
         check_option(self.capabilities, name, value)
         if name == "model":
-            self._call(wire.set_model(self._rid("set_model"), value))
+            message = wire.set_model(self._rid("set_model"), value)
+            with self._lock:
+                state.model_asked(message["request_id"], value)
+            self._call(message)
             return
         if name == "permission_mode":
             mode = value
@@ -506,6 +511,7 @@ class ClaudeStreamAdapter:
         with self._lock:
             state.permission_mode = body.get("mode") if isinstance(
                 body.get("mode"), str) else mode
+            self._emit(state.sync_options())
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

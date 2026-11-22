@@ -122,6 +122,18 @@ _PREFIXED_ID_RE = _prefixed_id_re(_ID_PREFIXES)
 _CLI_TMP_RE = re.compile(r"/(?:private/)?tmp/claude-\d+/[^\s\"'`]*")
 _TMP_RE = re.compile(r"/(?:private/)?var/folders/[^\s\"'`]*")
 _USERS_RE = re.compile(r"/(?:Users|home)/[^\s\"'`/]+")
+# The machine's OS release and architecture in a user agent
+# (``(Mac OS 27.3.0; arm64)``), and the recording's time in a Codex
+# rollout file name (``rollout-2026-11-22T07-20-54-<id>``), G32.
+_OS_RE = re.compile(r"\((?:Mac OS|macOS|Darwin|Linux|Windows)[^;()]*;"
+                    r"\s*[A-Za-z0-9_]+\)")
+_ROLLOUT_RE = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}")
+
+
+def blank_machine(s: str) -> str:
+    """``_OS_RE`` and ``_ROLLOUT_RE`` applied to one string."""
+    s = _OS_RE.sub("(os; arch)", s)
+    return _ROLLOUT_RE.sub("rollout-2026-01-01T00-00-00", s)
 
 # The fields of the init message and the initialize answer a recording
 # keeps; everything else (commands, skills, plugins, agents, MCP
@@ -204,6 +216,7 @@ class Redactor:
         if self.user:
             s = re.sub(rf"\b{re.escape(self.user)}\b", "user", s)
         s = _EMAIL_RE.sub("user@example.com", s)
+        s = blank_machine(s)
         s = _redact_secrets(s)
         s = _UUID_RE.sub(lambda m: self._id(
             "uuid", m.group(0).lower(),
@@ -568,6 +581,66 @@ def sc_set_model(spawn, work, ctx):
     return [d]
 
 
+def _mid_reply(d: Driver, start: int, change, ctx: dict) -> None:
+    """Send ``change()`` (a control request) once the reply streams, and
+    note what the reply in progress did: whether the change was answered
+    before the turn's result, whether the reply ran on to its end, and
+    the model of each assistant message (G32)."""
+    d.wait(lambda m: m.get("type") == "stream_event"
+           and ((m.get("event") or {}).get("delta") or {}).get("type")
+           == "text_delta", 60, start, "a text delta")
+    answer = change()
+    ctx["answered"] = (answer.get("response") or {}).get("subtype")
+    # Whether the turn had already ended by the time the answer came.
+    ctx["result_before_answer"] = any(
+        m.get("type") == "result" for m in d.incoming(start))
+    result = d.until_result(start, timeout=120)
+    d.settle(start)
+    ctx["result_subtype"] = result.get("subtype")
+    ctx["stop_reason"] = result.get("stop_reason")
+    text = result.get("result") if isinstance(result.get("result"), str) \
+        else ""
+    ctx["reply_lines"] = len([x for x in text.splitlines() if x.strip()])
+    ctx["models_in_turn"] = [
+        (m.get("message") or {}).get("model") for m in d.incoming(start)
+        if m.get("type") == "assistant"]
+
+
+def sc_set_model_mid(spawn, work, ctx):
+    """``set_model`` sent while a reply streams: does the reply in
+    progress switch, get cut, or finish on the old model?"""
+    d = spawn()
+    _handshake(d)
+    start = d.mark()
+    d.send(wire.user_message(
+        "Write the numbers from 1 to 150, one per line, and no other text."))
+    _mid_reply(d, start, lambda: d.control("set_model", model="sonnet"), ctx)
+    start = d.mark()
+    d.turn("Reply with exactly: ok")
+    d.settle(start)
+    ctx["next_turn_models"] = [
+        (m.get("message") or {}).get("model") for m in d.incoming(start)
+        if m.get("type") == "assistant"]
+    return [d]
+
+
+def sc_plan_mode_mid(spawn, work, ctx):
+    """``set_permission_mode`` plan sent while a reply streams, then
+    back to default after it."""
+    d = spawn(permission_mode="default")
+    _handshake(d)
+    start = d.mark()
+    d.send(wire.user_message(
+        "Write the numbers from 1 to 150, one per line, and no other text."))
+    _mid_reply(d, start,
+               lambda: d.control("set_permission_mode", mode="plan"), ctx)
+    d.control("set_permission_mode", mode="default")
+    start = d.mark()
+    d.turn("Reply with exactly: back")
+    d.settle(start)
+    return [d]
+
+
 def sc_subagent(spawn, work, ctx):
     d = spawn()
     _handshake(d)
@@ -767,6 +840,8 @@ SCENARIOS = {
     "plan_mode": sc_plan_mode,
     "plan_approve": sc_plan_approve,
     "set_model": sc_set_model,
+    "set_model_mid": sc_set_model_mid,
+    "plan_mode_mid": sc_plan_mode_mid,
     "subagent": sc_subagent,
     "stop_task": sc_stop_task,
     "steer": sc_steer,

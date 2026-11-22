@@ -14,6 +14,7 @@ Nothing sleeps or polls: a test waits on the runtime's listener feed
 HTTP stream. Every test stops its keepers in cleanup.
 """
 
+import dataclasses
 import http.client
 import json
 import os
@@ -2048,14 +2049,17 @@ class TestCapabilitySeed(unittest.TestCase):
         caps = Caps(**{k: seed[k] for k in ("steer", "plan_mode", "rollback",
                                             "fork", "stop_task")},
                     options=frozenset(seed["options"]))
-        self.assertEqual(caps, claude_wire.PROVEN)
+        # ``steer_effect`` is the adapter's, never harness.json's (G32).
+        self.assertEqual(caps, dataclasses.replace(claude_wire.PROVEN,
+                                                   steer_effect=""))
         self.assertEqual(tuple(seed["argv"]), claude_wire.DEFAULT_ARGV)
         self.assertEqual(seed["min_version"], claude_wire.MIN_VERSION)
         resolved = registry.adapter_for(
             "claude", {"claude": {"capabilities": {"session": dict(seed)}}},
             which=None)
         self.assertEqual((resolved.ok, resolved.source, resolved.caps),
-                         (True, "registry", claude_wire.PROVEN))
+                         (True, "registry", dataclasses.replace(
+                             claude_wire.PROVEN, steer_effect="")))
 
     def test_seeding_fills_an_entry_that_declares_nothing(self):
         saved = {}

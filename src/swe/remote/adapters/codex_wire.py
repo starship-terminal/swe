@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import Answer, Caps
 from swe.remote.adapters.core import (
     ALL_CAPS, FIXTURE_SESSION, FIXTURE_T0, Ack, Fed, SessionCore, clip,
@@ -67,8 +68,12 @@ MIN_VERSION = "0.170.0"
 # ``plan_mode`` (``collaborationMode``, experimental API only) and
 # ``stop_task`` (no request stops one sub-agent) stay off whatever
 # harness.json says.
+# ``steer_effect``: the server abandons the reply it was writing and
+# answers the steer in the same turn (steer); a running command goes on
+# (steer_tool) and an open approval holds it back (steer_approval).
 PROVEN = Caps(steer=True, rollback=True, fork=True,
-              options=frozenset({"model", "effort", "permission_mode"}))
+              options=frozenset({"model", "effort", "permission_mode"}),
+              steer_effect="stops_reply")
 
 # ``approvalPolicy`` values: what ``permission_mode`` means on Codex.
 APPROVAL_POLICIES = ("untrusted", "on-request", "never")
@@ -185,6 +190,11 @@ def _thread_fields(*, cwd: str = "", model: str = "",
     if approval_policy in APPROVAL_POLICIES:
         out["approvalPolicy"] = approval_policy
     return out
+
+
+def model_list(rpc_id: Any) -> dict:
+    """``model/list``: the models the server offers (one page)."""
+    return request(rpc_id, "model/list", {})
 
 
 def thread_start(rpc_id: Any, **fields: str) -> dict:
@@ -479,10 +489,56 @@ class ThreadState(SessionCore):
     skipped.
     """
 
+    def options(self) -> dict:
+        """The models ``model/list`` names (model_list, 0.171.0); the
+        effort and the approval policy as values only. Every change waits
+        for the next ``turn/start``: a turn in progress runs on what it
+        started with (``next_turn``)."""
+        get = self.settings.get
+        return {
+            "model": opts.string_option(get("model", ""), opts.NEXT_TURN,
+                                        choices=self.model_choices or None),
+            "effort": opts.string_option(get("effort", ""), opts.NEXT_TURN),
+            # The value only: a page does not offer a more permissive
+            # policy (G32, Limits). ``APPROVAL_POLICIES`` only checks
+            # what ``set_option`` is given.
+            "permission_mode": opts.string_option(
+                get("permission_mode", ""), opts.NEXT_TURN),
+        }
+
+    def model_list(self, answer: Any) -> list:
+        """A ``model/list`` answer: its models become the choices."""
+        data = answer.get("data") if isinstance(answer, dict) else None
+        self.model_choices = [
+            opts.choice(m.get("model") or m["id"], m.get("displayName"))
+            for m in data if isinstance(m, dict) and text_of(m.get("id"))
+        ] if isinstance(data, list) else []
+        return self.options_events()
+
+    def thread_settings(self, answer: Any) -> None:
+        """What a ``thread/start``, ``resume`` or ``fork`` answer says
+        the thread runs with (``model``, ``reasoningEffort``,
+        ``approvalPolicy``)."""
+        answer = answer if isinstance(answer, dict) else {}
+        for name, field in (("model", "model"), ("effort", "reasoningEffort"),
+                            ("permission_mode", "approvalPolicy")):
+            self.settings[name] = text_of(answer.get(field))
+
+    def setting(self, name: str, value: str) -> list:
+        """``set_option`` kept ``value`` for the next turn."""
+        self.settings[name] = value
+        return self.options_events()
+
     def __init__(self, session: str, **kw: Any) -> None:
         super().__init__(session, **kw)
         self.thread_id = ""
         self.model = ""
+        # What ``session.options`` says (G32): the model, effort and
+        # approval policy the next turn runs with, as the thread's
+        # answer reported them and ``set_option`` changed them.
+        self.settings: dict[str, str] = {}
+        # ``model/list``'s answer, as ``session.options`` choices.
+        self.model_choices: list[dict] = []
         # our turn id -> the server's, for ``thread/revert``
         self.native_turns: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -1116,6 +1172,7 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
     states: dict[int, ThreadState] = {}
     thread_rpc: dict[int, Any] = {}
     reverts: set = set()
+    lists: set = set()
     for line in lines[1:] if header else lines:
         proc = line.get("proc", 0)
         if isinstance(line.get("t"), (int, float)):
@@ -1133,6 +1190,8 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
         if line.get("dir") == "out":
             if msg.get("method") == "thread/revert":
                 reverts.add((proc, msg.get("id")))
+            elif msg.get("method") == "model/list":
+                lists.add((proc, msg.get("id")))
             out.extend(_replay_outgoing(state, msg, thread_rpc, proc))
             continue
         fed = state.feed(msg)
@@ -1142,8 +1201,12 @@ def replay(lines: list[dict], *, session: str = FIXTURE_SESSION) -> list:
                 thread = ack.body.get("thread")
                 state.thread_id = text_of(thread.get("id")) \
                     if isinstance(thread, dict) else ""
+                state.thread_settings(ack.body)
                 out.extend(state.start_events(ALL_CAPS.narrowed(PROVEN),
                                               session_ref(thread)))
+            elif ack.ok and (proc, ack.request_id) in lists:
+                # What ``CodexAppServerAdapter`` does with the answer.
+                out.extend(state.model_list(ack.body))
             elif ack.ok and (proc, ack.request_id) in reverts:
                 # What ``CodexAppServerAdapter.rollback`` emits.
                 out.extend(state.moved(ack.body.get("thread")))
@@ -1159,6 +1222,14 @@ def _replay_outgoing(state: ThreadState, msg: dict, thread_rpc: dict,
         thread_rpc[proc] = msg.get("id")
     elif method == "turn/start":
         state.expect_turn(msg.get("id"), _input_text(params))
+        # What ``set_option`` kept goes out with this turn.
+        events = []
+        for name, field in (("model", "model"), ("effort", "effort"),
+                            ("permission_mode", "approvalPolicy")):
+            if text_of(params.get(field)) \
+                    and params[field] != state.settings.get(name):
+                events.extend(state.setting(name, params[field]))
+        return events
     elif method == "turn/steer":
         state.expect_steer(msg.get("id"), _input_text(params))
     elif method == "turn/interrupt":

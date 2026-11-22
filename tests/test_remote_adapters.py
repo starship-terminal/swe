@@ -1973,7 +1973,7 @@ class TestCodexThreadState(unittest.TestCase):
         state.thread_id = THREAD
         first = state.start_events(caps, STEM)
         self.assertEqual([e["type"] for e in first],
-                         ["session.caps", "session.state"])
+                         ["session.caps", "session.state", "session.options"])
         return state, clock
 
     def feed(self, state, *msgs):
@@ -2555,8 +2555,8 @@ class TestCodexThreadState(unittest.TestCase):
         self.assertEqual(fed.events, [])
         out = state.start_events(codex_wire.PROVEN, STEM)
         self.assertEqual([e["type"] for e in out], [
-            "session.caps", "session.state", "turn.started",
-            "session.state"])
+            "session.caps", "session.state", "session.options",
+            "turn.started", "session.state"])
 
     def test_exit_and_close_sequences(self):
         for finish, source, status, last in (
@@ -2611,7 +2611,8 @@ class TestCodexThreadState(unittest.TestCase):
              "msg": {"id": 1, "result": {"thread": {"id": THREAD}}}},
             {"proc": 0, "exit": 0}])
         self.assertEqual([e["type"] for e in got],
-                         ["session.caps", "session.state", "session.state"])
+                         ["session.caps", "session.state", "session.options",
+                          "session.state"])
         self.assertEqual(got[1]["data"]["harness_session_id"], THREAD)
 
 
@@ -2656,9 +2657,13 @@ class _CodexCase(unittest.TestCase):
         return adapter, sink, sid
 
     def sent(self) -> list:
-        return [json.loads(line) for line in
-                self.log.read_text().splitlines()] if self.log.exists() \
+        """What the fake got, the model list aside: the adapter asks for
+        it on a thread of its own after the start (G32), so where it
+        falls among the other requests is not fixed."""
+        lines = [json.loads(line) for line in
+                 self.log.read_text().splitlines()] if self.log.exists() \
             else []
+        return [m for m in lines if m.get("method") != "model/list"]
 
     def sent_methods(self) -> list:
         return [m.get("method") for m in self.sent()[1:]]
@@ -2715,8 +2720,9 @@ class TestCodexAdapterStart(_CodexCase):
         self.assertEqual(adapter.capabilities, codex_wire.PROVEN)
         self.assertFalse(adapter.capabilities.plan_mode)
         self.assertFalse(adapter.capabilities.stop_task)
+        # The steer's effect is the adapter's own (G32).
         self.assertEqual(self.adapter(caps=Caps(steer=True)).capabilities,
-                         Caps(steer=True))
+                         Caps(steer=True, steer_effect="stops_reply"))
 
     def test_start_handshakes_and_names_the_session(self):
         adapter, sink, sid = self.started(spec={
@@ -2725,7 +2731,13 @@ class TestCodexAdapterStart(_CodexCase):
         self.assertEqual(sid, STEM, "the id SWE's session list uses")
         self.assertEqual(adapter.session_id, STEM)
         self.assertEqual(adapter.version, "0.170.0")
-        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.types(), ["session.caps", "session.state",
+                                        "session.options"])
+        # What the thread's answer says it runs with.
+        shown = sink.events[2]["data"]["options"]
+        self.assertEqual((shown["model"]["value"],
+                          shown["permission_mode"]["value"]),
+                         ("gpt-x", "on-request"))
         self.assertEqual(sink.events[0]["data"]["caps"],
                          codex_wire.PROVEN.as_dict())
         self.assertEqual(sink.events[1]["data"], {
@@ -4567,7 +4579,8 @@ class TestOpencodeServeState(unittest.TestCase):
             {"proc": 0, "junk": True},
             {"proc": 0, "exit": 0}])
         self.assertEqual([e["type"] for e in got],
-                         ["session.caps", "session.state", "session.state"])
+                         ["session.caps", "session.state", "session.options",
+                          "session.state"])
         self.assertEqual(got[1]["data"]["harness_session_id"], OC_SESSION)
 
 
@@ -4611,12 +4624,14 @@ class _OpencodeCase(unittest.TestCase):
         return adapter, sink, sid
 
     def sent(self) -> list:
-        """The requests the fake got, the stream's and info's aside."""
+        """The requests the fake got, the stream's, info's and the model
+        list's aside: the adapter asks for the list on a thread of its
+        own after the start (G32), so where it falls is not fixed."""
         lines = [json.loads(line) for line in
                  self.log.read_text().splitlines()] if self.log.exists() \
             else []
         return [ln for ln in lines if "path" in ln
-                and ln["path"] != "/api/info"]
+                and ln["path"] not in ("/api/info", "/api/model")]
 
     def first_line(self) -> dict:
         return json.loads(self.log.read_text().splitlines()[0])
@@ -4677,8 +4692,9 @@ class TestOpencodeAdapterStart(_OpencodeCase):
         self.assertEqual(adapter.capabilities, opencode_wire.PROVEN)
         self.assertFalse(adapter.capabilities.stop_task)
         self.assertFalse(adapter.capabilities.can_set("permission_mode"))
+        # The steer's effect is the adapter's own (G32).
         self.assertEqual(self.adapter(caps=Caps(steer=True)).capabilities,
-                         Caps(steer=True))
+                         Caps(steer=True, steer_effect="after_tool"))
 
     def test_start_binds_loopback_with_a_password_and_names_the_session(self):
         adapter, sink, sid = self.started(spec={
@@ -4687,7 +4703,8 @@ class TestOpencodeAdapterStart(_OpencodeCase):
         self.assertEqual(sid, OC_SESSION)
         self.assertEqual(adapter.session_id, OC_SESSION)
         self.assertEqual(adapter.version, "2.3.2")
-        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.types(), ["session.caps", "session.state",
+                                        "session.options"])
         self.assertEqual(sink.events[0]["data"]["caps"],
                          opencode_wire.PROVEN.as_dict())
         self.assertEqual(sink.events[1]["data"], {
@@ -5279,7 +5296,17 @@ class TestOpencodeAdapterOptions(_OpencodeCase):
         adapter.set_option("model", "other/m2")
         self.assertEqual(self.sent()[-1]["body"], {"model": {
             "providerID": "other", "id": "m2", "variant": "high"}})
-        self.assertEqual(len(sink.events), before, "no event of its own")
+        # Each change is said once, with the value the server took. The
+        # server's own session.model.selected for the first change may
+        # land after the second was posted: it is ignored, so the last
+        # word stays the second change. A turn run to its end makes sure
+        # both reports have come in.
+        self.wait_turn(sink, adapter.send_turn(TurnInput("go")))
+        said = [(e["data"]["options"]["model"]["value"],
+                 e["data"]["options"]["effort"]["value"])
+                for e in sink.events[before:]
+                if e["type"] == "session.options"]
+        self.assertEqual(said, [("prov/m1", "high"), ("other/m2", "high")])
         with self.assertRaises(AdapterError) as ctx:
             adapter.set_option("model", "no-provider")
         self.assertEqual(ctx.exception.code, "bad_request")

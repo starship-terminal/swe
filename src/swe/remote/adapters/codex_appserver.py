@@ -279,8 +279,33 @@ class CodexAppServerAdapter:
             state.thread_id = str(thread.get("id") or "")
             self._session_id = wire.session_ref(thread)
             self._rollout = str(thread.get("path") or "")
+            # An effort the launch asked for goes out with the first
+            # turn (the thread's start takes none).
+            for name, value in self._overrides.items():
+                state.settings[name] = value
             self._emit(state.start_events(self._caps, self._session_id))
+        if self._caps.can_set("model"):
+            # The server's own list for the picker (G32), asked after the
+            # start so it never holds the start up; it arrives as one more
+            # session.options. A refused or late one leaves the value
+            # alone (the keeper keeps the list it last had).
+            threading.Thread(target=self._fetch_models, daemon=True,
+                             name="codex-appserver-models").start()
         return self._session_id
+
+    def _fetch_models(self) -> None:
+        with self._lock:
+            if self._state is None or self._state.done or self._closed:
+                return
+            message = wire.model_list(self._rpc_id())
+        try:
+            listed = self._call(message)
+        except AdapterError:
+            return
+        with self._lock:
+            state = self._state
+            if state is not None and not state.done and not self._closed:
+                self._emit(state.model_list(listed))
 
     def _handshake(self, spec: StartSpec, thread_id: str) -> dict:
         from swe import __version__
@@ -299,7 +324,10 @@ class CodexAppServerAdapter:
             message = wire.thread_resume(self._rpc_id(), thread_id, **fields)
         else:
             message = wire.thread_start(self._rpc_id(), **fields)
-        thread = self._call(message, self._init_timeout).get("thread")
+        answer = self._call(message, self._init_timeout)
+        thread = answer.get("thread")
+        if isinstance(self._state, wire.ThreadState):
+            self._state.thread_settings(answer)
         if not isinstance(thread, dict) or not thread.get("id"):
             raise AdapterError("codex named no thread", code="refused")
         if not self.version:
@@ -459,6 +487,7 @@ class CodexAppServerAdapter:
                     code="bad_request")
             # plan_mode never gets here: PROVEN keeps it off.
             self._overrides[name] = value
+            self._emit(self._state.setting(name, value))
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

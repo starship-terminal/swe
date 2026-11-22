@@ -16,7 +16,8 @@
      "effort",
      "model",
      "permission_mode"
-    ]
+    ],
+    "steer_effect": "stops_reply"
    }
   }
  },
@@ -29,6 +30,52 @@
   "data": {
    "state": "idle",
    "harness_session_id": "rollout-2026-11-21T11-46-48-00000000-0000-4000-8000-000000000001"
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.883,
+  "data": {
+   "options": {
+    "model": {
+     "value": "gpt-5.6-luna",
+     "mid_turn": "next_turn"
+    },
+    "effort": {
+     "value": "",
+     "mid_turn": "next_turn"
+    },
+    "permission_mode": {
+     "value": "never",
+     "mid_turn": "next_turn"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000000.884,
+  "data": {
+   "options": {
+    "model": {
+     "value": "gpt-5.6-luna",
+     "mid_turn": "next_turn"
+    },
+    "effort": {
+     "value": "low",
+     "mid_turn": "next_turn"
+    },
+    "permission_mode": {
+     "value": "never",
+     "mid_turn": "next_turn"
+    }
+   }
   }
  },
  {

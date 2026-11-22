@@ -2106,7 +2106,8 @@ class TestAcpAdapter(_AcpAdapterCase):
         self.assertEqual((adapter.session_id, adapter.version,
                           adapter.agent_name),
                          (ACP_SESSION, "9.9.9", "fake-agent"))
-        self.assertEqual(sink.types(), ["session.caps", "session.state"])
+        self.assertEqual(sink.types(), ["session.caps", "session.state",
+                                        "session.options"])
         self.assertEqual(sink.events[1]["data"], {
             "state": "idle", "harness_session_id": ACP_SESSION})
         self.assertEqual(self.sent_methods(), [
@@ -2143,7 +2144,8 @@ class TestAcpAdapter(_AcpAdapterCase):
         _adapter, sink, sid = self.started(spec={"resume_id": "older-1"})
         self.assertEqual(sid, "older-1")
         self.assertEqual(self.sent_methods(), ["initialize", "session/load"])
-        self.assertEqual(sink.types(), ["session.caps", "session.state"],
+        self.assertEqual(sink.types(), ["session.caps", "session.state",
+                                        "session.options"],
                          "the replayed history is not live text")
 
     def test_start_refusals(self):

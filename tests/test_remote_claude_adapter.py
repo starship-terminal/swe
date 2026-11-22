@@ -884,13 +884,16 @@ class TestStreamState(unittest.TestCase):
         self.assertEqual([e["type"] for e in out],
                          ["turn.started", "session.state", "session.state",
                           "session.state", "context.compacted",
-                          "context.compacted", "turn.ended",
-                          "session.state"])
+                          "context.compacted", "session.options",
+                          "turn.ended", "session.state"])
         self.assertEqual([e["data"]["state"] for e in out
                           if e["type"] == "session.state"],
                          ["running", "waiting", "running", "idle"])
         self.assertEqual(out[4]["data"], {"tokens_before": 900})
         self.assertEqual(st.permission_mode, "plan")
+        # The CLI went into plan mode by itself: the options say so.
+        self.assertEqual(out[6]["data"]["options"]["plan_mode"],
+                         {"value": True, "mid_turn": "reply_finishes"})
 
     def test_tasks(self):
         st = self.state()
@@ -1226,7 +1229,8 @@ class TestAdapterStart(_FakeCase):
         self.assertEqual(caps, {"steer": True, "plan_mode": True,
                                 "rollback": False, "fork": True,
                                 "stop_task": True,
-                                "options": ["model", "permission_mode"]})
+                                "options": ["model", "permission_mode"],
+                                "steer_effect": "stops_reply"})
         self.assertEqual(sink.of("session.state")[0]["data"],
                          {"state": "idle", "harness_session_id": sid})
         with self.assertRaises(AdapterError) as ctx:

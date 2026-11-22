@@ -178,7 +178,8 @@
   status: todo
   depends_on: [G13]
   owns: ["src/swe/webapp/static/sessions.js", "src/swe/webapp/static/pages/chat.js"]
-  questions: []
+  questions:
+    - "The hub's `set_option` route lets any signed-in device switch a running session to its agent's most permissive mode (Claude's bypass mode, ACP `yolo`, Codex `never`) with no check and no confirmation, and the keeper keeps it for later starts (docs/specs/G32-session-options.md, Limits). Restrict it on the hub, require a confirmation in the view, or accept?"
   verify: ["end-to-end", "screens: all"]
   tier: implement-standard
   est_runtime: 60m
@@ -447,3 +448,45 @@
     - "50 runs of the outbox and store tests under load"
   tier: implement-hard
   est_runtime: 180m
+
+- id: G32
+  title: "Session options: model, effort and plan mode visible and changeable while a session runs (hub and client core)"
+  status: done
+  depends_on: [G11, G31]
+  owns:
+    - "src/swe/remote/adapters/options.py"
+    - "src/swe/remote/adapters/events.py"
+    - "src/swe/remote/adapters/core.py"
+    - "src/swe/remote/adapters/claude_wire.py"
+    - "src/swe/remote/adapters/claude_stream.py"
+    - "src/swe/remote/adapters/acp.py"
+    - "src/swe/remote/adapters/codex_wire.py"
+    - "src/swe/remote/adapters/codex_appserver.py"
+    - "src/swe/remote/adapters/opencode_wire.py"
+    - "src/swe/remote/adapters/opencode_serve.py"
+    - "src/swe/remote/adapters/fake.py"
+    - "src/swe/remote/keeper/process.py"
+    - "src/swe/remote/runtime.py"
+    - "src/swe/remote/sync.py"
+    - "src/swe/remote/protocol.py"
+    - "src/swe/remote/protocol_compat.py"
+    - "src/swe/remote/schema/**"
+    - "app/web-session/src/core/options.ts"
+    - "app/web-session/src/core/options.test.ts"
+    - "app/web-session/src/core/store.ts"
+    - "app/web-session/src/core/reducer.ts"
+    - "app/web-session/src/core/state.ts"
+    - "app/web-session/src/core/types.ts"
+    - "app/web-session/src/core/index.ts"
+    - "app/web-session/src/core/generated/**"
+    - "tests/fixtures/protocols/**/*.events.json"
+    - "tests/test_remote_session_options.py"
+    - "docs/specs/G32-session-options.md"
+  questions: []
+  verify:
+    - "python3 -m unittest tests.test_remote_session_options"
+    - "every tests/test_remote*.py against a throwaway HOME"
+    - "pnpm typecheck && pnpm lint:tokens && pnpm test && pnpm build"
+    - "each guard removed in turn fails a test"
+  tier: implement-hard
+  est_runtime: 240m

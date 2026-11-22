@@ -41,11 +41,17 @@ VERSION_HEADER = "X-SWE-Protocol"
 # ``GET /v1/sessions/{key}/commands/{id}`` reads a stored command.
 FEATURE_REQUIRE_KEEPER = "require_keeper"
 FEATURE_COMMAND_LOOKUP = "command_lookup"
+# ``session_options`` (G32): kept sessions journal ``session.options``,
+# a snapshot carries ``options``, and ``POST .../command`` takes
+# ``set_option``.
+FEATURE_SESSION_OPTIONS = "session_options"
 FEATURES = ("sync_v2", "snapshot", "live_resume", "delta_offset", "ping",
-            "command_id", FEATURE_REQUIRE_KEEPER, FEATURE_COMMAND_LOOKUP)
+            "command_id", FEATURE_REQUIRE_KEEPER, FEATURE_COMMAND_LOOKUP,
+            FEATURE_SESSION_OPTIONS)
 # Listed only while the session runtime's store is open, like
 # ``session_runtime``.
-STORE_FEATURES = (FEATURE_REQUIRE_KEEPER, FEATURE_COMMAND_LOOKUP)
+STORE_FEATURES = (FEATURE_REQUIRE_KEEPER, FEATURE_COMMAND_LOOKUP,
+                  FEATURE_SESSION_OPTIONS)
 FEATURE_RUNTIME = "session_runtime"
 # A v2 stream sends ``ping {ts, head}`` this often; a client treats
 # ``SILENCE_S`` with no frame at all as a dead connection.

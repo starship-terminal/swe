@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, NamedTuple
 
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters.base import Answer, Caps
 from swe.remote.adapters.claude_wire import parse_version, version_ok
 from swe.remote.adapters.core import (
@@ -73,8 +74,11 @@ MIN_VERSION = "2.3.2"
 # The caps this module can deliver, each proven by a recording.
 # ``stop_task`` has no request and stays off whatever harness.json says;
 # opencode has no session-wide permission mode.
+# ``steer_effect``: nothing is cut; the steer is delivered when the
+# current step ends, the reply (steer) or a running command (steer_tool).
 PROVEN = Caps(steer=True, plan_mode=True, rollback=True, fork=True,
-              options=frozenset({"model", "effort"}))
+              options=frozenset({"model", "effort"}),
+              steer_effect="after_tool")
 
 # Basic auth: the user name is fixed, the password is the child's
 # ``PASSWORD_ENV``.
@@ -177,6 +181,25 @@ def create_session(cwd: str, *, model: str = "", effort: str = "",
     if is_session_id(session_id):
         body["id"] = session_id
     return Request("POST", "/api/session", body)
+
+
+def list_models() -> Request:
+    """``GET /api/model``: every model the server can run, each with its
+    ``providerID``, ``id`` and ``name`` (providers recording, 2.3.2)."""
+    return Request("GET", "/api/model")
+
+
+def model_choices(body: Any) -> list[dict]:
+    """``session.options`` choices from a ``GET /api/model`` answer: the
+    ``provider/model`` ref a session takes, and the server's name."""
+    data = body.get("data") if isinstance(body, dict) else None
+    out = []
+    for m in data if isinstance(data, list) else ():
+        if isinstance(m, dict) and text_of(m.get("providerID")) \
+                and text_of(m.get("id")):
+            out.append(opts.choice(f"{m['providerID']}/{m['id']}",
+                                   m.get("name")))
+    return out
 
 
 def get_session(session_id: str) -> Request:
@@ -404,6 +427,20 @@ class ServeState(SessionCore):
         super().__init__(session, **kw)
         self.model: dict = {}
         self.agent = ""
+        # The server's models, as ``session.options`` choices (G32).
+        self.model_choices: list[dict] = []
+        # The model refs and agents this adapter posted that the server
+        # has not reported back yet, oldest first. The server reports
+        # each post on the event stream, which can lag the post's own
+        # answer: a report equal to a pending post is that post's echo
+        # and changes nothing (the newest post is shown already); any
+        # other report is the server's own change, shown at once.
+        self._posted_models: list[dict] = []
+        self._posted_agents: list[str] = []
+        # Bumped by every post, every report, a step's start that names a
+        # value, and every re-read started:
+        # a re-read's answer is used only if nothing came after its ask.
+        self._generation = 0
         # our turn id -> the id of its user message, for a revert
         self.turn_messages: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -555,7 +592,71 @@ class ServeState(SessionCore):
             self.note_unknown(etype)
             return fed
         handler(self, data, fed)
+        self.sync_options(fed.events)
         return fed
+
+    def options(self) -> dict:
+        """The model (``provider/model``) with the server's list
+        (``GET /api/model``), its variant as the effort (value only: the
+        list's variants are not kept), and the ``plan`` agent as plan
+        mode. Each change is posted at once, and the step being run
+        finishes as it started (``reply_finishes``): model_mid ran its
+        one step on the old model and the next turn on the new one;
+        plan_mode_mid's next step, in the same execution, ran as
+        ``plan``. The effort is the model ref's variant, the same
+        request as a model change."""
+        return {
+            "model": opts.string_option(model_name(self.model),
+                                        opts.REPLY_FINISHES,
+                                        choices=self.model_choices or None),
+            "effort": opts.string_option(
+                text_of(self.model.get("variant")), opts.REPLY_FINISHES),
+            "plan_mode": opts.flag_option(self.agent == PLAN_AGENT,
+                                          opts.REPLY_FINISHES),
+        }
+
+    def model_selected(self, ref: Any) -> list:
+        """The server took ``POST .../model`` ``ref``."""
+        if isinstance(ref, dict):
+            self.model = dict(ref)
+            self._posted_models.append(dict(ref))
+            self._generation += 1
+        return self.options_events()
+
+    def agent_selected(self, agent: Any) -> list:
+        """The server took ``POST .../agent`` ``agent``."""
+        if text_of(agent):
+            self.agent = agent
+            self._posted_agents.append(agent)
+            self._generation += 1
+        return self.options_events()
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def events_lost(self) -> int:
+        """An event the reader had to drop may have been a post's echo:
+        no report is taken for an echo any more, so every later one is
+        the server's word. Returns the generation to hand the session
+        re-read (any earlier re-read is overtaken by this one)."""
+        self._posted_models.clear()
+        self._posted_agents.clear()
+        self._generation += 1
+        return self._generation
+
+    def session_read(self, session: Any, generation: int) -> list:
+        """``GET .../session/<id>`` after lost events: the server's
+        current model and agent. An answer overtaken by anything newer
+        (a post, a server report, a later re-read) is not used: what
+        came after it said more."""
+        if generation != self._generation or not isinstance(session, dict):
+            return []
+        if isinstance(session.get("model"), dict):
+            self.model = dict(session["model"])
+        if text_of(session.get("agent")):
+            self.agent = session["agent"]
+        return self.options_events()
 
     def _ensure_turn(self, out: list) -> None:
         """A turn the server runs whose prompt's answer is still on its
@@ -617,6 +718,10 @@ class ServeState(SessionCore):
         # A steer still in the inbox stays there: the server delivers it
         # to the execution it starts next (``_ensure_turn``).
         self.finish_turn(fed.events, status)
+        # By now the server has reported every post it took: an echo it
+        # never sent is not waited for any longer.
+        self._posted_models.clear()
+        self._posted_agents.clear()
 
     def _fail(self, out: list, failure: dict, fallback: str) -> None:
         turn = self.turn
@@ -631,10 +736,17 @@ class ServeState(SessionCore):
             turn.reason, turn_id=turn.turn_id, ts=self.now()))
 
     def _on_step_started(self, data: dict, fed: Fed) -> None:
-        if isinstance(data.get("model"), dict):
+        # A step says what it runs with, which can be the value from
+        # before a change posted while the execution was under way (the
+        # step finishes as it started). It names the session's model or
+        # agent only while we know none; the session's setting comes from
+        # our posts and the server's ``*.selected`` reports.
+        if not self.model and isinstance(data.get("model"), dict):
             self.model = dict(data["model"])
-        if text_of(data.get("agent")):
+            self._generation += 1
+        if not self.agent and text_of(data.get("agent")):
             self.agent = data["agent"]
+            self._generation += 1
 
     def _on_step_ended(self, data: dict, fed: Fed) -> None:
         if isinstance(data.get("tokens"), dict):
@@ -821,12 +933,36 @@ class ServeState(SessionCore):
             self.key, turn_id=self.tid(), ts=self.now()))
 
     def _on_model(self, data: dict, fed: Fed) -> None:
-        if isinstance(data.get("model"), dict):
-            self.model = dict(data["model"])
+        model = data.get("model")
+        if not isinstance(model, dict):
+            return
+        self._generation += 1
+        for i, posted in enumerate(self._posted_models):
+            if _same_ref(model, posted):
+                del self._posted_models[i]  # that post's echo
+                return
+        self._posted_models.clear()  # the server's own change
+        self.model = dict(model)
 
     def _on_agent(self, data: dict, fed: Fed) -> None:
-        if text_of(data.get("agent")):
-            self.agent = data["agent"]
+        agent = text_of(data.get("agent"))
+        if not agent:
+            return
+        self._generation += 1
+        if agent in self._posted_agents:
+            self._posted_agents.remove(agent)  # that post's echo
+            return
+        self._posted_agents.clear()  # the server's own change
+        self.agent = agent
+
+
+def _same_ref(a: dict, b: dict) -> bool:
+    """Whether two model refs name the same model and variant."""
+    def key(ref: dict) -> tuple:
+        return (text_of(ref.get("providerID")),
+                text_of(ref.get("id") or ref.get("modelID")),
+                text_of(ref.get("variant")))
+    return key(a) == key(b)
 
 
 _EVENTS = {
@@ -960,8 +1096,19 @@ def _replay_answer(state: ServeState, request: dict, http: dict) -> list:
                     data.get("id")):
             if isinstance(data.get("model"), dict):
                 state.model = dict(data["model"])
+            if text_of(data.get("agent")):
+                state.agent = data["agent"]
             return state.start_events(ALL_CAPS.narrowed(PROVEN), data["id"])
         return []
+    sent = request.get("body") if isinstance(request.get("body"), dict) \
+        else {}
+    if ok and path == "/api/model":
+        state.model_choices = model_choices(body)
+        return state.options_events()
+    if ok and path.endswith("/model"):
+        return state.model_selected(sent.get("model"))
+    if ok and path.endswith("/agent"):
+        return state.agent_selected(sent.get("agent"))
     if _PROMPT_RE.search(path):
         if ok:
             return state.accepted(request.get("n"), data)

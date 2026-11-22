@@ -59,6 +59,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODE = os.environ.get("FAKE_OPENCODE_MODE", "ok")
@@ -422,6 +423,15 @@ class Handler(BaseHTTPRequestHandler):
                                      "hostname": "fake-host"})
         if self.path == "/api/event":
             return self.events()
+        if self.path == "/api/model" and self.command == "GET":
+            # The server's model list (G32): ``models`` lists two,
+            # ``slow-models`` answers 1.5 s later, after the start.
+            if MODE == "slow-models":
+                time.sleep(1.5)
+            if MODE in ("models", "slow-models"):
+                return self.answer(200, {"data": [
+                    {"id": "model-1", "providerID": "fake", "name": "One"},
+                    {"id": "model-2", "providerID": "fake", "name": "Two"}]})
         if self.path == "/api/session" and self.command == "POST":
             return self.create(body or {})
         if parts[:2] == ["api", "session"] and len(parts) >= 3:
@@ -529,8 +539,9 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 previous, state["model"] = state["model"], dict(
                     body.get("model") or {})
-            emit("session.model.selected", {"model": dict(state["model"]),
-                                            "previous": previous})
+            if MODE != "silent-model":
+                emit("session.model.selected", {
+                    "model": dict(state["model"]), "previous": previous})
             return self.answer(204)
         if tail == ["agent"]:
             if MODE == "refuse-agent":

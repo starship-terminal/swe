@@ -18,6 +18,7 @@ export const PROTOCOL = {
     "command_id",
     "require_keeper",
     "command_lookup",
+    "session_options",
     "session_runtime"
   ]
 } as const;
@@ -63,6 +64,32 @@ export type Caps = {
   fork: boolean;
   stop_task: boolean;
   options: string[];
+  steer_effect?: "after_tool" | "next_turn" | "stops_reply";
+};
+
+export type OptionChoice = {
+  id: string;
+  label?: string;
+  description?: string;
+};
+
+export type StringOption = {
+  value: string;
+  mid_turn: "next_turn" | "reply_finishes" | "unverified";
+  choices?: OptionChoice[];
+  reported?: string;
+};
+
+export type FlagOption = {
+  value: boolean;
+  mid_turn: "next_turn" | "reply_finishes" | "unverified";
+};
+
+export type SessionOptions = {
+  model?: StringOption;
+  effort?: StringOption;
+  permission_mode?: StringOption;
+  plan_mode?: FlagOption;
 };
 
 /** A message still being written: its id and the full text so far. */
@@ -353,6 +380,21 @@ export type SessionCapsEvent = {
   data: SessionCapsData;
 };
 
+export type SessionOptionsData = {
+  options: SessionOptions;
+};
+
+export type SessionOptionsEvent = {
+  v: 2;
+  type: "session.options";
+  session: string;
+  seq: number;
+  ts: number;
+  turn_id?: string;
+  command_id?: string;
+  data: SessionOptionsData;
+};
+
 export type SessionStateData = {
   state: "agent_down" | "closed" | "idle" | "parked" | "running" | "starting" | "waiting";
   reason?: string;
@@ -521,7 +563,7 @@ export type UsageUpdatedEvent = {
 };
 
 /** One v2 event. `seq` above 0 is its place in the session's journal; 0 marks one the hub made for the stream, which is not journaled and never moves a cursor. message.delta has none. */
-export type Event = ApprovalRequestedEvent | ApprovalResolvedEvent | ChangesUpdatedEvent | CheckpointCreatedEvent | CheckpointRestoredEvent | CommandReceiptEvent | CommandResultEvent | ContextCompactedEvent | ErrorEvent | InputRequestedEvent | MessageCompletedEvent | MessageDeltaEvent | NotifyEvent | PlanUpdatedEvent | QueueUpdatedEvent | SessionCapsEvent | SessionStateEvent | TaskUpdatedEvent | ThinkingCompletedEvent | ToolCompletedEvent | ToolStartedEvent | ToolUpdatedEvent | TurnEndedEvent | TurnStartedEvent | UsageUpdatedEvent;
+export type Event = ApprovalRequestedEvent | ApprovalResolvedEvent | ChangesUpdatedEvent | CheckpointCreatedEvent | CheckpointRestoredEvent | CommandReceiptEvent | CommandResultEvent | ContextCompactedEvent | ErrorEvent | InputRequestedEvent | MessageCompletedEvent | MessageDeltaEvent | NotifyEvent | PlanUpdatedEvent | QueueUpdatedEvent | SessionCapsEvent | SessionOptionsEvent | SessionStateEvent | TaskUpdatedEvent | ThinkingCompletedEvent | ToolCompletedEvent | ToolStartedEvent | ToolUpdatedEvent | TurnEndedEvent | TurnStartedEvent | UsageUpdatedEvent;
 
 /** The session's row, as GET /v1/sessions lists it (docs/remote-control.md). */
 export type Row = {
@@ -549,6 +591,7 @@ export type Snapshot = {
   state: "agent_down" | "closed" | "idle" | "parked" | "running" | "starting" | "waiting";
   reason?: string;
   caps: Caps | null;
+  options?: SessionOptions;
   open_turn: string | null;
   pending: (ApprovalRequestedEvent | InputRequestedEvent)[];
   queue: QueuedMessage[];
@@ -593,7 +636,7 @@ export type PingFrame = {
 };
 
 /** Anything a v=2 session stream sends. */
-export type Frame = ApprovalRequestedEvent | ApprovalResolvedEvent | ChangesUpdatedEvent | CheckpointCreatedEvent | CheckpointRestoredEvent | CommandReceiptEvent | CommandResultEvent | ContextCompactedEvent | ErrorEvent | InputRequestedEvent | MessageCompletedEvent | MessageDeltaEvent | NotifyEvent | PlanUpdatedEvent | QueueUpdatedEvent | SessionCapsEvent | SessionStateEvent | TaskUpdatedEvent | ThinkingCompletedEvent | ToolCompletedEvent | ToolStartedEvent | ToolUpdatedEvent | TurnEndedEvent | TurnStartedEvent | UsageUpdatedEvent | SessionSnapshotFrame | SessionRowFrame | PingFrame;
+export type Frame = ApprovalRequestedEvent | ApprovalResolvedEvent | ChangesUpdatedEvent | CheckpointCreatedEvent | CheckpointRestoredEvent | CommandReceiptEvent | CommandResultEvent | ContextCompactedEvent | ErrorEvent | InputRequestedEvent | MessageCompletedEvent | MessageDeltaEvent | NotifyEvent | PlanUpdatedEvent | QueueUpdatedEvent | SessionCapsEvent | SessionOptionsEvent | SessionStateEvent | TaskUpdatedEvent | ThinkingCompletedEvent | ToolCompletedEvent | ToolStartedEvent | ToolUpdatedEvent | TurnEndedEvent | TurnStartedEvent | UsageUpdatedEvent | SessionSnapshotFrame | SessionRowFrame | PingFrame;
 
 /** GET /v1/sessions/{id}/messages?v=2. */
 export type MessagesPage = {

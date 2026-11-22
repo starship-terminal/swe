@@ -54,6 +54,7 @@ from typing import Any, Callable, Iterable
 
 from swe.remote import acp as wire
 from swe.remote.adapters import events as ev
+from swe.remote.adapters import options as opts
 from swe.remote.adapters import registry
 from swe.remote.adapters.base import (
     AdapterError, Answer, Caps, EventSink, StartSpec, TranscriptPosition,
@@ -78,6 +79,10 @@ RECORDED = ("qwen-code", "0.28.0")
 
 # The mode id every recorded agent uses for "plan, do not act".
 PLAN_MODE = "plan"
+# Where plan mode off goes when no mode from before it is known: the one
+# that asks before edits and commands (qwen's ``default``), and never
+# another the agent happens to list first.
+FALLBACK_MODE = "default"
 
 # How long the whole handshake, any later request, one stdin write and
 # the kill steps get.
@@ -116,6 +121,26 @@ def mode_ids(info: Any) -> list[str]:
     listed = modes.get("availableModes") if isinstance(modes, dict) else None
     return [m["id"] for m in listed or () if isinstance(m, dict)
             and isinstance(m.get("id"), str) and m["id"]]
+
+
+def _listed(info: Any, field: str, items: str, key: str) -> list[dict]:
+    group = info.get(field) if isinstance(info, dict) else None
+    listed = group.get(items) if isinstance(group, dict) else None
+    return [opts.choice(m[key], m.get("name"), m.get("description"))
+            for m in listed or () if isinstance(m, dict)
+            and isinstance(m.get(key), str) and m[key]]
+
+
+def model_choices(info: Any) -> list[dict]:
+    """The models a session answer lists, as ``session.options``
+    choices."""
+    return _listed(info, "models", "availableModels", "modelId")
+
+
+def current_model(info: Any) -> str:
+    models = info.get("models") if isinstance(info, dict) else None
+    return text_of(models.get("currentModelId")) \
+        if isinstance(models, dict) else ""
 
 
 def current_mode(info: Any) -> str:
@@ -248,7 +273,8 @@ class AcpState(SessionCore):
                                                 ``failed``
     ``plan``                                    ``plan.updated``
     ``usage_update``, a chunk's ``_meta.usage``  ``usage.updated``
-    ``current_mode_update``                     none (the mode is kept)
+    ``current_mode_update``                     ``session.options`` (the
+                                                mode is kept)
     ``session/request_permission``              ``approval.requested``,
                                                 ``session.state`` waiting
     the answer to ``session/prompt``            open streams completed,
@@ -264,6 +290,10 @@ class AcpState(SessionCore):
         self.mode = ""
         self.modes: list[str] = []
         self.models: dict[str, str] = {}
+        # What ``session.options`` says (G32): the agent's model list and
+        # its current model id.
+        self.model = ""
+        self.model_choices: list[dict] = []
         # the kind streaming now -> its stream id, and the agent's
         # messageId for it
         self._cur: dict[str, str] = {}
@@ -281,6 +311,36 @@ class AcpState(SessionCore):
         self.modes = mode_ids(info)
         self.mode = current_mode(info)
         self.models = model_ids(info)
+        self.model = current_model(info)
+        self.model_choices = model_choices(info)
+
+    def options(self) -> dict:
+        """The agent's models and modes, each sent at once with
+        ``session/set_model`` or ``session/set_mode``. A mode set while
+        a prompt runs leaves its reply to finish (``reply_finishes``,
+        plan_mode_mid). A model set then was taken and the reply went
+        on, but the recording's agent lists one model, so no switch
+        could be seen: ``unverified`` (model_mid)."""
+        return {
+            "model": opts.string_option(self.model, opts.UNVERIFIED,
+                                        choices=self.model_choices),
+            # The value only, never the agent's mode list: a page does
+            # not offer a more permissive mode (G32, Limits).
+            "permission_mode": opts.string_option(self.mode,
+                                                  opts.REPLY_FINISHES),
+            "plan_mode": opts.flag_option(self.mode == PLAN_MODE,
+                                          opts.REPLY_FINISHES),
+        }
+
+    def mode_set(self, mode: str) -> list:
+        """The agent took ``session/set_mode`` ``mode``."""
+        self.mode = mode
+        return self.options_events()
+
+    def model_set(self, model_id: str) -> list:
+        """The agent took ``session/set_model`` ``model_id``."""
+        self.model = model_id
+        return self.options_events()
 
     @property
     def busy(self) -> bool:
@@ -355,6 +415,7 @@ class AcpState(SessionCore):
             self.note_unknown(what or "?")
             return fed
         handler(self, update, fed.events)
+        self.sync_options(fed.events)
         return fed
 
     def _chunk(self, kind: str, update: dict, out: list) -> None:
@@ -485,6 +546,12 @@ class AcpState(SessionCore):
                 self.key, turn_id=self.tid(), ts=self.now(), **counts))
 
     def _on_mode(self, update: dict, out: list) -> None:
+        # Always the agent's word, with no guard against late reports
+        # (unlike opencode): updates and answers share one ordered
+        # stream, and the keeper sends the next set only after the last
+        # one's answer, so an update the agent writes while it handles a
+        # set lands before the next set is even sent. ACP has this update
+        # for the agent's own changes, and qwen sent none after a set.
         if text_of(update.get("currentModeId")):
             self.mode = update["currentModeId"]
 
@@ -687,6 +754,13 @@ def _replay_in(state: AcpState, proc: int, msg: dict, sent: dict,
     if asked == "session/prompt" and turns.get(proc) == msg["id"]:
         turns.pop(proc, None)
         return state.prompt_answered(msg)
+    params = request.get("params") or {}
+    if "error" not in msg and asked == "session/set_mode" \
+            and text_of(params.get("modeId")):
+        return state.mode_set(params["modeId"])
+    if "error" not in msg and asked == "session/set_model" \
+            and text_of(params.get("modelId")):
+        return state.model_set(params["modelId"])
     return []
 
 
@@ -1057,10 +1131,18 @@ class AcpAdapter:
         else:
             if mode_now != PLAN_MODE:
                 return
+            # Back to the mode from before plan mode, else the agent's
+            # ``default``; never the first mode it lists, which could be
+            # one that asks no approvals at all (G32).
             back = self._mode_before if self._mode_before in state.modes \
-                else next((m for m in state.modes if m != PLAN_MODE), "")
-            if back:
-                self._set_mode(back)
+                and self._mode_before != PLAN_MODE else (
+                    FALLBACK_MODE if FALLBACK_MODE in state.modes else "")
+            if not back:
+                raise AdapterError(
+                    "plan mode stays on: there is no mode from before it to "
+                    f"go back to, and this agent lists no {FALLBACK_MODE!r} "
+                    "mode", code="refused")
+            self._set_mode(back)
 
     def _set_mode(self, mode: str, timeout: float | None = None,
                   plan: bool = False) -> None:
@@ -1074,14 +1156,17 @@ class AcpAdapter:
         with self._lock:
             if plan and before and before != PLAN_MODE:
                 self._mode_before = before
-            state.mode = mode
+            self._emit(state.mode_set(mode))
 
     def _set_model(self, model: str, timeout: float | None = None) -> None:
         state = self._state
         assert state is not None
+        model_id = state.models[model]
         self._call("session/set_model", {
             "sessionId": self._agent.session_id,
-            "modelId": state.models[model]}, timeout)
+            "modelId": model_id}, timeout)
+        with self._lock:
+            self._emit(state.model_set(model_id))
 
     def stop_task(self, task_id: str) -> None:
         with self._lock:

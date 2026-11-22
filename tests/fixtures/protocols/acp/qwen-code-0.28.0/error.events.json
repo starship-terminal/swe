@@ -32,6 +32,35 @@
  },
  {
   "v": 2,
+  "type": "session.options",
+  "session": "fixture:1",
+  "seq": 0,
+  "ts": 1760000001.624,
+  "data": {
+   "options": {
+    "model": {
+     "value": "$runtime|openai|no-such-model-for-the-recorder(openai)",
+     "mid_turn": "unverified",
+     "choices": [
+      {
+       "id": "$runtime|openai|no-such-model-for-the-recorder(openai)",
+       "label": "no-such-model-for-the-recorder"
+      }
+     ]
+    },
+    "permission_mode": {
+     "value": "auto",
+     "mid_turn": "reply_finishes"
+    },
+    "plan_mode": {
+     "value": false,
+     "mid_turn": "reply_finishes"
+    }
+   }
+  }
+ },
+ {
+  "v": 2,
   "type": "turn.started",
   "session": "fixture:1",
   "seq": 0,

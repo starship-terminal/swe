@@ -108,6 +108,18 @@ class Recorder(V2Case):
         super().setUp()
         self.connections: list[Connection] = []
         self.snapshots: list[dict] = []
+        # The view's fixtures carry no session.options (G32): the view
+        # draws none yet, and its tests count each event's seq.
+        make = self.factory
+        self.factory = lambda resolved: self._no_options(make(resolved))
+
+    @staticmethod
+    def _no_options(make):
+        def no_options():
+            adapter = make()
+            adapter.offers_options = False
+            return adapter
+        return no_options
 
     # -- helpers --------------------------------------------------------
 
