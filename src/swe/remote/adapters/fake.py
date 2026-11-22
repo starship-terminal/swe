@@ -227,6 +227,7 @@ class FakeAdapter:
         position: TranscriptPosition | None = None,
         choices: dict | None = None,
         refuse_options: dict | None = None,
+        offers_options: bool = True,
     ) -> None:
         if caps is None:
             caps = getattr(resolved, "caps", None) or Caps()
@@ -244,6 +245,9 @@ class FakeAdapter:
         # "agent" refuses with the given message.
         self.choices = {k: list(v) for k, v in (choices or {}).items()}
         self.refuse_options = dict(refuse_options or {})
+        # False: no ``session.options`` at all, as an adapter from before
+        # G32 (the session-view fixtures, recorded against such a hub).
+        self.offers_options = offers_options
         self._shown = opts.OptionsView()
         self.spec: StartSpec | None = None
         self.sink: EventSink | None = None
@@ -341,6 +345,8 @@ class FakeAdapter:
             return self.session_id
 
     def _options_changed(self) -> None:
+        if not self.offers_options:
+            return
         shown = {}
         for name in ("model", "effort", "permission_mode"):
             listed = self.choices.get(name)

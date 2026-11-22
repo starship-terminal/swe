@@ -1,0 +1,870 @@
+// The message box: one press sends once, and the draft is never lost.
+import { act } from "react";
+import { describe, expect, it, vi } from "vitest";
+
+import { all, box, btn, click, feed, frame, idle, key, KEY, mount, play, posts, q, settle, snapshotWith, text, typeText } from "./harness";
+import { readDraft, writeDraft } from "./draft";
+import { SAVE_AFTER_MS } from "./useDraft";
+
+const sent = (m: ReturnType<typeof mount>) => posts(m, "message");
+const hold = () => vi.fn(() => new Promise<never>(() => {}));
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Wait until something is so, however slow the machine is, then a moment more (a menu's listeners start on the turn after it opens). */
+async function until(done: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !done(); i++) await act(async () => void (await wait(10)));
+  await act(async () => void (await wait(15)));
+}
+
+describe("sending", () => {
+  it("posts the message once under one id, clears the box and the kept draft, and keeps the focus", async () => {
+    const m = mount();
+    await idle(m);
+    document.body.append(m.el);
+    typeText(m, "Please fix the build");
+    await click(btn(m, "Send message"));
+    expect(sent(m)).toHaveLength(1);
+    expect(sent(m)[0]).toMatchObject({ text: "Please fix the build", mode: "queue", command_id: "id1", client_id: "id1" });
+    expect(box(m).value).toBe("");
+    expect(readDraft(KEY).text).toBe("");
+    expect(window.localStorage.length).toBe(0);
+    expect(document.activeElement).toBe(box(m));
+  });
+
+  it("sends once when the button is pressed twice in the same moment, without a complaint", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "double");
+    const send = btn(m, "Send message") as HTMLButtonElement;
+    await settle(() => {
+      send.click();
+      send.click();
+    });
+    expect(sent(m)).toHaveLength(1);
+    expect(m.store.getState().outbox.entries).toHaveLength(1);
+    expect(q(m.el, '[data-composer-reason="error"]')).toBeNull();
+  });
+
+  it("sends once on Enter, and a held Enter does not send again or type a blank line", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "enter");
+    const first = key(m, { key: "Enter", keyCode: 13 });
+    expect(first.defaultPrevented).toBe(true);
+    await settle();
+    typeText(m, "next draft");
+    const held = key(m, { key: "Enter", keyCode: 13, repeat: true });
+    expect(held.defaultPrevented).toBe(true);
+    await settle();
+    expect(sent(m)).toHaveLength(1);
+    expect(box(m).value).toBe("next draft");
+  });
+
+  it("leaves Shift+Enter to the box for a new line", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "a");
+    const event = key(m, { key: "Enter", keyCode: 13, shiftKey: true });
+    expect(event.defaultPrevented).toBe(false);
+    expect(sent(m)).toHaveLength(0);
+  });
+
+  it("does not send on the Enter that ends an input method composition", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "にほん");
+    // Chrome and Firefox: the key press says it is part of a composition.
+    expect(key(m, { key: "Enter", keyCode: 13, isComposing: true }).defaultPrevented).toBe(false);
+    // Safari: the composition has ended, and the key press says keyCode 229.
+    expect(key(m, { key: "Enter", keyCode: 229 }).defaultPrevented).toBe(false);
+    // The box tracks the composition itself too.
+    act(() => void box(m).dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    expect(key(m, { key: "Enter", keyCode: 13 }).defaultPrevented).toBe(false);
+    await settle();
+    expect(sent(m)).toHaveLength(0);
+    act(() => void box(m).dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+    key(m, { key: "Enter", keyCode: 13 });
+    await settle();
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("sends once when the form is submitted again by a re-render's replay (strict mode) or by a held key", async () => {
+    const m = mount({ strict: true });
+    await idle(m);
+    const spy = hold();
+    m.store.setState({ send: spy });
+    typeText(m, "strict");
+    const form = q(m.el, "form") as HTMLFormElement;
+    await settle(() => {
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+    await feed(m, frame("ping", undefined, { ts: 1, head: 1 })); // a re-render while the send is out
+    await settle(() => form.requestSubmit());
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a press made while the same message is on its way from another instance of the box", async () => {
+    const m = mount();
+    await idle(m);
+    const spy = hold();
+    m.store.setState({ send: spy });
+    typeText(m, "remount");
+    await click(btn(m, "Send message"));
+    m.remount(); // the box is drawn again, as when the view remounts, and finds the draft kept
+    expect(box(m).value).toBe("remount");
+    await click(btn(m, "Send message"));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(text(q(m.el, '[data-composer-reason="error"]'))).toBe("Still sending your last message.");
+  });
+
+  it("locks the box while the message is being saved, with the draft in it", async () => {
+    const m = mount();
+    await idle(m);
+    m.store.setState({ send: hold() });
+    typeText(m, "saving");
+    await click(btn(m, "Send message"));
+    expect(box(m).readOnly).toBe(true);
+    expect(box(m).value).toBe("saving");
+    expect((btn(m, "Send message") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not send while the outbox is loading, and keeps the draft", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "early");
+    act(() => m.store.setState({ outbox: { ...m.store.getState().outbox, loading: true } }));
+    expect((btn(m, "Send message") as HTMLButtonElement).disabled).toBe(true);
+    expect(text(q(m.el, '[data-composer-reason="blocked"]'))).toBe("Loading the sends kept on this device.");
+    // The keyboard and the form bypass the button: the outbox itself refuses.
+    key(m, { key: "Enter", keyCode: 13 });
+    await settle(() => void (q(m.el, "form") as HTMLFormElement).requestSubmit());
+    expect(sent(m)).toHaveLength(0);
+    expect(m.store.getState().outbox.entries).toHaveLength(0);
+    expect(box(m).value).toBe("early");
+  });
+});
+
+describe("attachments the hub may have deleted", () => {
+  it("says which a restored draft lost, keeps its text, and can be dismissed", async () => {
+    writeDraft(KEY, { text: "see the logs", files: [{ ref: "1-a-old.log", name: "old.log", size: 9, at: Date.now() - 7 * 864e5 }, { ref: "2-b-new.log", name: "new.log", size: 9, at: Date.now() }] });
+    const m = mount();
+    await idle(m);
+    expect(box(m).value).toBe("see the logs");
+    expect(all(m.el, "[data-file]").map((el) => el.getAttribute("data-file"))).toEqual(["2-b-new.log"]);
+    const note = q(m.el, "[data-dropped-files]") as HTMLElement;
+    expect(text(note)).toContain("old.log");
+    expect(text(note)).toContain("Your text is kept");
+    await click(btn(m, "Dismiss this note"));
+    expect(q(m.el, "[data-dropped-files]")).toBeNull();
+  });
+
+  it("does not send a message that carries a file the hub has probably deleted: it takes the file out, keeps the text, and says so", async () => {
+    const stale = { ref: "1-a-old.log", name: "old.log", size: 9, at: Date.now() - 7 * 864e5 };
+    const m = mount({ props: { upload: async () => stale } });
+    await idle(m);
+    typeText(m, "see the log");
+    const input = q(m.el, 'input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", { configurable: true, value: [new File(["x"], "old.log")] });
+    await settle(() => void input.dispatchEvent(new Event("change", { bubbles: true })));
+    await settle(() => wait(5));
+    await click(btn(m, "Send message"));
+    expect(posts(m, "message")).toHaveLength(0);
+    expect(box(m).value).toBe("see the log");
+    expect(all(m.el, "[data-file]")).toHaveLength(0);
+    expect(text(q(m.el, "[data-dropped-files]"))).toContain("old.log");
+  });
+});
+
+describe("the draft", () => {
+  it("drops other sessions' drafts that were last edited over two weeks ago when the box opens, and keeps newer ones", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    window.localStorage.setItem("swe.sv.draft.v1:claude:old", JSON.stringify({ t: "stale", f: [], a: Date.now() - 15 * day }));
+    window.localStorage.setItem("swe.sv.draft.v1:claude:recent", JSON.stringify({ t: "recent", f: [], a: Date.now() - 2 * day }));
+    mount();
+    expect(window.localStorage.getItem("swe.sv.draft.v1:claude:old")).toBeNull();
+    expect(window.localStorage.getItem("swe.sv.draft.v1:claude:recent")).not.toBeNull();
+  });
+
+  it("keeps what is being typed when another tab banks a new credential (the legacy key goes, a credential stays)", async () => {
+    window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "sk-test" }));
+    const m = mount();
+    await idle(m);
+    typeText(m, "half a thought");
+    await settle(() => wait(SAVE_AFTER_MS + 50));
+    await settle(() => void window.dispatchEvent(new StorageEvent("storage", { key: "quiver.remote", oldValue: JSON.stringify({ credential: "old" }), newValue: null })));
+    await settle(() => wait(5));
+    expect(box(m).value).toBe("half a thought");
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).not.toBeNull();
+  });
+
+  it("is all dropped when the pairing is removed in another tab, and the box that shows one forgets it and writes nothing back", async () => {
+    window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "sk-test" }));
+    const m = mount();
+    await idle(m);
+    typeText(m, "typed under a signed-in session");
+    await settle(() => wait(SAVE_AFTER_MS + 50));
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).not.toBeNull();
+    typeText(m, "typed under a signed-in session, and more"); // a save is pending
+    window.localStorage.removeItem("swe.remote"); // no credential remains
+    await settle(() => void window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null })));
+    await settle(() => wait(5));
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toBeNull();
+    expect(box(m).value).toBe("");
+    await settle(() => wait(SAVE_AFTER_MS + 50)); // the pending save does not run
+    act(() => void m.el.ownerDocument.defaultView?.dispatchEvent(new Event("pagehide")));
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toBeNull();
+  });
+
+  it("stays in the box, in storage and on screen when the send is refused", async () => {
+    const m = mount();
+    await idle(m);
+    m.store.setState({ send: () => Promise.resolve({ ok: false, reason: "gone", message: "This session no longer exists." } as never) });
+    typeText(m, "do not lose me");
+    await click(btn(m, "Send message"));
+    expect(box(m).value).toBe("do not lose me");
+    expect(text(q(m.el, '[data-composer-reason="error"]'))).toBe("This session no longer exists.");
+    await wait(SAVE_AFTER_MS + 50);
+    expect(readDraft(KEY).text).toBe("do not lose me");
+    expect(box(m).readOnly).toBe(false);
+  });
+
+  it("stays when the store throws", async () => {
+    const m = mount();
+    await idle(m);
+    m.store.setState({ send: () => Promise.reject(new Error("storage exploded")) });
+    typeText(m, "still here");
+    await click(btn(m, "Send message"));
+    expect(box(m).value).toBe("still here");
+    expect(text(q(m.el, '[data-composer-reason="error"]'))).toBe("storage exploded");
+  });
+
+  it("is written soon after typing, and comes back after a reload", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "half a thought");
+    await wait(SAVE_AFTER_MS + 50);
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toContain("half a thought");
+    const again = mount(); // a new page: a new store and a new box, the same browser storage
+    await idle(again);
+    expect(box(again).value).toBe("half a thought");
+  });
+
+  it("is written when the box goes away, before the pause is over", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "just typed");
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    expect(readDraft(KEY).text).toBe("just typed");
+  });
+
+  it("is not erased by a send that settles after a newer draft was saved by a later box", async () => {
+    const m = mount();
+    await idle(m);
+    let settleSend: (r: unknown) => void = () => {};
+    m.store.setState({ send: () => new Promise((resolve) => (settleSend = resolve)) as never });
+    typeText(m, "first");
+    await click(btn(m, "Send message"));
+    m.remount(); // the first box goes; a second one reads the draft that is still kept
+    expect(box(m).value).toBe("first");
+    typeText(m, "second, typed later");
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    expect(readDraft(KEY).text).toBe("second, typed later");
+    await settle(() => settleSend({ ok: true, entry: {} })); // the first send is taken by the outbox only now
+    expect(readDraft(KEY).text).toBe("second, typed later");
+  });
+
+  it("is written when the box is taken off the page before the pause is over", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "typed just now");
+    act(() => void m.el.ownerDocument.defaultView?.dispatchEvent(new Event("noop")));
+    m.remount(); // unmounts the old box at once
+    expect(readDraft(KEY).text).toBe("typed just now");
+  });
+
+  it("is still there after the connection drops and comes back", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "keep this across a reconnect");
+    await settle(() => m.environment.goOffline());
+    await settle(() => m.environment.goOnline());
+    await settle(() => m.timers.advance(60_000));
+    expect(box(m).value).toBe("keep this across a reconnect");
+  });
+
+  it("says when it cannot be kept on this device", async () => {
+    const m = mount();
+    await idle(m);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    typeText(m, "no room");
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    await settle();
+    expect(text(q(m.el, "[data-draft-note]"))).toContain("will not survive a reload");
+    vi.restoreAllMocks();
+  });
+
+  it("is gone from storage after a send even when the stored copy was older than the box", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "older");
+    await wait(SAVE_AFTER_MS + 50); // what the pause timer had written so far
+    typeText(m, "newer words"); // not written yet
+    await click(btn(m, "Send message"));
+    expect(readDraft(KEY).text).toBe("");
+    await wait(SAVE_AFTER_MS + 50);
+    expect(readDraft(KEY).text).toBe("");
+  });
+});
+
+const menuItem = (m: ReturnType<typeof mount>, id: string) => q(m.el, `[data-menu-item="${id}"]`) as HTMLButtonElement | null;
+const menuOpen = (m: ReturnType<typeof mount>) => q(m.el, '[role="menu"]');
+const rightClick = (target: Element) => settle(() => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+
+describe("while a reply is in progress", () => {
+  it("offers Stop and Queue as icons; nothing of the kind when idle", async () => {
+    const idleOne = mount();
+    await idle(idleOne);
+    expect(btn(idleOne, "Stop the reply")).toBeUndefined();
+    expect(btn(idleOne, "Send message")).toBeDefined();
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    expect(btn(m, "Stop the reply")).toBeDefined();
+    expect(btn(m, "Queue message")).toBeDefined();
+    expect(btn(m, "Send message")).toBeUndefined();
+    expect(box(m).placeholder).toBe("Queue a message");
+    expect(box(idleOne).placeholder).toBe("Ask anything");
+  });
+
+  it("draws no word in the bar: every button is a picture with a name and a tooltip", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    const form = q(m.el, "form[aria-label='Composer']") as HTMLElement;
+    const buttons = all(form, "button") as HTMLButtonElement[];
+    expect(buttons.length).toBeGreaterThanOrEqual(3);
+    for (const button of buttons) {
+      expect(button.textContent).toBe("");
+      expect(button.getAttribute("aria-label")).toBeTruthy();
+      expect(button.title).toBeTruthy();
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+    // Send and Queue are different pictures.
+    const idleOne = mount();
+    await idle(idleOne);
+    expect(btn(idleOne, "Send message")?.innerHTML).not.toBe(btn(m, "Queue message")?.innerHTML);
+  });
+
+  it("queues with a press on the main button", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "after");
+    await click(btn(m, "Queue message"));
+    expect(sent(m)).toHaveLength(1);
+    expect(sent(m)[0]).toMatchObject({ text: "after", mode: "queue" });
+    expect(menuOpen(m)).toBeNull();
+  });
+
+  it("opens a menu with Queue and Send now on a right click, Queue first and in focus", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "now");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(menuOpen(m)).not.toBeNull();
+    expect(all(m.el, '[role="menuitem"]').map((i) => i.getAttribute("data-menu-item"))).toEqual(["queue", "steer"]);
+    expect(document.activeElement).toBe(menuItem(m, "queue"));
+    expect(text(menuItem(m, "steer"))).toContain("Send now");
+    expect(text(menuItem(m, "steer"))).toContain("Sends this message ahead of the queue. Some agents stop the current reply to do it.");
+    expect(sent(m)).toHaveLength(0); // the menu opening is not a send
+    await click(menuItem(m, "steer"));
+    expect(sent(m)).toHaveLength(1);
+    expect(sent(m)[0]).toMatchObject({ text: "now", mode: "steer" });
+    expect(menuOpen(m)).toBeNull();
+  });
+
+  it("opens the same menu from the keyboard, and Escape closes it with the focus back on the button", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "keys");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    expect(menuOpen(m)).not.toBeNull();
+    expect(document.activeElement).toBe(menuItem(m, "queue"));
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect(document.activeElement).toBe(menuItem(m, "steer"));
+    await settle(() => void menuItem(m, "steer")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(menuOpen(m)).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(main);
+    expect(sent(m)).toHaveLength(0);
+  });
+
+  it("does not swallow the next press after a menu opened from the keyboard is closed", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "after the keys");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(menuOpen(m)).toBeNull();
+    await click(main); // Enter or Space on the focused button arrives as a click, with no pointer before it
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("does not swallow a press made while a keyboard-opened menu is still open", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "open and pressed");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    expect(menuOpen(m)).not.toBeNull();
+    await click(main);
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("does not swallow the next press after the menu key opened the menu with no pointer down", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "menu key");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    await rightClick(main);
+    expect(menuOpen(m)).not.toBeNull();
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await click(main);
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  // The events a browser sends around a hold's release, as recorded in Chrome (primary.ts has the table). `detail` is 1
+  // for a click a pointer makes, 0 for one a key or an assistive technology makes.
+  const fire = (el: Element, type: string, init: object = {}) => act(() => void el.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init })));
+  const tail = (el: Element) => settle(() => void el.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+  const ORDERS: Record<string, (el: Element) => Promise<void>> = {
+    mouse: async (el) => {
+      fire(el, "pointerup");
+      await tail(el);
+    },
+    touch: async (el) => {
+      fire(el, "pointerup");
+      fire(el, "pointerout", { relatedTarget: document.body }); // React hears a leave through pointerout
+      await tail(el);
+    },
+    "touch, click before the leave": async (el) => {
+      fire(el, "pointerup");
+      await tail(el);
+      fire(el, "pointerout", { relatedTarget: document.body });
+    },
+  };
+
+  for (const [name, release] of Object.entries(ORDERS)) {
+    it(`opens the menu on a hold, and the release of that hold (${name}) does not also queue the message`, async () => {
+      const m = mount({ props: { holdMs: 20 } });
+      await play(m, "streaming", 0, 3);
+      typeText(m, "held");
+      const main = btn(m, "Queue message") as HTMLButtonElement;
+      main.focus();
+      fire(main, "pointerdown");
+      await until(() => menuOpen(m) !== null);
+      expect(menuOpen(m)).not.toBeNull();
+      expect(document.activeElement).not.toBe(main); // the menu took the focus
+      await release(main);
+      expect(sent(m)).toHaveLength(0);
+      expect(menuOpen(m)).not.toBeNull(); // and the menu is still there to choose from
+      // A new press, after that, is a press.
+      fire(main, "pointerdown");
+      fire(main, "pointerup");
+      await tail(main);
+      expect(sent(m)).toHaveLength(1);
+    });
+  }
+
+  it("sends nothing for the click after a hold that was let go off the button, and sends on the next keyboard press", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "after a hold");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    await until(() => menuOpen(m) !== null);
+    fire(main, "pointerout", { relatedTarget: document.body }); // let go over the menu: no pointerup on the button, no click
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await click(main); // Enter or Space on the focused button: a click with no pointer
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("treats a cancelled hold like a released one: its tail sends nothing, the next press sends", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "x");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    await until(() => menuOpen(m) !== null);
+    fire(main, "pointercancel");
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await tail(main); // a pointer's click that no new pointerdown began is still the hold's tail: not a press
+    expect(sent(m)).toHaveLength(0);
+    await click(main); // a key's click is
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("treats an assistive technology's bare click as a press of its own, after a hold too", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "bare");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    await until(() => menuOpen(m) !== null);
+    fire(main, "pointerup");
+    await click(main); // detail 0: no pointer made it
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("opens the menu for a control click and keeps its release from sending", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "ctrl");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown", { ctrlKey: true });
+    await settle(() => void main.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    expect(menuOpen(m)).not.toBeNull();
+    fire(main, "pointerup");
+    await tail(main);
+    expect(sent(m)).toHaveLength(0);
+  });
+
+  it("sends on a short press with a pointer, and opens no menu", async () => {
+    const m = mount({ props: { holdMs: 60 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "short");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    fire(main, "pointerup");
+    await tail(main);
+    expect(sent(m)).toHaveLength(1);
+    expect(menuOpen(m)).toBeNull();
+  });
+
+  it("opens the send menu in the stack above the bar, after the dock and the tray and before the bar, so nothing it hides is a request", async () => {
+    const m = mount();
+    await play(m, "approval", 0, 2); // a request is waiting, and the reply is running
+    await feed(m, frame("session.caps", 40, { caps: { steer: true, plan_mode: false, rollback: false, fork: false, stop_task: false, options: [], steer_effect: "stops_reply" } }));
+    typeText(m, "one\ntwo\nthree");
+    await rightClick(btn(m, "Queue message") as Element);
+    const form = q(m.el, 'form[aria-label="Composer"]') as HTMLElement;
+    const menu = menuOpen(m) as HTMLElement;
+    const wrapper = menu.closest("[data-send-menu]") as HTMLElement;
+    expect(form.contains(menu)).toBe(false);
+    const dock = q(m.el, "[data-dock]") as HTMLElement;
+    // Order in the stack: the dock, then the menu, then the bar. The menu is in the flow, not over the dock.
+    expect(dock.compareDocumentPosition(wrapper) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(wrapper.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(menu.className).not.toContain("absolute");
+    // With the menu and the bar taking the height limit, what is above keeps 5 rem and the menu scrolls inside what is left.
+    const above = q(m.el, "[data-composer-above]") as HTMLElement;
+    expect(above.className).toContain("min-h-20");
+    expect(wrapper.className).toContain("overflow-y-auto");
+    expect(wrapper.className).toContain("min-h-16");
+  });
+
+  it("does not open the menu on a short press", async () => {
+    const m = mount({ props: { holdMs: 60 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "short");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    act(() => void main.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })));
+    await click(main);
+    await wait(100);
+    expect(menuOpen(m)).toBeNull();
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("has no menu while idle: a hold or a right click does nothing special", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await idle(m);
+    typeText(m, "idle");
+    const main = btn(m, "Send message") as HTMLButtonElement;
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    await wait(60);
+    const context = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await settle(() => void main.dispatchEvent(context));
+    expect(menuOpen(m)).toBeNull();
+    expect(context.defaultPrevented).toBe(false); // the browser's own menu is left alone
+  });
+
+  it("never makes the stopping item the one the menu opens on, and disables it, with the reason, on an agent that cannot steer", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    await feed(m, frame("session.caps", 40, { caps: { steer: false, plan_mode: false, rollback: false, fork: false, stop_task: false, options: [] } }));
+    typeText(m, "hello");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(document.activeElement).toBe(menuItem(m, "queue"));
+    expect(menuItem(m, "steer")?.getAttribute("aria-disabled")).toBe("true");
+    expect(text(menuItem(m, "steer"))).toContain("This agent cannot be steered.");
+    await click(menuItem(m, "steer"));
+    expect(sent(m)).toHaveLength(0);
+    expect(text(q(m.el, "[data-composer-reason]"))).toContain("cannot send a message ahead of the queue");
+  });
+
+  it("closes the menu when the reply ends under it", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "x");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(menuOpen(m)).not.toBeNull();
+    const turn = m.store.getState().session.openTurn ?? "";
+    await feed(m, frame("turn.ended", 30, { status: "completed" }, { turn_id: turn }), frame("session.state", 31, { state: "idle" }));
+    expect(menuOpen(m)).toBeNull();
+  });
+
+  it("opens no menu when the reply ended during the hold: it is only a long press, and the release sends", async () => {
+    const m = mount({ props: { holdMs: 80 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "ended mid-press");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    const turn = m.store.getState().session.openTurn ?? "";
+    await feed(m, frame("turn.ended", 30, { status: "completed" }, { turn_id: turn }), frame("session.state", 31, { state: "idle" }));
+    expect(btn(m, "Send message")).toBeDefined(); // the button became Send
+    await wait(160); // the hold timer would have run
+    expect(menuOpen(m)).toBeNull();
+    fire(main, "pointerup");
+    await tail(main);
+    expect(sent(m)).toHaveLength(1); // a plain press, after all
+  });
+
+  it("gives the stack three quarters of the height while the send menu is open, so a waiting request's answers keep their room", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "x");
+    const stack = () => q(m.el, ".sv-composer") as HTMLElement;
+    expect(stack().className).toContain("max-h-1/2");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(stack().className).toContain("max-h-3/4");
+    expect(stack().className).not.toContain("max-h-1/2");
+  });
+
+  it("stops once on a double press", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    m.transport.on("/control", () => ({ status: 200, body: { receipt: "accepted" } }), "POST");
+    const stop = btn(m, "Stop the reply") as HTMLButtonElement;
+    await settle(() => {
+      stop.click();
+      stop.click();
+    });
+    expect(posts(m, "control")).toHaveLength(1);
+    expect(posts(m, "control")[0]).toMatchObject({ op: "interrupt" });
+    expect(btn(m, "Stop the reply")?.title).toBe("Stopping");
+  });
+
+  it("disables Stop, with the reason, when the connection is down", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    await settle(() => m.environment.goOffline());
+    expect((btn(m, "Stop the reply") as HTMLButtonElement).disabled).toBe(true);
+    expect(btn(m, "Stop the reply")?.title).toBe("You are offline. Reconnect to do this.");
+    await click(btn(m, "Stop the reply"));
+    expect(posts(m, "control")).toHaveLength(0);
+  });
+});
+
+describe("the attach menu", () => {
+  it("opens on the plus with the ways this browser offers, and Escape closes it", async () => {
+    const m = mount();
+    await idle(m);
+    await click(btn(m, "Attach"));
+    expect(all(m.el, '[role="menuitem"]').map((i) => text(i))).toEqual(["Choose files"]); // no photo library on a desktop browser
+    expect(document.activeElement).toBe(menuItem(m, "files"));
+    await settle(() => void menuItem(m, "files")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(menuOpen(m)).toBeNull();
+  });
+
+  it("offers the photo library where there is a touch screen, and opens the picker for images", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("coarse"), media: query, addEventListener() {}, removeEventListener() {} }));
+    const m = mount();
+    await idle(m);
+    await click(btn(m, "Attach"));
+    expect(all(m.el, '[role="menuitem"]').map((i) => text(i))).toEqual(["Choose files", "Photo library"]);
+    const input = q(m.el, 'input[type="file"]') as HTMLInputElement;
+    const opened = vi.spyOn(input, "click").mockImplementation(() => {});
+    await click(menuItem(m, "photos"));
+    expect(input.accept).toBe("image/*");
+    expect(opened).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("offline, storage and read-only", () => {
+  it("accepts a message while offline and says in the timeline it waits", async () => {
+    const m = mount();
+    await idle(m);
+    await settle(() => m.environment.goOffline());
+    typeText(m, "typed offline");
+    await click(btn(m, "Send message"));
+    expect(sent(m)).toHaveLength(0);
+    const view = m.store.getState().sends[0];
+    expect(view?.shown).toBe("waiting");
+    expect(view?.reason).toBe("Waiting: you are offline. It will be sent when you are back.");
+    expect(box(m).value).toBe("");
+  });
+
+  it("shows the outbox's note when storage will not survive a reload", async () => {
+    const m = mount();
+    await idle(m);
+    expect(text(q(m.el, "[data-outbox-note]"))).toBe("no database in tests.");
+  });
+
+  it("is replaced by a bar with the reason when the session cannot be driven", async () => {
+    const m = mount();
+    await settle(() => void m.transport.last.send(...snapshotWith("default", { row: { ...(JSON.parse("{}") as object), key: KEY, control: "read_only", control_reason: "Started in a terminal." } })));
+    expect(q(m.el, "textarea")).toBeNull();
+    expect(text(q(m.el, '[data-composer="read-only"]'))).toBe("Started in a terminal.");
+  });
+});
+
+describe("attachments", () => {
+  const fileInput = (m: ReturnType<typeof mount>) => q(m.el, 'input[type="file"]') as HTMLInputElement;
+  const choose = async (m: ReturnType<typeof mount>, ...names: string[]) => {
+    const files = names.map((name) => new File(["abc"], name, { type: "text/plain" }));
+    Object.defineProperty(fileInput(m), "files", { value: files, configurable: true });
+    await settle(() => void fileInput(m).dispatchEvent(new Event("change", { bubbles: true })));
+    await settle();
+  };
+
+  it("stages a file, shows it, and sends its ref with the message", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ref: "1-a-notes.txt", name: "notes.txt", size: 3 }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const m = mount();
+    await idle(m);
+    await choose(m, "notes.txt");
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[0]?.[0]).toBe("/v1/sessions/claude%3Asession-1/attachments?name=notes.txt");
+    expect(calls[0]?.[1].method).toBe("POST");
+    expect(text(q(m.el, '[data-file="1-a-notes.txt"]'))).toBe("notes.txt");
+    await click(btn(m, "Send message"));
+    expect(sent(m)[0]).toMatchObject({ text: "", attachments: ["1-a-notes.txt"] });
+    expect(all(m.el, "[data-file]")).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("says why an upload failed, and does not stop a message without it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { message: "unsupported file type .exe" } }), { status: 422 })));
+    const m = mount();
+    await idle(m);
+    await choose(m, "tool.exe");
+    expect(text(q(m.el, '[data-upload="failed"]'))).toContain("unsupported file type .exe");
+    typeText(m, "no file then");
+    expect((btn(m, "Send message") as HTMLButtonElement).disabled).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("takes at most ten files, however many are picked at once", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(url);
+      return new Response(JSON.stringify({ ref: `1-a-f${calls.length}.txt`, name: `f${calls.length}.txt`, size: 3 }), { status: 200 });
+    }));
+    const m = mount();
+    await idle(m);
+    await choose(m, ...Array.from({ length: 13 }, (_, i) => `f${i}.txt`));
+    expect(calls).toHaveLength(10);
+    expect(all(m.el, "[data-file]")).toHaveLength(10);
+    expect(text(q(m.el, '[data-composer-reason="error"]'))).toBe("A message takes at most 10 attachments.");
+    vi.unstubAllGlobals();
+  });
+
+  it("holds the send back until an upload has finished", async () => {
+    let finish: (r: Response) => void = () => {};
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (finish = resolve))));
+    const m = mount();
+    await idle(m);
+    typeText(m, "with a file");
+    await choose(m, "slow.txt");
+    expect((btn(m, "Send message") as HTMLButtonElement).disabled).toBe(true);
+    expect(text(q(m.el, '[data-composer-reason="blocked"]'))).toBe("Waiting for the attachment to upload.");
+    await settle(() => finish(new Response(JSON.stringify({ ref: "1-a-slow.txt", name: "slow.txt", size: 3 }), { status: 200 })));
+    expect((btn(m, "Send message") as HTMLButtonElement).disabled).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps staged files in the draft across a reload", async () => {
+    writeDraft(KEY, { text: "with files", files: [{ ref: "1-a-x.txt", name: "x.txt", size: 3, at: Date.now() }] });
+    const m = mount();
+    await idle(m);
+    expect(text(q(m.el, '[data-file="1-a-x.txt"]'))).toBe("x.txt");
+  });
+});
+
+describe("keeping the timeline clear of the bar", () => {
+  it("measures again when the keyboard moves the bar without changing the stack's size", async () => {
+    const callbacks: (() => void)[] = [];
+    const watched: Element[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+        observe(el: Element) {
+          watched.push(el);
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const m = mount();
+      const host = q(m.el, "[data-composer-host]") as HTMLElement;
+      const stack = host.firstElementChild as HTMLElement;
+      // The host (what the keyboard's padding is on) is watched as well as the stack.
+      expect(watched).toContain(host);
+      expect(watched).toContain(stack);
+      // The view ends at 800; the stack's top moves from 700 to 464 when the keyboard opens, its size the same.
+      m.el.getBoundingClientRect = () => ({ bottom: 800 }) as DOMRect;
+      let top = 700;
+      stack.getBoundingClientRect = () => ({ top }) as DOMRect;
+      callbacks.forEach((notify) => notify());
+      expect(m.el.style.getPropertyValue("--sv-composer-h")).toBe("100px");
+      top = 464;
+      callbacks.forEach((notify) => notify());
+      expect(m.el.style.getPropertyValue("--sv-composer-h")).toBe("336px");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("the area above the bar when the room is short", () => {
+  it("is anchored at its bottom, where the answers are, and follows its content", async () => {
+    const heights = new Map<Element, number>();
+    const callbacks: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      const m = mount();
+      const above = q(m.el, "[data-composer-above]") as HTMLElement;
+      Object.defineProperty(above, "scrollHeight", { configurable: true, get: () => heights.get(above) ?? 300 });
+      Object.defineProperty(above, "clientHeight", { configurable: true, value: 100 });
+      above.scrollTop = 0;
+      callbacks.forEach((notify) => notify()); // its content or its room changed
+      expect(above.scrollTop).toBe(300); // at the end: the answers
+      // The person scrolls up to read: it does not drag them back.
+      above.scrollTop = 40;
+      above.dispatchEvent(new Event("scroll"));
+      heights.set(above, 340);
+      callbacks.forEach((notify) => notify());
+      expect(above.scrollTop).toBe(40);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

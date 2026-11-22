@@ -131,8 +131,10 @@ function StatusMark({ status }: { status: ToolItem["status"] | "stopped" }) {
     case "error":
       return <Icon className="size-3.5 shrink-0 text-danger-text" name="alert" />;
     case "cancelled":
-    case "stopped":
       return <Icon className="size-3.5 shrink-0 text-muted" name="x" />;
+    case "stopped":
+      // Cut off by the end of the turn, not called off: its own mark (a square, as on the Stop button).
+      return <Icon className="size-3.5 shrink-0 text-muted" name="stop" />;
   }
 }
 

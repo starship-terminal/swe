@@ -547,7 +547,9 @@ describe("the view changes options only through setOption (G32)", () => {
               : [],
         )
       : [];
-  const banned = [/\bsessionPath\b/, /\bfetchTransport\b/, /["'`/]command["'`]/, /\bset_option\b/];
+  // The command route by name: `sessionPath(key, "command")`, or a path ending in `/command`. Other routes the
+  // view may fetch itself (the composer uploads attachments through `sessionPath(key, "attachments")`).
+  const banned = [/\bsessionPath\([^)]*["'`]command["'`]/, /\bfetchTransport\b/, /\/command["'`?]/, /\bset_option\b/];
 
   it("finds nothing under composer, session or ui that names the command route", () => {
     const files = ["composer", "session", "ui"].flatMap((d) => sources(join(root, d)));
@@ -560,7 +562,7 @@ describe("the view changes options only through setOption (G32)", () => {
 
   it("would catch a direct post", () => {
     const bad = [
-      'transport.postJson(sessionPath(key, "x"), body);',
+      'transport.postJson(sessionPath(key, "command"), body);',
       "const t = fetchTransport({ baseUrl: '' });",
       "fetch(`/v1/sessions/${key}/command`, { method: 'POST' });",
       'post({ op: "set_option", name: "model" });',

@@ -1,6 +1,6 @@
 import type { CompactedItem, ErrorItem, LiveText, RequestItem } from "../core";
-import { cx, Icon, Prose, Spinner, StateArrow } from "../ui";
-import { plural } from "./format";
+import { cx, Icon, InlineText, Prose, Spinner, StateArrow } from "../ui";
+import { clip, plural } from "./format";
 import type { TurnFooter } from "./model";
 
 /** A reply still being written: the text so far, as prose, with a caret that stops under reduced motion. */
@@ -87,10 +87,15 @@ export function RequestRow({ item }: { item: RequestItem }) {
   const data = item.event.data;
   const kind = item.event.type === "approval.requested" ? KIND_WORD[item.event.data.kind] : "Question";
   const open = item.resolution === undefined;
+  // The same cut the timeline gives any text that came from outside: a request's prompt is the agent's, of any size.
+  const shown = clip(data.prompt);
   return (
     <div className={cx("rounded-card border px-3 py-2", open ? "border-warning bg-subtle" : "border-border")} data-request={open ? "open" : "closed"}>
       <p className="text-xs text-muted">{kind ?? "Request"}</p>
-      <p className="mt-0.5 text-sm leading-6 break-words whitespace-pre-wrap">{data.prompt}</p>
+      <p className="mt-0.5 text-sm leading-6 break-words whitespace-pre-wrap">
+        <InlineText text={shown.text} />
+      </p>
+      {shown.hidden > 0 ? <p className="text-xs text-muted">{`${shown.hidden.toLocaleString("en-US")} more characters not shown.`}</p> : null}
       <p className="mt-1.5 flex items-center gap-1.5 text-xs text-secondary">
         <StateArrow colour={arrow} />
         {text}

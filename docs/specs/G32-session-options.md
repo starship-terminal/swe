@@ -136,8 +136,13 @@ frame: the options of a long session cost one event per change.
 ### The snapshot and the stream
 
 - `GET .../snapshot` (and `session.snapshot`) carries `options`, the
-  same object (`{}` when nothing is offered). It is optional in the
-  schema: a hub that does not list `session_options` sends none.
+  same object, once the session's agent has said any. It is optional in
+  the schema: a hub that does not list `session_options` sends none, and
+  neither does one whose agent has offered nothing, so the client reads
+  both alike (nothing known).
+- The session-view fixtures (G11) are recorded with an agent that
+  offers no options (`FakeAdapter(offers_options=False)`), so they are
+  the same as before G32 and the view's tests keep their seq numbers.
 - For a kept session it is the runtime's copy (`_Owned.offered`, from
   the keeper's welcome and its events), so a ring that dropped the last
   event does not lose it; for any other session (a satellite keeper's

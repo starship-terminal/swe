@@ -730,7 +730,7 @@ class SyncHub:
         body = {
             "session": key, "epoch": fold["epoch"], "head": head,
             "boot_id": hub.boot_id, "row": self._row(key, device_id),
-            "state": state, "caps": caps, "options": offered or {},
+            "state": state, "caps": caps,
             "open_turn": open_turn,
             "pending": [p for p in (served(e) for e in pending)
                         if p is not None],
@@ -743,6 +743,10 @@ class SyncHub:
         }
         if reason:
             body["reason"] = reason
+        if offered:
+            # Optional (G32): absent while the session's agent has said
+            # no options, as from a hub before G32.
+            body["options"] = offered
         return body
 
 

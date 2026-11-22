@@ -137,3 +137,40 @@ function align(value: "left" | "right" | "center" | null | undefined) {
 export const Prose = memo(function Prose({ text, className }: { text: string; className?: string }) {
   return <div className={cx("sv-prose text-sm leading-6 break-words", className)}>{blocks(parseMarkdown(text))}</div>;
 });
+
+/** A code span: a run of backticks, what is between, and a run as long (the reader's own pattern for it). */
+const CODE_SPAN = /(?<!`)(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/;
+
+/**
+ * One run of an agent's text with code spans drawn as code, and nothing else read: no bold, no italic, no link,
+ * no block. Every character that arrived is drawn, the backticks of a span included, so what a person approves is
+ * what is on the screen (`rm *.log *.txt` stays as it is; an italic reading would have dropped the stars). Only
+ * the first `readMax` characters are looked at for spans, which caps the nodes at about a third of that many;
+ * the rest is one text node. Line breaks are the container's (`whitespace-pre-wrap`).
+ */
+export function InlineText({ text, readMax = 2000 }: { text: string; readMax?: number }) {
+  const parts: ReactNode[] = [];
+  let rest = text.length > readMax ? text.slice(0, readMax) : text;
+  const beyond = text.length > readMax ? text.slice(readMax) : "";
+  let key = 0;
+  while (rest !== "") {
+    const match = rest.includes("`") ? CODE_SPAN.exec(rest) : null;
+    if (match === null) {
+      parts.push(rest);
+      break;
+    }
+    if (match.index > 0) parts.push(rest.slice(0, match.index));
+    parts.push(
+      <code key={key++} className="sv-inline-code rounded-control bg-subtle px-1 py-0.5 font-mono break-words">
+        {match[0]}
+      </code>,
+    );
+    rest = rest.slice(match.index + match[0].length);
+  }
+  return (
+    <>
+      {parts}
+      {beyond}
+    </>
+  );
+}

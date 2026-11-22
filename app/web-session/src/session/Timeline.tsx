@@ -72,9 +72,16 @@ export function Timeline({ store }: { store: SessionStore }) {
   const loaded = useSessionStore(store, (s) => s.session.loaded);
   const hasMore = useSessionStore(store, (s) => s.session.hasMore);
   const caughtUp = useSessionStore(store, (s) => s.session.caughtUp);
-  const sends = useSessionStore(store, (s) => s.sends);
+  const allSends = useSessionStore(store, (s) => s.sends);
+  const queue = useSessionStore(store, (s) => s.session.queue);
   const connection = useSessionStore(store, (s) => s.connection);
 
+  // A send the hub holds in its queue is drawn by the composer's queued tray (G13), not twice.
+  const sends = useMemo(() => {
+    if (queue.length === 0) return allSends;
+    const held = new Set(queue.map((item) => item.command_id));
+    return allSends.filter((send) => !held.has(send.commandId));
+  }, [allSends, queue]);
   const rows = useMemo(
     () => buildRows({ items, live, turns, stopped, openTurn, phase }, sends),
     [items, live, turns, stopped, openTurn, phase, sends],
@@ -147,7 +154,8 @@ export function Timeline({ store }: { store: SessionStore }) {
     const watcher = new ResizeObserver(() => {
       if (stuck.current && anchor.current === null && scroller.current !== null) scroller.current.scrollTop = scroller.current.scrollHeight;
     });
-    watcher.observe(target);
+    // The border box: the composer's height is this element's bottom padding, and a content box would not change with it.
+    watcher.observe(target, { box: "border-box" });
     return () => watcher.disconnect();
   }, [rows.length > 0]);
 
@@ -203,7 +211,7 @@ export function Timeline({ store }: { store: SessionStore }) {
     body = <EmptyState />;
   } else {
     body = (
-      <div ref={content} aria-label="Conversation" className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-5" role="log">
+      <div ref={content} aria-label="Conversation" className="sv-pad-end mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pt-5" role="log">
         {hasMore ? (
           <div className="flex justify-center">
             <Button disabled={loadingOlder} onClick={() => void loadOlder()}>
@@ -234,7 +242,7 @@ export function Timeline({ store }: { store: SessionStore }) {
         {body}
       </main>
       {!atEnd ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+        <div className="sv-jump pointer-events-none absolute inset-x-0 flex justify-center">
           <Button
             className="sv-enter pointer-events-auto bg-card shadow-sm"
             onClick={() => {
