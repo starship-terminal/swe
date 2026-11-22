@@ -539,8 +539,9 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 previous, state["model"] = state["model"], dict(
                     body.get("model") or {})
-            emit("session.model.selected", {"model": dict(state["model"]),
-                                            "previous": previous})
+            if MODE != "silent-model":
+                emit("session.model.selected", {
+                    "model": dict(state["model"]), "previous": previous})
             return self.answer(204)
         if tail == ["agent"]:
             if MODE == "refuse-agent":

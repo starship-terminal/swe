@@ -79,6 +79,10 @@ RECORDED = ("qwen-code", "0.28.0")
 
 # The mode id every recorded agent uses for "plan, do not act".
 PLAN_MODE = "plan"
+# Where plan mode off goes when no mode from before it is known: the one
+# that asks before edits and commands (qwen's ``default``), and never
+# another the agent happens to list first.
+FALLBACK_MODE = "default"
 
 # How long the whole handshake, any later request, one stdin write and
 # the kill steps get.
@@ -290,6 +294,11 @@ class AcpState(SessionCore):
         # its current model id.
         self.model = ""
         self.model_choices: list[dict] = []
+        # The last mode this adapter set, until the agent reports it
+        # back or the turn ends: a ``current_mode_update`` naming any
+        # other mode in that time is the agent's late word on an earlier
+        # set, and showing it would undo the newer change.
+        self._set_mode_id = ""
         # the kind streaming now -> its stream id, and the agent's
         # messageId for it
         self._cur: dict[str, str] = {}
@@ -331,6 +340,7 @@ class AcpState(SessionCore):
     def mode_set(self, mode: str) -> list:
         """The agent took ``session/set_mode`` ``mode``."""
         self.mode = mode
+        self._set_mode_id = mode
         return self.options_events()
 
     def model_set(self, model_id: str) -> list:
@@ -542,8 +552,14 @@ class AcpState(SessionCore):
                 self.key, turn_id=self.tid(), ts=self.now(), **counts))
 
     def _on_mode(self, update: dict, out: list) -> None:
-        if text_of(update.get("currentModeId")):
-            self.mode = update["currentModeId"]
+        mode = text_of(update.get("currentModeId"))
+        if not mode:
+            return
+        if self._set_mode_id:
+            if mode != self._set_mode_id:
+                return  # an earlier set's late report
+            self._set_mode_id = ""
+        self.mode = mode
 
     def permission(self, rpc_id: Any, params: Any) -> Fed:
         """A ``session/request_permission`` request. A request that
@@ -606,6 +622,9 @@ class AcpState(SessionCore):
         if self.done or turn is None or not isinstance(msg, dict):
             return out
         self._end_streams(out)
+        # By now the agent has reported every set it took; one it never
+        # reported no longer holds back its own later changes.
+        self._set_mode_id = ""
         if "error" in msg:
             reason = error_text(msg["error"])
             turn.error, turn.reason = True, reason
@@ -1121,10 +1140,18 @@ class AcpAdapter:
         else:
             if mode_now != PLAN_MODE:
                 return
+            # Back to the mode from before plan mode, else the agent's
+            # ``default``; never the first mode it lists, which could be
+            # one that asks no approvals at all (G32).
             back = self._mode_before if self._mode_before in state.modes \
-                else next((m for m in state.modes if m != PLAN_MODE), "")
-            if back:
-                self._set_mode(back)
+                and self._mode_before != PLAN_MODE else (
+                    FALLBACK_MODE if FALLBACK_MODE in state.modes else "")
+            if not back:
+                raise AdapterError(
+                    "plan mode stays on: there is no mode from before it to "
+                    f"go back to, and this agent lists no {FALLBACK_MODE!r} "
+                    "mode", code="refused")
+            self._set_mode(back)
 
     def _set_mode(self, mode: str, timeout: float | None = None,
                   plan: bool = False) -> None:

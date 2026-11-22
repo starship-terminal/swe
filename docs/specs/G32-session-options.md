@@ -40,11 +40,11 @@ name is recorded; `unverified` means nothing proves it.
 |---|---|---|---|---|---|---|
 | claude_stream (2.1.328, mid-turn 2.1.330) | `model` | yes: `initialize` answer `models[]` (`hello`, every recording). The recordings keep `value` only (the recorder cuts each model to it), so whether these versions send `displayName` is not known; the reader of `displayName` and `description` is proven *(synthetic)* | the CLI's `init` message and the `set_model` answer (resolved ids), shown as the listed id that was asked for, `reported` keeping the CLI's (`set_model`); a model the CLI names by itself (a fallback) shows as it names it *(synthetic)* | at once, `set_model` | `reply_finishes`: the reply in progress ran to its end on the old model, the next turn on the new one (`set_model_mid`) | the CLI's control error: `command.result` `ok: false`, note `claude refused set_model: <its error>` *(synthetic)* |
 | | `permission_mode` | no; a value only | `current_permission_mode`, `init`, `system status`, the `set_permission_mode` answer (`plan_mode`) | not from a page | `reply_finishes` (`plan_mode_mid`) | as above *(synthetic)* |
-| | `plan_mode` | (a flag) | `permission_mode` is `plan`; the CLI leaving it after an approved plan (`plan_approve`) | at once, `set_permission_mode plan` and back | `reply_finishes`: answered at once, the reply ran on to all 150 lines (`plan_mode_mid`) | as above *(synthetic)* |
+| | `plan_mode` | (a flag) | `permission_mode` is `plan`; the CLI leaving it after an approved plan (`plan_approve`) | at once, `set_permission_mode plan`; off goes back to the mode from before plan, or `default` | `reply_finishes`: answered at once, the reply ran on to all 150 lines (`plan_mode_mid`) | as above *(synthetic)* |
 | | `effort` | | not offered: a spawn flag only, no control request (G7) | | | `unsupported` receipt |
 | acp (qwen-code 0.28.0) | `model` | yes: `session/new` `models.availableModels` (`modelId`, `name`, `description`) (`model`) | `currentModelId`, then each `session/set_model` the agent took (`model`) | at once | `unverified`: taken mid-prompt and the reply went on (`model_mid`), but the recording's agent lists one model, so no switch could show | an unlisted value: `bad_request` from the adapter before anything is sent *(synthetic)*; the agent's own JSON-RPC error for one sent anyway (`model`) |
 | | `permission_mode` | no; a value only (the agent's list holds `yolo` and `auto`) | `currentModeId`, each `session/set_mode` taken (`plan_mode`); `current_mode_update` *(synthetic)* | not from a page | `reply_finishes`: taken mid-prompt, the reply ran on (939 chunks after) and ended `end_turn` (`plan_mode_mid`) | an unknown mode: the agent's error (`plan_mode`) |
-| | `plan_mode` | (a flag) | the mode is `plan` (`plan_mode`) | at once, `session/set_mode` | `reply_finishes` (`plan_mode_mid`) | as above |
+| | `plan_mode` | (a flag) | the mode is `plan` (`plan_mode`) | at once, `session/set_mode plan`; off goes back to the mode from before plan, or `default` when the agent lists it; with neither, off is refused (`refused`) and the mode left alone, never the first mode listed (*(synthetic)*: a fake whose list starts with `yolo`) | `reply_finishes` (`plan_mode_mid`) | as above |
 | | `effort` | | not offered: no wire form | | | `unsupported` |
 | codex_appserver (0.170.0; list 0.171.0) | `model` | yes: `model/list`, asked after the start (`model`, `displayName`; one page) (`model_list`) | the `thread/start` answer's `model`, then each value `set_option` kept: the model the next turn uses (`options`) | with the next `turn/start` | `next_turn`: nothing is sent until then, and the server keeps it for later turns (`options`) | none when set; a model the provider lacks fails the next turn (G16 `error`) |
 | | `effort` | no (`model/list` names efforts per model; only ids and names were kept) | the answer's `reasoningEffort`, then each kept value (`options`) | next `turn/start` | `next_turn` | as above |
@@ -52,7 +52,7 @@ name is recorded; `unverified` means nothing proves it.
 | | `plan_mode` | | not offered (experimental API only) | | | `unsupported` |
 | opencode_serve 2.3.2 | `model` | yes: `GET /api/model` (`providerID`, `id`, `name`), as `provider/model` refs, asked after the start; `/api/config/providers` is 404 on 2.x (`providers`) | the session's `model` ref as `provider/model`, each `POST .../model` taken (`options`); `session.model.selected` *(synthetic)*. A model the server takes but cannot run shows as the value until the next turn fails (`error`) | at once | `reply_finishes`: the step in progress ran on the old model, the next turn on the new (`model_mid`) | a name with no provider: `bad_request` *(synthetic)*; any other is taken and fails the next turn (`error`) |
 | | `effort` | no (the list's variants were not kept) | the model ref's `variant` (`options`) | at once, with the model | `reply_finishes`: the same request as a model change | no model yet: `bad_request` *(synthetic)* |
-| | `plan_mode` | (a flag) | the session's agent is `plan`, as each `POST .../agent` and `session.agent.selected` after it say (`plan_mode`, `plan_mode_mid`); the server switching agent by itself *(synthetic)* | at once, `POST .../agent` | `reply_finishes`: the step in progress ran to its end as `build`, then the server ran one more step, as `plan`, in the same execution (`plan_mode_mid`) | the server's HTTP error *(synthetic)* |
+| | `plan_mode` | (a flag) | the session's agent is `plan`, as each `POST .../agent` and `session.agent.selected` after it say (`plan_mode`, `plan_mode_mid`); the server switching agent by itself *(synthetic)* | at once, `POST .../agent plan`; off goes back to the agent from before plan, or `build` | `reply_finishes`: the step in progress ran to its end as `build`, then the server ran one more step, as `plan`, in the same execution (`plan_mode_mid`) | the server's HTTP error *(synthetic)* |
 | | `permission_mode` | | not offered: rules, not a mode (G16) | | | `unsupported` |
 
 Every adapter emits `session.options` after `session.caps` and
@@ -172,6 +172,7 @@ value.
 | A change while the agent is parked or down | the keeper's own `session.options` with the value the next start will use (and plan mode off after a permission mode, as `spec.json` records), then the result `applies when the agent starts`; that start's own event then says what the agent made of it |
 | The agent restarts, or a new keeper resumes | the new adapter's event at start; a keeper whose agent does not start reads the last one back from its log for the welcome |
 | An agent with narrower caps starts | the keeper drops what it no longer offers |
+| The agent's report of an earlier change lands after a newer one | nothing: while a change this adapter sent is not yet reported back (until the end of the turn), opencode ignores a `session.model.selected` or `session.agent.selected` naming anything else, and ACP a `current_mode_update` naming another mode *(synthetic)*. qwen sent no `current_mode_update` after `session/set_mode` in the recordings. Codex has no such report: its values come from `set_option` and the thread's answers only |
 | A hub restart | the keeper's welcome |
 | A satellite session | the copied journal's events, folded |
 
@@ -267,8 +268,11 @@ then sort them first. `recent_models` could stand in for "recent".
 
 ## Limits
 
-- **The permission mode from any signed-in device.** This page never
-  sends it, and no session offers its modes as choices. The hub route
+- **The permission mode from any signed-in device.** The page never
+  names a permission mode, and no session offers its modes as choices.
+  Plan mode off returns to the mode from before plan, or to the
+  fallback the table gives per adapter (Claude `default`, ACP `default`
+  when listed, opencode the `build` agent). The hub route
   is unchanged from G8: any device with a valid token can `POST
   .../command {op: "set_option", name: "permission_mode", value}` and
   switch a running session with no check and no confirmation, and the
@@ -311,6 +315,11 @@ then sort them first. `recent_models` could stand in for "recent".
   snapshot has none until the agent next starts.
 - The selector's `pending` lives in the page: a reload in the middle of
   a change shows the hub's value and no spinner.
+- The page bundle still exports `fetchTransport` and `sessionPath`,
+  the one remaining way for page code to post a command itself. The
+  view changes options only through `setOption`, and a test
+  (`core/options.test.ts`) fails if a file under `src/composer/`,
+  `src/session/` or `src/ui/` names the command route.
 
 ## Interface changes to earlier milestones
 

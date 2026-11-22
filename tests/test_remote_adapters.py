@@ -5296,22 +5296,17 @@ class TestOpencodeAdapterOptions(_OpencodeCase):
         adapter.set_option("model", "other/m2")
         self.assertEqual(self.sent()[-1]["body"], {"model": {
             "providerID": "other", "id": "m2", "variant": "high"}})
-        # Each change is said with the value the server took (its own
-        # session.model.selected says it again, and may land after the
-        # next change: the values said are only ever ones it took), and
-        # the last change is said.
-        last = sink.wait_for(lambda e: e["type"] == "session.options" and (
-            e["data"]["options"]["model"]["value"],
-            e["data"]["options"]["effort"]["value"]) == ("other/m2", "high"))
-        self.assertIsNotNone(last)
+        # Each change is said once, with the value the server took. The
+        # server's own session.model.selected for the first change may
+        # land after the second was posted: it is ignored, so the last
+        # word stays the second change. A turn run to its end makes sure
+        # both reports have come in.
+        self.wait_turn(sink, adapter.send_turn(TurnInput("go")))
         said = [(e["data"]["options"]["model"]["value"],
                  e["data"]["options"]["effort"]["value"])
-                for e in sink.events[before:]]
-        self.assertEqual({e["type"] for e in sink.events[before:]},
-                         {"session.options"})
-        self.assertLessEqual(set(said), {("prov/m1", "high"),
-                                         ("other/m2", "high")})
-        self.assertEqual(said[0], ("prov/m1", "high"))
+                for e in sink.events[before:]
+                if e["type"] == "session.options"]
+        self.assertEqual(said, [("prov/m1", "high"), ("other/m2", "high")])
         with self.assertRaises(AdapterError) as ctx:
             adapter.set_option("model", "no-provider")
         self.assertEqual(ctx.exception.code, "bad_request")

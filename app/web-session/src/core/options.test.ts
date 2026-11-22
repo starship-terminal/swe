@@ -1,5 +1,8 @@
 // G32: a running session's options in the reducer, the store's setOption, and the selector a picker reads
 // (docs/specs/G32-session-options.md).
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { describeOptions, FEATURE_SESSION_OPTIONS } from "./options";
@@ -527,5 +530,41 @@ describe("the gates", () => {
     u.state().start();
     expect(await u.state().setOption("model", "sonnet")).toMatchObject({ ok: false, reason: "not_live" });
     expect([...t.posts, ...u.posts]).toEqual([]);
+  });
+});
+
+describe("the view changes options only through setOption (G32)", () => {
+  // The bundle still exports fetchTransport and sessionPath; nothing the
+  // view is built from may post a command itself.
+  const root = join(__dirname, "..");
+  const sources = (dir: string): string[] =>
+    existsSync(dir)
+      ? readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+          e.isDirectory()
+            ? sources(join(dir, e.name))
+            : /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)
+              ? [join(dir, e.name)]
+              : [],
+        )
+      : [];
+  const banned = [/\bsessionPath\b/, /\bfetchTransport\b/, /["'`/]command["'`]/, /\bset_option\b/];
+
+  it("finds nothing under composer, session or ui that names the command route", () => {
+    const files = ["composer", "session", "ui"].flatMap((d) => sources(join(root, d)));
+    expect(files.length).toBeGreaterThan(0);
+    const found = files.flatMap((f) =>
+      banned.filter((re) => re.test(readFileSync(f, "utf8"))).map((re) => `${f}: ${re}`),
+    );
+    expect(found).toEqual([]);
+  });
+
+  it("would catch a direct post", () => {
+    const bad = [
+      'transport.postJson(sessionPath(key, "x"), body);',
+      "const t = fetchTransport({ baseUrl: '' });",
+      "fetch(`/v1/sessions/${key}/command`, { method: 'POST' });",
+      'post({ op: "set_option", name: "model" });',
+    ];
+    for (const [i, re] of banned.entries()) expect(re.test(bad[i] ?? ""), String(re)).toBe(true);
   });
 });

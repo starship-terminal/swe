@@ -1,6 +1,6 @@
 {
   "hash_rule": "app/web-session/scripts/source-hash.mjs",
-  "source_hash": "b615778a628a60a781a5ae783908865679dcadb636d8cb3b5bf8a61b317dda84",
+  "source_hash": "eab7d333e6683188be32337576c9d7f8f874b2570164936e5465cacec107ae6d",
   "sources": {
     "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
     "package.json": "cb9b7879ea6c06714a7ca2fe19e1d3de1eef288fab335122c39db4037073781d",
@@ -18,7 +18,7 @@
     "src/core/generated/session-v2.ts": "8d51ffb5681508064f924ffd9b412e3da598f018c952a61c33f02bed749301e3",
     "src/core/hook.test.ts": "f2666c37f40e6046f8a292b9d57433222776c28834d2a4a98317bb6b042b3ba7",
     "src/core/index.ts": "fe2438e66366afd5d3fbdd1f8136f6b09e959e543df4beff3ef2103ea36b1db1",
-    "src/core/options.test.ts": "77a217cb18caa1c70c2627d1314e6791d1ecca6ff86b2e7a985d225c0bfb7141",
+    "src/core/options.test.ts": "caf7eee3da0d7ac372bb85fd1c87a5f1b1a911b23d17a6dcd2fa9b5904398b98",
     "src/core/options.ts": "118a551aef03779fecc1903d570dea291ab949e81904e3fa4a59f99f3721f6e1",
     "src/core/outbox-keeper.test.ts": "3ed2f974eb3a6f2817a284b278d7afc51f4c80bb13940d712644418f32e9d83f",
     "src/core/outbox-storage.ts": "2d3f82609e78c07375a6531a63603d842a15e6049b890f31651e77fd6387aecf",

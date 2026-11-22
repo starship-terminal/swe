@@ -1280,11 +1280,16 @@ class Keeper:
         opencode) says the value first and the list when it comes, if it
         comes: until then an option keeps the list it had, so a restart
         or a late or failed list never blanks the picker (G32). Called
-        on the adapter's thread; reads one reference."""
+        on the adapter's thread; reads one reference. Only the model
+        list is carried: it is the only list sent after the start, and a
+        list of another option in an older log (modes, policies) must
+        not come back."""
         before = self._shown_options
         shown = dict(event["data"]["options"])
         carried = False
         for name, option in shown.items():
+            if name != "model":
+                continue
             old = before.get(name)
             if isinstance(option, dict) and "choices" not in option \
                     and isinstance(old, dict) and old.get("choices"):

@@ -429,6 +429,12 @@ class ServeState(SessionCore):
         self.agent = ""
         # The server's models, as ``session.options`` choices (G32).
         self.model_choices: list[dict] = []
+        # The last model ref and agent this adapter posted, until the
+        # server reports them back (or the execution ends): a report of
+        # anything else in that time is the server's late word on an
+        # earlier post, and showing it would undo the newer change.
+        self._posted_model: dict | None = None
+        self._posted_agent = ""
         # our turn id -> the id of its user message, for a revert
         self.turn_messages: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -607,12 +613,14 @@ class ServeState(SessionCore):
         """The server took ``POST .../model`` ``ref``."""
         if isinstance(ref, dict):
             self.model = dict(ref)
+            self._posted_model = dict(ref)
         return self.options_events()
 
     def agent_selected(self, agent: Any) -> list:
         """The server took ``POST .../agent`` ``agent``."""
         if text_of(agent):
             self.agent = agent
+            self._posted_agent = agent
         return self.options_events()
 
     def _ensure_turn(self, out: list) -> None:
@@ -675,6 +683,9 @@ class ServeState(SessionCore):
         # A steer still in the inbox stays there: the server delivers it
         # to the execution it starts next (``_ensure_turn``).
         self.finish_turn(fed.events, status)
+        # By now the server has reported every post it took; a report it
+        # never sent no longer holds back its own later changes.
+        self._posted_model, self._posted_agent = None, ""
 
     def _fail(self, out: list, failure: dict, fallback: str) -> None:
         turn = self.turn
@@ -879,12 +890,33 @@ class ServeState(SessionCore):
             self.key, turn_id=self.tid(), ts=self.now()))
 
     def _on_model(self, data: dict, fed: Fed) -> None:
-        if isinstance(data.get("model"), dict):
-            self.model = dict(data["model"])
+        model = data.get("model")
+        if not isinstance(model, dict):
+            return
+        if self._posted_model is not None:
+            if not _same_ref(model, self._posted_model):
+                return  # an earlier post's late report
+            self._posted_model = None
+        self.model = dict(model)
 
     def _on_agent(self, data: dict, fed: Fed) -> None:
-        if text_of(data.get("agent")):
-            self.agent = data["agent"]
+        agent = text_of(data.get("agent"))
+        if not agent:
+            return
+        if self._posted_agent:
+            if agent != self._posted_agent:
+                return  # an earlier post's late report
+            self._posted_agent = ""
+        self.agent = agent
+
+
+def _same_ref(a: dict, b: dict) -> bool:
+    """Whether two model refs name the same model and variant."""
+    def key(ref: dict) -> tuple:
+        return (text_of(ref.get("providerID")),
+                text_of(ref.get("id") or ref.get("modelID")),
+                text_of(ref.get("variant")))
+    return key(a) == key(b)
 
 
 _EVENTS = {

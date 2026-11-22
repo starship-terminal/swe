@@ -19,9 +19,10 @@ from swe.remote import protocol, sync as sync_mod
 from swe.remote.adapters import acp, claude_wire, codex_wire, opencode_wire
 from swe.remote.adapters import events as ev
 from swe.remote.adapters import fake, options as opts
-from swe.remote.adapters.base import AdapterError, Caps
+from swe.remote.adapters.base import AdapterError, Caps, TurnInput
 from swe.remote.adapters.core import ALL_CAPS
 
+from tests.test_remote_acp import _AcpAdapterCase
 from tests.test_remote_adapters import _CodexCase, _OpencodeCase
 from tests.test_remote_keeper import KeeperCase, S, kill
 from tests.test_remote_sse_v2 import V2Case
@@ -241,6 +242,116 @@ class TestOpencode(unittest.TestCase):
         self.assertEqual(_options(out)[-1]["plan_mode"]["value"], False)
 
 
+class TestOpencodeLateReports(unittest.TestCase):
+    """A server report of an earlier post, landing after a newer post,
+    never undoes the newer change (G32)."""
+
+    def state(self):
+        st = opencode_wire.ServeState("oc:x", clock=lambda: 1.0,
+                                      run_id="aaaa0001")
+        st.session_id = "ses_1"
+        st.model = {"providerID": "p", "id": "m0"}
+        st.start_events(ALL_CAPS.narrowed(opencode_wire.PROVEN), "ses_1")
+        return st
+
+    def report(self, st, model_id):
+        return st.feed({"type": "session.model.selected", "data": {
+            "sessionID": "ses_1",
+            "model": {"providerID": "p", "id": model_id}}}).events
+
+    def test_a_late_report_of_the_earlier_model_is_ignored(self):
+        st = self.state()
+        said = st.model_selected({"providerID": "p", "id": "a"})
+        said += st.model_selected({"providerID": "p", "id": "b"})
+        said += self.report(st, "a")
+        said += self.report(st, "b")
+        self.assertEqual(_values(said, "model"), ["p/a", "p/b"])
+        self.assertEqual(st.model["id"], "b")
+        # Once its post is reported back, the server's own change shows.
+        self.assertEqual(_values(self.report(st, "c"), "model"), ["p/c"])
+
+    def test_when_the_newer_report_never_comes_the_newer_stays(self):
+        st = self.state()
+        said = st.model_selected({"providerID": "p", "id": "a"})
+        said += st.model_selected({"providerID": "p", "id": "b"})
+        said += self.report(st, "a")
+        self.assertEqual(_values(said, "model"), ["p/a", "p/b"])
+        self.assertEqual(_options(said)[-1]["model"]["value"], "p/b")
+
+    def test_a_late_agent_report_is_ignored(self):
+        st = self.state()
+        said = st.agent_selected("plan") + st.agent_selected("build")
+        said += st.feed({"type": "session.agent.selected", "data": {
+            "sessionID": "ses_1", "agent": "plan"}}).events
+        self.assertEqual(_values(said, "plan_mode"), [True, False])
+
+
+class TestAcpLateModeReports(unittest.TestCase):
+    """The same for ACP's ``current_mode_update`` (G32)."""
+
+    def test_a_late_mode_report_is_ignored_until_the_set_one_comes(self):
+        st = acp.AcpState("acp:x", clock=lambda: 1.0, run_id="aaaa0001")
+        st.session_id = "s1"
+        st.modes = ["default", "plan"]
+        st.mode = "default"
+        st.start_events(ALL_CAPS.narrowed(acp.PROVEN), "s1")
+
+        def update(mode):
+            return st.update({"sessionId": "s1", "update": {
+                "sessionUpdate": "current_mode_update",
+                "currentModeId": mode}}).events
+
+        said = st.mode_set("plan") + st.mode_set("default")
+        said += update("plan")
+        self.assertEqual(_values(said, "plan_mode"), [True, False])
+        self.assertEqual(st.mode, "default")
+        update("default")
+        self.assertEqual(_values(update("plan"), "plan_mode"), [True],
+                         "the agent's own change shows once reported back")
+
+
+class TestKeeperCarriesTheModelList(unittest.TestCase):
+    """A value-only ``session.options`` keeps the model list shown
+    before it, and only that list (G32)."""
+
+    def carry(self, before, options):
+        from swe.remote.keeper.process import Keeper
+        k = object.__new__(Keeper)
+        k.session_key = "acp:x"
+        k._shown_options = before
+        return Keeper._carry_choices(
+            k, ev.session_options("acp:x", options))["data"]["options"]
+
+    def test_the_model_list_is_carried(self):
+        listed = [{"id": "m1"}, {"id": "m2"}]
+        out = self.carry({"model": {"value": "m1", "mid_turn": "next_turn",
+                                    "choices": listed}},
+                         {"model": {"value": "m2", "mid_turn": "next_turn"}})
+        self.assertEqual(out["model"]["choices"], listed)
+
+    def test_a_permission_list_in_an_older_log_is_not_carried(self):
+        modes = [{"id": m} for m in ("plan", "default", "auto", "yolo")]
+        out = self.carry(
+            {"permission_mode": {"value": "default",
+                                 "mid_turn": "reply_finishes",
+                                 "choices": modes}},
+            {"permission_mode": {"value": "default",
+                                 "mid_turn": "reply_finishes"}})
+        self.assertNotIn("choices", out["permission_mode"])
+
+
+class TestOpencodeAdapterLateReports(_OpencodeCase):
+    def test_a_model_the_server_never_reports_back_stays_shown(self):
+        adapter, sink, _sid = self.started("silent-model",
+                                           spec={"model": "prov/m1"})
+        adapter.set_option("model", "prov/m2")
+        adapter.set_option("model", "prov/m3")
+        self.wait_turn(sink, adapter.send_turn(TurnInput("go")))
+        said = [e["data"]["options"]["model"]["value"]
+                for e in sink.events if e["type"] == "session.options"]
+        self.assertEqual(said[-1], "prov/m3")
+
+
 def _notes(adapter: str, version: str, scenario: str) -> dict:
     return _lines(adapter, version, scenario)[0]["notes"]
 
@@ -409,6 +520,22 @@ class TestOpencodeListAfterStart(_OpencodeCase):
                               timeout=10.0)
         self.assertIsNotNone(found, "the late list still arrives")
 
+    def test_a_list_that_arrives_for_a_closed_adapter_is_dropped(self):
+        import types
+        adapter, sink, _sid = self.started()
+        seen: list[int] = []
+
+        def call(request):
+            adapter.close()  # closed while the list was on its way
+            seen.append(len(sink.events))
+            return types.SimpleNamespace(ok=True, body={"data": [
+                {"id": "model-1", "providerID": "fake", "name": "One"}]})
+
+        adapter._call = call
+        adapter._fetch_models()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(sink.events[seen[0]:], [], "nothing after the close")
+
     def test_a_server_with_no_list_leaves_the_value_alone(self):
         adapter, sink, _sid = self.started()
         self.assertIsNone(sink.wait_for(
@@ -436,11 +563,50 @@ class TestCodexListAfterStart(_CodexCase):
             lambda e: e["type"] == "session.options"
             and "choices" in e["data"]["options"]["model"], timeout=10.0))
 
+    def test_a_list_that_arrives_for_a_closed_adapter_is_dropped(self):
+        adapter, sink, _sid = self.started()
+        seen: list[int] = []
+
+        def call(message, *a, **kw):
+            adapter.close()  # closed while the list was on its way
+            seen.append(len(sink.events))
+            return {"data": [{"id": "gpt-a", "displayName": "GPT A"}]}
+
+        adapter._call = call
+        adapter._fetch_models()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(sink.events[seen[0]:], [], "nothing after the close")
+
     def test_a_refused_list_leaves_the_value_alone(self):
         _adapter, sink, _sid = self.started()
         self.assertIsNone(sink.wait_for(
             lambda e: e["type"] == "session.options"
             and "choices" in e["data"]["options"]["model"], timeout=0.5))
+
+
+class TestAcpPlanModeOff(_AcpAdapterCase):
+    """Plan mode off goes back to the mode from before it, else to the
+    agent's ``default``, never to the first mode it lists (G32)."""
+
+    def test_an_agent_listing_yolo_first_is_not_sent_to_it(self):
+        adapter, _sink, _sid = self.started("yolo-first")
+        self.assertEqual(adapter._state.mode, "plan")
+        with self.assertRaises(AdapterError) as ctx:
+            adapter.set_option("plan_mode", False)
+        self.assertEqual(ctx.exception.code, "refused")
+        modes = [m["params"]["modeId"] for m in self.sent()
+                 if m.get("method") == "session/set_mode"]
+        self.assertEqual(modes, [], "nothing is sent")
+
+    def test_with_no_mode_from_before_it_goes_to_default(self):
+        adapter, _sink, _sid = self.started()
+        adapter._mode_before = ""
+        adapter.set_option("plan_mode", True)
+        adapter._mode_before = ""
+        adapter.set_option("plan_mode", False)
+        modes = [m["params"]["modeId"] for m in self.sent()
+                 if m.get("method") == "session/set_mode"]
+        self.assertEqual(modes[-1], "default")
 
 
 class TestSteerEffect(unittest.TestCase):
