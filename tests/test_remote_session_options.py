@@ -473,19 +473,22 @@ class TestOpencodeAdapterLateReports(_OpencodeCase):
         import threading
         import types
         adapter, sink, _sid = self.started()
-        gate = threading.Event()
+        gate, reading = threading.Event(), threading.Event()
         asked: list[int] = []
 
         def call(request, *a, **kw):
             asked.append(1)
             if len(asked) == 1:
+                reading.set()
                 gate.wait(5.0)  # the first read is slow
             return types.SimpleNamespace(ok=True, data={
                 "agent": "plan", "model": {"providerID": "p", "id": "m"}})
 
         adapter._call = call
-        for _ in range(5):
-            adapter._events_lost()
+        adapter._events_lost()
+        self.assertTrue(reading.wait(5.0), "the first read began")
+        for _ in range(4):
+            adapter._events_lost()  # while it is out
         gate.set()
         deadline = time.monotonic() + 5.0
         while adapter._rereading and time.monotonic() < deadline:
