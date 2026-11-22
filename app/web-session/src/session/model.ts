@@ -86,7 +86,8 @@ function deliveredIds(items: readonly TimelineItem[]): Set<string> {
  * `command.result` removes the entry (or, if that result is lost, until the entry ends unconfirmed), and
  * nothing is guessed from the text. See "Legacy sends" in the G12 spec.
  *
- * A send the hub only queued is still shown here: the queue's own tray is the composer milestone's.
+ * A send the hub only queued is shown here until the queue lists it; then the composer's queued tray (G13) draws it
+ * and `Timeline` leaves the bubble out.
  */
 export function visibleSends(sends: readonly SendView[], items: readonly TimelineItem[]): SendView[] {
   if (sends.length === 0) return [];

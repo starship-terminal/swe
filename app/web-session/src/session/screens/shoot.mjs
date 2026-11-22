@@ -27,6 +27,46 @@ const SCENES = {
   "outbox-states": "scene=sends",
   "outbox-storage-down": "scene=sends-storage-down",
   "outbox-loading": "scene=sends-loading",
+  "composer-empty": "scene=composer-empty",
+  "composer-typing": "scene=composer-typing",
+  "composer-multiline": "scene=composer-multiline",
+  "composer-sending": "scene=composer-sending",
+  "composer-busy": "scene=composer-busy",
+  "composer-queued": "scene=composer-queued",
+  "composer-queued-edit": "scene=composer-queued-edit",
+  "composer-queued-many": "scene=composer-queued-many",
+  "composer-approval-confirm": "scene=composer-approval-confirm",
+  "composer-menu-send": "scene=composer-menu-send",
+  "composer-menu-attach": "scene=composer-menu-attach",
+  "composer-menu-steer-stops": "scene=composer-menu-steer-stops",
+  "composer-menu-steer-after-tool": "scene=composer-menu-steer-after-tool",
+  "composer-menu-steer-next-turn": "scene=composer-menu-steer-next-turn",
+  "composer-queued-menu": "scene=composer-queued-menu",
+  "composer-error-note": "scene=composer-error-note",
+  "composer-approval-error": "scene=composer-approval-error",
+  "composer-approval-reloaded": "scene=composer-approval-reloaded",
+  "composer-over-code": "scene=composer-over-code",
+  "composer-over-diff": "scene=composer-over-diff",
+  "composer-keyboard": "scene=composer-keyboard",
+  "composer-keyboard-approval": "scene=composer-keyboard-approval",
+  "composer-approval": "scene=composer-approval",
+  "composer-approval-offline": "scene=composer-approval-offline",
+  "composer-input-text": "scene=composer-input-text",
+  "composer-input-choice": "scene=composer-input-choice",
+  "composer-offline": "scene=composer-offline",
+  "composer-storage-down": "scene=composer-storage-down",
+  "composer-loading": "scene=composer-loading",
+  "composer-no-steer": "scene=composer-no-steer",
+  "composer-read-only": "scene=composer-read-only",
+  "composer-attachments": "scene=composer-attachments",
+  "composer-hostile": "scene=composer-hostile",
+  "composer-menu-steer-approval": "scene=composer-menu-steer-approval",
+  "composer-menu-send-multiline": "scene=composer-menu-send-multiline",
+  "composer-queued-conflict": "scene=composer-queued-conflict",
+  "composer-queued-remove": "scene=composer-queued-remove",
+  "composer-hostile-labels": "scene=composer-hostile-labels",
+  "composer-acp-approval": "scene=composer-acp-approval",
+  "composer-acp-many": "scene=composer-acp-many",
 };
 const SIZES = { desktop: { width: 1280, height: 800, mobile: false }, phone: { width: 390, height: 844, mobile: true } };
 const BASE = process.env.SCREENS_URL ?? "http://localhost:5199/";
@@ -97,11 +137,15 @@ try {
         await call("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: size.mobile });
         await call("Emulation.setTouchEmulationEnabled", { enabled: size.mobile });
         await call("Page.navigate", { url: `${BASE}?${query}&theme=${theme}` });
-        for (let i = 0; i < 100; i++) {
-          const { result } = await call("Runtime.evaluate", { expression: "window.__ready === true", returnByValue: true });
-          if (result.value === true) break;
-          await sleep(100);
+        // The scene is ready when the page says so. A scene that threw, or never got ready, stops the run: it would be a picture of a wrong state.
+        let ready = false;
+        for (let i = 0; i < 100 && !ready; i++) {
+          const { result } = await call("Runtime.evaluate", { expression: "window.__failed ? 'failed: ' + window.__failed : window.__ready === true ? 'ready' : ''", returnByValue: true });
+          if (result.value === "ready") ready = true;
+          else if (typeof result.value === "string" && result.value.startsWith("failed")) throw new Error(`scene ${name} (${sizeName}, ${theme}) ${result.value}`);
+          else await sleep(100);
         }
+        if (!ready) throw new Error(`scene ${name} (${sizeName}, ${theme}) was not ready after 10 seconds`);
         await sleep(400); // the last animation settles
         const shot = await call("Page.captureScreenshot", { format: "png" });
         const file = join(out, `${name}-${sizeName}-${theme}.png`);

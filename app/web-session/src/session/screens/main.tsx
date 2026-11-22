@@ -11,6 +11,7 @@ import { MemoryStorage } from "../../core/outbox-storage";
 import type { OutboxView } from "../../core/outbox";
 import type { Environment, Timers } from "../../core/supervisor";
 import type { StreamHandlers, Transport } from "../../core/transport";
+import { composerScene, seedDraft } from "../../composer/scenes";
 import { SessionView } from "../SessionView";
 
 const KEY = "claude:session-1";
@@ -95,11 +96,11 @@ const store = createSessionStore({
   timers: frozen,
   random: () => 0,
   environment: env,
-  openStorage: async () => new MemoryStorage(scene === "sends-storage-down" ? "IndexedDB failed (connection lost)" : ""),
+  openStorage: async () => new MemoryStorage(scene === "sends-storage-down" || scene === "composer-storage-down" ? "IndexedDB failed (connection lost)" : ""),
   newId: () => `w-${Math.random().toString(16).slice(2, 10)}`,
 });
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function entry(over: Partial<OutboxEntry> & Pick<OutboxEntry, "commandId" | "text" | "status">): OutboxEntry {
   return { session: KEY, attachments: [], mode: "queue", createdAt: Date.now(), attempts: 1, ...over };
@@ -124,10 +125,13 @@ function showSends(entries: OutboxEntry[], over: Partial<OutboxView> = {}): void
 }
 
 async function run(): Promise<void> {
+  seedDraft(scene, KEY);
   store.getState().start();
   const base = fixture("default");
   const all = base.connections[0]?.frames ?? [];
   await sleep(30);
+  // G13: the composer's own scenes (src/composer/scenes.ts) script the whole state themselves.
+  if (await composerScene(scene, { key: KEY, store, transport, env, fixture, showSends, entry, sleep })) return;
   switch (scene) {
     case "loading":
       break;
@@ -221,4 +225,8 @@ createRoot(document.getElementById("root") as HTMLElement).render(
     <SessionView sessionKey={KEY} store={store} />
   </StrictMode>,
 );
-void run().then(clicks).then(() => Object.assign(window, { __ready: true }));
+// A scene that throws (it never reached the state it is for) says so, and the shoot stops on it: no picture of a wrong state.
+void run()
+  .then(clicks)
+  .then(() => Object.assign(window, { __ready: true }))
+  .catch((error: unknown) => Object.assign(window, { __failed: String(error) }));

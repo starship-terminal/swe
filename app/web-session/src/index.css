@@ -42,6 +42,7 @@
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-divider: var(--row-divider);
+  --color-glass-border: var(--glass-border);
 
   /* Roles */
   --color-accent: var(--accent);
@@ -60,6 +61,8 @@
   --radius-field: var(--field-radius);
   --radius-block: var(--block-radius);
   --radius-dialog: var(--dialog-radius);
+  --radius-bar: var(--bar-radius);
+  --radius-glass: var(--glass-radius);
   --radius-full: 9999px;
 
   /* Fonts: the system stack; mono is for code only (lint:tokens). */
