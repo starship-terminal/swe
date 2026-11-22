@@ -51,6 +51,8 @@ async function dockSays(c: SceneContext, words = "You can answer now."): Promise
     if ((document.querySelector("[data-dock-status]")?.textContent ?? "").startsWith(words)) return;
     await c.sleep(50);
   }
+  // A scene that never reaches the state it is for must fail, not be shot as if it had.
+  throw new Error(`the dock never said "${words}"`);
 }
 
 /** Press a dock answer by the id the agent gave it (its name holds two texts when it asks twice, so a name will not find it). */
@@ -148,7 +150,8 @@ export function seedDraft(scene: string, key: string): void {
   // So are the answers a scene posted: one scene must not show another's. The reload scene starts with one, as after a reload.
   window.localStorage.removeItem(`swe.sv.answer.v1:${key}`);
   if (scene === "composer-approval-reloaded") {
-    window.localStorage.setItem(`swe.sv.answer.v1:${key}`, JSON.stringify({ "r1\u00008": { d: "allow", l: "Allow", o: "taken", r: "held", a: Date.now() } }));
+    // A request is named by the journal's epoch (the fixture's is 0), its id and its seq.
+    window.localStorage.setItem(`swe.sv.answer.v1:${key}`, JSON.stringify({ "0\u0000r1\u00008": { d: "allow", l: "Allow", o: "taken", r: "held", a: Date.now() } }));
   }
   if (scene !== "composer-attachments") return;
   writeDraft(key, {
