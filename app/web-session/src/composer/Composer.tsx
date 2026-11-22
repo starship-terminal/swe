@@ -5,7 +5,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Comp
 import { readOnlyReason, useSessionStore, type SessionStore } from "../core";
 import { asArrived } from "../session/format";
 import { cx, Icon, Spinner, StateArrow, type IconName } from "../ui";
-import { dropDraftsOnSignOut, FILES_KEPT, sweepDrafts, type StagedFile } from "./draft";
+import { dropDraftsOnSignOut, fileKept, FILES_KEPT, sweepDrafts, type StagedFile } from "./draft";
 import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { enterAction, touchScreen } from "./keys";
@@ -28,6 +28,8 @@ const MAX_BOX_PX = 200;
 const ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.heic,.pdf,.txt,.md,.csv,.json,.log,.diff,.patch";
 /** How long the primary button is held, while a reply runs, before its menu opens. */
 export const HOLD_MS = 450;
+/** The default wait for an accepted answer or edit to show. */
+export const CONFIRM_MS = 15_000;
 
 export interface ComposerProps {
   store: SessionStore;
@@ -38,6 +40,12 @@ export interface ComposerProps {
   settleMs?: number;
   /** How long the primary button is held before its menu opens. */
   holdMs?: number;
+  /**
+   * How long an accepted answer or edit waits to be seen taking effect (an answer's request ending, an edit showing in the
+   * queue) before the view stops waiting and says it was not confirmed. The hub accepts a command before an agent on
+   * another machine has run it, and the store has no later result for these, so what the view sees is all it has.
+   */
+  confirmMs?: number;
   /**
    * The slot between the box and the buttons, for the model chip a later milestone brings (the store has no
    * action to set a model yet, so nothing is drawn there now; see the spec).
@@ -161,11 +169,13 @@ function RoundButton({
   );
 }
 
-function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Omit<ComposerProps, "chip">> & { chip: ReactNode }) {
+function Form({ store, sessionKey, upload, settleMs, holdMs, confirmMs, chip }: Required<Omit<ComposerProps, "chip">> & { chip: ReactNode }) {
   const { draft, latest, update, clear, kept } = useDraft(sessionKey);
   const { host, stack } = useFloating();
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Attachments the restored draft lost because the hub no longer keeps them: said once, until the person dismisses it.
+  const [dropped, setDropped] = useState<string[]>(() => draft.dropped ?? []);
   const [uploads, setUploads] = useState<Uploading[]>([]);
   const [stopState, setStopState] = useState<"idle" | "sending" | "sent">("idle");
   const [menu, setMenu] = useState<"attach" | "send" | null>(null);
@@ -255,6 +265,14 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
     if (guard.current) return;
     guard.current = true;
     const sent = latest.current;
+    // A file the hub has probably deleted (the page was left open for days) is taken out, the text is kept, and nothing is sent.
+    const stale = sent.files.filter((file) => !fileKept(file));
+    if (stale.length > 0) {
+      guard.current = false;
+      update((now) => ({ ...now, files: now.files.filter((file) => fileKept(file)) }));
+      setDropped(stale.map((file) => file.name));
+      return;
+    }
     setSubmitting(true);
     setNotice(null);
     try {
@@ -343,7 +361,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
       setUploads((now) => [...now, { id, name: file.name, error: null }]);
       upload(file, controller.signal)
         .then((staged: StagedFile) => {
-          update((now) => ({ ...now, files: [...now.files, staged] }));
+          update((now) => ({ ...now, files: [...now.files, { ...staged, at: staged.at ?? Date.now() }] }));
           setUploads((now) => now.filter((entry) => entry.id !== id));
         })
         .catch((error: unknown) => {
@@ -416,11 +434,19 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
         {/* While the send menu is open it and the bar can use the whole height limit: what is above keeps at least 5 rem (the request's answers),
             the menu scrolls inside what is left of it, and the stack may stand a little over its limit rather than hide a waiting request. */}
         <div ref={above} className={cx("flex flex-col gap-2 overflow-y-auto", menu === "send" ? "min-h-20 empty:min-h-0" : "min-h-0")} data-composer-above>
-          {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null ? (
+          {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null || dropped.length > 0 ? (
             <div className="flex shrink-0 flex-col gap-1.5">
               {!persistent && outboxNote !== "" ? (
                 <p className="sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs text-secondary" data-outbox-note role="status">
                   {asArrived(outboxNote)}
+                </p>
+              ) : null}
+              {dropped.length > 0 ? (
+                <p className="sv-glass pointer-events-auto flex items-start gap-2 rounded-glass px-3 py-1.5 text-xs text-secondary" data-dropped-files role="status">
+                  <span className="min-w-0 flex-1 break-words">{`The hub no longer keeps ${plural(dropped.length, "attachment")} from this draft (${dropped.slice(0, 3).map((name) => cut(name, 40).text).join(", ")}${dropped.length > 3 ? ", ..." : ""}), so ${dropped.length === 1 ? "it was" : "they were"} left out. Your text is kept. Attach ${dropped.length === 1 ? "it" : "them"} again.`}</span>
+                  <button aria-label="Dismiss this note" className="shrink-0 underline focus-visible:outline-2 focus-visible:outline-interactive" onClick={() => setDropped([])} type="button">
+                    Dismiss
+                  </button>
                 </p>
               ) : null}
               {kept === "memory" && text !== "" ? (
@@ -446,10 +472,10 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
             </div>
           ) : null}
           <Guard message="The queue could not be shown. Queued messages are still sent when the reply ends." part="tray" resetKey={queue}>
-            <QueueTray onKeep={keep} settleMs={settleMs} store={store} />
+            <QueueTray confirmMs={confirmMs} onKeep={keep} settleMs={settleMs} store={store} />
           </Guard>
           <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-            <RequestDock settleMs={settleMs} store={store} />
+            <RequestDock confirmMs={confirmMs} settleMs={settleMs} store={store} />
           </Guard>
         </div>
         {/* In the stack, between what is above the bar and the bar: it does not cover a request that is waiting (the dock
@@ -617,9 +643,9 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
  * The message bar, the approval and question dock, and the queued tray: everything over the bottom of the
  * timeline. A session that cannot be driven gets a bar with the reason in place of all of it.
  */
-export function Composer({ store, sessionKey, upload, settleMs = SETTLE_MS, holdMs = HOLD_MS, chip = null }: ComposerProps) {
+export function Composer({ store, sessionKey, upload, settleMs = SETTLE_MS, holdMs = HOLD_MS, confirmMs = CONFIRM_MS, chip = null }: ComposerProps) {
   const readOnly = useSessionStore(store, (s) => readOnlyReason(s.session.row ?? null));
   const stage = useMemo<Upload>(() => upload ?? httpUpload(sessionKey), [upload, sessionKey]);
   if (readOnly !== null) return <ReadOnlyBar reason={readOnly} />;
-  return <Form key={sessionKey} chip={chip} holdMs={holdMs} sessionKey={sessionKey} settleMs={settleMs} store={store} upload={stage} />;
+  return <Form key={sessionKey} chip={chip} confirmMs={confirmMs} holdMs={holdMs} sessionKey={sessionKey} settleMs={settleMs} store={store} upload={stage} />;
 }

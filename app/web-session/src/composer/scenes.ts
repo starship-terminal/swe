@@ -134,9 +134,9 @@ export function seedDraft(scene: string, key: string): void {
   writeDraft(key, {
     text: "Here is the failing log and the config I changed. Can you check the retry settings?",
     files: [
-      { ref: "1760000000-aa11bb-build.log", name: "build.log", size: 48213 },
-      { ref: "1760000001-cc22dd-config.json", name: "config.json", size: 912 },
-      { ref: "1760000002-ee33ff-screenshot-of-the-failing-checkout-flow-on-the-staging-site.png", name: "screenshot-of-the-failing-checkout-flow-on-the-staging-site.png", size: 220118 },
+      { ref: "1760000000-aa11bb-build.log", name: "build.log", size: 48213, at: Date.now() },
+      { ref: "1760000001-cc22dd-config.json", name: "config.json", size: 912, at: Date.now() },
+      { ref: "1760000002-ee33ff-screenshot-of-the-failing-checkout-flow-on-the-staging-site.png", name: "screenshot-of-the-failing-checkout-flow-on-the-staging-site.png", size: 220118, at: Date.now() },
     ],
   });
 }

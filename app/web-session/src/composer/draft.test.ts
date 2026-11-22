@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { clearAllDrafts, DRAFT_KEPT_CHARS, DRAFT_MAX_AGE_MS, dropDraftsOnSignOut, forgetMemoryDrafts, readDraft, sweepDrafts, writeDraft } from "./draft";
+import { clearAllDrafts, DRAFT_KEPT_CHARS, DRAFT_MAX_AGE_MS, FILE_MAX_AGE_MS, dropDraftsOnSignOut, forgetMemoryDrafts, readDraft, sweepDrafts, writeDraft } from "./draft";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -8,7 +8,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const file = { ref: "1-a-x.png", name: "x.png", size: 3 };
+const file = { ref: "1-a-x.png", name: "x.png", size: 3, at: Date.now() };
 
 describe("the draft kept for a session", () => {
   it("is read back after a reload, with its files", () => {
@@ -177,5 +177,33 @@ describe("how long a draft is kept", () => {
     expect(readDraft("a").text).toBe("");
     expect(readDraft("b").text).toBe("");
     expect(window.localStorage.getItem("swe.remote")).toBe("pairing");
+  });
+});
+
+describe("the files a draft offers again", () => {
+  const day = 24 * 60 * 60 * 1000;
+
+  it("leaves out a staged file the hub has probably deleted (it keeps them seven days), names it, and keeps the text", () => {
+    const old = { ref: "1-a-old.log", name: "old.log", size: 9, at: Date.now() - 6.5 * day };
+    const fresh = { ref: "2-b-new.log", name: "new.log", size: 9, at: Date.now() - 1 * day };
+    writeDraft("s", { text: "see the logs", files: [old, fresh] });
+    forgetMemoryDrafts();
+    const back = readDraft("s");
+    expect(back.text).toBe("see the logs");
+    expect(back.files.map((f) => f.name)).toEqual(["new.log"]);
+    expect(back.dropped).toEqual(["old.log"]);
+  });
+
+  it("treats a file with no time on it as too old, and offers one just inside the limit", () => {
+    window.localStorage.setItem("swe.sv.draft.v1:s", JSON.stringify({ t: "x", f: [{ ref: "1-a-x", name: "x", size: 1 }, { ref: "2-a-y", name: "y", size: 1, at: Date.now() - FILE_MAX_AGE_MS + 60_000 }], a: Date.now() }));
+    const back = readDraft("s");
+    expect(back.files.map((f) => f.name)).toEqual(["y"]);
+    expect(back.dropped).toEqual(["x"]);
+  });
+
+  it("does the same for the copy a page holds in memory", () => {
+    writeDraft("big", { text: "x".repeat(DRAFT_KEPT_CHARS + 1), files: [{ ref: "1-a-z", name: "z", size: 1, at: Date.now() - 7 * day }] });
+    expect(readDraft("big").files).toEqual([]);
+    expect(readDraft("big").dropped).toEqual(["z"]);
   });
 });

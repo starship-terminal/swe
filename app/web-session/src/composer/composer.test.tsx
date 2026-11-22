@@ -9,6 +9,11 @@ import { SAVE_AFTER_MS } from "./useDraft";
 const sent = (m: ReturnType<typeof mount>) => posts(m, "message");
 const hold = () => vi.fn(() => new Promise<never>(() => {}));
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Wait until something is so, however slow the machine is, then a moment more (a menu's listeners start on the turn after it opens). */
+async function until(done: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !done(); i++) await act(async () => void (await wait(10)));
+  await act(async () => void (await wait(15)));
+}
 
 describe("sending", () => {
   it("posts the message once under one id, clears the box and the kept draft, and keeps the focus", async () => {
@@ -136,6 +141,37 @@ describe("sending", () => {
     expect(sent(m)).toHaveLength(0);
     expect(m.store.getState().outbox.entries).toHaveLength(0);
     expect(box(m).value).toBe("early");
+  });
+});
+
+describe("attachments the hub may have deleted", () => {
+  it("says which a restored draft lost, keeps its text, and can be dismissed", async () => {
+    writeDraft(KEY, { text: "see the logs", files: [{ ref: "1-a-old.log", name: "old.log", size: 9, at: Date.now() - 7 * 864e5 }, { ref: "2-b-new.log", name: "new.log", size: 9, at: Date.now() }] });
+    const m = mount();
+    await idle(m);
+    expect(box(m).value).toBe("see the logs");
+    expect(all(m.el, "[data-file]").map((el) => el.getAttribute("data-file"))).toEqual(["2-b-new.log"]);
+    const note = q(m.el, "[data-dropped-files]") as HTMLElement;
+    expect(text(note)).toContain("old.log");
+    expect(text(note)).toContain("Your text is kept");
+    await click(btn(m, "Dismiss this note"));
+    expect(q(m.el, "[data-dropped-files]")).toBeNull();
+  });
+
+  it("does not send a message that carries a file the hub has probably deleted: it takes the file out, keeps the text, and says so", async () => {
+    const stale = { ref: "1-a-old.log", name: "old.log", size: 9, at: Date.now() - 7 * 864e5 };
+    const m = mount({ props: { upload: async () => stale } });
+    await idle(m);
+    typeText(m, "see the log");
+    const input = q(m.el, 'input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", { configurable: true, value: [new File(["x"], "old.log")] });
+    await settle(() => void input.dispatchEvent(new Event("change", { bubbles: true })));
+    await settle(() => wait(5));
+    await click(btn(m, "Send message"));
+    expect(posts(m, "message")).toHaveLength(0);
+    expect(box(m).value).toBe("see the log");
+    expect(all(m.el, "[data-file]")).toHaveLength(0);
+    expect(text(q(m.el, "[data-dropped-files]"))).toContain("old.log");
   });
 });
 
@@ -430,7 +466,7 @@ describe("while a reply is in progress", () => {
       const main = btn(m, "Queue message") as HTMLButtonElement;
       main.focus();
       fire(main, "pointerdown");
-      await wait(60);
+      await until(() => menuOpen(m) !== null);
       expect(menuOpen(m)).not.toBeNull();
       expect(document.activeElement).not.toBe(main); // the menu took the focus
       await release(main);
@@ -450,7 +486,7 @@ describe("while a reply is in progress", () => {
     typeText(m, "after a hold");
     const main = btn(m, "Queue message") as HTMLButtonElement;
     fire(main, "pointerdown");
-    await wait(60);
+    await until(() => menuOpen(m) !== null);
     fire(main, "pointerout", { relatedTarget: document.body }); // let go over the menu: no pointerup on the button, no click
     await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await click(main); // Enter or Space on the focused button: a click with no pointer
@@ -463,7 +499,7 @@ describe("while a reply is in progress", () => {
     typeText(m, "x");
     const main = btn(m, "Queue message") as HTMLButtonElement;
     fire(main, "pointerdown");
-    await wait(60);
+    await until(() => menuOpen(m) !== null);
     fire(main, "pointercancel");
     await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await tail(main); // a pointer's click that no new pointerdown began is still the hold's tail: not a press
@@ -478,7 +514,7 @@ describe("while a reply is in progress", () => {
     typeText(m, "bare");
     const main = btn(m, "Queue message") as HTMLButtonElement;
     fire(main, "pointerdown");
-    await wait(60);
+    await until(() => menuOpen(m) !== null);
     fire(main, "pointerup");
     await click(main); // detail 0: no pointer made it
     expect(sent(m)).toHaveLength(1);
@@ -727,7 +763,7 @@ describe("attachments", () => {
   });
 
   it("keeps staged files in the draft across a reload", async () => {
-    writeDraft(KEY, { text: "with files", files: [{ ref: "1-a-x.txt", name: "x.txt", size: 3 }] });
+    writeDraft(KEY, { text: "with files", files: [{ ref: "1-a-x.txt", name: "x.txt", size: 3, at: Date.now() }] });
     const m = mount();
     await idle(m);
     expect(text(q(m.el, '[data-file="1-a-x.txt"]'))).toBe("x.txt");

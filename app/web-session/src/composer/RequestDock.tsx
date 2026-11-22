@@ -122,14 +122,26 @@ function ToolDetails({ tool }: { tool: ToolItem | undefined }) {
  * is on its way (a double click, a held key) is refused by `answer`, which keeps a set of the answers in
  * flight, and is not an error to show: the first press is still doing its work.
  */
-function useAnswering(store: SessionStore, event: RequestEvent) {
+function useAnswering(store: SessionStore, event: RequestEvent, confirmMs: number) {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // An answer the hub accepted is not one the agent took: on another machine the hub says "accepted" first. The request
+  // ending is what shows it was taken; if it is still open after `confirmMs`, the answers come back, and say why.
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  useEffect(() => {
+    if (!sent) return;
+    const timer = setTimeout(() => {
+      setSent(false);
+      setUnconfirmed(true);
+    }, confirmMs);
+    return () => clearTimeout(timer);
+  }, [sent, confirmMs]);
   const shown = { requestId: event.data.request_id, seq: event.seq };
   const press = async (decision: string): Promise<void> => {
     setBusy(true);
     setMessage(null);
+    setUnconfirmed(false);
     try {
       const outcome = await answer(store, shown, decision);
       if (outcome.ok) setSent(true);
@@ -138,7 +150,7 @@ function useAnswering(store: SessionStore, event: RequestEvent) {
       setBusy(false);
     }
   };
-  return { busy, sent, message, press };
+  return { busy, sent, message, press, unconfirmed };
 }
 
 function optionsOf(event: RequestEvent): Option[] {
@@ -147,7 +159,7 @@ function optionsOf(event: RequestEvent): Option[] {
   return event.type === "approval.requested" ? [{ id: "allow", label: "Allow", kind: "allow" }, { id: "deny", label: "Deny", kind: "deny" }] : [];
 }
 
-function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionStore; event: RequestEvent; waiting: number; settleMs: number; focusKept: MutableRefObject<boolean> }) {
+function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { store: SessionStore; event: RequestEvent; waiting: number; settleMs: number; confirmMs: number; focusKept: MutableRefObject<boolean> }) {
   const approval = event.type === "approval.requested";
   const [settling, setSettling] = useState(settleMs > 0);
   useEffect(() => {
@@ -159,7 +171,7 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
   const refusal = useSessionStore(store, (s) => s.refusal()?.message ?? null);
   const callId = event.type === "approval.requested" ? event.data.call_id : undefined;
   const tool = useSessionStore(store, (s) => findTool(s.session.items, callId));
-  const { busy, sent, message, press } = useAnswering(store, event);
+  const { busy, sent, message, press, unconfirmed } = useAnswering(store, event, confirmMs);
   // The standing option that was pressed once, and whether the second press counts yet.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [confirmReady, setConfirmReady] = useState(false);
@@ -229,6 +241,7 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
     : settling ? "A new request just appeared. Read it before you answer."
     : confirming !== null ? (confirmReady ? "Ready. Press again to confirm." : "One moment, then press again.")
     : busy ? "Sending your answer."
+    : unconfirmed ? "The agent has not taken your answer yet. You can answer again."
     : "You can answer now.";
 
   const renderAnswer = ({ option, index, fixed: meaning }: { option: Option; index: number; fixed: Fixed | null }, kindOf: "fixed" | "choice") => {
@@ -363,7 +376,7 @@ function ChoicesInFull({ choices }: { choices: { n: number; text: string }[] }) 
  * ago cannot land on it. The decisions (Allow, Always allow, Deny) are pinned under the request's text, which
  * scrolls above them in its own area with the agent's own choices.
  */
-export function RequestDock({ store, settleMs }: { store: SessionStore; settleMs: number }) {
+export function RequestDock({ store, settleMs, confirmMs }: { store: SessionStore; settleMs: number; confirmMs: number }) {
   const first = useSessionStore(store, (s) => s.session.pending[0]);
   const waiting = useSessionStore(store, (s) => Math.max(0, s.session.pending.length - 1));
   // Set by a panel that goes while the keyboard focus is in it: the one that takes its place takes the focus.
@@ -375,7 +388,7 @@ export function RequestDock({ store, settleMs }: { store: SessionStore; settleMs
   if (first === undefined) return null;
   return (
     <Guard key={`${first.data.request_id}:${first.seq}`} message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-      <Panel event={first} focusKept={focusKept} settleMs={settleMs} store={store} waiting={waiting} />
+      <Panel confirmMs={confirmMs} event={first} focusKept={focusKept} settleMs={settleMs} store={store} waiting={waiting} />
     </Guard>
   );
 }

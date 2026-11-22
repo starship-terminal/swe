@@ -20,11 +20,33 @@ export interface StagedFile {
   ref: string;
   name: string;
   size: number;
+  /** When the hub staged it (ms): the hub deletes staged files after seven days, so a restored draft must not offer an older one. */
+  at?: number;
 }
 
 export interface Draft {
   text: string;
   files: StagedFile[];
+  /** Names of attachments left out of this draft because the hub no longer keeps them (set on reading, never stored). */
+  dropped?: string[];
+}
+
+/**
+ * How long a staged file is offered again: six days, a day under the hub's seven (`attachments.MAX_AGE_S`), so a file that
+ * is shown is one the hub still has. A file with no time on it is treated as too old.
+ */
+export const FILE_MAX_AGE_MS = 6 * 24 * 60 * 60 * 1000;
+
+/** Whether the hub may still hold a staged file. */
+export function fileKept(file: StagedFile, now = Date.now()): boolean {
+  return typeof file.at === "number" && now - file.at <= FILE_MAX_AGE_MS;
+}
+
+/** The draft with the files the hub has probably deleted taken out, and their names noted. The text is never touched. */
+export function withoutExpiredFiles(draft: Draft, now = Date.now()): Draft {
+  const gone = draft.files.filter((file) => !fileKept(file, now));
+  if (gone.length === 0) return draft;
+  return { text: draft.text, files: draft.files.filter((file) => fileKept(file, now)), dropped: gone.map((file) => file.name) };
 }
 
 export const EMPTY_DRAFT: Draft = { text: "", files: [] };
@@ -80,7 +102,8 @@ function parse(raw: string, now: number): Draft | null {
       for (const entry of value.f.slice(0, FILES_KEPT)) {
         const item = entry as { ref?: unknown; name?: unknown; size?: unknown } | null;
         if (item !== null && typeof item === "object" && typeof item.ref === "string" && typeof item.name === "string") {
-          files.push({ ref: item.ref, name: item.name, size: typeof item.size === "number" ? item.size : 0 });
+          const at = (entry as { at?: unknown }).at;
+          files.push({ ref: item.ref, name: item.name, size: typeof item.size === "number" ? item.size : 0, ...(typeof at === "number" ? { at } : {}) });
         }
       }
     }
@@ -97,18 +120,18 @@ function parse(raw: string, now: number): Draft | null {
 export function readDraft(session: string): Draft {
   if (unsaved.has(session) && memoryFresh(session)) {
     const newer = memory.get(session);
-    if (newer !== undefined) return newer;
+    if (newer !== undefined) return withoutExpiredFiles(newer);
   }
   try {
     const raw = backing()?.getItem(PREFIX + session) ?? null;
     if (raw !== null) {
       const found = parse(raw, Date.now());
-      if (found !== null) return found;
+      if (found !== null) return withoutExpiredFiles(found);
     }
   } catch {
     // Unreadable storage: fall through to memory.
   }
-  return memoryFresh(session) ? (memory.get(session) ?? EMPTY_DRAFT) : EMPTY_DRAFT;
+  return memoryFresh(session) ? withoutExpiredFiles(memory.get(session) ?? EMPTY_DRAFT) : EMPTY_DRAFT;
 }
 
 export type Kept = "storage" | "memory";

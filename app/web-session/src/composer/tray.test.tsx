@@ -8,8 +8,8 @@ const ok = () => ({ status: 200, body: { ok: true, receipt: "accepted" } });
 const queue = (seq: number, ...items: { id: string; text: string; attachments?: string[] }[]) =>
   frame("queue.updated", seq, { items: items.map((i) => ({ command_id: i.id, text: i.text, by: "device-1", mode: "queue", ...(i.attachments ? { attachments: i.attachments } : {}) })) });
 
-async function withQueue(settleMs?: number): Promise<Mounted> {
-  const m = mount(settleMs === undefined ? {} : { props: { settleMs } });
+async function withQueue(settleMs?: number, confirmMs?: number): Promise<Mounted> {
+  const m = mount(settleMs === undefined && confirmMs === undefined ? {} : { props: { ...(settleMs === undefined ? {} : { settleMs }), ...(confirmMs === undefined ? {} : { confirmMs }) } });
   m.transport.on("/queue", ok, "POST");
   await play(m, "queued", 0, 3); // q1 "then lint it" queued behind an open approval
   await feed(m, frame("approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }), frame("session.state", 14, { state: "running" }));
@@ -293,5 +293,48 @@ describe("an edit while another device changes the message", () => {
     expect(orphan.getAttribute("data-orphan-sent")).toBe("true");
     expect(text(orphan)).toContain("This message was sent before your edit was saved, so your edit did not change it");
     expect(text(orphan)).toContain("then lint it twice");
+  });
+});
+
+describe("an edit the hub accepted but the queue has not shown", () => {
+  async function saved(confirmMs?: number): Promise<Mounted> {
+    const m = await withQueue(undefined, confirmMs);
+    await click(btn(m, "Edit queued message"));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it twice");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click(btn(m, "Save the edit"));
+    return m;
+  }
+
+  it("keeps the words, says it is saving, and lets go of them when the queue shows the edit", async () => {
+    const m = await saved();
+    expect(posts(m, "queue")).toEqual([{ client_id: "q1", op: "edit", command_id: "id1", text: "then lint it twice" }]);
+    expect(q(tray(m), "textarea")).toBeNull(); // the editor is closed
+    expect(text(q(m.el, "[data-edit-pending]"))).toContain("Saving your edit");
+    expect(text(q(m.el, '[data-queued="q1"]'))).toContain("then lint it"); // the queue still shows the old text
+    await feed(m, queue(20, { id: "q1", text: "then lint it twice" }));
+    expect(q(m.el, "[data-edit-pending]")).toBeNull();
+    expect(text(q(m.el, '[data-queued="q1"]'))).toContain("then lint it twice");
+    expect(q(m.el, "[data-orphan]")).toBeNull();
+  });
+
+  it("gives the words back in a card when the message leaves the queue before the edit shows", async () => {
+    const m = await saved();
+    await feed(m, queue(20));
+    const orphan = q(m.el, "[data-orphan]") as HTMLElement;
+    expect(text(orphan)).toContain("The hub took your edit, but the message left the queue before it showed");
+    expect(text(orphan)).toContain("then lint it twice");
+  });
+
+  it("puts the words back in the editor, saying so, when the edit never shows", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    expect(editor.value).toBe("then lint it twice");
+    expect(text(q(m.el, "[data-edit-unconfirmed]"))).toContain("did not show your edit");
+    expect(q(m.el, "[data-edit-pending]")).toBeNull();
   });
 });

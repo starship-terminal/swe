@@ -590,3 +590,32 @@ describe("the dock's focus, live region and stable answers", () => {
     expect(dock(m).contains(document.activeElement)).toBe(false);
   });
 });
+
+describe("an answer the hub accepted that the agent has not taken", () => {
+  it("brings the answers back, and says why, when the request is still open after the wait", async () => {
+    const m = mount({ props: { confirmMs: 150 } });
+    m.transport.on("/approval", ok, "POST");
+    await play(m, "approval", 0, 2);
+    await ready();
+    await pointerPress(opt(m, "allow"));
+    expect(posts(m, "approval")).toHaveLength(1);
+    expect(text(q(m.el, "[data-dock-status]"))).toBe("Answer sent. Waiting for the agent.");
+    expect(off(opt(m, "allow"))).toBe(true);
+    await settle(() => wait(250));
+    expect(text(q(m.el, "[data-dock-status]"))).toBe("The agent has not taken your answer yet. You can answer again.");
+    expect(off(opt(m, "allow"))).toBe(false);
+    await pointerPress(opt(m, "allow"));
+    expect(posts(m, "approval")).toHaveLength(2);
+  });
+
+  it("does not bring them back when the request ends", async () => {
+    const m = mount({ props: { confirmMs: 150 } });
+    m.transport.on("/approval", ok, "POST");
+    await play(m, "approval", 0, 2);
+    await ready();
+    await pointerPress(opt(m, "allow"));
+    await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }));
+    await settle(() => wait(250));
+    expect(dock(m)).toBeNull();
+  });
+});

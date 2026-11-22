@@ -20,6 +20,10 @@ const TEXT_SHOWN = 2000;
 interface Edit {
   text: string;
   original: string;
+  /** The hub accepted the edit; it is not shown in the queue yet. The words are kept until it is (or the message leaves). */
+  pending?: boolean;
+  /** The hub accepted the edit and it never showed within `confirmMs`: the words are back in the editor. */
+  unconfirmed?: boolean;
 }
 
 type Action = "edit" | "cancel" | "steer";
@@ -51,6 +55,7 @@ function Item({
   steerEffect,
   refusal,
   settleMs,
+  confirmMs,
 }: {
   store: SessionStore;
   item: Queued;
@@ -60,6 +65,7 @@ function Item({
   steerEffect: ReturnType<typeof steerEffectOf>;
   refusal: string | null;
   settleMs: number;
+  confirmMs: number;
 }) {
   const requestOpen = useSessionStore(store, (s) => s.session.pending.length > 0);
   const [busy, setBusy] = useState<Action | null>(null);
@@ -86,7 +92,13 @@ function Item({
   }, [removing]);
   const id = item.command_id;
   // Another device changed this message while it is being edited here: Save would write over it unseen.
-  const changedUnder = edit !== undefined && item.text !== edit.original;
+  const changedUnder = edit !== undefined && edit.pending !== true && item.text !== edit.original;
+  // An accepted edit that has not shown in the queue: its words stay (here and in the tray's list of edits) until it does.
+  useEffect(() => {
+    if (edit === undefined || edit.pending !== true) return;
+    const timer = setTimeout(() => setEdit(id, { text: edit.text, original: edit.original, unconfirmed: true }), confirmMs);
+    return () => clearTimeout(timer);
+  }, [edit?.pending, confirmMs]);
   const shown = clip(item.text, TEXT_SHOWN, 60);
 
   const run = async (action: Action, text?: string): Promise<boolean> => {
@@ -108,7 +120,7 @@ function Item({
   const idle = busy === null && refusal === null;
   return (
     <li className="rounded-block bg-subtle px-2 py-1.5" data-queued={id}>
-      {edit === undefined ? (
+      {edit === undefined || edit.pending === true ? (
         <>
           <div className="flex items-center gap-1">
             <div className="min-w-0 flex-1 px-1">
@@ -124,12 +136,17 @@ function Item({
               ) : null}
             </div>
             {busy !== null ? <Spinner /> : null}
-            <IconButton disabled={!idle} icon="edit" label="Edit queued message" onClick={() => setEdit(id, { text: item.text, original: item.text })} />
+            <IconButton disabled={!idle || edit?.pending === true} icon="edit" label="Edit queued message" onClick={() => setEdit(id, { text: item.text, original: item.text })} />
             <IconButton ref={trash} danger disabled={!idle} icon="trash" label="Remove queued message" onClick={() => setRemoving(true)} />
             {steerEffect !== "next_turn" ? (
               <IconButton ref={more} aria-expanded={menu} aria-haspopup="menu" disabled={!idle} icon="more" label="More for queued message" onClick={() => setMenu((now) => !now)} />
             ) : null}
           </div>
+          {edit?.pending === true ? (
+            <p className="px-1 text-xs text-secondary" data-edit-pending role="status">
+              Saving your edit. Your words are kept until it shows here.
+            </p>
+          ) : null}
           {removing ? (
             <div className="mt-1 flex flex-wrap items-center gap-1.5" data-remove-confirm>
               <AnswerButton
@@ -193,6 +210,11 @@ function Item({
             readOnly={busy !== null}
             value={edit.text}
           />
+          {edit.unconfirmed === true ? (
+            <p className="mt-1 text-xs text-secondary" data-edit-unconfirmed role="status">
+              The hub did not show your edit in the queue. Your words are still here: save again, or cancel.
+            </p>
+          ) : null}
           {changedUnder ? (
             <div className="mt-1 rounded-block border border-border bg-card px-2 py-1.5" data-edit-conflict role="group" aria-label="The message changed while you were editing">
               <p className="text-xs text-secondary">This message was changed on another device while you were editing it. The new text:</p>
@@ -217,7 +239,8 @@ function Item({
               label="Save the edit"
               onClick={() => {
                 void run("edit", edit.text).then((ok) => {
-                  if (ok) setEdit(id, undefined);
+                  // Accepted is not applied: the words stay until the queue shows them.
+                  if (ok) setEdit(id, { text: edit.text, original: edit.original, pending: true });
                 });
               }}
             />
@@ -252,9 +275,11 @@ function Orphan({ store, id, edit, setEdit, onKeep }: { store: SessionStore; id:
   return (
     <div aria-label="An edit that was not saved" className="mb-1 rounded-block border border-warning bg-subtle px-2.5 py-2" data-orphan={id} data-orphan-sent={sent} role="group">
       <p className="text-xs text-secondary">
-        {sent
-          ? "This message was sent before your edit was saved, so your edit did not change it. Your words are here."
-          : "This message left the queue before your edit was saved: it is being sent, or it was taken out on another device. Your words are here."}
+        {edit.pending === true
+          ? "The hub took your edit, but the message left the queue before it showed: it may have gone as it was. Your words are here."
+          : sent
+            ? "This message was sent before your edit was saved, so your edit did not change it. Your words are here."
+            : "This message left the queue before your edit was saved: it is being sent, or it was taken out on another device. Your words are here."}
       </p>
       <p className="mt-1 text-sm leading-6 break-words whitespace-pre-wrap" data-untrusted="edit">
         {clip(edit.text, TEXT_SHOWN, 60).text}
@@ -284,7 +309,7 @@ function Orphan({ store, id, edit, setEdit, onKeep }: { store: SessionStore; id:
  * (it was sent, or taken out on another device) leaves the person's words in a card of their own, to move into
  * the message box or let go; they are never dropped quietly. The list has its own height and its own scroll.
  */
-export function QueueTray({ store, onKeep, settleMs }: { store: SessionStore; onKeep(text: string): void; settleMs: number }) {
+export function QueueTray({ store, onKeep, settleMs, confirmMs }: { store: SessionStore; onKeep(text: string): void; settleMs: number; confirmMs: number }) {
   const queue = useSessionStore(store, (s) => s.session.queue);
   const steerOk = useSessionStore(store, (s) => s.session.caps?.steer === true);
   const steerEffect = useSessionStore(store, (s) => steerEffectOf(s.session.caps));
@@ -301,6 +326,14 @@ export function QueueTray({ store, onKeep, settleMs }: { store: SessionStore; on
       else next[id] = edit;
       return next;
     });
+
+  // An accepted edit that the queue now shows is done: its words are no longer kept aside.
+  useEffect(() => {
+    for (const item of queue) {
+      const kept = edits[item.command_id];
+      if (kept !== undefined && kept.pending === true && item.text === kept.text) setEdit(item.command_id, undefined);
+    }
+  }, [queue, edits]);
 
   const present = new Set(queue.map((item) => item.command_id));
   const orphans = Object.entries(edits).filter(([id, edit]) => !present.has(id) && edit.text !== edit.original && edit.text.trim() !== "");
@@ -329,7 +362,7 @@ export function QueueTray({ store, onKeep, settleMs }: { store: SessionStore; on
                   <ul className={cx("flex flex-col gap-1 overflow-y-auto pb-1", editing ? "max-h-72" : "max-h-44")}>
                     {shown.map((item) => (
                       <Guard key={item.command_id} message="This queued message could not be shown." part="queued" resetKey={`${item.text}\u0000${item.mode ?? ""}`}>
-                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} settleMs={settleMs} steerEffect={steerEffect} steerOk={steerOk} store={store} />
+                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} confirmMs={confirmMs} settleMs={settleMs} steerEffect={steerEffect} steerOk={steerOk} store={store} />
                       </Guard>
                     ))}
                   </ul>
