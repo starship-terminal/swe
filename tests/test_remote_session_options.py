@@ -469,6 +469,46 @@ class TestOpencodeAdapterLateReports(_OpencodeCase):
             time.sleep(0.05)  # the fake logs a request after answering it
         self.assertEqual(reads(), ["GET"])
 
+    def test_drops_while_a_re_read_runs_make_one_more_read_not_many(self):
+        import threading
+        import types
+        adapter, sink, _sid = self.started()
+        gate = threading.Event()
+        asked: list[int] = []
+
+        def call(request, *a, **kw):
+            asked.append(1)
+            if len(asked) == 1:
+                gate.wait(5.0)  # the first read is slow
+            return types.SimpleNamespace(ok=True, data={
+                "agent": "plan", "model": {"providerID": "p", "id": "m"}})
+
+        adapter._call = call
+        for _ in range(5):
+            adapter._events_lost()
+        gate.set()
+        deadline = time.monotonic() + 5.0
+        while adapter._rereading and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(adapter._rereading)
+        self.assertEqual(len(asked), 2, "the slow read, then one more")
+        self.assertIs(_options(sink.events)[-1]["plan_mode"]["value"], True)
+
+    def test_an_oversized_line_is_one_dropped_event(self):
+        from unittest import mock
+        from swe.remote.adapters import opencode_serve
+        with mock.patch.object(opencode_serve, "_MAX_LINE", 300):
+            adapter, sink, _sid = self.started(reply="long " * 200)
+            lost: list[int] = []
+            real = adapter._events_lost
+            adapter._events_lost = lambda: (lost.append(1), real())[1]
+            self.wait_turn(sink, adapter.send_turn(TurnInput("hi")))
+        drops = [d for d in adapter.dropped
+                 if d == "an event line over the size bound"]
+        self.assertEqual(len(lost), len(drops))
+        self.assertGreater(len(drops), 0)
+        self.assertLessEqual(len(drops), 3, "one per line, not per read")
+
     def test_a_model_the_server_never_reports_back_stays_shown(self):
         adapter, sink, _sid = self.started("silent-model",
                                            spec={"model": "prov/m1"})

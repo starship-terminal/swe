@@ -151,6 +151,10 @@ class OpencodeServeAdapter:
         # Why events were skipped (a bug, never the wire's fault): kept
         # for tests and logs, bounded.
         self.dropped: collections.deque = collections.deque(maxlen=20)
+        # The session re-read after a dropped event (G32): at most one
+        # runs; a drop while it runs asks it for one more read.
+        self._rereading = False
+        self._reread_again = False
 
     # -- small helpers ---------------------------------------------------
 
@@ -708,11 +712,14 @@ class OpencodeServeAdapter:
                     break
                 whole = raw.endswith(b"\n")
                 if oversized or not whole:
-                    # A line past the bound: drop the event it is in.
+                    # A line past the bound: drop the event it is in,
+                    # said once however many reads the line takes.
+                    if not oversized:
+                        self.dropped.append(
+                            "an event line over the size bound")
+                        self._events_lost()
                     oversized = not whole
                     parser = wire.SseParser()
-                    self.dropped.append("an event line over the size bound")
-                    self._events_lost()
                     continue
                 event = parser.feed(raw)
                 if event is None:
@@ -760,21 +767,38 @@ class OpencodeServeAdapter:
             if state is None or state.done or self._closed \
                     or not self._session_id:
                 return
-            generation = state.events_lost()
-        threading.Thread(target=self._reread_session, args=(generation,),
-                         daemon=True, name="opencode-serve-reread").start()
+            state.events_lost()
+            if self._rereading:
+                self._reread_again = True
+                return
+            self._rereading = True
+        threading.Thread(target=self._reread_session, daemon=True,
+                         name="opencode-serve-reread").start()
 
-    def _reread_session(self, generation: int) -> None:
-        try:
-            reply = self._call(wire.get_session(self._session_id))
-        except AdapterError:
-            return
-        if not reply.ok:
-            return
-        with self._lock:
-            state = self._state
-            if state is not None and not state.done and not self._closed:
-                self._emit(state.session_read(reply.data, generation))
+    def _reread_session(self) -> None:
+        """Read the session back until no drop asked for another read.
+        Each read is used only if nothing came after its ask (the
+        state's generation)."""
+        while True:
+            with self._lock:
+                state = self._state
+                self._reread_again = False
+                if state is None or state.done or self._closed:
+                    self._rereading = False
+                    return
+                generation = state.generation
+            try:
+                reply = self._call(wire.get_session(self._session_id))
+            except AdapterError:
+                reply = None
+            with self._lock:
+                state = self._state
+                if reply is not None and reply.ok and state is not None \
+                        and not state.done and not self._closed:
+                    self._emit(state.session_read(reply.data, generation))
+                if not self._reread_again:
+                    self._rereading = False
+                    return
 
     def _dispatch(self, event: dict) -> None:
         with self._lock:

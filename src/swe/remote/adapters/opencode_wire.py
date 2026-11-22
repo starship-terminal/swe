@@ -631,6 +631,10 @@ class ServeState(SessionCore):
             self._generation += 1
         return self.options_events()
 
+    @property
+    def generation(self) -> int:
+        return self._generation
+
     def events_lost(self) -> int:
         """An event the reader had to drop may have been a post's echo:
         no report is taken for an echo any more, so every later one is
