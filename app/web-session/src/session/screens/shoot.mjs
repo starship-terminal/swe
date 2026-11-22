@@ -137,11 +137,15 @@ try {
         await call("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: size.mobile });
         await call("Emulation.setTouchEmulationEnabled", { enabled: size.mobile });
         await call("Page.navigate", { url: `${BASE}?${query}&theme=${theme}` });
-        for (let i = 0; i < 100; i++) {
-          const { result } = await call("Runtime.evaluate", { expression: "window.__ready === true", returnByValue: true });
-          if (result.value === true) break;
-          await sleep(100);
+        // The scene is ready when the page says so. A scene that threw, or never got ready, stops the run: it would be a picture of a wrong state.
+        let ready = false;
+        for (let i = 0; i < 100 && !ready; i++) {
+          const { result } = await call("Runtime.evaluate", { expression: "window.__failed ? 'failed: ' + window.__failed : window.__ready === true ? 'ready' : ''", returnByValue: true });
+          if (result.value === "ready") ready = true;
+          else if (typeof result.value === "string" && result.value.startsWith("failed")) throw new Error(`scene ${name} (${sizeName}, ${theme}) ${result.value}`);
+          else await sleep(100);
         }
+        if (!ready) throw new Error(`scene ${name} (${sizeName}, ${theme}) was not ready after 10 seconds`);
         await sleep(400); // the last animation settles
         const shot = await call("Page.captureScreenshot", { format: "png" });
         const file = join(out, `${name}-${sizeName}-${theme}.png`);

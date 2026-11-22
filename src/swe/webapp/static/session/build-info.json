@@ -1,6 +1,6 @@
 {
   "hash_rule": "app/web-session/scripts/source-hash.mjs",
-  "source_hash": "e9770e150880132547c05d861c7ea9864897b860ee1b092276c5b22187d8838b",
+  "source_hash": "49bc08fba2eeda3f8462652db315a459ecf81597516a19bf977d5ebd1b44cc1c",
   "sources": {
     "index.html": "449e8aefdd45eeb0b3a5f6212788814e40368ad6ec87f907a2e9faecbf806ded",
     "package.json": "cb9b7879ea6c06714a7ca2fe19e1d3de1eef288fab335122c39db4037073781d",
@@ -38,7 +38,7 @@
     "src/composer/primary.test.ts": "c0c5132fea6592c8e7455f73ad00b284f68740157b19a1e654e302b4ecccf4dc",
     "src/composer/primary.ts": "fa3fb40527eec1a09131e4ade50e64721b2111ac0fde5886dfa8da9e9f53c539",
     "src/composer/reload.test.tsx": "5191b48d34dfe22cbcab24b906dc16ac3de689da0720f914ee038e9ff0cbfd26",
-    "src/composer/scenes.ts": "eb7bfbe811886e605acebb6a30116e6c84385be1b67f01e8f9659329b3b38d23",
+    "src/composer/scenes.ts": "bb265592f9ab564a59b2f12444615cd9146f8377cc96dc8fd6cfe3e9d59ea26d",
     "src/composer/steer.test.tsx": "e6d449add0cd80b96b4bab0f0f0c8be70cc6ad344c1d218073985fdc70938d0d",
     "src/composer/steer.ts": "e7e079b99e20cb88064a5613cd489e447b22a5091ec0eb679320b9b25d503136",
     "src/composer/submit.test.ts": "4cc6d7138cb5479732dab6903b6c9fa873eba8ca9673f55d72a57ace183caa79",
@@ -102,8 +102,8 @@
     "src/session/motion.test.ts": "ba3bff276b5b18d06eace44e9ebb75dd2866a4cf95317fa6fec2a46c7ffe1610",
     "src/session/render-cost.test.tsx": "8fdf6ebb2eca3c5f59df04874247a018daa58cb7dc5b2cc6747db20a7849323d",
     "src/session/screens/index.html": "7ac7a05d780063d0aada27b5a390896f5df8f395c56c257197181d6fedaef769",
-    "src/session/screens/main.tsx": "da4eb9f3e1f9b928019c27c55131a33018a95b5635d869120d281c1fb8f1b38b",
-    "src/session/screens/shoot.mjs": "fb49703bdc163c06b097dadee94eced438d563cb183a95e18b7a9a2b09733962",
+    "src/session/screens/main.tsx": "5cd2aaecadb40973d5295e1a7c8a25f6174da86bad5b6695606e7dd708990934",
+    "src/session/screens/shoot.mjs": "c7993127ed358471fbca93657d80c7e84a74942ebda405ff73f4e43ffdbde843",
     "src/session/screens/vite.config.ts": "7b93a67d4cd3fd5523f0d22741b1c8d62e7ab775b22d278e4a255750366f8f67",
     "src/session/scroll.test.tsx": "aae44f74e09848a2ee9e1e91540d8a187226fe4d27d26835288c08dccd2d6bfc",
     "src/session/session.css": "4a8b53d792fc5af370e685269d30a81c77ed528b4e44638943d80932472d551c",

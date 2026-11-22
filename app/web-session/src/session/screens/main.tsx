@@ -225,4 +225,8 @@ createRoot(document.getElementById("root") as HTMLElement).render(
     <SessionView sessionKey={KEY} store={store} />
   </StrictMode>,
 );
-void run().then(clicks).then(() => Object.assign(window, { __ready: true }));
+// A scene that throws (it never reached the state it is for) says so, and the shoot stops on it: no picture of a wrong state.
+void run()
+  .then(clicks)
+  .then(() => Object.assign(window, { __ready: true }))
+  .catch((error: unknown) => Object.assign(window, { __failed: String(error) }));
