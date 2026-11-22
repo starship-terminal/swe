@@ -6,12 +6,17 @@
 // person saw) and is refused, before anything is posted, unless the latest open request with that id still
 // has that `seq`. Check and post happen in one synchronous step, so no frame can arrive between them.
 import type { ActionResult, RequestEvent, SessionStore } from "../core";
-import { forgetPosted, readPosted, writePosted, type Posted } from "./posted";
+import { forgetPosted, postedGeneration, readPosted, writePosted, type Posted } from "./posted";
 
 export interface Shown {
   requestId: string;
   seq: number;
+  /** The journal's epoch when the request was shown: `seq` counts again after a reset, so it is part of the request's identity. */
+  epoch: string;
 }
+
+/** The epoch the store holds now, as the text `Shown` carries. */
+export const epochOf = (store: SessionStore): string => String(store.getState().session.epoch ?? "");
 
 // What this view has posted for a request is kept by `posted.ts` (storage per session, memory when storage is off), so a reload
 // or a second tab knows: the invariant is that this view posts at most one decision value for a request. The hub stores each
@@ -31,7 +36,7 @@ export function postedFor(scope: string, shown: Shown): Posted | undefined {
   return readPosted(scope, shown);
 }
 
-const postedKey = (shown: Shown): string => `${shown.requestId}\u0000${shown.seq}`;
+const postedKey = (shown: Shown): string => `${shown.epoch}\u0000${shown.requestId}\u0000${shown.seq}`;
 
 /** Whether a refused answer may still have reached the hub: a timeout, a server error or no answer at all may; a plain refusal did not. */
 function inDoubt(result: Extract<ActionResult, { ok: false }>): boolean {
@@ -74,7 +79,7 @@ export async function answer(store: SessionStore, scope: string, shown: Shown, d
     if (before.outcome === "taken") return { ok: false, reason: "decided", message: "The hub already has your answer. Nothing more was sent." };
   }
   const current = openRequest(store, shown.requestId);
-  if (current === undefined || current.seq !== shown.seq) {
+  if (current === undefined || current.seq !== shown.seq || epochOf(store) !== shown.epoch) {
     return {
       ok: false,
       reason: "changed",
@@ -82,8 +87,10 @@ export async function answer(store: SessionStore, scope: string, shown: Shown, d
     };
   }
   mine.add(key);
+  // Taken before the post: a sign-out while it is on its way ends what may be written for it.
+  const since = postedGeneration();
   // Written before the post leaves: a reload while it is on its way, or another tab, must find it already in doubt.
-  writePosted(scope, shown, { decision, label, outcome: "unknown" });
+  writePosted(scope, shown, { decision, label, outcome: "unknown" }, since);
   let result: ActionResult;
   try {
     result = await store.getState().respond(shown.requestId, decision);
@@ -93,12 +100,12 @@ export async function answer(store: SessionStore, scope: string, shown: Shown, d
   }
   mine.delete(key);
   if (result.ok) {
-    writePosted(scope, shown, { decision, label, outcome: "taken", receipt: result.receipt });
+    writePosted(scope, shown, { decision, label, outcome: "taken", receipt: result.receipt }, since);
     return { ok: true, receipt: result.receipt };
   }
   if (inDoubt(result)) return { ok: false, reason: "unknown", message: result.message };
   // A definite refusal: nothing reached the hub, so the answers come back (unless an earlier post of this decision is still in doubt).
-  if (before === undefined) forgetPosted(scope, shown);
-  else writePosted(scope, shown, before);
+  if (before === undefined) forgetPosted(scope, shown, since);
+  else writePosted(scope, shown, before, since);
   return { ok: false, reason: "refused", message: result.message };
 }

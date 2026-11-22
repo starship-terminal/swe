@@ -2,9 +2,11 @@
 import { act } from "react";
 import { describe, expect, it } from "vitest";
 
-import { answer, decisionFor, openRequest } from "./answer";
+import { answer, decisionFor, epochOf, openRequest } from "./answer";
 import { all, btn, click, feed, frame, KEY, mount, off, play, posts, q, said, settle, text, type Mounted } from "./harness";
 
+/** The request as the dock shows it to `answer()`. */
+const at = (m: Mounted, requestId = "r1", seq = 8) => ({ requestId, seq, epoch: epochOf(m.store) });
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const ok = () => ({ status: 200, body: { ok: true, receipt: "accepted", command_id: "x" } });
 
@@ -269,11 +271,11 @@ describe("an answer lands on the request that was shown", () => {
   it("is refused by answer() when the request changed, resolved, or never was", async () => {
     const m = await withApproval();
     expect(openRequest(m.store, "r1")?.seq).toBe(8);
-    expect(await answer(m.store, KEY, { requestId: "r1", seq: 7 }, "allow")).toMatchObject({ ok: false, reason: "changed" });
-    expect(await answer(m.store, KEY, { requestId: "nope", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "changed", message: "That request is no longer open. Nothing was sent." });
+    expect(await answer(m.store, KEY, at(m, "r1", 7), "allow")).toMatchObject({ ok: false, reason: "changed" });
+    expect(await answer(m.store, KEY, at(m, "nope", 8), "allow")).toMatchObject({ ok: false, reason: "changed", message: "That request is no longer open. Nothing was sent." });
     expect(posts(m, "approval")).toHaveLength(0);
     await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }));
-    expect(await answer(m.store, KEY, { requestId: "r1", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "changed" });
+    expect(await answer(m.store, KEY, at(m), "allow")).toMatchObject({ ok: false, reason: "changed" });
     expect(posts(m, "approval")).toHaveLength(0);
   });
 
@@ -283,14 +285,14 @@ describe("an answer lands on the request that was shown", () => {
     const older = session.pending[0] as (typeof session.pending)[number];
     m.store.setState({ session: { ...session, pending: [older, request(30, "r1") as unknown as typeof older] } });
     expect(openRequest(m.store, "r1")?.seq).toBe(30);
-    expect(await answer(m.store, KEY, { requestId: "r1", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "changed" });
+    expect(await answer(m.store, KEY, at(m), "allow")).toMatchObject({ ok: false, reason: "changed" });
     expect(posts(m, "approval")).toHaveLength(0);
   });
 
   it("takes one answer at a time for one request, whoever asks", async () => {
     const m = await withApproval();
-    const first = answer(m.store, KEY, { requestId: "r1", seq: 8 }, "allow");
-    const second = answer(m.store, KEY, { requestId: "r1", seq: 8 }, "allow");
+    const first = answer(m.store, KEY, at(m), "allow");
+    const second = answer(m.store, KEY, at(m), "allow");
     expect(await second).toMatchObject({ ok: false, reason: "busy" });
     expect(await first).toMatchObject({ ok: true });
     expect(posts(m, "approval")).toHaveLength(1);
@@ -632,8 +634,8 @@ describe("one request, at most one decision", () => {
       expect(posts(m, "approval")).toHaveLength(1);
       expect(onlyDecision(m)).toEqual(new Set(["allow"]));
       // And not by another route either: the answer itself refuses a different decision, and a repeat.
-      expect(await answer(m.store, KEY, { requestId: "r1", seq: 8 }, "deny")).toMatchObject({ ok: false, reason: "decided" });
-      expect(await answer(m.store, KEY, { requestId: "r1", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "decided" });
+      expect(await answer(m.store, KEY, at(m), "deny")).toMatchObject({ ok: false, reason: "decided" });
+      expect(await answer(m.store, KEY, at(m), "allow")).toMatchObject({ ok: false, reason: "decided" });
       expect(posts(m, "approval")).toHaveLength(1);
     });
   }
@@ -645,7 +647,7 @@ describe("one request, at most one decision", () => {
     await ready();
     expect(status(m)).toContain("You answered: Allow.");
     expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
-    expect(await answer(m.store, KEY, { requestId: "r1", seq: 8 }, "deny")).toMatchObject({ ok: false, reason: "decided" });
+    expect(await answer(m.store, KEY, at(m), "deny")).toMatchObject({ ok: false, reason: "decided" });
   });
 
   it("brings the answers back, with the hub's reason, after a definite refusal (nothing was posted)", async () => {
@@ -682,7 +684,7 @@ describe("one request, at most one decision", () => {
       expect(all(dock(m), "button").filter((b) => !b.hasAttribute("data-option"))).toHaveLength(1);
       // A different decision is refused, whatever the button says.
       await pointerPress(opt(m, "allow"));
-      expect(await answer(m.store, KEY, { requestId: "r1", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "decided" });
+      expect(await answer(m.store, KEY, at(m), "allow")).toMatchObject({ ok: false, reason: "decided" });
       // The same one goes again, and then it is taken.
       await settle(() => void (q(dock(m), "[data-resend]") as HTMLButtonElement).click());
       expect(posts(m, "approval").map((p) => p.decision)).toEqual(["deny", "deny"]);

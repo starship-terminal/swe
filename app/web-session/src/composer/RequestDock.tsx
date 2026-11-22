@@ -134,7 +134,8 @@ function useAnswering(store: SessionStore, scope: string, event: RequestEvent, c
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [, redraw] = useState(0);
-  const shown = { requestId: event.data.request_id, seq: event.seq };
+  const epoch = useSessionStore(store, (st) => String(st.session.epoch ?? ""));
+  const shown = { requestId: event.data.request_id, seq: event.seq, epoch };
   // What was posted for this request lives outside the dock (see answer.ts): a dock drawn again for it knows, and no press of
   // this view can post a second, different decision for it.
   const posted = postedFor(scope, shown);
@@ -412,12 +413,13 @@ function ChoicesInFull({ choices }: { choices: { n: number; text: string }[] }) 
 export function RequestDock({ store, scope, settleMs, confirmMs }: { store: SessionStore; scope: string; settleMs: number; confirmMs: number }) {
   const first = useSessionStore(store, (s) => s.session.pending[0]);
   const waiting = useSessionStore(store, (s) => Math.max(0, s.session.pending.length - 1));
-  // A request that has ended no longer needs its record. Only once the snapshot has loaded: before that nothing is open and every record would go.
-  const loaded = useSessionStore(store, (s) => s.session.loaded);
+  // A request that has ended no longer needs its record. Only once the connection has caught up: before that, and while a replay is still filling `pending` one event at a time, the list is not complete and records for requests that have not arrived yet would go.
+  const caughtUp = useSessionStore(store, (s) => s.session.caughtUp);
   const open = useSessionStore(store, (s) => s.session.pending);
+  const epoch = useSessionStore(store, (s) => String(s.session.epoch ?? ""));
   useEffect(() => {
-    if (loaded) prunePosted(scope, open.map((request) => ({ requestId: request.data.request_id, seq: request.seq })));
-  }, [loaded, open, scope]);
+    if (caughtUp) prunePosted(scope, open.map((request) => ({ requestId: request.data.request_id, seq: request.seq, epoch })));
+  }, [caughtUp, open, epoch, scope]);
   // Set by a panel that goes while the keyboard focus is in it: the one that takes its place takes the focus.
   const focusKept = useRef(false);
   useEffect(() => {
@@ -426,7 +428,7 @@ export function RequestDock({ store, scope, settleMs, confirmMs }: { store: Sess
   });
   if (first === undefined) return null;
   return (
-    <Guard key={`${first.data.request_id}:${first.seq}`} message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
+    <Guard key={`${epoch}:${first.data.request_id}:${first.seq}`} message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
       <Panel confirmMs={confirmMs} event={first} focusKept={focusKept} scope={scope} settleMs={settleMs} store={store} waiting={waiting} />
     </Guard>
   );

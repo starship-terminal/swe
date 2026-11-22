@@ -6,8 +6,8 @@
 // session (`swe.sv.answer.v1:<session key>`), holding one small entry per request and `seq`: the decision, the label
 // shown, the outcome and the hub's receipt, nothing else (no prompt, no tool input, no text the person typed).
 //
-// How long: an entry is dropped when its request is no longer open (`prunePosted`, run when the session's snapshot has
-// loaded), when it is older than `POSTED_MAX_AGE_MS` (14 days, as a draft), and with every draft when the device's
+// How long: an entry is dropped when its request is no longer open (`prunePosted`, run when the connection has
+// caught up), when it is older than `POSTED_MAX_AGE_MS` (14 days, as a draft), and with every draft when the device's
 // credential is forgotten (`clearAllPosted`, called by `clearAllDrafts`; the web app's `pairForget` removes the keys).
 // A browser that refuses storage keeps the record in memory for as long as the page lives; a second device, or a
 // browser that refuses storage and is then reloaded, still knows nothing of it (spec, Limits).
@@ -38,9 +38,17 @@ interface Entry extends Posted {
 }
 
 const memory = new Map<string, Map<string, Entry>>();
+/**
+ * Counts the sign-outs this page has seen (`clearAllPosted`). A post that was on its way when the device signed out must not write its
+ * answer back afterwards: `answer` takes the number before it posts, and `writePosted` and `forgetPosted` do nothing for an older one.
+ */
+let generation = 0;
+export const postedGeneration = (): number => generation;
 const listeners = new Map<string, Set<() => void>>();
 
-const entryKey = (shown: Shown): string => `${shown.requestId}\u0000${shown.seq}`;
+// The journal's epoch is part of a request's identity: when a keeper's log restarts the hub changes the epoch and counts `seq` again,
+// so a new request can share an id and a `seq` with an old one that was answered.
+const entryKey = (shown: Shown): string => `${shown.epoch}\u0000${shown.requestId}\u0000${shown.seq}`;
 
 function backing(): Storage | null {
   try {
@@ -101,14 +109,18 @@ function tell(scope: string): void {
 export function readPosted(scope: string, shown: Shown, now = Date.now()): Posted | undefined {
   const key = entryKey(shown);
   const fromStorage = stored(scope, now)?.get(key);
-  const found = fromStorage ?? memory.get(scope)?.get(key);
+  const fromMemory = memory.get(scope)?.get(key);
+  // The newer of the two: a write that could not reach storage (full, off) leaves an older copy there, and the memory one is the truth,
+  // as with a draft. Another tab's later write is newer than this page's memory.
+  const found = fromStorage === undefined ? fromMemory : fromMemory !== undefined && fromMemory.at > fromStorage.at ? fromMemory : fromStorage;
   if (found === undefined || now - found.at > POSTED_MAX_AGE_MS) return undefined;
   const { at: _at, ...posted } = found;
   return posted;
 }
 
 /** Keep what was posted for this request, in storage and in memory. */
-export function writePosted(scope: string, shown: Shown, entry: Posted, now = Date.now()): void {
+export function writePosted(scope: string, shown: Shown, entry: Posted, since = generation, now = Date.now()): void {
+  if (since !== generation) return; // the device signed out while this was on its way
   const key = entryKey(shown);
   const mine = memory.get(scope) ?? new Map<string, Entry>();
   memory.set(scope, mine);
@@ -124,7 +136,8 @@ export function writePosted(scope: string, shown: Shown, entry: Posted, now = Da
 }
 
 /** Forget what was posted for this request: the post was refused outright, so nothing reached the hub. */
-export function forgetPosted(scope: string, shown: Shown): void {
+export function forgetPosted(scope: string, shown: Shown, since = generation): void {
+  if (since !== generation) return;
   const key = entryKey(shown);
   memory.get(scope)?.delete(key);
   const all = stored(scope, Date.now());
@@ -137,7 +150,7 @@ export function forgetPosted(scope: string, shown: Shown): void {
 
 /**
  * Drop the entries whose request is no longer open. `open` is every request now in `session.pending`; call it only when
- * the session's snapshot has loaded, since before that nothing is open and every entry would go.
+ * the connection has caught up, since before that, and while a replay fills `pending` one event at a time, the list is not complete and entries for requests that have not arrived yet would go.
  */
 export function prunePosted(scope: string, open: Shown[]): void {
   const keep = new Set(open.map(entryKey));
@@ -173,6 +186,7 @@ export function subscribePosted(scope: string, listener: () => void): () => void
 
 /** Drop every record, on this page and in storage: the device was signed out. Open docks draw again and find nothing. */
 export function clearAllPosted(): void {
+  generation += 1;
   const scopes = new Set([...memory.keys(), ...listeners.keys()]);
   memory.clear();
   try {
