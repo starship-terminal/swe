@@ -618,6 +618,33 @@ describe("while a reply is in progress", () => {
     expect(menuOpen(m)).toBeNull();
   });
 
+  it("opens no menu when the reply ended during the hold: it is only a long press, and the release sends", async () => {
+    const m = mount({ props: { holdMs: 80 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "ended mid-press");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    const turn = m.store.getState().session.openTurn ?? "";
+    await feed(m, frame("turn.ended", 30, { status: "completed" }, { turn_id: turn }), frame("session.state", 31, { state: "idle" }));
+    expect(btn(m, "Send message")).toBeDefined(); // the button became Send
+    await wait(160); // the hold timer would have run
+    expect(menuOpen(m)).toBeNull();
+    fire(main, "pointerup");
+    await tail(main);
+    expect(sent(m)).toHaveLength(1); // a plain press, after all
+  });
+
+  it("gives the stack three quarters of the height while the send menu is open, so a waiting request's answers keep their room", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "x");
+    const stack = () => q(m.el, ".sv-composer") as HTMLElement;
+    expect(stack().className).toContain("max-h-1/2");
+    await rightClick(btn(m, "Queue message") as Element);
+    expect(stack().className).toContain("max-h-3/4");
+    expect(stack().className).not.toContain("max-h-1/2");
+  });
+
   it("stops once on a double press", async () => {
     const m = mount();
     await play(m, "streaming", 0, 3);

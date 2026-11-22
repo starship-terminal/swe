@@ -192,6 +192,8 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, confirmMs, chip }: 
   const aborts = useRef(new Set<AbortController>());
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryState = useRef<PrimaryState>("idle");
+  // Whether the menu behind the primary button applies now (a reply is running and has a second way to send), read when the hold timer runs.
+  const holdApplies = useRef(false);
   const reasonId = useId();
 
   const busyTurn = useSessionStore(store, (s) => s.session.openTurn !== null || s.session.phase === "running" || s.session.phase === "waiting");
@@ -202,6 +204,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, confirmMs, chip }: 
   const steerWords = steerWording(steerEffect, requestOpen);
   // A steer that lands when the reply ends is what Queue does: it is not offered as a second way to do the same thing.
   const menuOffered = steerEffect !== "next_turn";
+  holdApplies.current = busyTurn && menuOffered;
   const connection = useSessionStore(store, (s) => s.connection.state);
   const refusalReason = useSessionStore(store, (s) => s.refusal()?.reason ?? null);
   const refusalMessage = useSessionStore(store, (s) => s.refusal()?.message ?? null);
@@ -430,7 +433,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, confirmMs, chip }: 
 
   return (
     <div ref={host} className="sv-composer-host pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="form" data-composer-host>
-      <div ref={stack} className="sv-composer mx-auto flex max-h-1/2 w-full max-w-3xl flex-col gap-2">
+      <div ref={stack} className={cx("sv-composer mx-auto flex w-full max-w-3xl flex-col gap-2", menu === "send" ? "max-h-3/4" : "max-h-1/2")}>
         {/* While the send menu is open it and the bar can use the whole height limit: what is above keeps at least 5 rem (the request's answers),
             the menu scrolls inside what is left of it, and the stack may stand a little over its limit rather than hide a waiting request. */}
         <div ref={above} className={cx("flex flex-col gap-2 overflow-y-auto", menu === "send" ? "min-h-20 empty:min-h-0" : "min-h-0")} data-composer-above>
@@ -620,6 +623,8 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, confirmMs, chip }: 
                     stopHold();
                     hold.current = setTimeout(() => {
                       hold.current = null;
+                      // The reply may have ended during the hold (the button became Send): then it is only a long press, and no menu applies.
+                      if (!holdApplies.current) return;
                       if (feed({ type: "hold" }) === "open-menu") openSendMenu();
                     }, holdMs);
                   }

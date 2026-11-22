@@ -48,7 +48,7 @@ describe("the approval dock", () => {
     const m = await withApproval();
     await click(btn(m, "Allow"));
     expect(posts(m, "approval")).toEqual([{ request_id: "r1", decision: "allow", command_id: "id1" }]);
-    expect(text(q(m.el, "[data-dock-status]"))).toBe("Answer sent. Waiting for the agent.");
+    expect(text(q(m.el, "[data-dock-status]"))).toBe("You answered: Allow. The hub took it. Waiting for the agent.");
     expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
   });
 
@@ -60,7 +60,7 @@ describe("the approval dock", () => {
       allow.click();
     });
     expect(posts(m, "approval")).toHaveLength(1);
-    expect(q(m.el, "[data-dock-status]")?.textContent).toBe("Answer sent. Waiting for the agent.");
+    expect(q(m.el, "[data-dock-status]")?.textContent).toBe("You answered: Allow. The hub took it. Waiting for the agent.");
   });
 
   it("denies with the word the hub reads", async () => {
@@ -516,6 +516,21 @@ describe("an ACP agent's request: ids o1..oN, the meaning in `kind`, the agent's
     expect(all(dock(m), "button[data-option-kind='choice']").map((b) => b.getAttribute("aria-label"))).toEqual(["Option 1: Allow", "Option 2: Deny"]);
   });
 
+  it("gives the whole of what the agent called a fixed answer in its tooltip and accessible name, however much of it the button shows", async () => {
+    const name = `Reject and forget this tool for the rest of the session ${"and every other one like it ".repeat(4)}`;
+    const m = await ask([{ id: "o1", label: "Allow once", kind: "allow" }, { id: "o2", label: name, kind: "deny" }]);
+    const deny = opt(m, "o2");
+    expect(text(q(deny, "[data-agent-name]")).endsWith("…")).toBe(true);
+    expect(deny.title).toBe(name.trim().length > 300 ? `${name.trim().slice(0, 300)}…` : name.trim());
+    expect(deny.getAttribute("aria-label")).toBe(`Deny: ${deny.title}`);
+  });
+
+  it("makes the agent's name the larger, plain text when two answers share a kind, and the small print when they do not", async () => {
+    const m = await ask(acp());
+    for (const id of ["o3", "o4"]) expect(q(opt(m, id), "[data-agent-name]")?.className).toContain("text-sm");
+    expect(q(opt(m, "o1"), "[data-agent-name]")?.className).toContain("opacity-80");
+  });
+
   it("pins two of a kind and lists the rest as choices", async () => {
     const m = await ask(Array.from({ length: 5 }, (_, i) => ({ id: `o${i + 1}`, label: `Reject ${i}`, kind: "deny" })));
     expect(all(pinned(m), "[data-fixed-word]")).toHaveLength(2);
@@ -591,31 +606,95 @@ describe("the dock's focus, live region and stable answers", () => {
   });
 });
 
-describe("an answer the hub accepted that the agent has not taken", () => {
-  it("brings the answers back, and says why, when the request is still open after the wait", async () => {
-    const m = mount({ props: { confirmMs: 150 } });
-    m.transport.on("/approval", ok, "POST");
-    await play(m, "approval", 0, 2);
+describe("one request, at most one decision", () => {
+  const status = (m: Mounted) => text(q(m.el, "[data-dock-status]"));
+  const onlyDecision = (m: Mounted) => new Set(posts(m, "approval").map((p) => p.decision));
+
+  for (const [name, reply, words] of [
+    ["accepted", { status: 200, body: { ok: true, receipt: "accepted" } }, "The hub took it. Waiting for the agent."],
+    ["queued", { status: 202, body: { ok: true, receipt: "queued" } }, "The hub queued it. Waiting for the agent."],
+    ["held (that machine is asleep)", { status: 202, body: { ok: true, receipt: "held" } }, "Your answer waits for that machine to wake."],
+  ] as const) {
+    it(`after an answer the hub ${name}, nothing can post another decision, at the wait's end or ever`, async () => {
+      const m = mount({ props: { confirmMs: 120 } });
+      m.transport.on("/approval", () => reply, "POST");
+      await play(m, "approval", 0, 2);
+      await ready();
+      await pointerPress(opt(m, "allow"));
+      expect(status(m)).toBe(`You answered: Allow. ${words}`);
+      await settle(() => wait(250)); // the wait is over and the request is still open
+      expect(status(m)).toContain("Still waiting");
+      // Every control is off, and a press on Deny posts nothing.
+      expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
+      await pointerPress(opt(m, "deny"));
+      await pointerPress(opt(m, "always"));
+      await pointerPress(opt(m, "allow"));
+      expect(posts(m, "approval")).toHaveLength(1);
+      expect(onlyDecision(m)).toEqual(new Set(["allow"]));
+      // And not by another route either: the answer itself refuses a different decision, and a repeat.
+      expect(await answer(m.store, { requestId: "r1", seq: 8 }, "deny")).toMatchObject({ ok: false, reason: "decided" });
+      expect(await answer(m.store, { requestId: "r1", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "decided" });
+      expect(posts(m, "approval")).toHaveLength(1);
+    });
+  }
+
+  it("keeps the answer in mind when the dock is drawn again for the same request", async () => {
+    const m = await withApproval();
+    await pointerPress(opt(m, "allow"));
+    m.remount();
     await ready();
-    await pointerPress(opt(m, "allow"));
-    expect(posts(m, "approval")).toHaveLength(1);
-    expect(text(q(m.el, "[data-dock-status]"))).toBe("Answer sent. Waiting for the agent.");
-    expect(off(opt(m, "allow"))).toBe(true);
-    await settle(() => wait(250));
-    expect(text(q(m.el, "[data-dock-status]"))).toBe("The agent has not taken your answer yet. You can answer again.");
-    expect(off(opt(m, "allow"))).toBe(false);
-    await pointerPress(opt(m, "allow"));
-    expect(posts(m, "approval")).toHaveLength(2);
+    expect(status(m)).toContain("You answered: Allow.");
+    expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
+    expect(await answer(m.store, { requestId: "r1", seq: 8 }, "deny")).toMatchObject({ ok: false, reason: "decided" });
   });
 
-  it("does not bring them back when the request ends", async () => {
-    const m = mount({ props: { confirmMs: 150 } });
-    m.transport.on("/approval", ok, "POST");
-    await play(m, "approval", 0, 2);
-    await ready();
+  it("brings the answers back, with the hub's reason, after a definite refusal (nothing was posted)", async () => {
+    const m = await withApproval();
+    m.transport.on("/approval", () => ({ status: 409, body: { error: { code: "approval_failed", message: "that request is no longer open" } } }), "POST");
     await pointerPress(opt(m, "allow"));
-    await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }));
-    await settle(() => wait(250));
+    expect(text(q(m.el, "[data-dock-status]"))).toContain("that request is no longer open");
+    expect(all(dock(m), "button[data-option]").some(off)).toBe(false);
+    // The hub refused it (nothing was taken), so a different decision may follow.
+    m.transport.on("/approval", ok, "POST");
+    await pointerPress(opt(m, "deny"));
+    expect(posts(m, "approval").map((p) => p.decision)).toEqual(["allow", "deny"]);
+  });
+
+  for (const [name, reply] of [
+    ["a server error", () => ({ status: 503, body: { error: { code: "unavailable", message: "the hub is busy" } } })],
+    ["no answer at all", () => Promise.reject(new Error("the hub could not be reached"))],
+  ] as const) {
+    it(`says so after ${name}, offers exactly one action (the same answer again) and never another decision`, async () => {
+      const m = await withApproval();
+      let first = true;
+      m.transport.on("/approval", () => {
+        if (first) {
+          first = false;
+          return reply();
+        }
+        return { status: 200, body: { ok: true, receipt: "accepted" } };
+      }, "POST");
+      await pointerPress(opt(m, "deny"));
+      expect(status(m)).toContain("We could not tell whether your answer (Deny) reached the hub.");
+      expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
+      const resend = q(dock(m), "[data-resend]") as HTMLButtonElement;
+      expect(text(resend)).toBe("Send the same answer again");
+      expect(all(dock(m), "button").filter((b) => !b.hasAttribute("data-option"))).toHaveLength(1);
+      // A different decision is refused, whatever the button says.
+      await pointerPress(opt(m, "allow"));
+      expect(await answer(m.store, { requestId: "r1", seq: 8 }, "allow")).toMatchObject({ ok: false, reason: "decided" });
+      // The same one goes again, and then it is taken.
+      await settle(() => void (q(dock(m), "[data-resend]") as HTMLButtonElement).click());
+      expect(posts(m, "approval").map((p) => p.decision)).toEqual(["deny", "deny"]);
+      expect(status(m)).toBe("You answered: Deny. The hub took it. Waiting for the agent.");
+      expect(q(dock(m), "[data-resend]")).toBeNull();
+    });
+  }
+
+  it("ends the dock as before when another device answers while this one waits", async () => {
+    const m = await withApproval();
+    await pointerPress(opt(m, "allow"));
+    await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "deny", by: "device-2" }, { turn_id: "t1" }));
     expect(dock(m)).toBeNull();
   });
 });

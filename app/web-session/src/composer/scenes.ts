@@ -45,6 +45,21 @@ async function press(c: SceneContext, label: string): Promise<void> {
   await c.sleep(40);
 }
 
+/** Wait until the dock says its answers can be pressed (a request that has just appeared keeps them off for a moment), or `text`. */
+async function dockSays(c: SceneContext, words = "You can answer now."): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    if ((document.querySelector("[data-dock-status]")?.textContent ?? "").startsWith(words)) return;
+    await c.sleep(50);
+  }
+}
+
+/** Press a dock answer by the id the agent gave it (its name holds two texts when it asks twice, so a name will not find it). */
+async function pressOption(c: SceneContext, id: string): Promise<void> {
+  await dockSays(c);
+  document.querySelector<HTMLButtonElement>(`[data-dock] [data-option="${id}"]`)?.click();
+  await c.sleep(60);
+}
+
 /** Press the first button whose text starts with `prefix` (a work group's header says how long it worked). */
 async function pressStarting(c: SceneContext, prefix: string): Promise<void> {
   await c.sleep(60);
@@ -211,8 +226,8 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       break;
     case "composer-approval-confirm":
       send(...approval.slice(0, 2));
-      await c.sleep(700); // past the settle time: a request that has just appeared cannot be answered
-      await press(c, "Always allow");
+      await pressOption(c, "always"); // armed
+      await dockSays(c, "Ready."); // and past its wait
       break;
     case "composer-queued-edit":
       send(
@@ -256,8 +271,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       break;
     case "composer-approval-error":
       send(...approval.slice(0, 2));
-      await c.sleep(700);
-      await press(c, "Allow");
+      await pressOption(c, "allow");
       break;
     case "composer-menu-steer-approval": {
       // A request is waiting and the agent's steer stops the reply: the sentence says what that may do to the request.
@@ -448,7 +462,8 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
     default:
       throw new Error(`no composer scene ${scene}`);
   }
-  // A request has its answers off for a moment after it appears: the screens wait it out.
-  await c.sleep(/approval|input|hostile/.test(scene) ? 700 : 60);
+  // A request has its answers off for a moment after it appears: the screens wait it out, until the dock says so.
+  if (/approval|input|hostile|acp/.test(scene)) await dockSays(c, scene === "composer-approval-confirm" ? "Ready." : scene === "composer-approval-error" || scene === "composer-approval-offline" ? "" : "You can answer now.");
+  await c.sleep(60);
   return true;
 }

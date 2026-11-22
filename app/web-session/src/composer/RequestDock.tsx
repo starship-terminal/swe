@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type Mut
 import { useSessionStore, type RequestEvent, type SessionStore, type TimelineItem, type ToolItem } from "../core";
 import { Collapsible, cx, InlineText, Spinner, StateArrow } from "../ui";
 import { AnswerButton } from "./AnswerButton";
-import { answer, decisionFor } from "./answer";
+import { answer, decisionFor, postedFor } from "./answer";
 import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { usePresses } from "./press";
@@ -58,6 +58,13 @@ function agentName(option: Option, word: string): string | null {
 }
 
 type Option = { id: string; label: string; kind?: string; standing?: boolean };
+
+/** What the hub's receipt for a taken answer means for the person. */
+const RECEIPT_WORDS: Record<string, string> = {
+  accepted: "The hub took it. Waiting for the agent.",
+  queued: "The hub queued it. Waiting for the agent.",
+  held: "Your answer waits for that machine to wake.",
+};
 
 /** How far back from the end of the timeline the tool call a request asks about is looked for. */
 const LOOKBACK = 300;
@@ -124,33 +131,31 @@ function ToolDetails({ tool }: { tool: ToolItem | undefined }) {
  */
 function useAnswering(store: SessionStore, event: RequestEvent, confirmMs: number) {
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  // An answer the hub accepted is not one the agent took: on another machine the hub says "accepted" first. The request
-  // ending is what shows it was taken; if it is still open after `confirmMs`, the answers come back, and say why.
-  const [unconfirmed, setUnconfirmed] = useState(false);
-  useEffect(() => {
-    if (!sent) return;
-    const timer = setTimeout(() => {
-      setSent(false);
-      setUnconfirmed(true);
-    }, confirmMs);
-    return () => clearTimeout(timer);
-  }, [sent, confirmMs]);
+  const [, redraw] = useState(0);
   const shown = { requestId: event.data.request_id, seq: event.seq };
-  const press = async (decision: string): Promise<void> => {
+  // What was posted for this request lives outside the dock (see answer.ts): a dock drawn again for it knows, and no press of
+  // this view can post a second, different decision for it.
+  const posted = postedFor(store, shown);
+  // A taken answer that the request has not ended after `confirmMs`: said, and nothing more offered (a different answer cannot be sent).
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    if (posted?.outcome !== "taken") return;
+    const timer = setTimeout(() => setLate(true), confirmMs);
+    return () => clearTimeout(timer);
+  }, [posted?.outcome, confirmMs]);
+  const press = async (decision: string, label: string): Promise<void> => {
     setBusy(true);
     setMessage(null);
-    setUnconfirmed(false);
     try {
-      const outcome = await answer(store, shown, decision);
-      if (outcome.ok) setSent(true);
-      else if (outcome.reason !== "busy") setMessage(outcome.message);
+      const outcome = await answer(store, shown, decision, label);
+      if (!outcome.ok && outcome.reason !== "busy" && outcome.reason !== "unknown") setMessage(outcome.message);
     } finally {
       setBusy(false);
+      redraw((n) => n + 1);
     }
   };
-  return { busy, sent, message, press, unconfirmed };
+  return { busy, posted, message, press, late };
 }
 
 function optionsOf(event: RequestEvent): Option[] {
@@ -171,7 +176,10 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
   const refusal = useSessionStore(store, (s) => s.refusal()?.message ?? null);
   const callId = event.type === "approval.requested" ? event.data.call_id : undefined;
   const tool = useSessionStore(store, (s) => findTool(s.session.items, callId));
-  const { busy, sent, message, press, unconfirmed } = useAnswering(store, event, confirmMs);
+  const { busy, posted, message, press, late } = useAnswering(store, event, confirmMs);
+  // Once an answer is posted, no other decision can be: the answers stay off. If it may not have arrived, the same one can be sent again.
+  const taken = posted?.outcome === "taken";
+  const doubtful = posted?.outcome === "unknown";
   // The standing option that was pressed once, and whether the second press counts yet.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [confirmReady, setConfirmReady] = useState(false);
@@ -212,7 +220,7 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
   const choices = rest.slice(0, OPTIONS_SHOWN);
   const hidden = rest.length - choices.length;
   const textQuestion = !approval && event.data.kind === "text";
-  const blocked = settling || busy || sent || refusal !== null;
+  const blocked = settling || busy || taken || doubtful || refusal !== null;
   const kind = approval ? (KIND_WORD[event.data.kind] ?? "Request") : "";
   // One filled answer: the first that lets the agent go on. The others (a standing grant included) are plain.
   const firstAllow = fixed.find((entry) => entry.fixed === "allow")?.index;
@@ -230,18 +238,19 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
       }
     }
     setConfirming(null);
-    void press(decisionFor(option, index));
+    const meaning = fixedKind(option);
+    void press(decisionFor(option, index), meaning === null ? label(option.label) : wordFor(meaning, option));
   };
 
   // One line that is always there (so a screen reader has a live region before its text changes) and that says
   // what the answers can do now: wait, or go.
   const status =
-    sent ? "Answer sent. Waiting for the agent."
+    taken ? `You answered: ${posted.label}. ${RECEIPT_WORDS[posted.receipt ?? "accepted"] ?? RECEIPT_WORDS.accepted}${late ? " Still waiting: the request has not ended." : ""}`
+    : doubtful ? `We could not tell whether your answer (${posted.label}) reached the hub.`
     : refusal !== null ? refusal
     : settling ? "A new request just appeared. Read it before you answer."
     : confirming !== null ? (confirmReady ? "Ready. Press again to confirm." : "One moment, then press again.")
     : busy ? "Sending your answer."
-    : unconfirmed ? "The agent has not taken your answer yet. You can answer again."
     : "You can answer now.";
 
   const renderAnswer = ({ option, index, fixed: meaning }: { option: Option; index: number; fixed: Fixed | null }, kindOf: "fixed" | "choice") => {
@@ -251,11 +260,15 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
     const word = meaning === null ? full : wordFor(meaning, option);
     const confirmText = meaning === "deny" ? "Press again to always deny" : "Press again to always allow";
     const name = kindOf === "fixed" ? agentName(option, word) : null;
+    // What the agent called it, in full (to the label cap): in the tooltip and the accessible name, whatever the button shows of it.
+    const fullName = name === null ? null : label(option.label);
+    // Two answers of one kind (Reject once, Reject always) are told apart by what the agent called them: that is then the larger text.
+    const twins = meaning !== null && fixed.filter((entry) => entry.fixed === meaning).length > 1;
     const words = confirm ? confirmText : word;
     return (
       <AnswerButton
         key={`${index}:${option.id}`}
-        aria-label={kindOf === "choice" ? `Option ${index + 1}: ${full}` : name !== null && !confirm ? `${word}: ${name}` : undefined}
+        aria-label={kindOf === "choice" ? `Option ${index + 1}: ${full}` : fullName !== null && !confirm ? `${word}: ${fullName}` : undefined}
         className={kindOf === "choice" ? "w-full justify-start border-dashed text-left" : undefined}
         data-armed={confirm ? true : undefined}
         data-option={option.id}
@@ -265,7 +278,7 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
         onKeyDown={(key) => presses.key(key, option.id, !blocked && (confirming !== option.id || confirmReady))}
         onKeyUp={() => presses.keyUp()}
         onPointerDown={() => presses.down(option.id, !blocked && (confirming !== option.id || confirmReady))}
-        title={kindOf === "choice" ? full : undefined}
+        title={kindOf === "choice" ? full : fullName !== null && !confirm ? fullName : undefined}
         variant={kindOf === "choice" ? "plain" : deny ? "danger" : index === firstAllow ? "primary" : "plain"}
       >
         {kindOf === "choice" ? (
@@ -284,7 +297,11 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
             ) : (
               <span data-fixed-word>{words}</span>
             )}
-            {name !== null && !confirm ? <span className="line-clamp-2 text-xs font-normal break-words opacity-80" data-agent-name>{name}</span> : null}
+            {name !== null && !confirm ? (
+              <span className={cx("line-clamp-2 break-words", twins ? "text-sm font-medium" : "text-xs font-normal opacity-80")} data-agent-name>
+                {name}
+              </span>
+            ) : null}
           </span>
         )}
       </AnswerButton>
@@ -332,6 +349,19 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
         {/* Above the answers, so that what comes and goes here moves the text up and never an answer. */}
         <div aria-live="polite" className="min-h-4 text-xs text-secondary" data-dock-status role="status">
           {message !== null ? <ErrorNote>{message}</ErrorNote> : status}
+          {doubtful && !busy ? (
+            <>
+              {" "}
+              <button
+                className="underline focus-visible:outline-2 focus-visible:outline-interactive"
+                data-resend
+                onClick={() => void press(posted.decision, posted.label)}
+                type="button"
+              >
+                Send the same answer again
+              </button>
+            </>
+          ) : null}
         </div>
         {confirming !== null ? (
           <p className="mt-1 text-xs text-secondary" data-note="standing">
@@ -344,7 +374,7 @@ function Panel({ store, event, waiting, settleMs, confirmMs, focusKept }: { stor
         <div className="mt-1.5 flex flex-wrap gap-2">
           {fixed.map((entry) => renderAnswer(entry, "fixed"))}
           {textQuestion ? (
-            <AnswerButton aria-disabled={blocked ? true : undefined} data-option="skip" onClick={() => !blocked && void press("deny")} variant="plain">
+            <AnswerButton aria-disabled={blocked ? true : undefined} data-option="skip" onClick={() => !blocked && void press("deny", "Skip this question")} variant="plain">
               Skip this question
             </AnswerButton>
           ) : null}
