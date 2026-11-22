@@ -172,7 +172,7 @@ value.
 | A change while the agent is parked or down | the keeper's own `session.options` with the value the next start will use (and plan mode off after a permission mode, as `spec.json` records), then the result `applies when the agent starts`; that start's own event then says what the agent made of it |
 | The agent restarts, or a new keeper resumes | the new adapter's event at start; a keeper whose agent does not start reads the last one back from its log for the welcome |
 | An agent with narrower caps starts | the keeper drops what it no longer offers |
-| The agent reports a change this adapter sent, late | nothing: opencode keeps the model refs and agents it posted and the server has not reported back yet. A `session.model.selected` or `session.agent.selected` equal to one of them is that post's echo and is used up (the newest post is shown already); any other report is the server's own change (a plan approved, a fallback model) and is shown at once. Posting A, B, A ends on A whatever order the echoes come in; the list is cleared when an execution ends *(synthetic)*. ACP needs no such rule: the agent's updates and answers share one ordered stdio stream, and the keeper sends the next `session/set_mode` only after the last one's answer, so an update the agent writes while it handles a set lands before the next set is sent. ACP has `current_mode_update` for the agent's own changes, and qwen sent none after a set; each one is shown as the agent's word. Codex has no such report: its values come from `set_option` and the thread's answers only |
+| The agent reports a change this adapter sent, late | nothing: opencode keeps the model refs and agents it posted and the server has not reported back yet. A `session.model.selected` or `session.agent.selected` equal to one of them is that post's echo and is used up (the newest post is shown already); any other report is the server's own change (a plan approved, a fallback model) and is shown at once. Posting A, B, A ends on A whatever order the echoes come in; the list is cleared when an execution ends *(synthetic)*. An echo is lost only with an event the reader drops (a line over the size bound, or one the state cannot read): the event stream never reconnects, and when it ends so does the session. On a dropped event the list is cleared and the session is read back once (`GET .../session/<id>`, which carries `model` and `agent`); the read is shown unless a newer post overtook it *(synthetic)*. ACP needs no such rule: the agent's updates and answers share one ordered stdio stream, and the keeper sends the next `session/set_mode` only after the last one's answer, so an update the agent writes while it handles a set lands before the next set is sent. ACP has `current_mode_update` for the agent's own changes, and qwen sent none after a set; each one is shown as the agent's word. Codex has no such report: its values come from `set_option` and the thread's answers only |
 | A hub restart | the keeper's welcome |
 | A satellite session | the copied journal's events, folded |
 
@@ -315,6 +315,9 @@ then sort them first. `recent_models` could stand in for "recent".
   snapshot has none until the agent next starts.
 - The selector's `pending` lives in the page: a reload in the middle of
   a change shows the hub's value and no spinner.
+- opencode: a model the server switches to by itself with no
+  `session.model.selected` report, seen only in a step's start, is not
+  shown (a step's start names the model only while none is known).
 - The page bundle still exports `fetchTransport` and `sessionPath`,
   the one remaining way for page code to post a command itself. The
   view changes options only through `setOption`, and a test

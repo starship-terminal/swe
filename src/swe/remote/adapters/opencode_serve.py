@@ -712,6 +712,7 @@ class OpencodeServeAdapter:
                     oversized = not whole
                     parser = wire.SseParser()
                     self.dropped.append("an event line over the size bound")
+                    self._events_lost()
                     continue
                 event = parser.feed(raw)
                 if event is None:
@@ -724,6 +725,7 @@ class OpencodeServeAdapter:
                     # An event the state machine choked on must not end
                     # the reader: every later event would be lost.
                     self.dropped.append(f"{type(exc).__name__}: {exc}"[:200])
+                    self._events_lost()
         except (OSError, ValueError, http.client.HTTPException,
                 AttributeError):
             pass
@@ -746,6 +748,34 @@ class OpencodeServeAdapter:
             self._kill()
         except (OSError, AttributeError):
             pass
+
+    def _events_lost(self) -> None:
+        """The reader dropped an event, which may have been a post's
+        echo (G32): forget the posts waiting for one, and read the
+        session's model and agent back once, off the reader's thread.
+        The stream itself never reconnects: when it ends, so does the
+        session."""
+        with self._lock:
+            state = self._state
+            if state is None or state.done or self._closed \
+                    or not self._session_id:
+                return
+            state.events_lost()
+            posts = state.posts
+        threading.Thread(target=self._reread_session, args=(posts,),
+                         daemon=True, name="opencode-serve-reread").start()
+
+    def _reread_session(self, posts: int) -> None:
+        try:
+            reply = self._call(wire.get_session(self._session_id))
+        except AdapterError:
+            return
+        if not reply.ok:
+            return
+        with self._lock:
+            state = self._state
+            if state is not None and not state.done and not self._closed:
+                self._emit(state.session_read(reply.data, posts))
 
     def _dispatch(self, event: dict) -> None:
         with self._lock:

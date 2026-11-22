@@ -339,6 +339,29 @@ class TestOpencodeLateReports(unittest.TestCase):
             "model": {"providerID": "p", "id": "m0"}}}).events
         self.assertEqual(_values(said, "model"), ["p/m0"])
 
+    def test_after_lost_events_the_servers_word_is_shown(self):
+        # build then plan posted, both echoes lost with dropped events;
+        # then the server leaves plan by itself and reports build.
+        st = self.state()
+        said = st.agent_selected("build") + st.agent_selected("plan")
+        st.events_lost()
+        said += self.agent_report(st, "build")
+        self.assertIs(_options(said)[-1]["plan_mode"]["value"], False)
+        self.assertEqual(st.agent, "build")
+
+    def test_a_re_read_overtaken_by_a_post_is_not_used(self):
+        st = self.state()
+        st.events_lost()
+        posts = st.posts
+        st.model_selected({"providerID": "p", "id": "new"})
+        self.assertEqual(st.session_read(
+            {"model": {"providerID": "p", "id": "old"}}, posts), [])
+        self.assertEqual(st.model["id"], "new")
+        said = st.session_read({"model": {"providerID": "p", "id": "x"},
+                                "agent": "plan"}, st.posts)
+        self.assertEqual(_options(said)[-1]["model"]["value"], "p/x")
+        self.assertIs(_options(said)[-1]["plan_mode"]["value"], True)
+
     def test_a_late_agent_report_is_ignored(self):
         st = self.state()
         said = st.agent_selected("plan") + st.agent_selected("build")
@@ -395,6 +418,29 @@ class TestKeeperCarriesTheModelList(unittest.TestCase):
 
 
 class TestOpencodeAdapterLateReports(_OpencodeCase):
+    def test_a_dropped_event_reads_the_session_back(self):
+        adapter, sink, _sid = self.started()
+        adapter.set_option("plan_mode", True)  # the server's agent: plan
+        with adapter._lock:
+            # The page shows build (as if the reports had gone wrong).
+            adapter._emit(adapter._state.agent_selected("build"))
+        shown = len(sink.events)
+        adapter._events_lost()
+        found = sink.wait_for(
+            lambda e: e["type"] == "session.options"
+            and e["data"]["options"]["plan_mode"]["value"] is True
+            and sink.events.index(e) >= shown, timeout=5.0)
+        self.assertIsNotNone(found)
+        self.assertIs(_options(sink.events)[-1]["plan_mode"]["value"], True)
+        path = "/api/session/" + adapter._session_id
+
+        def reads():
+            return [r["method"] for r in self.sent() if r["path"] == path]
+        deadline = time.monotonic() + 5.0
+        while not reads() and time.monotonic() < deadline:
+            time.sleep(0.05)  # the fake logs a request after answering it
+        self.assertEqual(reads(), ["GET"])
+
     def test_a_model_the_server_never_reports_back_stays_shown(self):
         adapter, sink, _sid = self.started("silent-model",
                                            spec={"model": "prov/m1"})

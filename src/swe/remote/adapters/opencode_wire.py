@@ -437,6 +437,7 @@ class ServeState(SessionCore):
         # other report is the server's own change, shown at once.
         self._posted_models: list[dict] = []
         self._posted_agents: list[str] = []
+        self._posts = 0  # every post so far, to tell a stale re-read
         # our turn id -> the id of its user message, for a revert
         self.turn_messages: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -616,6 +617,7 @@ class ServeState(SessionCore):
         if isinstance(ref, dict):
             self.model = dict(ref)
             self._posted_models.append(dict(ref))
+            self._posts += 1
         return self.options_events()
 
     def agent_selected(self, agent: Any) -> list:
@@ -623,6 +625,30 @@ class ServeState(SessionCore):
         if text_of(agent):
             self.agent = agent
             self._posted_agents.append(agent)
+            self._posts += 1
+        return self.options_events()
+
+    @property
+    def posts(self) -> int:
+        return self._posts
+
+    def events_lost(self) -> None:
+        """An event the reader had to drop may have been a post's echo:
+        no report is taken for an echo any more, so every later one is
+        the server's word."""
+        self._posted_models.clear()
+        self._posted_agents.clear()
+
+    def session_read(self, session: Any, posts: int) -> list:
+        """``GET .../session/<id>`` after lost events: the server's
+        current model and agent. A read that ``posts`` show was overtaken
+        by a newer post is not used (that post's answer said more)."""
+        if posts != self._posts or not isinstance(session, dict):
+            return []
+        if isinstance(session.get("model"), dict):
+            self.model = dict(session["model"])
+        if text_of(session.get("agent")):
+            self.agent = session["agent"]
         return self.options_events()
 
     def _ensure_turn(self, out: list) -> None:
