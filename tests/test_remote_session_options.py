@@ -315,6 +315,30 @@ class TestOpencodeLateReports(unittest.TestCase):
                 self.assertEqual(_values(self.report(st, "b"), "model"),
                                  ["p/b"])
 
+    def test_a_step_still_on_the_old_value_does_not_undo_a_post(self):
+        # A change posted as an execution starts: its step says the old
+        # model and agent, then the posts' echoes come.
+        st = self.state()
+        st.agent = "build"
+        said = st.model_selected({"providerID": "p", "id": "b"})
+        said += st.agent_selected("plan")
+        said += st.feed({"type": "session.step.started", "data": {
+            "sessionID": "ses_1", "agent": "build",
+            "model": {"providerID": "p", "id": "m0"}}}).events
+        said += self.report(st, "b") + self.agent_report(st, "plan")
+        self.assertEqual(_options(said)[-1]["model"]["value"], "p/b")
+        self.assertIs(_options(said)[-1]["plan_mode"]["value"], True)
+
+    def test_a_step_names_the_model_while_none_is_known(self):
+        st = opencode_wire.ServeState("oc:x", clock=lambda: 1.0,
+                                      run_id="aaaa0001")
+        st.session_id = "ses_1"
+        st.start_events(ALL_CAPS.narrowed(opencode_wire.PROVEN), "ses_1")
+        said = st.feed({"type": "session.step.started", "data": {
+            "sessionID": "ses_1", "agent": "build",
+            "model": {"providerID": "p", "id": "m0"}}}).events
+        self.assertEqual(_values(said, "model"), ["p/m0"])
+
     def test_a_late_agent_report_is_ignored(self):
         st = self.state()
         said = st.agent_selected("plan") + st.agent_selected("build")

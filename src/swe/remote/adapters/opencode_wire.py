@@ -703,9 +703,14 @@ class ServeState(SessionCore):
             turn.reason, turn_id=turn.turn_id, ts=self.now()))
 
     def _on_step_started(self, data: dict, fed: Fed) -> None:
-        if isinstance(data.get("model"), dict):
+        # A step says what it runs with, which can be the value from
+        # before a change posted while the execution was under way (the
+        # step finishes as it started). It names the session's model or
+        # agent only while we know none; the session's setting comes from
+        # our posts and the server's ``*.selected`` reports.
+        if not self.model and isinstance(data.get("model"), dict):
             self.model = dict(data["model"])
-        if text_of(data.get("agent")):
+        if not self.agent and text_of(data.get("agent")):
             self.agent = data["agent"]
 
     def _on_step_ended(self, data: dict, fed: Fed) -> None:
