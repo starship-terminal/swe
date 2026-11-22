@@ -334,8 +334,8 @@ export function QueueTray({ store, onKeep, settleMs, confirmMs }: { store: Sessi
   useEffect(() => {
     for (const item of queue) {
       const kept = edits[item.command_id];
-      // Also after the wait gave up on it (a connection that came back late): the text is the saved one, and nothing typed since is touched.
-      if (kept !== undefined && (kept.pending === true || kept.unconfirmed === true) && item.text === kept.text) setEdit(item.command_id, undefined);
+      // Also after the wait gave up on it (a connection that came back late). It is the saved text arriving, and the draft is still that text: a draft the person has changed since is theirs, and typing text that happens to match the queue is not an echo.
+      if (kept !== undefined && (kept.pending === true || kept.unconfirmed === true) && kept.saved !== undefined && item.text === kept.saved && kept.text === kept.saved) setEdit(item.command_id, undefined);
     }
   }, [queue, edits]);
 

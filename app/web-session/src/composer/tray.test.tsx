@@ -354,6 +354,19 @@ describe("an edit the hub accepted but the queue has not shown", () => {
     expect(q(m.el, "[data-edit-conflict]")).toBeNull();
   });
 
+  it("keeps the editor open when typing makes the draft match the queue's text, after the wait gave up", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    // Delete back to what the queue still shows ("then lint it"): that is typing, not the saved edit arriving.
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(q(tray(m), "textarea")).not.toBeNull();
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it");
+  });
+
   it("puts the words back in the editor, saying so, when the edit never shows", async () => {
     const m = await saved(120);
     await settle(() => wait(200));
