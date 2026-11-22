@@ -211,6 +211,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       break;
     case "composer-approval-confirm":
       send(...approval.slice(0, 2));
+      await c.sleep(700); // past the settle time: a request that has just appeared cannot be answered
       await press(c, "Always allow");
       break;
     case "composer-queued-edit":
@@ -255,7 +256,63 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       break;
     case "composer-approval-error":
       send(...approval.slice(0, 2));
+      await c.sleep(700);
       await press(c, "Allow");
+      break;
+    case "composer-menu-steer-approval": {
+      // A request is waiting and the agent's steer stops the reply: the sentence says what that may do to the request.
+      send(...approval.slice(0, 2), frame(k, "session.caps", 50, { caps: { steer: true, plan_mode: true, rollback: false, fork: true, stop_task: true, options: [], steer_effect: "stops_reply" } }));
+      await type(c, "Actually, use the retry helper in utils instead.");
+      await rightClick(c, "Queue message");
+      break;
+    }
+    case "composer-menu-send-multiline":
+      send(...streaming.slice(0, 5));
+      await type(c, "Two things:\n1. Rename `load_config` to `read_config` everywhere.\n2. Keep the old name as a wrapper.\nRun the linter at the end.");
+      await rightClick(c, "Queue message");
+      break;
+    case "composer-queued-conflict":
+      send(
+        ...queued.slice(0, 3),
+        frame(k, "approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow", by: "device-1" }),
+        frame(k, "session.state", 14, { state: "running" }),
+        frame(k, "queue.updated", 15, { items: [{ command_id: "q1", text: "then lint it", by: "device-1", mode: "queue" }] }),
+      );
+      await openTray(c);
+      await press(c, "Edit queued message");
+      // Another device edits the same message while this one is editing it.
+      send(frame(k, "queue.updated", 16, { items: [{ command_id: "q1", text: "then lint it and run the tests", by: "device-2", mode: "queue" }] }));
+      break;
+    case "composer-queued-remove":
+      send(
+        ...queued.slice(0, 3),
+        frame(k, "approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow", by: "device-1" }),
+        frame(k, "session.state", 14, { state: "running" }),
+        frame(k, "queue.updated", 15, { items: [{ command_id: "q1", text: "then lint it", by: "device-1", mode: "queue" }] }),
+      );
+      await openTray(c);
+      await press(c, "Remove queued message");
+      await c.sleep(700);
+      break;
+    case "composer-hostile-labels":
+      send(
+        ...approval.slice(0, 4),
+        frame(k, "approval.requested", 15, {
+          request_id: "r11",
+          kind: "command",
+          prompt: "Run `git push --force origin main`?",
+          options: [
+            { id: "x1", label: `Allow everything from now on ${"and never ask again ".repeat(15)}` },
+            { id: "x2", label: "Allow" },
+            { id: "x3", label: `Deny ${"this one, it is risky ".repeat(15)}` },
+            { id: "x4", label: "Deny" },
+            { id: "allow", label: "Allow", kind: "allow" },
+            { id: "always", label: "Always", kind: "allow", standing: true },
+            { id: "deny", label: "Deny", kind: "deny" },
+          ],
+        }),
+        frame(k, "session.state", 16, { state: "waiting" }),
+      );
       break;
     case "composer-menu-attach":
       send(...base);
@@ -369,6 +426,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
     default:
       throw new Error(`no composer scene ${scene}`);
   }
-  await c.sleep(60);
+  // A request has its answers off for a moment after it appears: the screens wait it out.
+  await c.sleep(/approval|input|hostile/.test(scene) ? 700 : 60);
   return true;
 }

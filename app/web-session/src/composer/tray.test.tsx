@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { all, box, btn, click, feed, frame, mount, play, posts, q, settle, text, typeText, type Mounted } from "./harness";
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const ok = () => ({ status: 200, body: { ok: true, receipt: "accepted" } });
 const queue = (seq: number, ...items: { id: string; text: string; attachments?: string[] }[]) =>
   frame("queue.updated", seq, { items: items.map((i) => ({ command_id: i.id, text: i.text, by: "device-1", mode: "queue", ...(i.attachments ? { attachments: i.attachments } : {}) })) });
@@ -32,14 +33,38 @@ describe("the queued tray", () => {
     expect(q(m.el, "[data-tray]")).toBeNull();
   });
 
-  it("removes a message once on a double press", async () => {
+  it("takes a message out in two presses, the second after a wait and a press of its own: a double click removes nothing", async () => {
     const m = await withQueue();
     const remove = btn(m, "Remove queued message") as HTMLButtonElement;
+    await click(remove); // the first press arms
+    expect(posts(m, "queue")).toHaveLength(0);
+    const confirm = btn(m, "Press again to remove") as HTMLButtonElement;
+    // The second click of a double click lands on the new button: it is visibly not ready, and does nothing.
+    expect(confirm.disabled).toBe(true);
+    expect(text(q(m.el, "[data-remove-confirm]"))).toContain("One moment, then press again.");
+    await click(confirm);
+    expect(posts(m, "queue")).toHaveLength(0);
+    await settle(() => wait(60));
+    expect((btn(m, "Press again to remove") as HTMLButtonElement).disabled).toBe(false);
+    // A click whose pointer did not go down on it is not a press of it.
+    await settle(() => void (btn(m, "Press again to remove") as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(posts(m, "queue")).toHaveLength(0);
+    // A pointer that goes down on it after the wait is.
     await settle(() => {
-      remove.click();
-      remove.click();
+      const again = btn(m, "Press again to remove") as HTMLButtonElement;
+      again.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+      again.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      again.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
     });
     expect(posts(m, "queue")).toEqual([{ client_id: "q1", op: "cancel", command_id: "id1" }]);
+  });
+
+  it("lets the person keep a message they started to remove", async () => {
+    const m = await withQueue();
+    await click(btn(m, "Remove queued message"));
+    await click(btn(m, "Keep it"));
+    expect(q(m.el, "[data-remove-confirm]")).toBeNull();
+    expect(posts(m, "queue")).toHaveLength(0);
   });
 
   it("sends a queued message now, which stops the reply, from its menu and once", async () => {
@@ -95,7 +120,7 @@ describe("the queued tray", () => {
     });
     await feed(m, queue(20)); // it was sent meanwhile
     const orphan = q(m.el, "[data-orphan]") as HTMLElement;
-    expect(text(orphan)).toContain("left the queue before your edit was saved");
+    expect(text(orphan)).toContain("sent or taken out of the queue before your edit was saved");
     expect(text(orphan)).toContain("then lint it, strictly");
     await click(btn(m, "Move to the message box"));
     expect(box(m).value).toBe("then lint it, strictly");
@@ -183,5 +208,55 @@ describe("the queued tray", () => {
   it("offers no reorder: the hub has none", async () => {
     const m = await withQueue();
     expect(all(tray(m), "button").map((b) => b.getAttribute("aria-label") ?? text(b))).toEqual(["Edit queued message", "Remove queued message", "More for queued message", "Queued: 1 message"]);
+  });
+});
+
+describe("an edit while another device changes the message", () => {
+  async function editing(): Promise<Mounted> {
+    const m = await withQueue();
+    await click(btn(m, "Edit queued message"));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it twice");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return m;
+  }
+
+  it("says the message changed, shows the new text, and does not save over it unseen", async () => {
+    const m = await editing();
+    await feed(m, queue(20, { id: "q1", text: "then lint and test it" }));
+    const conflict = q(m.el, "[data-edit-conflict]") as HTMLElement;
+    expect(text(conflict)).toContain("changed on another device while you were editing");
+    expect(text(conflict)).toContain("then lint and test it");
+    expect((btn(m, "Save the edit") as HTMLButtonElement).disabled).toBe(true);
+    await click(btn(m, "Save the edit"));
+    expect(posts(m, "queue")).toHaveLength(0);
+  });
+
+  it("lets the person keep their own words, which then save", async () => {
+    const m = await editing();
+    await feed(m, queue(20, { id: "q1", text: "then lint and test it" }));
+    await click(btn(m, "Keep my words"));
+    expect(q(m.el, "[data-edit-conflict]")).toBeNull();
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it twice");
+    await click(btn(m, "Save the edit"));
+    expect(posts(m, "queue")).toEqual([{ client_id: "q1", op: "edit", command_id: "id1", text: "then lint it twice" }]);
+  });
+
+  it("lets the person take the new text instead", async () => {
+    const m = await editing();
+    await feed(m, queue(20, { id: "q1", text: "then lint and test it" }));
+    await click(btn(m, "Use the new text"));
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint and test it");
+    expect(q(m.el, "[data-edit-conflict]")).toBeNull();
+  });
+
+  it("keeps the person's words and says what happened when the message was sent or taken out meanwhile", async () => {
+    const m = await editing();
+    await feed(m, queue(20));
+    const orphan = q(m.el, "[data-orphan]") as HTMLElement;
+    expect(text(orphan)).toContain("sent or taken out of the queue before your edit was saved");
+    expect(text(orphan)).toContain("then lint it twice");
   });
 });

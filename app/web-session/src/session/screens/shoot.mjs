@@ -59,6 +59,11 @@ const SCENES = {
   "composer-read-only": "scene=composer-read-only",
   "composer-attachments": "scene=composer-attachments",
   "composer-hostile": "scene=composer-hostile",
+  "composer-menu-steer-approval": "scene=composer-menu-steer-approval",
+  "composer-menu-send-multiline": "scene=composer-menu-send-multiline",
+  "composer-queued-conflict": "scene=composer-queued-conflict",
+  "composer-queued-remove": "scene=composer-queued-remove",
+  "composer-hostile-labels": "scene=composer-hostile-labels",
 };
 const SIZES = { desktop: { width: 1280, height: 800, mobile: false }, phone: { width: 390, height: 844, mobile: true } };
 const BASE = process.env.SCREENS_URL ?? "http://localhost:5199/";

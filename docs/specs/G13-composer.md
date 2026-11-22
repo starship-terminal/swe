@@ -14,7 +14,9 @@ core. The view is still behind `remote.session_view`, which is off by default.
 | `Menu.tsx`, `composer.css` | the glass menu (attach, send options, a queued message's), and the rules a utility class cannot say: the glass, the keyboard inset, the timeline's end padding |
 | `submit.ts` | `submitMessage`: the one place a message goes to the store, with its guards |
 | `keys.ts` | `enterAction`: what Enter means (pure) |
-| `draft.ts`, `useDraft.ts` | the draft kept in storage, and the hook that writes it |
+| `draft.ts`, `useDraft.ts` | the draft kept in storage (with its age limit and sign-out clearing), and the hook that writes it |
+| `press.ts` | what counts as a press of an answer that cannot be taken back (its own pointer or key start, no repeat) |
+| `Menu.tsx` | the glass menu: safe first focus, no repeat, no key held from opening |
 | `RequestDock.tsx`, `answer.ts` | the approval and question dock, and `answer`: a press that lands on the request shown |
 | `QueueTray.tsx` | the tray: a strip that opens upward into a list; edit, remove, and send now in each item's menu |
 | `steer.ts` | what steer is called and says, from `caps.steer_effect` |
@@ -36,7 +38,9 @@ Edits outside `src/composer/`, each the smallest that mounts the composer:
 | `src/swe/webapp/static/tokens.css`, `src/index.css` | the glass tokens (below), and their names for Tailwind (`rounded-bar`, `rounded-glass`, `border-glass-border`) |
 | `src/session/Timeline.tsx` (again) | the timeline's content leaves `--sv-composer-h` of padding at its end, and "Jump to latest" sits that far above the bottom (two class names: `sv-pad-end`, `sv-jump`) |
 | `src/ui/Prose.tsx`, `src/ui/index.ts` | `InlineText`: one run of text with code spans drawn as code and every character kept (nothing else is read) |
-| `src/session/Rows.tsx` | the timeline's request row draws its prompt through `InlineText`, so a prompt shows the same in the row and in the dock |
+| `src/session/Rows.tsx` | the timeline's request row draws its prompt through `InlineText`, cut with the timeline's `clip` (6000 characters, 300 lines), so a prompt shows the same in the row and in the dock |
+| `src/session/WorkGroup.tsx` | a step stopped by the end of its turn has its own mark (the square), not the cancelled step's cross |
+| `src/swe/webapp/static/app.js` | `pairForget` also removes the saved drafts (`swe.sv.draft.v1:*`), 13 lines |
 | `src/session/screens/main.tsx`, `shoot.mjs` | the composer's scenes (`composer-*`) |
 | `SessionShell.test.tsx`, `SessionView.test.tsx` | the tests that described the placeholder now describe the composer |
 
@@ -154,17 +158,25 @@ device first (G11's outbox) and the timeline draws its bubble and its reason.
 
 **The menu behind the primary button.** While a reply runs, holding the primary
 button (450 ms), a right click, or the ArrowUp key (or Shift+F10) opens a glass
-menu above it with two items: **Queue** ("Sent when the current reply ends.") and
+menu above the whole bar (not above the button: on a phone a draft of several lines has its first line level with it) with two items: **Queue** ("Sent when the current reply ends.") and
 the steer item, which is named and worded from `caps.steer_effect` ("Stop and send"
 only when the session says its steer stops the reply, "Send next" for the two that wait, "Send now" when the field is absent; see
-"What steer does, per agent"). The menu opens on Queue, never on the steer item; the arrow keys move, Escape or Tab or a press elsewhere closes it
+"What steer does, per agent"; for `next_turn` it is not offered at all, and with it the menu: a steer that lands when the reply ends is Queue again). The
+menu opens on Queue, never on the steer item. That is a rule of `Menu` itself: an item is `safe` (may take the first
+focus) only if choosing it sends nothing, stops nothing, steers nothing and removes nothing in a way that cannot be undone
+(Queue and the file choices are; the steer item and the tray's steer menu are not), and a menu with no safe
+item opens with the focus on the menu itself, so a key still down from opening it chooses nothing. A repeat of any key
+chooses nothing, and neither does a key's click while the Enter or Space that was down when the menu opened is still down
+(the page tracks which keys are down; a pointer's click is not held back). The arrow keys move, Escape or Tab or a press elsewhere closes it
 and the focus goes back to the button. The steer item is disabled, with the
 reason in the menu and beside the bar, when `caps.steer` is not true ("This agent
-cannot be steered."), which is also the case of an ACP agent. If the turn ended
+cannot be steered."), which is also the case of an ACP agent. With no steer and a message typed, the line beside the bar
+says what is true: "This agent cannot send a message ahead of the queue. A message sent now waits and goes when the reply ends." If the turn ended
 between the menu opening and the item being chosen, the message goes as a plain
 send: the hub refuses a steer with no turn open (`idle`, G16), and "send now" is
 what the person asked for. The press that opened the menu never also sends: the
-click that follows the release of a hold is swallowed (`sv-press` also stops the
+click that follows the release of a hold is swallowed (a hold let go off the button, a cancelled pointer and a button that
+lost the focus forget the flag, so the next keyboard Enter or Space on it is a press; `sv-press` also stops the
 iOS callout and text selection), and a short press, with no menu, sends once.
 There is no menu while idle.
 
@@ -177,6 +189,8 @@ a copy of the code with that guard removed and fails there (see Verification).
 |---|---|
 | Double click, or two presses in one task | `Composer.submit` takes a ref (set before the first `await`) and returns while it is held; the button's `disabled` waits for the next render and would not stop it |
 | A hold that opens the menu, then its release | the click after the release is swallowed (`swallowClick`, set only while a pointer is down and forgotten 80 ms after its release); a right click and the key open the menu without a press at all |
+| A hold let go somewhere else, a cancelled pointer, a lost focus | `pointerleave`, `pointercancel` and `blur` on the button clear `swallowClick` and `pointerDown`: nothing is left to swallow the next Enter or Space |
+| A key that opened a menu, held or pressed twice | `Menu` ignores key repeats, ignores the click a key makes while the key that was down at opening is still down, and never starts the focus on an item that is not `safe`; see "The menu behind the primary button" |
 | A second press by any other route (a held key, a form `requestSubmit`, a re-render's replay, a second composer on the same store) | `submitMessage` keeps a `WeakSet` of stores with a send in flight and answers `busy` ("Still sending your last message.") without touching the store |
 | Enter held down | `enterAction` returns `swallow` for `repeat`: the first Enter sent, the rest neither send nor type blank lines into the next draft |
 | IME composition | Enter does nothing while `isComposing`, while `keyCode` is 229 (Safari fires `compositionend` before the key press that ended the composition), or while `compositionstart` has no `compositionend` yet |
@@ -199,6 +213,13 @@ storage, or a draft over 200,000 characters, keeps the draft in memory for the
 life of the page and the box says "This draft cannot be kept on this device, so it
 will not survive a reload." A reconnect never touches it: the box is not
 unmounted by the connection.
+
+*What is stored, and for how long.* Per session: the text, the staged file refs (name, size, ref: not the bytes) and
+the time it was last edited, nothing else. It is removed when its send is accepted (above), when the box empties, and
+when the credential is forgotten: the web app's `pairForget` (`app.js`) removes every `swe.sv.draft.v1:` key with the
+saved pairing, and a `storage` event for the pairing's key being removed, or `localStorage.clear()`, in another tab
+does the same (`dropDraftsOnSignOut`). A draft last edited more than 14 days ago is dropped when it is read and by a
+sweep when the box opens (`sweepDrafts`). A draft with no time on it is treated as expired.
 
 **Offline and storage down.** The box stays usable offline: a message is accepted,
 kept, and its bubble says "Waiting: you are offline. It will be sent when you are
@@ -232,12 +253,16 @@ agent reuses `perm-1`). Each press carries the request's `seq`; `answer()` looks
 the id up again at press time, takes the latest open request with that id, and
 refuses with "That request changed while you were looking. Nothing was sent: read
 the new one." (or "no longer open") unless its `seq` is the one shown. Check and
-post run in one synchronous step. A request that replaces the one on screen (a
-different request within five seconds of the last) keeps its answers off for
-350 ms ("A new request just appeared. Read it before you answer."), so a press aimed at
-the old one cannot land on the new one. A press is also taken once (a ref in the
-dock and a set in `answer`), and after it the answers stay off ("Answer sent.
-Waiting for the agent.") until the request ends, so two devices are not both
+post run in one synchronous step. Every request that
+newly becomes the shown one, the first or one that replaces another, keeps its answers off for `SETTLE_MS` (500 ms, one
+named constant, the composer's default `settleMs`), shown as a state: the buttons are dimmed and the line under them
+says "A new request just appeared. Read it before you answer." A dock appears over the page and pushes it up, so a press
+aimed at the tray strip or a line of the timeline can arrive under it; in real Chrome one 60 ms later posted a deny
+(G13 review, scenario D). A request already open when the page loads is treated the same. A press also has to be its own:
+a click counts only if its pointer went down on that button after it could be pressed, or, for a click a key makes, it is
+not a key repeat (`press.ts`). The in-flight set in `answer` takes one answer at a time per request (the dock keeps no
+ref of its own: a second press that gets that far is refused as "busy" and shows nothing), and after the first the
+answers stay off ("Answer sent. Waiting for the agent.") until the request ends, so two devices are not both
 answered by one device.
 
 **What is sent.** An option whose id is `allow`, `always` or `deny` sends that
@@ -246,10 +271,23 @@ word; any other option sends its 1-based place in the request's full option list
 standing option (`standing: true`, G16 gap 9) is worded "Always allow" when the
 hub's own label is just "Always" (any other label is the hub's, cut and not
 changed), and takes a second press. The first press changes the button to "Press
-again to always allow" and says beside it what that does: "Always allow Bash?
+again to always allow", which stays off for `SETTLE_MS` ("One moment, then press again." says so), so the second click of a
+double click, which lands on the new button, grants nothing. The second press must also start after that wait (a pointer
+that went down on the button after it, or a key that went down on it after it and is not a repeat), so a press held
+through the wait or a Space let go late confirms nothing. The note beside it says what the second press does: "Always allow Bash?
 Pressing again turns off later questions of the same kind for this session.
 Cancel to go back." (the tool is named from the call the request asks about, else
 "this kind of call"). Only the first allowing option is filled.
+
+**Layout: what the agent writes scrolls, the answers do not.** The dock is a column: the request's text (kind, prompt,
+details, the agent's own choices, "N more options") is one scroll area (`min-h-0 flex-1 overflow-y-auto`), and under it the
+decisions (Allow, Always allow, Deny, Skip), the standing note and the status are pinned (`shrink-0`) and visible
+together at every width, whatever the text holds. The decisions are the options whose id is `allow`, `always` or `deny`; their
+buttons say the hub's short word, or ours ("Allow", "Always allow", "Deny") when the label is over 40 characters.
+Every other option is the agent's own choice: a full-width dashed button, numbered ("1."), its label cut to two lines
+with the whole label (to 300 characters) in its tooltip and accessible name ("Option 2: ..."), and, when any is
+over 80 characters, listed in full under "Options in full". A choice labelled "Allow" or "Deny" therefore never looks
+like an answer: it is in the scroll area, dashed, numbered. The stack above the bar shrinks the dock first.
 
 **A question in words cannot be answered.** `input.requested` of kind `text` has
 no route that carries text (G11 "Schema gaps"). The dock says "This view cannot
@@ -266,8 +304,8 @@ characters of the prompt are looked at for code spans, which caps its nodes at a
 input is JSON in one `pre` cut the same way, only once opened; the tool name at
 120 characters; an option label at 300 (with an ellipsis); at most 20 options with
 "N more options are not shown. Answer in the terminal."; a queued message at 2000
-characters; at most 20 queued messages. The dock sits in the stack that scrolls inside half the view (the prompt inside 8 rem of its own), so a
-long request cannot push the bar off a phone. A letter that is shown is the
+characters; at most 20 queued messages. The dock sits in the stack that is held to half of the view, and the dock gives (its text scrolls) before its answers do, so a
+long request cannot push the bar or the answers off a phone. A letter that is shown is the
 letter that arrived. Nodes: a request is about 20 whatever its size, plus one
 button per option (at most 20). Each dock, the tray, each queued row and the whole
 composer sit in a `Guard` (an error boundary) whose message says what part failed;
@@ -278,17 +316,22 @@ a request that throws costs the dock only, and the next request draws.
 `session.queue` is the hub's list, drawn as a compact glass strip just above the
 bar ("Queued: 2 messages", with a chevron that points up while closed) that
 opens upward into the list. The list is not made until the strip is first opened
-(a long queue costs nothing closed), has its own height (`max-h-44`) and its own
+(a long queue costs nothing closed), has its own height (`max-h-44`, `max-h-72` while a message is being edited, which needs the room) and its own
 scroll, and stays open under the person's hands while one of its messages is being
 edited. Each item has icon buttons with names and tooltips: **Edit**, **Remove**
 (`cancel`), and **More**, whose menu holds the steer item (`steer`, worded as
 above; disabled, with its reason, when `caps.steer` is not true). Edit opens the
 message in place with **Save the edit** and **Cancel the edit** (icons). All are
 gated actions: off, with the store's reason, while the connection is down. One
-press is one request (a ref per row). A save the hub refuses keeps the editor
-and the person's words, with the hub's reason. A message that left the queue (sent,
-or removed on another device) while its edit was open leaves the edited words in a
-card to move into the message box or let go; they are never dropped quietly. A send
+press is one request (a ref per row). **Remove** is two presses, the same as "Always allow" and under the same
+rule: the first shows "Press again to remove" (and "Keep it"), off for `SETTLE_MS`, the second counts only as a
+press of its own (`press.ts`); a message is typed text and is not taken out by a double click. A save the hub refuses keeps the editor
+and the person's words, with the hub's reason. An edit remembers the text it started from. If another device changes the message meanwhile, the editor shows the new text
+under "This message was changed on another device while you were editing it", **Save** is off, and the person chooses
+**Use the new text** or **Keep my words** (which then saves over it, knowingly). A message that left the queue (sent
+or taken out) while its edit was open leaves the edited words in a card ("This message was sent or taken out of the queue
+before your edit was saved. Your words are here.") to move into the message box or let go; they are never dropped quietly. The
+tray's error boundary, and each row's, try again when the queue (or that row's text) changes. A send
 that is in the queue is drawn by the tray, not also as a bubble in the timeline.
 
 ## What steer does, per agent
@@ -305,8 +348,12 @@ it:
 |---|---|---|
 | `"stops_reply"` (Claude, Codex) | Stop and send | Stops the reply being written and sends this message now. A command that is already running may keep going. |
 | `"after_tool"` (opencode) | Send next | Sends this message when the current step ends. Nothing is stopped. |
-| `"next_turn"` (no adapter sends it today) | Send next | Sends this message when the reply ends. |
+| `"next_turn"` (no adapter sends it today) | Send next | Sends this message when the reply ends. Not offered: see below. |
 | absent, or a value this view does not know | Send now | Sends this message ahead of the queue. Some agents stop the current reply to do it. |
+
+A steer that lands when the reply ends (`next_turn`) is what Queue does, so it is not offered: the send menu does not open
+(the main button queues, as before) and a queued message has no "More" button. `steerWording` keeps its words for the day an
+adapter sends the value and the item means something else.
 
 While a request (an approval or a question) is waiting, the two sentences that cannot rule it out (`stops_reply` and
 absent) add: "A request waiting for your answer may be withdrawn, or may hold this message back until you answer
@@ -380,7 +427,7 @@ What each would need, so the next milestone can pick it up. For the model chip: 
 `composer-empty`, `-typing`, `-multiline`, `-sending`, `-busy`, `-queued`,
 `-queued-edit`, `-queued-many`, `-approval`, `-approval-confirm`, `-approval-offline`, `-input-text`, `-input-choice`,
 `-offline`, `-storage-down`, `-loading`, `-no-steer`, `-read-only`,
-`-attachments`, `-hostile`, `-menu-send` (steer_effect absent), `-menu-steer-stops`, `-menu-steer-after-tool`, `-menu-steer-next-turn`, `-queued-menu`, `-error-note`, `-approval-error`, `-menu-attach`, `-over-code` and `-over-diff` (the bar over a long scrolled timeline, under a code block and under a red diff line), `-keyboard` and `-keyboard-approval` (the phone with `--keyboard-inset` at 336 px, without and with a dock); each at 1280x800 and a 390x844 phone, light and dark.
+`-attachments`, `-hostile`, `-menu-send` (steer_effect absent), `-menu-steer-stops`, `-menu-steer-after-tool`, `-menu-steer-next-turn` (no menu opens: nothing to show but the bar), `-menu-steer-approval` (the steer menu with a request open), `-menu-send-multiline` (the menu above the whole bar, over a draft of five lines), `-queued-conflict`, `-queued-remove`, `-hostile-labels`, `-queued-menu`, `-error-note`, `-approval-error`, `-menu-attach`, `-over-code` and `-over-diff` (the bar over a long scrolled timeline, under a code block and under a red diff line), `-keyboard` and `-keyboard-approval` (the phone with `--keyboard-inset` at 336 px, without and with a dock); each at 1280x800 and a 390x844 phone, light and dark.
 `scenes.ts` scripts each over the recorded fixtures plus a few hand-built frames,
 and clears the stored draft first so one scene does not show another's.
 
@@ -394,8 +441,8 @@ Run on 2026-11-22, macOS 27.3, Node 22.23.1.
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (35 files, 698 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
+| `pnpm typecheck`, `pnpm lint:tokens`, `pnpm test` (37 files, 735 tests; the composer's are in `src/composer/*.test.ts(x)`), `pnpm build` | pass |
 | The built files under `src/swe/webapp/static/session/` equal a fresh build; `tests.test_webapp_session_view` | pass |
-| **Each guard, removed.** 94 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (code spans only, every character kept, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (the last rounds added 5 more edits, for the keyboard-opened menu, the code-span reader and the host's resize watch, all killed) (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits |
-| **A real hub.** `swe remote serve` on a throwaway HOME, harness.json pointing Claude's adapter at `tests/fakes/fake_claude.py` in `approval` mode, headless Chrome on the built page (`/session/index.html?key=...`) with the saved credential: the first turn's approval shows in the dock with nothing focused; a real mouse click on Allow answers it; text typed with the keyboard and sent with Enter arrives once; the second turn's approval is answered with a click. The hub's v2 messages hold the typed message once (`["list the build folder","now list it again please"]`) and both approvals as `source user, decision allow` | pass; screenshots `G13-e2e/` in the shared notes folder, script `G13-e2e_view.mjs` (run with `swe` as `PYTHONPATH=src python3 -m swe.cli`, since this was a worktree) |
-| Screenshots, 32 composer scenes x desktop 1280 and phone 390 x light and dark (128 files) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |
+| **Each guard, removed.** 135 one-line edits of the source, each followed by the composer's tests and `SessionView.test.tsx`: every guard in the "Message safety" table (the store's in-flight set, the box's ref, the loading and length refusals, the steer downgrade, read-only while saving, clear only on success, the draft write on unmount and in `clear`, the four IME and key rules), every dock guard (the `seq` check, the latest request with an id, the in-flight set, the settle delay, offline and sent staying off, the standing confirmation, the option, label, prompt and input cuts, the deep-input catch), every tray guard (press ref, orphans, offline, no-steer, the cap), the error boundary, the timeline's queued-bubble rule and the read-only bar | every edit makes at least one test fail. The first 46 covered the guards above; 11 more covered the inline reader (code spans only, every character kept, the read cap), the standing wording and its second press, the tool named in it, and the layout contract (the stack and tray caps, icon-only buttons); 19 more covered the bar (the hold and its swallowed click, the menu's keys, focus and disabled items, the touch-only photo item, the file slots, draft ownership and the newer-in-memory copy, a replacement after a request left, the closed tray, the timeline's end padding, the floating host, the solid fallback); 10 more covered the steer wording (the reader, each of the four cases, the tray's read) and the rule that no danger-coloured text goes on the glass. Four edits first survived (the last rounds added 5 more edits, for the keyboard-opened menu, the code-span reader and the host's resize watch, all killed) (a double press in the dock and its `answer()` guard covered each other; "latest request with an id" could not be reached through the reducer; a "busy" message hidden behind "Answer sent"; the idle right click, which the menu's own close-on-idle hid): the dock's own ref was dropped in favour of `answer()`'s set, the id case is built by hand, and the message now wins over "Answer sent", the idle test reads whether the browser's own menu was left alone, and all four then failed their edits. The strong-tier review round added 41 more edits: the dock's settle for every request, the confirm's wait and its press rules (`press.ts`), the menu's key rules (safe first focus, repeats, the key held from opening), the three pointer flags, the tray's two-press Remove, edit conflict and boundary reset, the draft's age, sweep and sign-out, the timeline row's clip, the stopped mark, the untrue steer sentence and the label's text. Three survived first: a `confirmReady` check that the disabled button already covers (removed), a pointer going down on a button that is off, and a cancelled pointer (the 80 ms timer also cleared it); the last two now have tests that fail without them. |
+| **A real hub.** `swe remote serve` on a throwaway HOME, harness.json pointing Claude's adapter at `tests/fakes/fake_claude.py` in `approval` mode, headless Chrome on the built page (`/session/index.html?key=...`) with the saved credential: the first turn's approval shows in the dock with nothing focused; a real mouse click on Allow answers it; text typed with the keyboard and sent with Enter arrives once; the second turn's approval is answered with a click. The hub's v2 messages hold the typed message once (`["list the build folder","now list it again please"]`) and both approvals as `source user, decision allow` | pass; screenshots `G13-e2e/` in the shared notes folder, script `G13-e2e_view.mjs` (run with `swe` as `PYTHONPATH=src python3 -m swe.cli`, since this was a worktree) Re-run on the review round's build: scenario D (a real mouse press on Deny right after the dock appeared answers nothing, the hub sees no approval) and scenario E (while an approval is open, a message queued with Enter, then a held and repeating Enter on the tray's More button: the menu opens with the focus on the menu, the hub's queue still holds the message), then three approvals answered and three messages arriving once each. |
+| Screenshots, 37 composer scenes x desktop 1280 and phone 390 x light and dark (148 files; the review round's new scenes are `-menu-steer-approval`, `-menu-send-multiline`, `-queued-conflict`, `-queued-remove`, `-hostile-labels`) | read; `G13-screens-glass/` in the shared notes folder. Findings fixed on the way: a request with many options pushed the answers off the screen (the stack above the bar now scrolls inside half the view), a long label overflowed its button, a long tool name overflowed its disclosure, a typed draft from one scene showed in the next (scenes clear it), the offline sentence was said twice (the banner and the box), "Question" was said twice in a question's header |

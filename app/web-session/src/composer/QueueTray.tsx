@@ -1,4 +1,4 @@
-import { useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type MouseEvent } from "react";
 
 import { useSessionStore, type SessionStore } from "../core";
 import { cx, Icon, Spinner } from "../ui";
@@ -6,6 +6,7 @@ import { AnswerButton } from "./AnswerButton";
 import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { Menu } from "./Menu";
+import { usePresses } from "./press";
 import { steerEffectOf, steerWording } from "./steer";
 import { clip, plural } from "./text";
 
@@ -49,6 +50,7 @@ function Item({
   steerOk,
   steerEffect,
   refusal,
+  settleMs,
 }: {
   store: SessionStore;
   item: Queued;
@@ -57,13 +59,27 @@ function Item({
   steerOk: boolean;
   steerEffect: ReturnType<typeof steerEffectOf>;
   refusal: string | null;
+  settleMs: number;
 }) {
   const requestOpen = useSessionStore(store, (s) => s.session.pending.length > 0);
   const [busy, setBusy] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const pressing = useRef(false);
+  // Taking a message out is two presses: the first says what the second does, and the second counts after a wait,
+  // as a press of its own (see press.ts), so a double click or a held key cannot do both.
+  const [removing, setRemoving] = useState(false);
+  const [removeReady, setRemoveReady] = useState(false);
+  useEffect(() => {
+    if (!removing) return;
+    setRemoveReady(false);
+    const timer = setTimeout(() => setRemoveReady(true), settleMs);
+    return () => clearTimeout(timer);
+  }, [removing]);
+  const presses = usePresses();
   const id = item.command_id;
+  // Another device changed this message while it is being edited here: Save would write over it unseen.
+  const changedUnder = edit !== undefined && item.text !== edit.original;
   const shown = clip(item.text, TEXT_SHOWN, 60);
 
   const run = async (action: Action, text?: string): Promise<boolean> => {
@@ -102,9 +118,32 @@ function Item({
             </div>
             {busy !== null ? <Spinner /> : null}
             <IconButton disabled={!idle} icon="edit" label="Edit queued message" onClick={() => setEdit(id, { text: item.text, original: item.text })} />
-            <IconButton danger disabled={!idle} icon="trash" label="Remove queued message" onClick={() => void run("cancel")} />
-            <IconButton aria-expanded={menu} aria-haspopup="menu" disabled={!idle} icon="more" label="More for queued message" onClick={() => setMenu((now) => !now)} />
+            <IconButton danger disabled={!idle || removing} icon="trash" label="Remove queued message" onClick={() => setRemoving(true)} />
+            {steerEffect !== "next_turn" ? (
+              <IconButton aria-expanded={menu} aria-haspopup="menu" disabled={!idle} icon="more" label="More for queued message" onClick={() => setMenu((now) => !now)} />
+            ) : null}
           </div>
+          {removing ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5" data-remove-confirm>
+              <AnswerButton
+                disabled={!idle || !removeReady}
+                onClick={(click: MouseEvent<HTMLButtonElement>) => {
+                  if (!presses.counts(click, "remove", true) || !removeReady) return;
+                  setRemoving(false);
+                  void run("cancel");
+                }}
+                onKeyDown={(key) => presses.key(key, "remove", removeReady)}
+                onPointerDown={() => presses.down("remove", removeReady)}
+                variant="danger"
+              >
+                Press again to remove
+              </AnswerButton>
+              <AnswerButton onClick={() => setRemoving(false)} variant="plain">
+                Keep it
+              </AnswerButton>
+              <span className="text-xs text-secondary">{removeReady ? "This takes the message out of the queue." : "One moment, then press again."}</span>
+            </div>
+          ) : null}
           {menu ? (
             <div className="mt-1 flex">
               <Menu
@@ -135,10 +174,26 @@ function Item({
             readOnly={busy !== null}
             value={edit.text}
           />
+          {changedUnder ? (
+            <div className="mt-1 rounded-block border border-border bg-card px-2 py-1.5" data-edit-conflict role="group" aria-label="The message changed while you were editing">
+              <p className="text-xs text-secondary">This message was changed on another device while you were editing it. The new text:</p>
+              <p className="mt-1 text-sm leading-6 break-words whitespace-pre-wrap" data-untrusted="queued-newer">
+                {clip(item.text, TEXT_SHOWN, 60).text}
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <AnswerButton onClick={() => setEdit(id, { text: item.text, original: item.text })} variant="plain">
+                  Use the new text
+                </AnswerButton>
+                <AnswerButton onClick={() => setEdit(id, { text: edit.text, original: item.text })} variant="plain">
+                  Keep my words
+                </AnswerButton>
+              </div>
+            </div>
+          ) : null}
           <div className="mt-1 flex items-center justify-end gap-1">
             {busy !== null ? <Spinner /> : null}
             <IconButton
-              disabled={!idle || edit.text.trim() === "" || edit.text === edit.original}
+              disabled={!idle || changedUnder || edit.text.trim() === "" || edit.text === edit.original}
               icon="check"
               label="Save the edit"
               onClick={() => {
@@ -165,7 +220,7 @@ function Item({
  * (it was sent, or taken out on another device) leaves the person's words in a card of their own, to move into
  * the message box or let go; they are never dropped quietly. The list has its own height and its own scroll.
  */
-export function QueueTray({ store, onKeep }: { store: SessionStore; onKeep(text: string): void }) {
+export function QueueTray({ store, onKeep, settleMs }: { store: SessionStore; onKeep(text: string): void; settleMs: number }) {
   const queue = useSessionStore(store, (s) => s.session.queue);
   const steerOk = useSessionStore(store, (s) => s.session.caps?.steer === true);
   const steerEffect = useSessionStore(store, (s) => steerEffectOf(s.session.caps));
@@ -192,10 +247,10 @@ export function QueueTray({ store, onKeep }: { store: SessionStore; onKeep(text:
   const expanded = open || editing;
 
   return (
-    <div className="sv-enter sv-glass pointer-events-auto flex flex-col rounded-glass px-1.5 py-1 shadow-sm" data-tray="queued">
+    <div className="sv-enter sv-glass pointer-events-auto flex shrink-0 flex-col rounded-glass px-1.5 py-1 shadow-sm" data-tray="queued">
       {orphans.map(([id, edit]) => (
         <div key={id} aria-label="An edit that was not saved" className="mb-1 rounded-block border border-warning bg-subtle px-2.5 py-2" data-orphan={id} role="group">
-          <p className="text-xs text-secondary">This message left the queue before your edit was saved. Your edit is here.</p>
+          <p className="text-xs text-secondary">This message was sent or taken out of the queue before your edit was saved. Your words are here.</p>
           <p className="mt-1 text-sm leading-6 break-words whitespace-pre-wrap" data-untrusted="edit">
             {clip(edit.text, TEXT_SHOWN, 60).text}
           </p>
@@ -230,10 +285,10 @@ export function QueueTray({ store, onKeep }: { store: SessionStore; onKeep(text:
                       This agent cannot send a message ahead of the queue. Queued messages are sent when the reply ends.
                     </p>
                   ) : null}
-                  <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto pb-1">
+                  <ul className={cx("flex flex-col gap-1 overflow-y-auto pb-1", editing ? "max-h-72" : "max-h-44")}>
                     {shown.map((item) => (
-                      <Guard key={item.command_id} message="This queued message could not be shown." part="queued">
-                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} steerEffect={steerEffect} steerOk={steerOk} store={store} />
+                      <Guard key={item.command_id} message="This queued message could not be shown." part="queued" resetKey={`${item.text}\u0000${item.mode ?? ""}`}>
+                        <Item edit={edits[item.command_id]} item={item} refusal={refusal} setEdit={setEdit} settleMs={settleMs} steerEffect={steerEffect} steerOk={steerOk} store={store} />
                       </Guard>
                     ))}
                   </ul>

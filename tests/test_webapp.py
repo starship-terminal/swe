@@ -266,6 +266,13 @@ process.stdout.write(JSON.stringify(Object.fromEntries(m)));
         forgot = self.migrate(got, then=app_js_function("pairForget") + "pairForget();")
         self.assertEqual(forgot, {})
 
+    def test_forgetting_the_credential_also_forgets_the_session_view_drafts(self):
+        # The session view keeps the message being typed per session; a draft must not outlive the pairing.
+        stored = {"swe.remote": '{"credential":"c"}', "swe.sv.draft.v1:claude:a": '{"t":"x","f":[],"a":1}',
+                  "swe.sv.draft.v1:claude:b": '{"t":"y","f":[],"a":1}', "swe.appearance": "dark"}
+        forgot = self.migrate(stored, then=app_js_function("pairForget") + "pairForget();")
+        self.assertEqual(forgot, {"swe.appearance": "dark"})
+
     def test_a_value_already_under_the_new_name_wins(self):
         got = self.migrate({"quiver.appearance": "dark", "swe.appearance": "light"})
         self.assertEqual(got, {"swe.appearance": "light"})

@@ -9,6 +9,7 @@ import { MemoryStorage } from "../core/outbox-storage";
 import { drain, FakeEnvironment, FakeTimers, FakeTransport, loadFixture, snapshotFrame, type Fixture } from "../core/test-support";
 import { Composer, type ComposerProps } from "./Composer";
 import { forgetMemoryDrafts } from "./draft";
+import { forgetKeysDown } from "./Menu";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -28,6 +29,7 @@ const stores: SessionStore[] = [];
 beforeEach(() => {
   window.localStorage.clear();
   forgetMemoryDrafts();
+  forgetKeysDown();
 });
 
 afterEach(() => {

@@ -21,6 +21,7 @@ const dock = (m: Mounted) => q(m.el, "[data-dock]") as HTMLElement;
 async function ask(m: Mounted, data: object, tool?: object): Promise<void> {
   await play(m, "approval", 0, 4); // r1 answered; running
   await feed(m, ...(tool === undefined ? [] : [frame("tool.started", 14, tool, { turn_id: "t1" })]), frame("approval.requested", 15, { request_id: "r9", kind: "command", ...data }, { turn_id: "t1" }));
+  await settle(() => new Promise((resolve) => setTimeout(resolve, 60))); // past the settle time
 }
 
 describe("a hostile request", () => {
@@ -63,16 +64,32 @@ describe("a hostile request", () => {
     await ask(m, { prompt: "pick", options });
     const buttons = all(dock(m), "button[data-option]");
     expect(buttons).toHaveLength(20);
-    expect(Math.max(...buttons.map((b) => (b.textContent ?? "").length))).toBeLessThanOrEqual(303);
+    expect(Math.max(...buttons.map((b) => (b.textContent ?? "").length))).toBeLessThanOrEqual(312);
     expect(text(dock(m))).toContain("980 more options are not shown.");
-    expect(all(dock(m), "*").length).toBeLessThan(100);
+    expect(all(dock(m), "*").length).toBeLessThan(200);
+  });
+
+  it("keeps Allow, Always allow and Deny in view however many choices come before them", async () => {
+    const m = mount();
+    m.transport.on("/approval", () => ({ status: 200, body: { receipt: "accepted" } }), "POST");
+    const rows = Array.from({ length: 40 }, (_, i) => ({ id: `row-${i}`, label: `Row ${i}` }));
+    const dupes = Array.from({ length: 300 }, () => ({ id: "deny", label: "Deny" }));
+    await ask(m, { prompt: "pick", options: [...rows, { id: "allow", label: "Allow", kind: "allow" }, { id: "always", label: "Always", kind: "allow", standing: true }, { id: "deny", label: "Deny", kind: "deny" }, ...dupes] });
+    const pinned = q(dock(m), "[data-dock-answers]") as HTMLElement;
+    expect(all(pinned, "button").map((b) => text(b))).toEqual(["Allow", "Always allow", "Deny"]);
+    // Only the agent's own choices are cut: 20 shown, the rest (40 rows and 300 more Deny) counted.
+    expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(20);
+    expect(text(dock(m))).toContain("320 more options are not shown.");
+    // Deny sends the word, by the first Deny, not by its place in the list.
+    await click(btn(m, "Deny"));
+    expect(m.transport.posts("/approval")[0]).toMatchObject({ request_id: "r9", decision: "deny" });
   });
 
   it("answers an option by its place in the full list, even with the list cut", async () => {
     const m = mount();
     m.transport.on("/approval", () => ({ status: 200, body: { receipt: "accepted" } }), "POST");
     await ask(m, { prompt: "pick", options: Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}`, label: `row ${i}` })) });
-    await click(btn(m, "row 19"));
+    await click(btn(m, "Option 20: row 19"));
     expect(m.transport.posts("/approval")[0]).toMatchObject({ request_id: "r9", decision: "20" });
   });
 
@@ -146,5 +163,37 @@ describe("a hostile queued message", () => {
     expect(text(q(m.el, '[data-composer-failed="queued"]'))).toBe("This queued message could not be shown.");
     expect((q(m.el, '[data-queued="c"] [data-untrusted="queued"]') as HTMLElement).textContent?.length).toBeLessThanOrEqual(2000);
     expect(q(m.el, '[data-queued="c"] img')).toBeNull();
+  });
+
+  it("draws a message again once the queue changed and it is fine", async () => {
+    const m = mount();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await play(m, "queued", 0, 3);
+    await settle(() => void 0);
+    await feed(m, frame("queue.updated", 20, { items: [{ command_id: "b", text: "BOOM" }] }));
+    await click(q(m.el, "[data-tray] button[aria-controls]"));
+    expect(q(m.el, '[data-composer-failed="queued"]')).not.toBeNull();
+    // The same message, edited on another device, is fine now: its row is tried again.
+    await feed(m, frame("queue.updated", 21, { items: [{ command_id: "b", text: "fixed" }] }));
+    spy.mockRestore();
+    expect(q(m.el, '[data-composer-failed="queued"]')).toBeNull();
+    expect(text(q(m.el, '[data-queued="b"]'))).toContain("fixed");
+  });
+
+  it("draws the whole tray again once the queue changed, after a failure that took it down", async () => {
+    const m = mount();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await play(m, "queued", 0, 3);
+    await settle(() => void 0);
+    // The tray's own count line throws on a queue that is not a list.
+    const session = m.store.getState().session;
+    m.store.setState({ session: { ...session, queue: { length: 1, map: undefined, some: undefined } as never } });
+    await settle(() => void 0);
+    expect(q(m.el, '[data-composer-failed="tray"]')).not.toBeNull();
+    m.store.setState({ session: { ...session, queue: [{ command_id: "z", text: "back again" }] } });
+    await settle(() => void 0);
+    spy.mockRestore();
+    expect(q(m.el, '[data-composer-failed="tray"]')).toBeNull();
+    expect(q(m.el, "[data-tray]")).not.toBeNull();
   });
 });

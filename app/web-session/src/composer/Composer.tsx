@@ -5,13 +5,13 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Comp
 import { readOnlyReason, useSessionStore, type SessionStore } from "../core";
 import { asArrived } from "../session/format";
 import { cx, Icon, Spinner, StateArrow, type IconName } from "../ui";
-import { FILES_KEPT, type StagedFile } from "./draft";
+import { dropDraftsOnSignOut, FILES_KEPT, sweepDrafts, type StagedFile } from "./draft";
 import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { enterAction, touchScreen } from "./keys";
 import { Menu, type MenuItem } from "./Menu";
 import { QueueTray } from "./QueueTray";
-import { RequestDock } from "./RequestDock";
+import { RequestDock, SETTLE_MS } from "./RequestDock";
 import { steerEffectOf, steerWording } from "./steer";
 import { MAX_MESSAGE_CHARS, submitMessage } from "./submit";
 import { cut, plural } from "./text";
@@ -156,7 +156,10 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   const steerOk = useSessionStore(store, (s) => s.session.caps?.steer === true);
   const steerEffect = useSessionStore(store, (s) => steerEffectOf(s.session.caps));
   const requestOpen = useSessionStore(store, (s) => s.session.pending.length > 0);
+  const queue = useSessionStore(store, (s) => s.session.queue);
   const steerWords = steerWording(steerEffect, requestOpen);
+  // A steer that lands when the reply ends is what Queue does: it is not offered as a second way to do the same thing.
+  const menuOffered = steerEffect !== "next_turn";
   const connection = useSessionStore(store, (s) => s.connection.state);
   const refusalReason = useSessionStore(store, (s) => s.refusal()?.reason ?? null);
   const refusalMessage = useSessionStore(store, (s) => s.refusal()?.message ?? null);
@@ -184,6 +187,12 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
     el.style.height = "auto";
     if (el.scrollHeight > 0) el.style.height = `${Math.min(el.scrollHeight, MAX_BOX_PX)}px`;
   }, [text]);
+
+  // Drafts that were not touched for two weeks are dropped when the box opens, and all of them when the device signs out.
+  useEffect(() => {
+    sweepDrafts();
+    return dropDraftsOnSignOut();
+  }, []);
 
   useEffect(() => {
     const open = aborts.current;
@@ -278,15 +287,23 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   // arrow key, the menu key) has none, and a flag left set would swallow the next real press.
   const openSendMenu = (): void => {
     stopHold();
+    if (!menuOffered) return;
     swallowClick.current = pointerDown.current;
     setMenu("send");
   };
   const onPrimaryDown = (event: PointerEvent<HTMLButtonElement>): void => {
     swallowClick.current = false;
     pointerDown.current = true;
-    if (!busyTurn || event.button !== 0) return;
+    if (!busyTurn || event.button !== 0 || !menuOffered) return;
     stopHold();
     hold.current = setTimeout(openSendMenu, holdMs);
+  };
+  // The pointer left the button, was cancelled, or the button lost the focus: there is no release over the button to
+  // swallow, and a flag left set would swallow the next keyboard Enter or Space on it.
+  const dropPointer = (): void => {
+    stopHold();
+    pointerDown.current = false;
+    swallowClick.current = false;
   };
   const onPrimaryUp = (): void => {
     pointerDown.current = false;
@@ -340,17 +357,17 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   };
 
   const note = connectionNote(connection, loaded);
-  const steerReason = busyTurn && !steerOk ? "This agent cannot take a message while it is replying. Queue it to send when the reply ends." : null;
+  const steerReason = busyTurn && !steerOk ? "This agent cannot send a message ahead of the queue. A message sent now waits and goes when the reply ends." : null;
   const reason = notice ?? blockedBy ?? (hasContent ? steerReason : null) ?? note;
   const stopDisabled = refusalMessage !== null || stopState !== "idle";
   const canSend = !submitting && hasContent && blockedBy === null;
 
-  const attachItems: MenuItem[] = [{ id: "files", label: "Choose files", icon: "folder", onSelect: () => choose("files") }];
+  const attachItems: MenuItem[] = [{ id: "files", label: "Choose files", icon: "folder", safe: true, onSelect: () => choose("files") }];
   // A photo library is something a phone or a tablet has; a desktop browser's file picker already shows pictures.
-  if (touchScreen()) attachItems.push({ id: "photos", label: "Photo library", icon: "photo", onSelect: () => choose("photos") });
+  if (touchScreen()) attachItems.push({ id: "photos", label: "Photo library", icon: "photo", safe: true, onSelect: () => choose("photos") });
   // The safe item first: the menu opens on it, and the one that stops the reply is never the one it opens on.
   const sendItems: MenuItem[] = [
-    { id: "queue", label: "Queue", icon: "queue", hint: "Sent when the current reply ends.", disabled: !canSend, reason: "Write a message first.", onSelect: () => void submit("queue") },
+    { id: "queue", label: "Queue", icon: "queue", safe: true, hint: "Sent when the current reply ends.", disabled: !canSend, reason: "Write a message first.", onSelect: () => void submit("queue") },
     {
       id: "steer",
       label: steerWords.label,
@@ -377,7 +394,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
       <div ref={stack} className="sv-composer mx-auto flex max-h-1/2 w-full max-w-3xl flex-col gap-2">
         <div className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
           {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null ? (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex shrink-0 flex-col gap-1.5">
               {!persistent && outboxNote !== "" ? (
                 <p className="sv-glass pointer-events-auto rounded-glass px-3 py-1.5 text-xs text-secondary" data-outbox-note role="status">
                   {asArrived(outboxNote)}
@@ -405,8 +422,8 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
               ) : null}
             </div>
           ) : null}
-          <Guard message="The queue could not be shown. Queued messages are still sent when the reply ends." part="tray">
-            <QueueTray onKeep={keep} store={store} />
+          <Guard message="The queue could not be shown. Queued messages are still sent when the reply ends." part="tray" resetKey={queue}>
+            <QueueTray onKeep={keep} settleMs={settleMs} store={store} />
           </Guard>
           <Guard message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
             <RequestDock settleMs={settleMs} store={store} />
@@ -538,20 +555,20 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
                     openSendMenu();
                   }
                 }}
-                onPointerCancel={onPrimaryUp}
+                onBlur={dropPointer}
+                onPointerCancel={dropPointer}
                 onPointerDown={onPrimaryDown}
-                onPointerLeave={() => {
-                  stopHold();
-                }}
+                onPointerLeave={dropPointer}
                 onPointerUp={onPrimaryUp}
                 title={busyTurn ? "Queue this message (hold for more)" : "Send"}
                 tone="primary"
               >
                 {submitting ? <Spinner className="text-card" /> : <Icon className="size-4.5" name={busyTurn ? "queue" : "send"} />}
               </RoundButton>
-              {menu === "send" ? <Menu items={sendItems} label="Send options" onClose={closeMenu} placement="above-end" /> : null}
             </div>
           </div>
+          {/* Above the whole bar, not above the button: a draft of several lines has its first line level with the button. */}
+          {menu === "send" ? <Menu items={sendItems} label="Send options" onClose={closeMenu} placement="above-end" /> : null}
         </form>
       </div>
     </div>
@@ -562,7 +579,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
  * The message bar, the approval and question dock, and the queued tray: everything over the bottom of the
  * timeline. A session that cannot be driven gets a bar with the reason in place of all of it.
  */
-export function Composer({ store, sessionKey, upload, settleMs = 350, holdMs = HOLD_MS, chip = null }: ComposerProps) {
+export function Composer({ store, sessionKey, upload, settleMs = SETTLE_MS, holdMs = HOLD_MS, chip = null }: ComposerProps) {
   const readOnly = useSessionStore(store, (s) => readOnlyReason(s.session.row ?? null));
   const stage = useMemo<Upload>(() => upload ?? httpUpload(sessionKey), [upload, sessionKey]);
   if (readOnly !== null) return <ReadOnlyBar reason={readOnly} />;

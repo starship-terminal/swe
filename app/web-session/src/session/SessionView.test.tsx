@@ -177,6 +177,17 @@ describe("a request in the timeline", () => {
   });
 });
 
+describe("a long request in the timeline", () => {
+  it("is cut like any text from outside, and says how much it left out", async () => {
+    const t = setup();
+    const prompt = "Run `ls` ".repeat(4000);
+    await settle(() => void t.transport.last.send(frame("turn.started", 1, {}, { turn_id: "t1" }), frame("approval.requested", 2, { request_id: "r1", kind: "command", prompt }, { turn_id: "t1" })));
+    const row = q(t.el, '[data-request="open"]') as HTMLElement;
+    expect(row.querySelector("p.whitespace-pre-wrap")?.textContent?.length).toBeLessThanOrEqual(6000);
+    expect(text(row)).toContain(`${(prompt.length - 6000).toLocaleString("en-US")} more characters not shown.`);
+  });
+});
+
 describe("sends from the outbox", () => {
   async function ready(over: { online?: boolean } = {}) {
     const t = setup(over);
@@ -609,6 +620,24 @@ describe("a step that never finished", () => {
     expect(text(row)).toContain("Stopped");
     expect(text(row)).not.toContain("Running");
     expect(row.querySelector(".sv-spin")).toBeNull();
+  });
+
+  it("has its own mark, not the cancelled step's", async () => {
+    const markOf = (row: HTMLElement) => Array.from(row.querySelectorAll("svg path"), (path) => path.getAttribute("d")).join("|");
+    const stoppedTurn = await history([
+      frame("turn.started", 95, {}, { turn_id: "t1" }),
+      ...toolCall(96, { running: true }),
+      frame("turn.ended", 97, { status: "interrupted" }, { turn_id: "t1" }),
+    ]);
+    await click(button(stoppedTurn.el, "Worked"));
+    const stopped = all(stoppedTurn.el, "button").find((b) => text(b).includes("step 96")) as HTMLButtonElement;
+    const cancelledTurn = await history([frame("turn.started", 95, {}, { turn_id: "t1" }), ...toolCall(96, { status: "cancelled" }), frame("turn.ended", 98, { status: "completed" }, { turn_id: "t1" })]);
+    await click(button(cancelledTurn.el, "Worked"));
+    const cancelled = all(cancelledTurn.el, "button").find((b) => text(b).includes("step 96")) as HTMLButtonElement;
+    expect(text(cancelled)).toContain("Cancelled");
+    expect(markOf(stopped)).toContain("M4.5 4.5h7v7h-7v-7Z");
+    expect(markOf(cancelled)).toContain("M4 4 12 12M12 4 4 12");
+    expect(markOf(stopped)).not.toBe(markOf(cancelled));
   });
 
   it("still spins while its turn is running", async () => {

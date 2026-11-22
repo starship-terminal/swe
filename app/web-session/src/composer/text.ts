@@ -18,7 +18,11 @@ export function cut(text: string, max: number): { text: string; cut: boolean } {
   return { text: text.slice(0, end), cut: true };
 }
 
-/** A label for a button: its first characters, with an ellipsis when it was cut. */
+/**
+ * A label for a button: its first characters, with an ellipsis when it was cut. The text is the hub's and is not
+ * changed: the only thing taken off is whitespace at its two ends (`String.prototype.trim`), never anything inside
+ * it; the cut, when there is one, is the only other difference and is marked.
+ */
 export function label(text: string): string {
   const shown = cut(text.trim(), LABEL_SHOWN);
   return shown.cut ? `${shown.text}…` : shown.text;

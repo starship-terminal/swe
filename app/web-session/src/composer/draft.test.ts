@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DRAFT_KEPT_CHARS, forgetMemoryDrafts, readDraft, writeDraft } from "./draft";
+import { clearAllDrafts, DRAFT_KEPT_CHARS, DRAFT_MAX_AGE_MS, dropDraftsOnSignOut, forgetMemoryDrafts, readDraft, sweepDrafts, writeDraft } from "./draft";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -72,5 +72,82 @@ describe("the draft kept for a session", () => {
     writeDraft("s", { text: "back in storage", files: [] });
     forgetMemoryDrafts();
     expect(readDraft("s").text).toBe("back in storage");
+  });
+});
+
+describe("how long a draft is kept", () => {
+  const raw = (session: string) => window.localStorage.getItem(`swe.sv.draft.v1:${session}`);
+
+  it("stores when it was last edited, and nothing but the text, the files and that", () => {
+    writeDraft("s", { text: "x", files: [file] });
+    expect(Object.keys(JSON.parse(raw("s") as string)).sort()).toEqual(["a", "f", "t"]);
+  });
+
+  it("is gone when it was last edited more than fourteen days ago, and still there just inside that", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z"));
+      writeDraft("old", { text: "stale", files: [] });
+      writeDraft("fresh", { text: "kept", files: [] });
+      forgetMemoryDrafts();
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z").getTime() + DRAFT_MAX_AGE_MS - 1000);
+      expect(readDraft("old").text).toBe("stale");
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z").getTime() + DRAFT_MAX_AGE_MS + 1000);
+      writeDraft("fresh", { text: "kept", files: [] }); // edited again just now
+      forgetMemoryDrafts();
+      expect(readDraft("old").text).toBe("");
+      expect(readDraft("fresh").text).toBe("kept");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is dropped, with no time on it, as one an older version wrote", () => {
+    window.localStorage.setItem("swe.sv.draft.v1:legacy", JSON.stringify({ t: "no time", f: [] }));
+    expect(readDraft("legacy").text).toBe("");
+  });
+
+  it("is swept out of storage when the box opens, the old ones only", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z"));
+      writeDraft("old", { text: "stale", files: [] });
+      window.localStorage.setItem("other", "not a draft");
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z").getTime() + DRAFT_MAX_AGE_MS + 1000);
+      writeDraft("fresh", { text: "kept", files: [] });
+      sweepDrafts();
+      expect(raw("old")).toBeNull();
+      expect(raw("fresh")).not.toBeNull();
+      expect(window.localStorage.getItem("other")).toBe("not a draft");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is all dropped when the pairing is removed in another tab, and not when something else is", () => {
+    const stop = dropDraftsOnSignOut();
+    writeDraft("a", { text: "one", files: [] });
+    writeDraft("b", { text: "two", files: [] });
+    window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: JSON.stringify({ credential: "sk-test" }) }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "something.else", newValue: null }));
+    expect(readDraft("a").text).toBe("one");
+    window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null }));
+    expect(raw("a")).toBeNull();
+    expect(raw("b")).toBeNull();
+    expect(readDraft("a").text).toBe(""); // nor is it still held in memory
+    stop();
+    writeDraft("c", { text: "three", files: [] });
+    window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null }));
+    expect(raw("c")).not.toBeNull(); // no longer listening
+  });
+
+  it("is all dropped on demand, files and memory copies with it, and other keys stay", () => {
+    writeDraft("a", { text: "x".repeat(DRAFT_KEPT_CHARS + 1), files: [] }); // memory only
+    writeDraft("b", { text: "two", files: [file] });
+    window.localStorage.setItem("swe.remote", "pairing");
+    clearAllDrafts();
+    expect(readDraft("a").text).toBe("");
+    expect(readDraft("b").text).toBe("");
+    expect(window.localStorage.getItem("swe.remote")).toBe("pairing");
   });
 });

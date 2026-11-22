@@ -140,6 +140,25 @@ describe("sending", () => {
 });
 
 describe("the draft", () => {
+  it("drops other sessions' drafts that were last edited over two weeks ago when the box opens, and keeps newer ones", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    window.localStorage.setItem("swe.sv.draft.v1:claude:old", JSON.stringify({ t: "stale", f: [], a: Date.now() - 15 * day }));
+    window.localStorage.setItem("swe.sv.draft.v1:claude:recent", JSON.stringify({ t: "recent", f: [], a: Date.now() - 2 * day }));
+    mount();
+    expect(window.localStorage.getItem("swe.sv.draft.v1:claude:old")).toBeNull();
+    expect(window.localStorage.getItem("swe.sv.draft.v1:claude:recent")).not.toBeNull();
+  });
+
+  it("is all dropped when the pairing is removed in another tab, even one the box shows", async () => {
+    const m = mount();
+    await idle(m);
+    typeText(m, "typed under a signed-in session");
+    await settle(() => wait(SAVE_AFTER_MS + 50));
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).not.toBeNull();
+    act(() => void window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null })));
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toBeNull();
+  });
+
   it("stays in the box, in storage and on screen when the send is refused", async () => {
     const m = mount();
     await idle(m);
@@ -379,6 +398,51 @@ describe("while a reply is in progress", () => {
     expect(sent(m)).toHaveLength(1);
   });
 
+  it("sends on the first keyboard press after a hold that was let go off the button", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "after a hold");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    await wait(60); // the menu opens
+    expect(menuOpen(m)).not.toBeNull();
+    // The pointer is let go over the menu, not over the button: the button never gets the release.
+    // React hears a pointer leaving through pointerout.
+    act(() => void main.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: null })));
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await wait(150);
+    // Enter or Space on the focused button is a click with no pointer.
+    await click(main);
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("forgets a hold that was cancelled, or whose button lost the focus, as well", async () => {
+    for (const how of ["pointercancel", "blur"] as const) {
+      const m = mount({ props: { holdMs: 20 } });
+      await play(m, "streaming", 0, 3);
+      typeText(m, "x");
+      const main = btn(m, "Queue message") as HTMLButtonElement;
+      act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+      await wait(60);
+      act(() => void main.dispatchEvent(new Event(how === "blur" ? "focusout" : how, { bubbles: true })));
+      await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      // At once, not after the 80 ms a normal release takes to forget its flag: a cancelled pointer has no release.
+      await click(main);
+      expect(sent(m), how).toHaveLength(1);
+    }
+  });
+
+  it("opens the send menu above the whole bar, so a draft of several lines is not covered", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "one\ntwo\nthree");
+    await rightClick(btn(m, "Queue message") as Element);
+    const form = q(m.el, 'form[aria-label="Composer"]') as HTMLElement;
+    const menu = menuOpen(m) as HTMLElement;
+    expect(menu.parentElement).toBe(form); // anchored to the bar, not to the button inside it
+    expect(menu.className).toContain("bottom-full");
+  });
+
   it("does not open the menu on a short press", async () => {
     const m = mount({ props: { holdMs: 60 } });
     await play(m, "streaming", 0, 3);
@@ -416,7 +480,7 @@ describe("while a reply is in progress", () => {
     expect(text(menuItem(m, "steer"))).toContain("This agent cannot be steered.");
     await click(menuItem(m, "steer"));
     expect(sent(m)).toHaveLength(0);
-    expect(text(q(m.el, "[data-composer-reason]"))).toContain("cannot take a message while it is replying");
+    expect(text(q(m.el, "[data-composer-reason]"))).toContain("cannot send a message ahead of the queue");
   });
 
   it("closes the menu when the reply ends under it", async () => {

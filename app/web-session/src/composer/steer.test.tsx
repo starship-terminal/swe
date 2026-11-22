@@ -24,7 +24,7 @@ const CASES: [string, object, string, string, string][] = [
 ];
 
 describe("the steer item in the send menu", () => {
-  for (const [name, extra, label, sentence] of CASES) {
+  for (const [name, extra, label, sentence] of CASES.filter(([name]) => name !== "next_turn")) {
     it(`says ${label} and what it does when steer_effect is ${name}`, async () => {
       const m = await busy(extra);
       expect(text(sendItem(m).querySelector("span > span:first-child"))).toBe(label);
@@ -39,15 +39,33 @@ describe("the steer item in the send menu", () => {
     expect(text(sendItem(m))).toContain("Some agents stop the current reply to do it.");
   });
 
-  it("sends the same steer whatever the label says", async () => {
+  it("offers no menu at all for a steer that lands when the reply ends: it would be Queue again", async () => {
     const m = await busy({ steer_effect: "next_turn" });
+    expect(q(m.el, '[role="menu"]')).toBeNull();
+    expect(sendItem(m)).toBeNull();
+    // A press on the main button still queues.
+    await click(btn(m, "Queue message"));
+    expect(m.transport.posts("/message")[0]).toMatchObject({ text: "hello", mode: "queue" });
+  });
+
+  it("sends the same steer whatever the label says", async () => {
+    const m = await busy({ steer_effect: "after_tool" });
     await click(sendItem(m));
     expect(m.transport.posts("/message")[0]).toMatchObject({ text: "hello", mode: "steer" });
   });
 });
 
 describe("the steer item in a queued message's menu", () => {
-  for (const [name, extra, label, sentence] of CASES) {
+  it("is not offered for a steer that lands when the reply ends", async () => {
+    const m = mount();
+    await play(m, "queued", 0, 3);
+    await feed(m, frame("approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }), frame("session.state", 14, { state: "running" }), caps({ steer_effect: "next_turn" }));
+    await click(q(m.el, "[data-tray] button[aria-controls]"));
+    expect(btn(m, "More for queued message")).toBeUndefined();
+    expect(btn(m, "Edit queued message")).toBeDefined();
+  });
+
+  for (const [name, extra, label, sentence] of CASES.filter(([name]) => name !== "next_turn")) {
     it(`says ${label} when steer_effect is ${name}`, async () => {
       const m = mount();
       await play(m, "queued", 0, 3);

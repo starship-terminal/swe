@@ -8,6 +8,12 @@ export interface MenuItem {
   icon?: IconName;
   /** A line under the label that says what the item does. */
   hint?: string;
+  /**
+   * May take the focus when the menu opens: a choice that only sets something up or leaves things as they are
+   * (Queue, choose a file). An item that sends, stops, steers or removes is never `safe`: the menu opens with
+   * the focus on the menu itself, so a key still down from opening it cannot choose it.
+   */
+  safe?: boolean;
   /** Not available now: shown, with `reason`, and never selected. */
   disabled?: boolean;
   reason?: string;
@@ -25,18 +31,46 @@ interface Props {
   children?: ReactNode;
 }
 
+// Which keys are down now, kept for the whole page: a menu opened by a key press asks which keys were still down
+// when it opened, and ignores them until they are let go (a held or a doubled Enter chooses nothing).
+const down = new Set<string>();
+if (typeof document !== "undefined") {
+  document.addEventListener("keydown", (event) => void down.add(event.key), true);
+  document.addEventListener("keyup", (event) => void down.delete(event.key), true);
+  window.addEventListener("blur", () => down.clear());
+}
+
+/** Tests only: forget which keys are down. */
+export function forgetKeysDown(): void {
+  down.clear();
+}
+
 /**
- * A small menu on the glass surface. Opens with the focus on its first item that can be chosen (never a
- * destructive one: put the safe item first), moves with the arrow keys, closes on Escape, Tab or a press
- * elsewhere. An item that cannot be chosen is drawn with the reason and skipped by the keys.
+ * A small menu on the glass surface. Opens with the focus on its first item that is `safe` and can be chosen,
+ * or on the menu itself when there is none (an item that sends, stops, steers or removes is never the one a
+ * key press that opened the menu can reach). Moves with the arrow keys, closes on Escape, Tab or a press
+ * elsewhere. An item that cannot be chosen is drawn with the reason and skipped by the keys. A key that was
+ * down when the menu opened, and a repeat of any key, chooses nothing.
  */
 export function Menu({ label, items, onClose, placement = "above-start" }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const id = useId();
+  const held = useRef(new Set(down));
 
   useEffect(() => {
-    const first = root.current?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])');
-    first?.focus();
+    const first = root.current?.querySelector<HTMLElement>('[role="menuitem"][data-safe="true"]:not([aria-disabled="true"])');
+    (first ?? root.current)?.focus();
+  }, []);
+
+  useEffect(() => {
+    const up = (event: KeyboardEvent): void => void held.current.delete(event.key);
+    const gone = (): void => held.current.clear();
+    document.addEventListener("keyup", up, true);
+    window.addEventListener("blur", gone);
+    return () => {
+      document.removeEventListener("keyup", up, true);
+      window.removeEventListener("blur", gone);
+    };
   }, []);
 
   useEffect(() => {
@@ -64,13 +98,18 @@ export function Menu({ label, items, onClose, placement = "above-start" }: Props
       ref={root}
       aria-label={label}
       className={cx(
-        "sv-enter sv-glass z-20 flex min-w-48 flex-col rounded-glass p-1.5",
+        "sv-enter sv-glass z-20 flex min-w-48 flex-col rounded-glass p-1.5 focus:outline-none",
         placement === "inline" ? "relative" : "absolute bottom-full mb-2",
         placement === "above-start" && "left-0",
         placement === "above-end" && "right-0",
       )}
       data-menu={id}
       onKeyDown={(event) => {
+        // A key held down repeats: the repeat is never a choice (a button takes Enter on the key's going down).
+        if (event.repeat) {
+          event.preventDefault();
+          return;
+        }
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
@@ -91,6 +130,7 @@ export function Menu({ label, items, onClose, placement = "above-start" }: Props
         }
       }}
       role="menu"
+      tabIndex={-1}
     >
       {items.map((item) => (
         <button
@@ -101,8 +141,11 @@ export function Menu({ label, items, onClose, placement = "above-start" }: Props
             item.disabled === true ? "cursor-not-allowed opacity-60" : "hover:bg-hover",
           )}
           data-menu-item={item.id}
-          onClick={() => {
+          data-safe={item.safe === true}
+          onClick={(event) => {
             if (item.disabled === true) return;
+            // The click a key makes (no pointer: `detail` is 0) while Enter or Space is still down from before the menu opened.
+            if (event.detail === 0 && (held.current.has("Enter") || held.current.has(" "))) return;
             onClose();
             item.onSelect();
           }}
