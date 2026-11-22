@@ -101,23 +101,53 @@ describe("the approval dock", () => {
   it("needs the confirming press to start after the wait: a pointer that went down earlier, or a key held through it, does not confirm", async () => {
     const m = await withApproval();
     await pointerPress(btn(m, "Always allow"));
-    await ready();
+    // A key goes down on the button while it is still off (the arming key, held through the wait).
     const again = btn(m, "Press again to always allow") as HTMLButtonElement;
+    act(() => void again.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    await ready();
     // A click that no pointer went down on (the press began elsewhere, or before the button could be pressed).
     await settle(() => void again.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
     expect(posts(m, "approval")).toHaveLength(0);
-    // A key's click with no key going down on the button after the wait (a key held through it, a Space let go late).
+    // The held key's click, and a repeat of it.
     await click(again);
     expect(posts(m, "approval")).toHaveLength(0);
-    // A repeat of a held key is kept from pressing the button.
     const repeat = new KeyboardEvent("keydown", { key: "Enter", repeat: true, bubbles: true, cancelable: true });
     act(() => void again.dispatchEvent(repeat));
     expect(repeat.defaultPrevented).toBe(true);
-    // A key that goes down on it after the wait, once, is a press.
+    expect(posts(m, "approval")).toHaveLength(0);
+    // A Space let go late: its click follows its key's going up, in the same turn.
+    act(() => void again.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true })));
     await settle(() => {
-      again.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      again.dispatchEvent(new KeyboardEvent("keyup", { key: " ", bubbles: true }));
       again.click();
     });
+    expect(posts(m, "approval")).toHaveLength(1); // this Space went down after the wait: a press
+    expect(posts(m, "approval")[0]).toMatchObject({ decision: "always" });
+  });
+
+  it("does not confirm with a Space that went down before the wait ended and is let go after it", async () => {
+    const m = await withApproval();
+    await pointerPress(btn(m, "Always allow"));
+    const again = btn(m, "Press again to always allow") as HTMLButtonElement;
+    act(() => void again.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true })));
+    await ready();
+    // A Space makes its click as it is let go, in the same turn as its keyup.
+    await settle(() => {
+      again.dispatchEvent(new KeyboardEvent("keyup", { key: " ", bubbles: true }));
+      again.click();
+    });
+    expect(posts(m, "approval")).toHaveLength(0);
+    // The key is forgotten after that turn: a later bare click is an assistive technology's, and counts.
+    await settle(() => wait(5));
+    await click(btn(m, "Press again to always allow"));
+    expect(posts(m, "approval")).toHaveLength(1);
+  });
+
+  it("lets a screen reader or voice control confirm with a bare click, after the wait", async () => {
+    const m = await withApproval();
+    await pointerPress(btn(m, "Always allow"));
+    await ready();
+    await click(btn(m, "Press again to always allow")); // no pointer, no key: an assistive technology's activation
     expect(posts(m, "approval")).toHaveLength(1);
     expect(posts(m, "approval")[0]).toMatchObject({ decision: "always" });
   });

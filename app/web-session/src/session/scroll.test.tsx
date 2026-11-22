@@ -161,6 +161,7 @@ describe("following the end", () => {
 
 describe("opening something while following the end", () => {
   const observers: (() => void)[] = [];
+  const boxes: string[] = [];
 
   beforeEach(() => {
     observers.length = 0;
@@ -170,12 +171,20 @@ describe("opening something while following the end", () => {
         constructor(callback: () => void) {
           observers.push(callback);
         }
-        observe() {}
+        observe(el: Element, options?: ResizeObserverOptions) {
+          if (el.classList.contains("sv-pad-end")) boxes.push(options?.box ?? "content-box");
+        }
         disconnect() {}
       },
     );
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("watches the timeline's border box, so a taller composer (its height is the content's bottom padding) follows the end", async () => {
+    const t = setup();
+    await settle(() => void t.transport.last.send(...defaultFrames()));
+    expect(boxes).toEqual(["border-box"]);
+  });
 
   it("does not carry the pressed header off the top: a height the person caused is not a reason to jump to the end", async () => {
     const t = setup();

@@ -149,13 +149,18 @@ describe("the draft", () => {
     expect(window.localStorage.getItem("swe.sv.draft.v1:claude:recent")).not.toBeNull();
   });
 
-  it("is all dropped when the pairing is removed in another tab, even one the box shows", async () => {
+  it("is all dropped when the pairing is removed in another tab, and the box that shows one forgets it and writes nothing back", async () => {
     const m = mount();
     await idle(m);
     typeText(m, "typed under a signed-in session");
     await settle(() => wait(SAVE_AFTER_MS + 50));
     expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).not.toBeNull();
+    typeText(m, "typed under a signed-in session, and more"); // a save is pending
     act(() => void window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null })));
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toBeNull();
+    expect(box(m).value).toBe("");
+    await settle(() => wait(SAVE_AFTER_MS + 50)); // the pending save does not run
+    act(() => void m.el.ownerDocument.defaultView?.dispatchEvent(new Event("pagehide")));
     expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toBeNull();
   });
 
@@ -416,15 +421,30 @@ describe("while a reply is in progress", () => {
     expect(sent(m)).toHaveLength(1);
   });
 
-  it("forgets a hold that was cancelled, or whose button lost the focus, as well", async () => {
-    for (const how of ["pointercancel", "blur"] as const) {
+  it("keeps the release of a hold from sending even when the menu took the focus off the button", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "held");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    main.focus();
+    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    await wait(60); // the menu opens and takes the focus: the button blurs
+    expect(menuOpen(m)).not.toBeNull();
+    expect(document.activeElement).not.toBe(main);
+    act(() => void main.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })));
+    await click(main); // the click that follows the release over the button
+    expect(sent(m)).toHaveLength(0);
+  });
+
+  it("forgets a hold that was cancelled as well", async () => {
+    for (const how of ["pointercancel"] as const) {
       const m = mount({ props: { holdMs: 20 } });
       await play(m, "streaming", 0, 3);
       typeText(m, "x");
       const main = btn(m, "Queue message") as HTMLButtonElement;
       act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
       await wait(60);
-      act(() => void main.dispatchEvent(new Event(how === "blur" ? "focusout" : how, { bubbles: true })));
+      act(() => void main.dispatchEvent(new Event(how, { bubbles: true })));
       await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
       // At once, not after the 80 ms a normal release takes to forget its flag: a cancelled pointer has no release.
       await click(main);

@@ -555,7 +555,10 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
                     openSendMenu();
                   }
                 }}
-                onBlur={dropPointer}
+                onBlur={() => {
+                  // The focus moves into the menu a hold opened: the release that follows is still the hold's.
+                  if (menu !== "send") dropPointer();
+                }}
                 onPointerCancel={dropPointer}
                 onPointerDown={onPrimaryDown}
                 onPointerLeave={dropPointer}

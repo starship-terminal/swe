@@ -37,6 +37,25 @@ export const DRAFT_KEPT_CHARS = 200_000;
 export const FILES_KEPT = 10;
 
 const memory = new Map<string, Draft>();
+/** When each draft in `memory` was last written: a page that stays open for weeks must not bring one back. */
+const edited = new Map<string, number>();
+/** Mounted boxes, told when every draft was dropped (the device signed out) so none writes its text back. */
+const wipes = new Set<() => void>();
+
+/** Tell `listener` whenever every draft is dropped. Returns the way to stop. */
+export function onDraftsCleared(listener: () => void): () => void {
+  wipes.add(listener);
+  return () => void wipes.delete(listener);
+}
+
+function memoryFresh(session: string): boolean {
+  const at = edited.get(session);
+  if (at !== undefined && Date.now() - at <= DRAFT_MAX_AGE_MS) return true;
+  memory.delete(session);
+  unsaved.delete(session);
+  edited.delete(session);
+  return false;
+}
 /** Sessions whose latest draft is in `memory` only: storage holds an older one, or none. */
 const unsaved = new Set<string>();
 
@@ -74,7 +93,7 @@ function parse(raw: string, now: number): Draft | null {
  * could not reach storage, memory is the newer copy and wins: storage still holds an older one.
  */
 export function readDraft(session: string): Draft {
-  if (unsaved.has(session)) {
+  if (unsaved.has(session) && memoryFresh(session)) {
     const newer = memory.get(session);
     if (newer !== undefined) return newer;
   }
@@ -87,7 +106,7 @@ export function readDraft(session: string): Draft {
   } catch {
     // Unreadable storage: fall through to memory.
   }
-  return memory.get(session) ?? EMPTY_DRAFT;
+  return memoryFresh(session) ? (memory.get(session) ?? EMPTY_DRAFT) : EMPTY_DRAFT;
 }
 
 export type Kept = "storage" | "memory";
@@ -97,6 +116,7 @@ export function writeDraft(session: string, draft: Draft): Kept {
   const empty = draft.text === "" && draft.files.length === 0;
   if (empty) {
     memory.delete(session);
+    edited.delete(session);
     unsaved.delete(session);
     try {
       backing()?.removeItem(PREFIX + session);
@@ -106,6 +126,7 @@ export function writeDraft(session: string, draft: Draft): Kept {
     return "storage";
   }
   memory.set(session, draft);
+  edited.set(session, Date.now());
   if (draft.text.length > DRAFT_KEPT_CHARS) {
     unsaved.add(session);
     return "memory";
@@ -128,6 +149,7 @@ export function writeDraft(session: string, draft: Draft): Kept {
 /** Tests only: forget what this page holds in memory. */
 export function forgetMemoryDrafts(): void {
   memory.clear();
+  edited.clear();
   unsaved.clear();
 }
 
@@ -156,7 +178,9 @@ export function sweepDrafts(now = Date.now()): void {
 /** Drop every kept draft, on this page and in storage: the device was signed out. */
 export function clearAllDrafts(): void {
   memory.clear();
+  edited.clear();
   unsaved.clear();
+  for (const listener of wipes) listener();
   try {
     const store = backing();
     if (store === null) return;

@@ -168,9 +168,7 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
   const longChoices = choices.some(({ option }) => option.label.trim().length > CHOICE_LONG);
 
   const pick = (click: MouseEvent<HTMLButtonElement>, option: Option, index: number): void => {
-    // The confirming press of a standing grant needs a key of its own if it came from a key.
-    const confirms = option.standing === true && confirming === option.id;
-    if (!presses.counts(click, option.id, confirms) || blocked) return;
+    if (!presses.counts(click, option.id) || blocked) return;
     if (option.standing === true) {
       if (confirming !== option.id) {
         // Arming: the press that did it is spent. Confirming needs a press that starts after the wait.
@@ -200,7 +198,8 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
         data-option-kind={kindOf}
         disabled={blocked || (confirm && !confirmReady)}
         onClick={(click) => pick(click, option, index)}
-        onKeyDown={(key) => presses.key(key, option.id, !blocked)}
+        onKeyDown={(key) => presses.key(key, option.id, !blocked && (confirming !== option.id || confirmReady))}
+        onKeyUp={() => presses.keyUp()}
         onPointerDown={() => presses.down(option.id, !blocked)}
         title={kindOf === "choice" ? full : undefined}
         variant={kindOf === "choice" ? "plain" : deny ? "danger" : index === firstAllow ? "primary" : "plain"}

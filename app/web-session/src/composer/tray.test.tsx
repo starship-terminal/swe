@@ -67,6 +67,19 @@ describe("the queued tray", () => {
     expect(posts(m, "queue")).toHaveLength(0);
   });
 
+  it("puts the focus back on More when its menu is closed with Escape", async () => {
+    const m = await withQueue();
+    const more = btn(m, "More for queued message") as HTMLButtonElement;
+    more.focus();
+    await click(more);
+    const menu = q(m.el, '[role="menu"]') as HTMLElement;
+    expect(document.activeElement).toBe(menu);
+    await settle(() => void menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await settle(() => wait(5));
+    expect(q(m.el, '[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(btn(m, "More for queued message"));
+  });
+
   it("sends a queued message now, which stops the reply, from its menu and once", async () => {
     const m = await withQueue();
     expect(q(m.el, '[role="menu"]')).toBeNull(); // not a button of its own

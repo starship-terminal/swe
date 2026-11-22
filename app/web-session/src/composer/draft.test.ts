@@ -102,6 +102,19 @@ describe("how long a draft is kept", () => {
     }
   });
 
+  it("is gone from memory too once it is that old: a page left open for weeks does not bring it back", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z"));
+      writeDraft("big", { text: "x".repeat(DRAFT_KEPT_CHARS + 1), files: [] }); // memory only
+      expect(readDraft("big").text.length).toBe(DRAFT_KEPT_CHARS + 1);
+      vi.setSystemTime(new Date("2026-11-01T10:00:00Z").getTime() + DRAFT_MAX_AGE_MS + 1000);
+      expect(readDraft("big").text).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is dropped, with no time on it, as one an older version wrote", () => {
     window.localStorage.setItem("swe.sv.draft.v1:legacy", JSON.stringify({ t: "no time", f: [] }));
     expect(readDraft("legacy").text).toBe("");

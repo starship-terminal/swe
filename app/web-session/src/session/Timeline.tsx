@@ -154,7 +154,8 @@ export function Timeline({ store }: { store: SessionStore }) {
     const watcher = new ResizeObserver(() => {
       if (stuck.current && anchor.current === null && scroller.current !== null) scroller.current.scrollTop = scroller.current.scrollHeight;
     });
-    watcher.observe(target);
+    // The border box: the composer's height is this element's bottom padding, and a content box would not change with it.
+    watcher.observe(target, { box: "border-box" });
     return () => watcher.disconnect();
   }, [rows.length > 0]);
 

@@ -66,6 +66,7 @@ function Item({
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const pressing = useRef(false);
+  const more = useRef<HTMLButtonElement>(null);
   // Taking a message out is two presses: the first says what the second does, and the second counts after a wait,
   // as a press of its own (see press.ts), so a double click or a held key cannot do both.
   const [removing, setRemoving] = useState(false);
@@ -120,7 +121,7 @@ function Item({
             <IconButton disabled={!idle} icon="edit" label="Edit queued message" onClick={() => setEdit(id, { text: item.text, original: item.text })} />
             <IconButton danger disabled={!idle || removing} icon="trash" label="Remove queued message" onClick={() => setRemoving(true)} />
             {steerEffect !== "next_turn" ? (
-              <IconButton aria-expanded={menu} aria-haspopup="menu" disabled={!idle} icon="more" label="More for queued message" onClick={() => setMenu((now) => !now)} />
+              <IconButton ref={more} aria-expanded={menu} aria-haspopup="menu" disabled={!idle} icon="more" label="More for queued message" onClick={() => setMenu((now) => !now)} />
             ) : null}
           </div>
           {removing ? (
@@ -128,11 +129,12 @@ function Item({
               <AnswerButton
                 disabled={!idle || !removeReady}
                 onClick={(click: MouseEvent<HTMLButtonElement>) => {
-                  if (!presses.counts(click, "remove", true) || !removeReady) return;
+                  if (!presses.counts(click, "remove")) return;
                   setRemoving(false);
                   void run("cancel");
                 }}
                 onKeyDown={(key) => presses.key(key, "remove", removeReady)}
+                onKeyUp={() => presses.keyUp()}
                 onPointerDown={() => presses.down("remove", removeReady)}
                 variant="danger"
               >
@@ -159,7 +161,11 @@ function Item({
                   },
                 ]}
                 label="Queued message options"
-                onClose={() => setMenu(false)}
+                onClose={() => {
+                  setMenu(false);
+                  // The focus goes back to what opened the menu, as the bar's menus do.
+                  queueMicrotask(() => more.current?.focus());
+                }}
                 placement="inline"
               />
             </div>

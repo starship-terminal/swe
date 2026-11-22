@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { EMPTY_DRAFT, readDraft, writeDraft, type Draft, type Kept } from "./draft";
+import { EMPTY_DRAFT, onDraftsCleared, readDraft, writeDraft, type Draft, type Kept } from "./draft";
 
 /** How long typing pauses before the draft is written down. A hidden or closing page writes at once. */
 export const SAVE_AFTER_MS = 250;
@@ -61,6 +61,19 @@ export function useDraft(session: string) {
       }
     },
     [session, cancel],
+  );
+
+  // Every draft was dropped (the device signed out): this box forgets its text and its pending save, so nothing is written back.
+  useEffect(
+    () =>
+      onDraftsCleared(() => {
+        cancel();
+        latest.current = EMPTY_DRAFT;
+        owned.current = [""];
+        setDraft(EMPTY_DRAFT);
+        setKept("storage");
+      }),
+    [cancel],
   );
 
   useEffect(() => {
