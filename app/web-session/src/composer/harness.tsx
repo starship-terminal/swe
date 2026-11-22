@@ -74,7 +74,7 @@ export function mount(over: { online?: boolean; strict?: boolean; props?: Partia
   let root = createRoot(host);
   roots.push(root);
   const render = (extra: Partial<ComposerProps> = {}): void => {
-    const tree = <Composer sessionKey={KEY} settleMs={30} store={store} {...over.props} {...extra} />;
+    const tree = <Composer sessionKey={KEY} settleMs={40} store={store} {...over.props} {...extra} />;
     act(() => root.render(over.strict === true ? <StrictMode>{tree}</StrictMode> : tree));
   };
   render();
@@ -163,3 +163,9 @@ export function key(m: Mounted, init: KeyboardEventInit & { keyCode?: number }):
 
 /** The POSTs the transport saw to a route, by its last path segment. */
 export const posts = (m: Mounted, tail: string): Record<string, unknown>[] => m.transport.posts(`/${tail}`);
+
+/** Off in the way the dock does it: still focusable, and a press is ignored. */
+export const off = (b: Element | null | undefined) => b?.getAttribute("aria-disabled") === "true";
+
+/** What a fixed answer says now: its word, or the confirmation once armed (the other text only holds its width). */
+export const said = (b: Element) => text(Array.from(b.querySelectorAll("[data-fixed-word] > span")).find((el) => !el.className.includes("invisible")) ?? q(b as HTMLElement, "[data-fixed-word]") ?? b);

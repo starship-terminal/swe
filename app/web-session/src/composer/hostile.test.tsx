@@ -2,7 +2,7 @@
 // never change its letters, take the page down, or take down more than its own part.
 import { describe, expect, it, vi } from "vitest";
 
-import { all, btn, click, feed, frame, mount, play, q, settle, text, type Mounted } from "./harness";
+import { all, btn, click, feed, frame, mount, play, q, said, settle, text, type Mounted } from "./harness";
 
 vi.mock("./text", async (original) => {
   const real = await original<typeof import("./text")>();
@@ -21,7 +21,7 @@ const dock = (m: Mounted) => q(m.el, "[data-dock]") as HTMLElement;
 async function ask(m: Mounted, data: object, tool?: object): Promise<void> {
   await play(m, "approval", 0, 4); // r1 answered; running
   await feed(m, ...(tool === undefined ? [] : [frame("tool.started", 14, tool, { turn_id: "t1" })]), frame("approval.requested", 15, { request_id: "r9", kind: "command", ...data }, { turn_id: "t1" }));
-  await settle(() => new Promise((resolve) => setTimeout(resolve, 60))); // past the settle time
+  await settle(() => new Promise((resolve) => setTimeout(resolve, 120))); // past the settle time
 }
 
 describe("a hostile request", () => {
@@ -76,7 +76,7 @@ describe("a hostile request", () => {
     const dupes = Array.from({ length: 300 }, () => ({ id: "deny", label: "Deny" }));
     await ask(m, { prompt: "pick", options: [...rows, { id: "allow", label: "Allow", kind: "allow" }, { id: "always", label: "Always", kind: "allow", standing: true }, { id: "deny", label: "Deny", kind: "deny" }, ...dupes] });
     const pinned = q(dock(m), "[data-dock-answers]") as HTMLElement;
-    expect(all(pinned, "button").map((b) => text(b))).toEqual(["Allow", "Always allow", "Deny"]);
+    expect(all(pinned, "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny"]);
     // Only the agent's own choices are cut: 20 shown, the rest (40 rows and 300 more Deny) counted.
     expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(20);
     expect(text(dock(m))).toContain("320 more options are not shown.");

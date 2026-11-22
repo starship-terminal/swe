@@ -8,8 +8,8 @@ const ok = () => ({ status: 200, body: { ok: true, receipt: "accepted" } });
 const queue = (seq: number, ...items: { id: string; text: string; attachments?: string[] }[]) =>
   frame("queue.updated", seq, { items: items.map((i) => ({ command_id: i.id, text: i.text, by: "device-1", mode: "queue", ...(i.attachments ? { attachments: i.attachments } : {}) })) });
 
-async function withQueue(): Promise<Mounted> {
-  const m = mount();
+async function withQueue(settleMs?: number): Promise<Mounted> {
+  const m = mount(settleMs === undefined ? {} : { props: { settleMs } });
   m.transport.on("/queue", ok, "POST");
   await play(m, "queued", 0, 3); // q1 "then lint it" queued behind an open approval
   await feed(m, frame("approval.resolved", 13, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }), frame("session.state", 14, { state: "running" }));
@@ -34,18 +34,19 @@ describe("the queued tray", () => {
   });
 
   it("takes a message out in two presses, the second after a wait and a press of its own: a double click removes nothing", async () => {
-    const m = await withQueue();
+    const m = await withQueue(300); // a wait long enough that a slow run cannot end it before the checks
     const remove = btn(m, "Remove queued message") as HTMLButtonElement;
     await click(remove); // the first press arms
     expect(posts(m, "queue")).toHaveLength(0);
     const confirm = btn(m, "Press again to remove") as HTMLButtonElement;
     // The second click of a double click lands on the new button: it is visibly not ready, and does nothing.
-    expect(confirm.disabled).toBe(true);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(confirm); // the focus went with the button that was pressed
     expect(text(q(m.el, "[data-remove-confirm]"))).toContain("One moment, then press again.");
     await click(confirm);
     expect(posts(m, "queue")).toHaveLength(0);
-    await settle(() => wait(60));
-    expect((btn(m, "Press again to remove") as HTMLButtonElement).disabled).toBe(false);
+    await settle(() => wait(340));
+    expect((btn(m, "Press again to remove") as HTMLButtonElement).getAttribute("aria-disabled")).toBeNull();
     // A click whose pointer did not go down on it is not a press of it.
     await settle(() => void (btn(m, "Press again to remove") as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
     expect(posts(m, "queue")).toHaveLength(0);
@@ -59,10 +60,12 @@ describe("the queued tray", () => {
     expect(posts(m, "queue")).toEqual([{ client_id: "q1", op: "cancel", command_id: "id1" }]);
   });
 
-  it("lets the person keep a message they started to remove", async () => {
+  it("lets the person keep a message they started to remove, with the focus back on the trash", async () => {
     const m = await withQueue();
     await click(btn(m, "Remove queued message"));
     await click(btn(m, "Keep it"));
+    await settle(() => wait(5));
+    expect(document.activeElement).toBe(btn(m, "Remove queued message"));
     expect(q(m.el, "[data-remove-confirm]")).toBeNull();
     expect(posts(m, "queue")).toHaveLength(0);
   });
@@ -133,7 +136,7 @@ describe("the queued tray", () => {
     });
     await feed(m, queue(20)); // it was sent meanwhile
     const orphan = q(m.el, "[data-orphan]") as HTMLElement;
-    expect(text(orphan)).toContain("sent or taken out of the queue before your edit was saved");
+    expect(text(orphan)).toContain("left the queue before your edit was saved");
     expect(text(orphan)).toContain("then lint it, strictly");
     await click(btn(m, "Move to the message box"));
     expect(box(m).value).toBe("then lint it, strictly");
@@ -172,8 +175,17 @@ describe("the queued tray", () => {
     expect(text(now)).toContain("This agent cannot be steered.");
     await click(now);
     expect(posts(m, "queue")).toHaveLength(0);
-    expect(text(q(m.el, '[data-tray-note="no-steer"]'))).toContain("cannot send a message ahead of the queue");
+    // The one sentence about it is the bar's, not the tray's.
+    expect(q(m.el, '[data-tray-note="no-steer"]')).toBeNull();
     expect((btn(m, "Remove queued message") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says that an agent cannot send ahead of the queue once, not in the bar and again in the tray", async () => {
+    const m = await withQueue();
+    await feed(m, frame("session.caps", 40, { caps: { steer: false, plan_mode: false, rollback: false, fork: false, stop_task: false, options: [] } }));
+    typeText(m, "and bump the version");
+    const said = (text(m.el).match(/cannot send a message ahead of the queue/g) ?? []).length;
+    expect(said).toBe(1);
   });
 
   it("draws at most twenty, and says how many more there are", async () => {
@@ -265,11 +277,21 @@ describe("an edit while another device changes the message", () => {
     expect(q(m.el, "[data-edit-conflict]")).toBeNull();
   });
 
-  it("keeps the person's words and says what happened when the message was sent or taken out meanwhile", async () => {
+  it("keeps the person's words, and says only what it knows when the message left the queue meanwhile", async () => {
     const m = await editing();
     await feed(m, queue(20));
     const orphan = q(m.el, "[data-orphan]") as HTMLElement;
-    expect(text(orphan)).toContain("sent or taken out of the queue before your edit was saved");
+    expect(orphan.getAttribute("data-orphan-sent")).toBe("false");
+    expect(text(orphan)).toContain("left the queue before your edit was saved: it is being sent, or it was taken out on another device");
+    expect(text(orphan)).toContain("then lint it twice");
+  });
+
+  it("says it was sent once the timeline shows the message the same command made", async () => {
+    const m = await editing();
+    await feed(m, queue(20), frame("message.completed", 21, { id: "u9", kind: "user", text: "then lint it" }, { turn_id: "t2", command_id: "q1" }));
+    const orphan = q(m.el, "[data-orphan]") as HTMLElement;
+    expect(orphan.getAttribute("data-orphan-sent")).toBe("true");
+    expect(text(orphan)).toContain("This message was sent before your edit was saved, so your edit did not change it");
     expect(text(orphan)).toContain("then lint it twice");
   });
 });

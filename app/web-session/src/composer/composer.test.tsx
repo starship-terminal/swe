@@ -149,14 +149,29 @@ describe("the draft", () => {
     expect(window.localStorage.getItem("swe.sv.draft.v1:claude:recent")).not.toBeNull();
   });
 
+  it("keeps what is being typed when another tab banks a new credential (the legacy key goes, a credential stays)", async () => {
+    window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "sk-test" }));
+    const m = mount();
+    await idle(m);
+    typeText(m, "half a thought");
+    await settle(() => wait(SAVE_AFTER_MS + 50));
+    await settle(() => void window.dispatchEvent(new StorageEvent("storage", { key: "quiver.remote", oldValue: JSON.stringify({ credential: "old" }), newValue: null })));
+    await settle(() => wait(5));
+    expect(box(m).value).toBe("half a thought");
+    expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).not.toBeNull();
+  });
+
   it("is all dropped when the pairing is removed in another tab, and the box that shows one forgets it and writes nothing back", async () => {
+    window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "sk-test" }));
     const m = mount();
     await idle(m);
     typeText(m, "typed under a signed-in session");
     await settle(() => wait(SAVE_AFTER_MS + 50));
     expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).not.toBeNull();
     typeText(m, "typed under a signed-in session, and more"); // a save is pending
-    act(() => void window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null })));
+    window.localStorage.removeItem("swe.remote"); // no credential remains
+    await settle(() => void window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null })));
+    await settle(() => wait(5));
     expect(window.localStorage.getItem(`swe.sv.draft.v1:${KEY}`)).toBeNull();
     expect(box(m).value).toBe("");
     await settle(() => wait(SAVE_AFTER_MS + 50)); // the pending save does not run
@@ -386,81 +401,129 @@ describe("while a reply is in progress", () => {
     expect(sent(m)).toHaveLength(1);
   });
 
-  it("opens the menu on a hold, and the release of that hold does not also queue the message", async () => {
-    const m = mount({ props: { holdMs: 20 } });
-    await play(m, "streaming", 0, 3);
-    typeText(m, "held");
-    const main = btn(m, "Queue message") as HTMLButtonElement;
-    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
-    await wait(60);
-    expect(menuOpen(m)).not.toBeNull();
-    act(() => void main.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })));
-    await click(main); // the click that follows the release
-    expect(sent(m)).toHaveLength(0);
-    await wait(120);
-    // A press after that is a press again.
-    await click(menuItem(m, "queue"));
-    expect(sent(m)).toHaveLength(1);
-  });
+  // The events a browser sends around a hold's release, as recorded in Chrome (primary.ts has the table). `detail` is 1
+  // for a click a pointer makes, 0 for one a key or an assistive technology makes.
+  const fire = (el: Element, type: string, init: object = {}) => act(() => void el.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init })));
+  const tail = (el: Element) => settle(() => void el.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+  const ORDERS: Record<string, (el: Element) => Promise<void>> = {
+    mouse: async (el) => {
+      fire(el, "pointerup");
+      await tail(el);
+    },
+    touch: async (el) => {
+      fire(el, "pointerup");
+      fire(el, "pointerout", { relatedTarget: document.body }); // React hears a leave through pointerout
+      await tail(el);
+    },
+    "touch, click before the leave": async (el) => {
+      fire(el, "pointerup");
+      await tail(el);
+      fire(el, "pointerout", { relatedTarget: document.body });
+    },
+  };
 
-  it("sends on the first keyboard press after a hold that was let go off the button", async () => {
+  for (const [name, release] of Object.entries(ORDERS)) {
+    it(`opens the menu on a hold, and the release of that hold (${name}) does not also queue the message`, async () => {
+      const m = mount({ props: { holdMs: 20 } });
+      await play(m, "streaming", 0, 3);
+      typeText(m, "held");
+      const main = btn(m, "Queue message") as HTMLButtonElement;
+      main.focus();
+      fire(main, "pointerdown");
+      await wait(60);
+      expect(menuOpen(m)).not.toBeNull();
+      expect(document.activeElement).not.toBe(main); // the menu took the focus
+      await release(main);
+      expect(sent(m)).toHaveLength(0);
+      expect(menuOpen(m)).not.toBeNull(); // and the menu is still there to choose from
+      // A new press, after that, is a press.
+      fire(main, "pointerdown");
+      fire(main, "pointerup");
+      await tail(main);
+      expect(sent(m)).toHaveLength(1);
+    });
+  }
+
+  it("sends nothing for the click after a hold that was let go off the button, and sends on the next keyboard press", async () => {
     const m = mount({ props: { holdMs: 20 } });
     await play(m, "streaming", 0, 3);
     typeText(m, "after a hold");
     const main = btn(m, "Queue message") as HTMLButtonElement;
-    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
-    await wait(60); // the menu opens
-    expect(menuOpen(m)).not.toBeNull();
-    // The pointer is let go over the menu, not over the button: the button never gets the release.
-    // React hears a pointer leaving through pointerout.
-    act(() => void main.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: null })));
+    fire(main, "pointerdown");
+    await wait(60);
+    fire(main, "pointerout", { relatedTarget: document.body }); // let go over the menu: no pointerup on the button, no click
     await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    await wait(150);
-    // Enter or Space on the focused button is a click with no pointer.
-    await click(main);
+    await click(main); // Enter or Space on the focused button: a click with no pointer
     expect(sent(m)).toHaveLength(1);
   });
 
-  it("keeps the release of a hold from sending even when the menu took the focus off the button", async () => {
+  it("treats a cancelled hold like a released one: its tail sends nothing, the next press sends", async () => {
     const m = mount({ props: { holdMs: 20 } });
     await play(m, "streaming", 0, 3);
-    typeText(m, "held");
+    typeText(m, "x");
     const main = btn(m, "Queue message") as HTMLButtonElement;
-    main.focus();
-    act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
-    await wait(60); // the menu opens and takes the focus: the button blurs
+    fire(main, "pointerdown");
+    await wait(60);
+    fire(main, "pointercancel");
+    await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await tail(main); // a pointer's click that no new pointerdown began is still the hold's tail: not a press
+    expect(sent(m)).toHaveLength(0);
+    await click(main); // a key's click is
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("treats an assistive technology's bare click as a press of its own, after a hold too", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "bare");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    await wait(60);
+    fire(main, "pointerup");
+    await click(main); // detail 0: no pointer made it
+    expect(sent(m)).toHaveLength(1);
+  });
+
+  it("opens the menu for a control click and keeps its release from sending", async () => {
+    const m = mount();
+    await play(m, "streaming", 0, 3);
+    typeText(m, "ctrl");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown", { ctrlKey: true });
+    await settle(() => void main.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
     expect(menuOpen(m)).not.toBeNull();
-    expect(document.activeElement).not.toBe(main);
-    act(() => void main.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })));
-    await click(main); // the click that follows the release over the button
+    fire(main, "pointerup");
+    await tail(main);
     expect(sent(m)).toHaveLength(0);
   });
 
-  it("forgets a hold that was cancelled as well", async () => {
-    for (const how of ["pointercancel"] as const) {
-      const m = mount({ props: { holdMs: 20 } });
-      await play(m, "streaming", 0, 3);
-      typeText(m, "x");
-      const main = btn(m, "Queue message") as HTMLButtonElement;
-      act(() => void main.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
-      await wait(60);
-      act(() => void main.dispatchEvent(new Event(how, { bubbles: true })));
-      await settle(() => void menuItem(m, "queue")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-      // At once, not after the 80 ms a normal release takes to forget its flag: a cancelled pointer has no release.
-      await click(main);
-      expect(sent(m), how).toHaveLength(1);
-    }
+  it("sends on a short press with a pointer, and opens no menu", async () => {
+    const m = mount({ props: { holdMs: 60 } });
+    await play(m, "streaming", 0, 3);
+    typeText(m, "short");
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    fire(main, "pointerdown");
+    fire(main, "pointerup");
+    await tail(main);
+    expect(sent(m)).toHaveLength(1);
+    expect(menuOpen(m)).toBeNull();
   });
 
-  it("opens the send menu above the whole bar, so a draft of several lines is not covered", async () => {
+  it("opens the send menu in the stack above the bar, after the dock and the tray and before the bar, so nothing it hides is a request", async () => {
     const m = mount();
-    await play(m, "streaming", 0, 3);
+    await play(m, "approval", 0, 2); // a request is waiting, and the reply is running
+    await feed(m, frame("session.caps", 40, { caps: { steer: true, plan_mode: false, rollback: false, fork: false, stop_task: false, options: [], steer_effect: "stops_reply" } }));
     typeText(m, "one\ntwo\nthree");
     await rightClick(btn(m, "Queue message") as Element);
     const form = q(m.el, 'form[aria-label="Composer"]') as HTMLElement;
     const menu = menuOpen(m) as HTMLElement;
-    expect(menu.parentElement).toBe(form); // anchored to the bar, not to the button inside it
-    expect(menu.className).toContain("bottom-full");
+    const wrapper = menu.closest("[data-send-menu]") as HTMLElement;
+    expect(form.contains(menu)).toBe(false);
+    const dock = q(m.el, "[data-dock]") as HTMLElement;
+    // Order in the stack: the dock, then the menu, then the bar. The menu is in the flow, not over the dock.
+    expect(dock.compareDocumentPosition(wrapper) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(wrapper.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(menu.className).not.toContain("absolute");
   });
 
   it("does not open the menu on a short press", async () => {
@@ -698,6 +761,40 @@ describe("keeping the timeline clear of the bar", () => {
       top = 464;
       callbacks.forEach((notify) => notify());
       expect(m.el.style.getPropertyValue("--sv-composer-h")).toBe("336px");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("the area above the bar when the room is short", () => {
+  it("is anchored at its bottom, where the answers are, and follows its content", async () => {
+    const heights = new Map<Element, number>();
+    const callbacks: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      const m = mount();
+      const above = q(m.el, "[data-composer-above]") as HTMLElement;
+      Object.defineProperty(above, "scrollHeight", { configurable: true, get: () => heights.get(above) ?? 300 });
+      Object.defineProperty(above, "clientHeight", { configurable: true, value: 100 });
+      above.scrollTop = 0;
+      callbacks.forEach((notify) => notify()); // its content or its room changed
+      expect(above.scrollTop).toBe(300); // at the end: the answers
+      // The person scrolls up to read: it does not drag them back.
+      above.scrollTop = 40;
+      above.dispatchEvent(new Event("scroll"));
+      heights.set(above, 340);
+      callbacks.forEach((notify) => notify());
+      expect(above.scrollTop).toBe(40);
     } finally {
       vi.unstubAllGlobals();
     }

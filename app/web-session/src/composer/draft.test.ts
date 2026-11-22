@@ -137,21 +137,36 @@ describe("how long a draft is kept", () => {
     }
   });
 
-  it("is all dropped when the pairing is removed in another tab, and not when something else is", () => {
+  it("is all dropped when the pairing is removed in another tab and no credential remains, and not when something else is", async () => {
     const stop = dropDraftsOnSignOut();
+    window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "sk-test" }));
     writeDraft("a", { text: "one", files: [] });
     writeDraft("b", { text: "two", files: [] });
-    window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: JSON.stringify({ credential: "sk-test" }) }));
     window.dispatchEvent(new StorageEvent("storage", { key: "something.else", newValue: null }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(readDraft("a").text).toBe("one");
-    window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null }));
+    window.localStorage.removeItem("swe.remote");
+    window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", oldValue: "x", newValue: null }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(raw("a")).toBeNull();
     expect(raw("b")).toBeNull();
     expect(readDraft("a").text).toBe(""); // nor is it still held in memory
     stop();
     writeDraft("c", { text: "three", files: [] });
     window.dispatchEvent(new StorageEvent("storage", { key: "swe.remote", newValue: null }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(raw("c")).not.toBeNull(); // no longer listening
+  });
+
+  it("is kept when the legacy key goes while a credential stays: that is a new credential being banked", async () => {
+    const stop = dropDraftsOnSignOut();
+    // The web app's pairStore: setItem("swe.remote", ...), then removeItem("quiver.remote").
+    window.localStorage.setItem("swe.remote", JSON.stringify({ credential: "new" }));
+    writeDraft("a", { text: "half a thought", files: [] });
+    window.dispatchEvent(new StorageEvent("storage", { key: "quiver.remote", oldValue: JSON.stringify({ credential: "old" }), newValue: null }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(readDraft("a").text).toBe("half a thought");
+    stop();
   });
 
   it("is all dropped on demand, files and memory copies with it, and other keys stay", () => {

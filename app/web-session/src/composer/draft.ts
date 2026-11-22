@@ -14,6 +14,8 @@
 // `pairForget`, and a `storage` event from another tab for the credential key being removed), so a draft typed in a
 // signed-in session does not outlive it on a shared browser.
 
+import { hasCredential } from "../session/credential";
+
 export interface StagedFile {
   ref: string;
   name: string;
@@ -190,12 +192,26 @@ export function clearAllDrafts(): void {
   }
 }
 
-/** Clear every draft when another tab removes the saved pairing (signs out). Returns the way to stop listening. */
+/**
+ * Clear every draft when another tab signs out: it removed the saved pairing and no credential remains. A key being
+ * removed is not enough: banking a new credential (the web app's `pairStore`) removes the legacy key after it has
+ * written the new one, and a re-pair must keep what is being typed. So the check is made after the events settle,
+ * against what storage holds then. Returns the way to stop listening.
+ */
 export function dropDraftsOnSignOut(): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const onStorage = (event: StorageEvent): void => {
-    // `key === null` is `localStorage.clear()`; a pairing removed has no new value.
-    if (event.key === null || (CREDENTIAL_KEYS.includes(event.key) && event.newValue === null)) clearAllDrafts();
+    // `key === null` is `localStorage.clear()`; a pairing key removed has no new value.
+    if (!(event.key === null || (CREDENTIAL_KEYS.includes(event.key) && event.newValue === null))) return;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      if (!hasCredential()) clearAllDrafts();
+    }, 0);
   };
   window.addEventListener("storage", onStorage);
-  return () => window.removeEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    if (timer !== null) clearTimeout(timer);
+  };
 }

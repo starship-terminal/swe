@@ -74,15 +74,43 @@ export function Menu({ label, items, onClose, placement = "above-start" }: Props
   }, []);
 
   useEffect(() => {
-    const away = (event: Event): void => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) onClose();
+    // A press elsewhere closes the menu once its click has happened, not when the pointer goes down: the menu is in the flow, so
+    // closing it at pointerdown moves what is under the finger, and the press lands on nothing. The press that opened
+    // the menu (a hold's release and its click) began before it was there, so it closes nothing.
+    let armed = false;
+    const outside = (event: Event): boolean => root.current !== null && !root.current.contains(event.target as Node);
+    const down = (event: Event): void => {
+      armed = outside(event);
+    };
+    const click = (event: Event): void => {
+      if (armed && outside(event)) onClose();
+      armed = false;
+    };
+    const cancel = (): void => {
+      armed = false;
     };
     // On the next turn of the loop: the press that opened the menu must not close it.
-    const timer = setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
+    const timer = setTimeout(() => {
+      document.addEventListener("pointerdown", down, true);
+      document.addEventListener("click", click, true);
+      document.addEventListener("pointercancel", cancel, true);
+    }, 0);
     return () => {
       clearTimeout(timer);
-      document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("pointerdown", down, true);
+      document.removeEventListener("click", click, true);
+      document.removeEventListener("pointercancel", cancel, true);
     };
+  }, [onClose]);
+
+  // Escape closes the menu wherever the focus is: a finger lifting off the button that opened it can leave the focus on that
+  // button (a touch makes the browser focus it), and the menu must not stay open under a key that cannot reach it.
+  useEffect(() => {
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !event.defaultPrevented) onClose();
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
   }, [onClose]);
 
   const move = (step: number, from: number): void => {
@@ -98,7 +126,7 @@ export function Menu({ label, items, onClose, placement = "above-start" }: Props
       ref={root}
       aria-label={label}
       className={cx(
-        "sv-enter sv-glass z-20 flex min-w-48 flex-col rounded-glass p-1.5 focus:outline-none",
+        "sv-enter sv-glass pointer-events-auto z-20 flex min-w-48 flex-col rounded-glass p-1.5 focus:outline-none",
         placement === "inline" ? "relative" : "absolute bottom-full mb-2",
         placement === "above-start" && "left-0",
         placement === "above-end" && "right-0",

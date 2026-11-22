@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type MutableRefObject } from "react";
 
 import { useSessionStore, type RequestEvent, type SessionStore, type TimelineItem, type ToolItem } from "../core";
 import { Collapsible, cx, InlineText, Spinner, StateArrow } from "../ui";
@@ -16,24 +16,33 @@ import { clip, cut, inputText, label, NAME_SHOWN, OPTIONS_SHOWN } from "./text";
  */
 export const SETTLE_MS = 500;
 
-/** The words the hub reads as a decision itself; an option with any other id is one the agent made up. */
-const DECISION_IDS = new Set(["allow", "always", "deny"]);
-const FIXED_WORD: Record<string, string> = { allow: "Allow", always: "Always allow", deny: "Deny" };
-/** A label this long is the hub's own word for the decision; a longer one is somebody's paragraph. */
-const FIXED_LABEL_MAX = 40;
+/**
+ * The three meanings an answer can have for every agent: the hub gives each option a `kind` (allow, always, deny),
+ * whatever the agent's own ids and labels are (Claude and Codex name their options `allow`, `always`, `deny`; an ACP
+ * agent's are `o1`, `o2`...). Those options are the dock's fixed answers: pinned, in our own words, with what the
+ * agent called the option as small text under them. An option with any other kind, or none, is the agent's own choice.
+ */
+type Fixed = "allow" | "always" | "deny";
+const FIXED_WORD: Record<Fixed, string> = { allow: "Allow", always: "Always allow", deny: "Deny" };
+/** How many options of one kind are pinned (so six at most); further ones are listed as the agent's choices. */
+const FIXED_PER_KIND = 2;
+/** How much of the agent's name for a fixed answer shows under our word. */
+const FIXED_LABEL_SHOWN = 60;
 /** Past this many characters a choice's label is cut to two lines on screen, and listed in full under "Options in full". */
 const CHOICE_LONG = 80;
 
-/**
- * What a button says. A standing option the hub calls just "Always" says what it grants: "Always allow". Any
- * other label is the hub's, cut to a length and not changed.
- */
-function wording(option: Option): string {
-  if (option.standing === true && /^always$/i.test(option.label.trim())) return "Always allow";
-  // A decision's button is ours: the hub's short word for it, or our own when the label is long. Whatever a
-  // hostile label says, the fixed answers stay as short as they look.
-  if (DECISION_IDS.has(option.id) && option.label.trim().length > FIXED_LABEL_MAX) return FIXED_WORD[option.id] as string;
-  return label(option.label);
+function fixedKind(option: Option): Fixed | null {
+  if (option.standing === true) return "always";
+  return option.kind === "allow" || option.kind === "always" || option.kind === "deny" ? option.kind : null;
+}
+
+/** What the agent called a fixed answer, unless that is just our word again. */
+function agentName(option: Option, word: string): string | null {
+  const given = option.label.trim();
+  // The hub's own short names for the meanings ("Allow", "Always", "Always allow", "Deny") add nothing under ours.
+  if (given === "" || [word.toLowerCase(), word.toLowerCase().replace(/ allow$/, "")].includes(given.toLowerCase())) return null;
+  const shown = cut(given, FIXED_LABEL_SHOWN);
+  return shown.cut ? `${shown.text}…` : shown.text;
 }
 
 type Option = { id: string; label: string; kind?: string; standing?: boolean };
@@ -126,7 +135,7 @@ function optionsOf(event: RequestEvent): Option[] {
   return event.type === "approval.requested" ? [{ id: "allow", label: "Allow", kind: "allow" }, { id: "deny", label: "Deny", kind: "deny" }] : [];
 }
 
-function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event: RequestEvent; waiting: number; settleMs: number }) {
+function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionStore; event: RequestEvent; waiting: number; settleMs: number; focusKept: MutableRefObject<boolean> }) {
   const approval = event.type === "approval.requested";
   const [settling, setSettling] = useState(settleMs > 0);
   useEffect(() => {
@@ -149,14 +158,32 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
     return () => clearTimeout(timer);
   }, [confirming]);
   const presses = usePresses();
+  // Keyboard focus: a request that replaces one the person had the focus in takes it on its heading (never on an answer),
+  // so Tab does not start again from the top of the page. The old panel says it had the focus as it goes.
+  const section = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const node = section.current;
+    if (focusKept.current) {
+      focusKept.current = false;
+      heading.current?.focus();
+    }
+    return () => {
+      if (node !== null && node.contains(document.activeElement)) focusKept.current = true;
+    };
+  }, []);
 
   const all = optionsOf(event);
-  // The decisions are the first option with each of the words the hub reads as one (allow, always, deny), wherever
-  // they are in the list: an agent cannot push Deny out of sight by listing forty choices before it. Every other option
-  // is the agent's own choice, and only those are cut to `OPTIONS_SHOWN`.
-  const numbered = all.map((option, index) => ({ option, index }));
-  const seen = new Set<string>();
-  const fixed = numbered.filter(({ option }) => DECISION_IDS.has(option.id) && !seen.has(option.id) && seen.add(option.id));
+  // The fixed answers are the options whose `kind` says allow, always or deny (at most two of a kind),
+  // wherever they are in the list: an agent cannot push Deny out of sight by listing forty choices before it. Every
+  // other option is the agent's own choice, and only those are cut to `OPTIONS_SHOWN`.
+  const numbered = all.map((option, index) => ({ option, index, fixed: fixedKind(option) }));
+  const perKind: Record<string, number> = {};
+  const fixed = numbered.filter((entry) => {
+    if (entry.fixed === null || (perKind[entry.fixed] ?? 0) >= FIXED_PER_KIND) return false;
+    perKind[entry.fixed] = (perKind[entry.fixed] ?? 0) + 1;
+    return true;
+  });
   const rest = numbered.filter((entry) => !fixed.includes(entry));
   const choices = rest.slice(0, OPTIONS_SHOWN);
   const hidden = rest.length - choices.length;
@@ -164,11 +191,12 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
   const blocked = settling || busy || sent || refusal !== null;
   const kind = approval ? (KIND_WORD[event.data.kind] ?? "Request") : "";
   // One filled answer: the first that lets the agent go on. The others (a standing grant included) are plain.
-  const firstAllow = fixed.find(({ option }) => option.kind === "allow" || option.id === "allow")?.index;
+  const firstAllow = fixed.find((entry) => entry.fixed === "allow")?.index;
   const longChoices = choices.some(({ option }) => option.label.trim().length > CHOICE_LONG);
 
   const pick = (click: MouseEvent<HTMLButtonElement>, option: Option, index: number): void => {
     if (!presses.counts(click, option.id) || blocked) return;
+    if (confirming === option.id && !confirmReady) return;
     if (option.standing === true) {
       if (confirming !== option.id) {
         // Arming: the press that did it is spent. Confirming needs a press that starts after the wait.
@@ -180,23 +208,32 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
     void press(decisionFor(option, index));
   };
 
+  // One line that is always there (so a screen reader has a live region before its text changes) and that says
+  // what the answers can do now: wait, or go.
   const status =
-    message ??
-    (sent ? "Answer sent. Waiting for the agent." : refusal !== null ? refusal : settling ? "A new request just appeared. Read it before you answer." : null);
+    sent ? "Answer sent. Waiting for the agent."
+    : refusal !== null ? refusal
+    : settling ? "A new request just appeared. Read it before you answer."
+    : confirming !== null ? (confirmReady ? "Ready. Press again to confirm." : "One moment, then press again.")
+    : busy ? "Sending your answer."
+    : "You can answer now.";
 
-  const renderAnswer = ({ option, index }: { option: Option; index: number }, kindOf: "fixed" | "choice") => {
+  const renderAnswer = ({ option, index, fixed: meaning }: { option: Option; index: number; fixed: Fixed | null }, kindOf: "fixed" | "choice") => {
     const confirm = confirming === option.id;
-    const deny = option.kind === "deny" || option.id === "deny";
+    const deny = meaning === "deny";
     const full = label(option.label);
-    const words = confirm ? "Press again to always allow" : kindOf === "choice" ? full : wording(option);
+    const word = meaning === null ? full : FIXED_WORD[meaning];
+    const name = kindOf === "fixed" ? agentName(option, word) : null;
+    const words = confirm ? "Press again to always allow" : word;
     return (
       <AnswerButton
         key={`${index}:${option.id}`}
-        aria-label={kindOf === "choice" ? `Option ${index + 1}: ${full}` : undefined}
+        aria-label={kindOf === "choice" ? `Option ${index + 1}: ${full}` : name !== null && !confirm ? `${word}: ${name}` : undefined}
         className={kindOf === "choice" ? "w-full justify-start border-dashed text-left" : undefined}
+        data-armed={confirm ? true : undefined}
         data-option={option.id}
         data-option-kind={kindOf}
-        disabled={blocked || (confirm && !confirmReady)}
+        aria-disabled={blocked || (confirm && !confirmReady) ? true : undefined}
         onClick={(click) => pick(click, option, index)}
         onKeyDown={(key) => presses.key(key, option.id, !blocked && (confirming !== option.id || confirmReady))}
         onKeyUp={() => presses.keyUp()}
@@ -210,7 +247,18 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
             <span className="line-clamp-2 min-w-0 text-left break-words">{words}</span>
           </>
         ) : (
-          words
+          <span className="flex min-w-0 flex-col items-center leading-tight">
+            {option.standing === true ? (
+              // Both texts take the same place, so arming the button changes neither its size nor its row.
+              <span className="grid" data-fixed-word>
+                <span className={cx("col-start-1 row-start-1", confirm && "invisible")}>{FIXED_WORD[meaning ?? "always"]}</span>
+                <span aria-hidden={!confirm} className={cx("col-start-1 row-start-1", !confirm && "invisible")}>Press again to always allow</span>
+              </span>
+            ) : (
+              <span data-fixed-word>{words}</span>
+            )}
+            {name !== null && !confirm ? <span className="line-clamp-2 text-xs font-normal break-words opacity-80" data-agent-name>{name}</span> : null}
+          </span>
         )}
       </AnswerButton>
     );
@@ -219,18 +267,21 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
   return (
     <section
       aria-label={approval ? "Approval needed" : "Question from the agent"}
-      className="sv-enter sv-glass pointer-events-auto flex min-h-0 flex-col rounded-glass px-3.5 py-3 shadow-sm"
+      className="sv-enter sv-glass pointer-events-auto flex flex-col rounded-glass px-3.5 py-3 shadow-sm"
       data-dock={approval ? "approval" : "input"}
       data-request-id={event.data.request_id}
       data-request-seq={event.seq}
+      ref={section}
       role="group"
     >
-      <div className="min-h-0 flex-1 overflow-y-auto" data-dock-text>
-        <p aria-live="polite" className="flex items-center gap-1.5 text-xs font-medium text-primary">
-          <StateArrow colour="yellow" />
-          {approval ? "Approval needed" : "The agent has a question"}
-          {approval || waiting > 0 ? <span className="font-normal text-muted">{`${approval ? ` · ${kind}` : ""}${waiting > 0 ? ` · ${waiting} more waiting` : ""}`}</span> : null}
-        </p>
+      {/* What it is, then the request's text in an area of its own (it scrolls past 10 rem), then the answers. The dock does not
+          shrink below its content: when the stack is short the area above the bar scrolls, anchored at its bottom, where the answers are. */}
+      <p ref={heading} aria-live="polite" className="flex items-center gap-1.5 text-xs font-medium text-primary focus:outline-none" tabIndex={-1}>
+        <StateArrow colour="yellow" />
+        {approval ? "Approval needed" : "The agent has a question"}
+        {approval || waiting > 0 ? <span className="font-normal text-muted">{`${approval ? ` · ${kind}` : ""}${waiting > 0 ? ` · ${waiting} more waiting` : ""}`}</span> : null}
+      </p>
+      <div className="max-h-40 overflow-y-auto" data-dock-text>
         <Clipped className="mt-1.5" text={event.data.prompt} />
         <ToolDetails tool={tool} />
         {textQuestion ? (
@@ -251,34 +302,27 @@ function Panel({ store, event, waiting, settleMs }: { store: SessionStore; event
         ) : null}
       </div>
       <div className="mt-2 shrink-0" data-dock-answers>
-        <div className="flex flex-wrap gap-2">
+        {/* Above the answers, so that what comes and goes here moves the text up and never an answer. */}
+        <div aria-live="polite" className="min-h-4 text-xs text-secondary" data-dock-status role="status">
+          {message !== null ? <ErrorNote>{message}</ErrorNote> : status}
+        </div>
+        {confirming !== null ? (
+          <p className="mt-1 text-xs text-secondary" data-note="standing">
+            {`Always allow ${tool?.name !== undefined && tool.name !== "" ? cut(tool.name, NAME_SHOWN).text : "this kind of call"}? Pressing again turns off later questions of the same kind for this session. `}
+            <button className="underline focus-visible:outline-2 focus-visible:outline-interactive" onClick={() => setConfirming(null)} type="button">
+              Cancel
+            </button>
+          </p>
+        ) : null}
+        <div className="mt-1.5 flex flex-wrap gap-2">
           {fixed.map((entry) => renderAnswer(entry, "fixed"))}
           {textQuestion ? (
-            <AnswerButton data-option="skip" disabled={blocked} onClick={() => void press("deny")} variant="plain">
+            <AnswerButton aria-disabled={blocked ? true : undefined} data-option="skip" onClick={() => !blocked && void press("deny")} variant="plain">
               Skip this question
-            </AnswerButton>
-          ) : null}
-          {confirming !== null ? (
-            <AnswerButton onClick={() => setConfirming(null)} variant="plain">
-              Cancel
             </AnswerButton>
           ) : null}
           {busy ? <Spinner className="self-center" /> : null}
         </div>
-        {confirming !== null ? (
-          <p className="mt-1.5 text-xs text-secondary" data-note="standing">
-            {`Always allow ${tool?.name !== undefined && tool.name !== "" ? cut(tool.name, NAME_SHOWN).text : "this kind of call"}? Pressing again turns off later questions of the same kind for this session. Cancel to go back.${confirmReady ? "" : " One moment, then press again."}`}
-          </p>
-        ) : null}
-        {message !== null ? (
-          <ErrorNote aria-live="polite" className="mt-1.5" data-dock-status>
-            {message}
-          </ErrorNote>
-        ) : status !== null ? (
-          <p aria-live="polite" className="mt-1.5 text-xs text-secondary" data-dock-status role="status">
-            {status}
-          </p>
-        ) : null}
       </div>
     </section>
   );
@@ -308,10 +352,16 @@ function ChoicesInFull({ choices }: { choices: { n: number; text: string }[] }) 
 export function RequestDock({ store, settleMs }: { store: SessionStore; settleMs: number }) {
   const first = useSessionStore(store, (s) => s.session.pending[0]);
   const waiting = useSessionStore(store, (s) => Math.max(0, s.session.pending.length - 1));
+  // Set by a panel that goes while the keyboard focus is in it: the one that takes its place takes the focus.
+  const focusKept = useRef(false);
+  useEffect(() => {
+    // No request took its place: nobody is owed the focus later.
+    if (first === undefined) focusKept.current = false;
+  });
   if (first === undefined) return null;
   return (
     <Guard key={`${first.data.request_id}:${first.seq}`} message="This request could not be shown. Answer it in the terminal or on another device." part="dock">
-      <Panel event={first} settleMs={settleMs} store={store} waiting={waiting} />
+      <Panel event={first} focusKept={focusKept} settleMs={settleMs} store={store} waiting={waiting} />
     </Guard>
   );
 }

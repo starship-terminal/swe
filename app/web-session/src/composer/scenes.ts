@@ -294,6 +294,28 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
       await press(c, "Remove queued message");
       await c.sleep(700);
       break;
+    case "composer-acp-approval":
+    case "composer-acp-many": {
+      // An ACP agent's request, as adapters/acp.py builds it: ids o1..oN, the meaning in `kind`, the agent's own names.
+      const many = scene.endsWith("many") ? Array.from({ length: 40 }, (_, i) => ({ id: `c${i}`, label: `Open ${["the config", "the log", "the tests", "the readme"][i % 4]} first (${i})` })) : [];
+      send(
+        ...approval.slice(0, 4),
+        frame(k, "approval.requested", 15, {
+          request_id: "p1",
+          kind: "command",
+          prompt: "Run `rm -rf build`?",
+          options: [
+            ...many,
+            { id: "o1", label: "Allow once", kind: "allow" },
+            { id: "o2", label: "Allow always", kind: "always", standing: true },
+            { id: "o3", label: "Reject once", kind: "deny" },
+            { id: "o4", label: "Reject always", kind: "deny" },
+          ],
+        }),
+        frame(k, "session.state", 16, { state: "waiting" }),
+      );
+      break;
+    }
     case "composer-hostile-labels":
       send(
         ...approval.slice(0, 4),

@@ -10,6 +10,7 @@ import { ErrorNote } from "./ErrorNote";
 import { Guard } from "./Guard";
 import { enterAction, touchScreen } from "./keys";
 import { Menu, type MenuItem } from "./Menu";
+import { stepPrimary, type PrimaryAction, type PrimaryEvent, type PrimaryState } from "./primary";
 import { QueueTray } from "./QueueTray";
 import { RequestDock, SETTLE_MS } from "./RequestDock";
 import { steerEffectOf, steerWording } from "./steer";
@@ -83,6 +84,37 @@ function useFloating(): { host: RefObject<HTMLDivElement | null>; stack: RefObje
   return { host, stack };
 }
 
+/** Keeps a scroll area at its end while its content changes size, unless the person has scrolled away from the end. */
+function useStickToBottom(area: RefObject<HTMLDivElement | null>): void {
+  useLayoutEffect(() => {
+    const el = area.current;
+    if (el === null || typeof ResizeObserver === "undefined") return;
+    let atEnd = true;
+    const onScroll = (): void => {
+      atEnd = el.scrollHeight - el.clientHeight - el.scrollTop <= 4;
+    };
+    const follow = (): void => {
+      if (atEnd) el.scrollTop = el.scrollHeight;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    // Its size changes when the room does; its content's when a request, the tray or a note comes or goes.
+    const watcher = new ResizeObserver(follow);
+    watcher.observe(el);
+    for (const child of Array.from(el.children)) watcher.observe(child);
+    const content = new MutationObserver(() => {
+      for (const child of Array.from(el.children)) watcher.observe(child);
+      follow();
+    });
+    content.observe(el, { childList: true, subtree: true });
+    follow();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      watcher.disconnect();
+      content.disconnect();
+    };
+  }, [area]);
+}
+
 function ReadOnlyBar({ reason }: { reason: string }) {
   const { host, stack } = useFloating();
   return (
@@ -140,6 +172,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   const guard = useRef(false);
   const stopGuard = useRef(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  const above = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const primary = useRef<HTMLButtonElement>(null);
   const plus = useRef<HTMLButtonElement>(null);
@@ -148,8 +181,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   const openUploads = useRef(0);
   const aborts = useRef(new Set<AbortController>());
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const swallowClick = useRef(false);
-  const pointerDown = useRef(false);
+  const primaryState = useRef<PrimaryState>("idle");
   const reasonId = useId();
 
   const busyTurn = useSessionStore(store, (s) => s.session.openTurn !== null || s.session.phase === "running" || s.session.phase === "waiting");
@@ -278,38 +310,21 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   };
 
   // The primary button: a press sends (or queues). While a reply runs, holding it, a right click, or the
-  // arrow-up key opens a menu with the other way to send. The press that opened the menu never also sends.
+  // arrow-up key opens a menu with the other way to send. The press that opened the menu never also sends, in
+  // whatever order the browser delivers the events of its release: `primary.ts` is the table, this is its wiring.
   const stopHold = (): void => {
     if (hold.current !== null) clearTimeout(hold.current);
     hold.current = null;
   };
-  // Only a menu opened by a pointer that is still down has a release to swallow. One opened by the keyboard (the
-  // arrow key, the menu key) has none, and a flag left set would swallow the next real press.
+  const feed = (event: PrimaryEvent): PrimaryAction => {
+    const step = stepPrimary(primaryState.current, event);
+    primaryState.current = step.state;
+    if (step.action === "stop-hold") stopHold();
+    return step.action;
+  };
   const openSendMenu = (): void => {
     stopHold();
-    if (!menuOffered) return;
-    swallowClick.current = pointerDown.current;
-    setMenu("send");
-  };
-  const onPrimaryDown = (event: PointerEvent<HTMLButtonElement>): void => {
-    swallowClick.current = false;
-    pointerDown.current = true;
-    if (!busyTurn || event.button !== 0 || !menuOffered) return;
-    stopHold();
-    hold.current = setTimeout(openSendMenu, holdMs);
-  };
-  // The pointer left the button, was cancelled, or the button lost the focus: there is no release over the button to
-  // swallow, and a flag left set would swallow the next keyboard Enter or Space on it.
-  const dropPointer = (): void => {
-    stopHold();
-    pointerDown.current = false;
-    swallowClick.current = false;
-  };
-  const onPrimaryUp = (): void => {
-    pointerDown.current = false;
-    stopHold();
-    // The click that follows this release belongs to the hold that opened the menu: it is left unanswered, then forgotten.
-    if (swallowClick.current) setTimeout(() => (swallowClick.current = false), 80);
+    if (menuOffered) setMenu("send");
   };
 
   const addFiles = (list: FileList | null): void => {
@@ -356,6 +371,10 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
     box.current?.focus();
   };
 
+  // The area above the bar scrolls when the room is short (the keyboard is up, a menu is open). It stays at its bottom, where
+  // the answers are, as its content changes size.
+  useStickToBottom(above);
+
   const note = connectionNote(connection, loaded);
   const steerReason = busyTurn && !steerOk ? "This agent cannot send a message ahead of the queue. A message sent now waits and goes when the reply ends." : null;
   const reason = notice ?? blockedBy ?? (hasContent ? steerReason : null) ?? note;
@@ -381,8 +400,10 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   const closeMenu = useMemo(
     () => () => {
       setMenu((now) => {
-        // The focus goes back to what opened the menu.
-        queueMicrotask(() => (now === "attach" ? plus.current : primary.current)?.focus());
+        // The focus goes back to what opened the menu, unless it is somewhere the person put it (the box, the button).
+        queueMicrotask(() => {
+          if (document.activeElement === null || document.activeElement === document.body) (now === "attach" ? plus.current : primary.current)?.focus();
+        });
         return null;
       });
     },
@@ -392,7 +413,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   return (
     <div ref={host} className="sv-composer-host pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="form" data-composer-host>
       <div ref={stack} className="sv-composer mx-auto flex max-h-1/2 w-full max-w-3xl flex-col gap-2">
-        <div className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
+        <div ref={above} className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
           {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null ? (
             <div className="flex shrink-0 flex-col gap-1.5">
               {!persistent && outboxNote !== "" ? (
@@ -429,6 +450,13 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
             <RequestDock settleMs={settleMs} store={store} />
           </Guard>
         </div>
+        {/* In the stack, between what is above the bar and the bar: it does not cover a request that is waiting (the dock
+            makes room and stays in view) or the draft (a draft of several lines has its first line level with the button). */}
+        {menu === "send" ? (
+          <div className="flex shrink-0 justify-end" data-send-menu>
+            <Menu items={sendItems} label="Send options" onClose={closeMenu} placement="inline" />
+          </div>
+        ) : null}
         <form
           aria-label="Composer"
           className="sv-glass pointer-events-auto relative flex shrink-0 flex-col gap-1 rounded-bar px-1.5 py-1.5 shadow-sm focus-within:border-border-strong"
@@ -535,34 +563,41 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
                 aria-haspopup={busyTurn ? "menu" : undefined}
                 disabled={submitting || !hasContent || blockedBy !== null}
                 label={busyTurn ? "Queue message" : "Send message"}
+                onBlur={() => void feed({ type: "blur" })}
                 onClick={(event) => {
-                  if (swallowClick.current) {
-                    // The release of a hold that opened the menu: not a press.
+                  if (feed({ type: "click", detail: event.detail }) === "swallow") {
+                    // The tail of a hold that opened the menu: not a press.
                     event.preventDefault();
-                    swallowClick.current = false;
                     return;
                   }
                   if (canSend) void submit("queue");
                 }}
                 onContextMenu={(event) => {
-                  if (!busyTurn) return;
+                  if (!busyTurn || !menuOffered) return;
                   event.preventDefault();
-                  openSendMenu();
+                  if (feed({ type: "contextmenu", menuOffered }) === "open-menu") openSendMenu();
                 }}
                 onKeyDown={(event) => {
+                  feed({ type: "key" });
                   if (busyTurn && (event.key === "ArrowUp" || (event.shiftKey && event.key === "F10"))) {
                     event.preventDefault();
                     openSendMenu();
                   }
                 }}
-                onBlur={() => {
-                  // The focus moves into the menu a hold opened: the release that follows is still the hold's.
-                  if (menu !== "send") dropPointer();
+                onPointerCancel={() => void feed({ type: "cancel" })}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  const holdable = busyTurn && menuOffered;
+                  if (feed({ type: "down", holdable }) === "start-hold") {
+                    stopHold();
+                    hold.current = setTimeout(() => {
+                      hold.current = null;
+                      if (feed({ type: "hold" }) === "open-menu") openSendMenu();
+                    }, holdMs);
+                  }
                 }}
-                onPointerCancel={dropPointer}
-                onPointerDown={onPrimaryDown}
-                onPointerLeave={dropPointer}
-                onPointerUp={onPrimaryUp}
+                onPointerLeave={() => void feed({ type: "leave" })}
+                onPointerUp={() => void feed({ type: "up" })}
                 title={busyTurn ? "Queue this message (hold for more)" : "Send"}
                 tone="primary"
               >
@@ -570,8 +605,6 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
               </RoundButton>
             </div>
           </div>
-          {/* Above the whole bar, not above the button: a draft of several lines has its first line level with the button. */}
-          {menu === "send" ? <Menu items={sendItems} label="Send options" onClose={closeMenu} placement="above-end" /> : null}
         </form>
       </div>
     </div>

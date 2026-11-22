@@ -81,3 +81,87 @@ describe("the send menu", () => {
     expect(posts(m, "message")).toHaveLength(0);
   });
 });
+
+describe("closing a menu by pressing elsewhere", () => {
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function open(): Promise<Mounted> {
+    const m = mount({ props: { holdMs: 20 } });
+    m.transport.on("/message", () => ({ status: 202, body: { receipt: "queued" } }), "POST");
+    await play(m, "streaming", 0, 3);
+    const box = q(m.el, 'textarea[aria-label="Message"]') as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(box, "hello");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle(() => void (btn(m, "Queue message") as HTMLButtonElement).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await settle(() => wait(5)); // the menu's listeners start on the next turn
+    return m;
+  }
+
+  it("closes it after the click, not at the pointer going down: the menu is in the flow and would move what is under the finger", async () => {
+    const m = await open();
+    const elsewhere = q(m.el, 'textarea[aria-label="Message"]') as HTMLElement;
+    act(() => void elsewhere.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    expect(q(m.el, '[role="menu"]')).not.toBeNull();
+    await settle(() => void elsewhere.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(q(m.el, '[role="menu"]')).toBeNull();
+  });
+
+  it("is not closed by the tail of the hold that opened it (a click no pointerdown outside began)", async () => {
+    const m = await open();
+    await settle(() => void (btn(m, "Queue message") as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(q(m.el, '[role="menu"]')).not.toBeNull();
+  });
+
+  it("is not closed by a press that was cancelled (a scroll started)", async () => {
+    const m = await open();
+    const elsewhere = q(m.el, 'textarea[aria-label="Message"]') as HTMLElement;
+    act(() => void elsewhere.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    act(() => void elsewhere.dispatchEvent(new Event("pointercancel", { bubbles: true })));
+    await settle(() => void elsewhere.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(q(m.el, '[role="menu"]')).not.toBeNull();
+  });
+});
+
+describe("an answer pressed while the send menu is open", () => {
+  it("is answered, and the menu closes after", async () => {
+    const m = mount();
+    m.transport.on("/approval", () => ({ status: 200, body: { ok: true, receipt: "accepted" } }), "POST");
+    await play(m, "approval", 0, 2);
+    await settle(() => new Promise((resolve) => setTimeout(resolve, 120)));
+    const box = q(m.el, 'textarea[aria-label="Message"]') as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(box, "hello");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle(() => void (btn(m, "Queue message") as HTMLButtonElement).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    await settle(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    expect(q(m.el, '[role="menu"]')).not.toBeNull();
+    const allow = q(m.el, '[data-option="allow"]') as HTMLElement;
+    await settle(() => {
+      allow.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+      allow.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    });
+    expect(posts(m, "approval")).toHaveLength(1);
+    expect(q(m.el, '[role="menu"]')).toBeNull();
+  });
+});
+
+describe("Escape with the focus somewhere else", () => {
+  it("closes the send menu from the button, which a touch release leaves with the focus", async () => {
+    const m = mount({ props: { holdMs: 20 } });
+    await play(m, "streaming", 0, 3);
+    const box = q(m.el, 'textarea[aria-label="Message"]') as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(box, "hello");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const main = btn(m, "Queue message") as HTMLButtonElement;
+    await settle(() => void main.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    main.focus(); // the browser focused the button on the touch's release
+    expect(q(m.el, '[role="menu"]')).not.toBeNull();
+    await settle(() => void main.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(q(m.el, '[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(main); // and the focus stays where it was
+  });
+});

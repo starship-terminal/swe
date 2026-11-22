@@ -64,6 +64,8 @@ const SCENES = {
   "composer-queued-conflict": "scene=composer-queued-conflict",
   "composer-queued-remove": "scene=composer-queued-remove",
   "composer-hostile-labels": "scene=composer-hostile-labels",
+  "composer-acp-approval": "scene=composer-acp-approval",
+  "composer-acp-many": "scene=composer-acp-many",
 };
 const SIZES = { desktop: { width: 1280, height: 800, mobile: false }, phone: { width: 390, height: 844, mobile: true } };
 const BASE = process.env.SCREENS_URL ?? "http://localhost:5199/";

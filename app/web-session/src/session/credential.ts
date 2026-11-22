@@ -17,6 +17,11 @@ function saved(): string {
   return "";
 }
 
+/** Whether this browser still holds a device credential (inside the Mac and iPhone shells there is none and none is needed). */
+export function hasCredential(): boolean {
+  return saved() !== "";
+}
+
 /** `X-Swe-Pair` marks a request as this page's own (the hub only honours a tailnet identity with it). */
 export function authHeaders(): Record<string, string> {
   const credential = saved();

@@ -67,6 +67,8 @@ function Item({
   const [menu, setMenu] = useState(false);
   const pressing = useRef(false);
   const more = useRef<HTMLButtonElement>(null);
+  const trash = useRef<HTMLButtonElement>(null);
+  const confirmButton = useRef<HTMLButtonElement>(null);
   // Taking a message out is two presses: the first says what the second does, and the second counts after a wait,
   // as a press of its own (see press.ts), so a double click or a held key cannot do both.
   const [removing, setRemoving] = useState(false);
@@ -78,6 +80,10 @@ function Item({
     return () => clearTimeout(timer);
   }, [removing]);
   const presses = usePresses();
+  // The trash button is replaced, under the finger, by the confirmation: the keyboard focus goes with it.
+  useEffect(() => {
+    if (removing) confirmButton.current?.focus();
+  }, [removing]);
   const id = item.command_id;
   // Another device changed this message while it is being edited here: Save would write over it unseen.
   const changedUnder = edit !== undefined && item.text !== edit.original;
@@ -119,7 +125,7 @@ function Item({
             </div>
             {busy !== null ? <Spinner /> : null}
             <IconButton disabled={!idle} icon="edit" label="Edit queued message" onClick={() => setEdit(id, { text: item.text, original: item.text })} />
-            <IconButton danger disabled={!idle || removing} icon="trash" label="Remove queued message" onClick={() => setRemoving(true)} />
+            <IconButton ref={trash} danger disabled={!idle} icon="trash" label="Remove queued message" onClick={() => setRemoving(true)} />
             {steerEffect !== "next_turn" ? (
               <IconButton ref={more} aria-expanded={menu} aria-haspopup="menu" disabled={!idle} icon="more" label="More for queued message" onClick={() => setMenu((now) => !now)} />
             ) : null}
@@ -127,9 +133,10 @@ function Item({
           {removing ? (
             <div className="mt-1 flex flex-wrap items-center gap-1.5" data-remove-confirm>
               <AnswerButton
-                disabled={!idle || !removeReady}
+                ref={confirmButton}
+                aria-disabled={!idle || !removeReady ? true : undefined}
                 onClick={(click: MouseEvent<HTMLButtonElement>) => {
-                  if (!presses.counts(click, "remove")) return;
+                  if (!presses.counts(click, "remove") || !idle || !removeReady) return;
                   setRemoving(false);
                   void run("cancel");
                 }}
@@ -140,7 +147,13 @@ function Item({
               >
                 Press again to remove
               </AnswerButton>
-              <AnswerButton onClick={() => setRemoving(false)} variant="plain">
+              <AnswerButton
+                onClick={() => {
+                  setRemoving(false);
+                  queueMicrotask(() => trash.current?.focus());
+                }}
+                variant="plain"
+              >
                 Keep it
               </AnswerButton>
               <span className="text-xs text-secondary">{removeReady ? "This takes the message out of the queue." : "One moment, then press again."}</span>
@@ -219,6 +232,51 @@ function Item({
   );
 }
 
+/** How far back from the end of the timeline a sent message is looked for. */
+const SENT_LOOKBACK = 300;
+
+/**
+ * An edit whose message left the queue. It says what happened when the session knows: the message shows in the
+ * timeline as a user message sent by the same command (it was sent); otherwise it only says it left the queue (sent a
+ * moment ago, or taken out on another device), and says it was sent as soon as the timeline shows it.
+ */
+function Orphan({ store, id, edit, setEdit, onKeep }: { store: SessionStore; id: string; edit: Edit; setEdit(id: string, edit: Edit | undefined): void; onKeep(text: string): void }) {
+  const sent = useSessionStore(store, (s) => {
+    const items = s.session.items;
+    for (let i = items.length - 1; i >= 0 && i >= items.length - SENT_LOOKBACK; i--) {
+      const item = items[i];
+      if (item !== undefined && item.kind === "message" && item.role === "user" && item.commandId === id) return true;
+    }
+    return false;
+  });
+  return (
+    <div aria-label="An edit that was not saved" className="mb-1 rounded-block border border-warning bg-subtle px-2.5 py-2" data-orphan={id} data-orphan-sent={sent} role="group">
+      <p className="text-xs text-secondary">
+        {sent
+          ? "This message was sent before your edit was saved, so your edit did not change it. Your words are here."
+          : "This message left the queue before your edit was saved: it is being sent, or it was taken out on another device. Your words are here."}
+      </p>
+      <p className="mt-1 text-sm leading-6 break-words whitespace-pre-wrap" data-untrusted="edit">
+        {clip(edit.text, TEXT_SHOWN, 60).text}
+      </p>
+      <div className="mt-1.5 flex gap-1.5">
+        <AnswerButton
+          onClick={() => {
+            onKeep(edit.text);
+            setEdit(id, undefined);
+          }}
+          variant="primary"
+        >
+          Move to the message box
+        </AnswerButton>
+        <AnswerButton onClick={() => setEdit(id, undefined)} variant="plain">
+          Let it go
+        </AnswerButton>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The messages the hub holds for after the reply, as a strip just above the bar ("Queued: 2 messages") that
  * opens upward into the list. Each can be edited, taken out, or sent now (in its menu: that stops the reply in
@@ -255,26 +313,7 @@ export function QueueTray({ store, onKeep, settleMs }: { store: SessionStore; on
   return (
     <div className="sv-enter sv-glass pointer-events-auto flex shrink-0 flex-col rounded-glass px-1.5 py-1 shadow-sm" data-tray="queued">
       {orphans.map(([id, edit]) => (
-        <div key={id} aria-label="An edit that was not saved" className="mb-1 rounded-block border border-warning bg-subtle px-2.5 py-2" data-orphan={id} role="group">
-          <p className="text-xs text-secondary">This message was sent or taken out of the queue before your edit was saved. Your words are here.</p>
-          <p className="mt-1 text-sm leading-6 break-words whitespace-pre-wrap" data-untrusted="edit">
-            {clip(edit.text, TEXT_SHOWN, 60).text}
-          </p>
-          <div className="mt-1.5 flex gap-1.5">
-            <AnswerButton
-              onClick={() => {
-                onKeep(edit.text);
-                setEdit(id, undefined);
-              }}
-              variant="primary"
-            >
-              Move to the message box
-            </AnswerButton>
-            <AnswerButton onClick={() => setEdit(id, undefined)} variant="plain">
-              Let it go
-            </AnswerButton>
-          </div>
-        </div>
+        <Orphan key={id} edit={edit} id={id} onKeep={onKeep} setEdit={setEdit} store={store} />
       ))}
       {queue.length > 0 ? (
         <>
@@ -285,10 +324,6 @@ export function QueueTray({ store, onKeep, settleMs }: { store: SessionStore; on
                   {refusal !== null ? (
                     <p className="px-1.5 pb-1 text-xs text-secondary" data-tray-note="refusal">
                       {refusal}
-                    </p>
-                  ) : !steerOk ? (
-                    <p className="px-1.5 pb-1 text-xs text-secondary" data-tray-note="no-steer">
-                      This agent cannot send a message ahead of the queue. Queued messages are sent when the reply ends.
                     </p>
                   ) : null}
                   <ul className={cx("flex flex-col gap-1 overflow-y-auto pb-1", editing ? "max-h-72" : "max-h-44")}>

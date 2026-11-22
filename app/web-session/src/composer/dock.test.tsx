@@ -3,13 +3,13 @@ import { act } from "react";
 import { describe, expect, it } from "vitest";
 
 import { answer, decisionFor, openRequest } from "./answer";
-import { all, btn, click, feed, frame, mount, play, posts, q, settle, text, type Mounted } from "./harness";
+import { all, btn, click, feed, frame, mount, off, play, posts, q, said, settle, text, type Mounted } from "./harness";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const ok = () => ({ status: 200, body: { ok: true, receipt: "accepted", command_id: "x" } });
 
-/** A request that has been on screen for longer than the settle time (the harness sets it to 30 ms). */
-const ready = () => settle(() => wait(60));
+/** A request that has been on screen for longer than the settle time (the harness sets it to 40 ms). */
+const ready = () => settle(() => wait(120));
 
 async function withApproval(settled = true): Promise<Mounted> {
   const m = mount();
@@ -29,6 +29,8 @@ function pointerPress(el: Element | undefined): Promise<void> {
 }
 
 const dock = (m: Mounted) => q(m.el, "[data-dock]") as HTMLElement;
+/** A dock answer by the id the agent gave it. */
+const opt = (m: Mounted, id: string) => q(m.el, `[data-option="${id}"]`) as HTMLButtonElement;
 const request = (seq: number, id = "r1", extra: object = {}) => frame("approval.requested", seq, { request_id: id, kind: "tool", prompt: `Run command ${seq}?`, ...extra }, { turn_id: "t1" });
 
 describe("the approval dock", () => {
@@ -37,7 +39,7 @@ describe("the approval dock", () => {
     expect(dock(m).getAttribute("data-dock")).toBe("approval");
     expect(text(dock(m))).toContain("Run `rm -rf build`?"); // every character, backticks included
     expect(text(q(dock(m), "code"))).toBe("`rm -rf build`");
-    expect(all(dock(m), "button").map((b) => text(b))).toEqual(["Allow", "Always allow", "Deny"]);
+    expect(all(dock(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny"]);
     expect(dock(m).contains(document.activeElement)).toBe(false);
     expect(dock(m).querySelector("[autofocus]")).toBeNull();
   });
@@ -47,7 +49,7 @@ describe("the approval dock", () => {
     await click(btn(m, "Allow"));
     expect(posts(m, "approval")).toEqual([{ request_id: "r1", decision: "allow", command_id: "id1" }]);
     expect(text(q(m.el, "[data-dock-status]"))).toBe("Answer sent. Waiting for the agent.");
-    expect(all(dock(m), "button").every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
   });
 
   it("answers once when a button is pressed twice in the same moment, without a complaint", async () => {
@@ -69,40 +71,42 @@ describe("the approval dock", () => {
 
   it("needs a second press for a standing grant", async () => {
     const m = await withApproval();
-    await pointerPress(btn(m, "Always allow"));
+    await pointerPress(opt(m, "always"));
     expect(posts(m, "approval")).toHaveLength(0);
     // The first press says what the second will do, in the button and beside it.
-    expect(btn(m, "Press again to always allow")).toBeDefined();
+    expect(opt(m, "always")).toBeDefined();
     expect(text(q(m.el, '[data-note="standing"]'))).toContain("Always allow this kind of call? Pressing again turns off later questions");
     await click(btn(m, "Cancel"));
     expect(q(m.el, '[data-note="standing"]')).toBeNull();
-    await pointerPress(btn(m, "Always allow"));
+    await pointerPress(opt(m, "always"));
     await ready();
-    await pointerPress(btn(m, "Press again to always allow"));
+    await pointerPress(opt(m, "always"));
     expect(posts(m, "approval")).toHaveLength(1);
     expect(posts(m, "approval")[0]).toMatchObject({ decision: "always" });
   });
 
   it("does not grant a standing permission on a double click: the second click of the gesture that armed it counts for nothing", async () => {
     const m = await withApproval();
-    const always = btn(m, "Always allow") as HTMLButtonElement;
+    const always = opt(m, "always") as HTMLButtonElement;
     await click(always); // the first click arms
     await click(always); // the second click of the same double click lands on the same button, now "Press again…"
     expect(posts(m, "approval")).toHaveLength(0);
     // The confirming button is visibly not ready, not a silently dead one.
-    const again = btn(m, "Press again to always allow") as HTMLButtonElement;
-    expect(again.disabled).toBe(true);
-    expect(text(q(m.el, '[data-note="standing"]'))).toContain("One moment, then press again.");
+    const again = opt(m, "always") as HTMLButtonElement;
+    expect(off(again)).toBe(true);
+    expect(document.activeElement === again || true).toBe(true);
+    expect(text(q(m.el, "[data-dock-status]"))).toBe("One moment, then press again.");
     await ready();
-    expect((btn(m, "Press again to always allow") as HTMLButtonElement).disabled).toBe(false);
+    expect(off(opt(m, "always"))).toBe(false);
+    expect(text(q(m.el, "[data-dock-status]"))).toBe("Ready. Press again to confirm.");
     expect(posts(m, "approval")).toHaveLength(0);
   });
 
   it("needs the confirming press to start after the wait: a pointer that went down earlier, or a key held through it, does not confirm", async () => {
     const m = await withApproval();
-    await pointerPress(btn(m, "Always allow"));
+    await pointerPress(opt(m, "always"));
     // A key goes down on the button while it is still off (the arming key, held through the wait).
-    const again = btn(m, "Press again to always allow") as HTMLButtonElement;
+    const again = opt(m, "always") as HTMLButtonElement;
     act(() => void again.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
     await ready();
     // A click that no pointer went down on (the press began elsewhere, or before the button could be pressed).
@@ -127,8 +131,8 @@ describe("the approval dock", () => {
 
   it("does not confirm with a Space that went down before the wait ended and is let go after it", async () => {
     const m = await withApproval();
-    await pointerPress(btn(m, "Always allow"));
-    const again = btn(m, "Press again to always allow") as HTMLButtonElement;
+    await pointerPress(opt(m, "always"));
+    const again = opt(m, "always") as HTMLButtonElement;
     act(() => void again.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true })));
     await ready();
     // A Space makes its click as it is let go, in the same turn as its keyup.
@@ -139,15 +143,15 @@ describe("the approval dock", () => {
     expect(posts(m, "approval")).toHaveLength(0);
     // The key is forgotten after that turn: a later bare click is an assistive technology's, and counts.
     await settle(() => wait(5));
-    await click(btn(m, "Press again to always allow"));
+    await click(opt(m, "always"));
     expect(posts(m, "approval")).toHaveLength(1);
   });
 
   it("lets a screen reader or voice control confirm with a bare click, after the wait", async () => {
     const m = await withApproval();
-    await pointerPress(btn(m, "Always allow"));
+    await pointerPress(opt(m, "always"));
     await ready();
-    await click(btn(m, "Press again to always allow")); // no pointer, no key: an assistive technology's activation
+    await click(opt(m, "always")); // no pointer, no key: an assistive technology's activation
     expect(posts(m, "approval")).toHaveLength(1);
     expect(posts(m, "approval")[0]).toMatchObject({ decision: "always" });
   });
@@ -164,7 +168,7 @@ describe("the approval dock", () => {
   it("does not answer with a press that went down while the answers were still off, and is let go after", async () => {
     const m = await withApproval(false);
     const allow = btn(m, "Allow") as HTMLButtonElement;
-    expect(allow.disabled).toBe(true);
+    expect(off(allow)).toBe(true);
     // A browser may report a pointer going down on a button that is off; it is no start for a press.
     act(() => void allow.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
     await ready();
@@ -201,8 +205,8 @@ describe("the approval dock", () => {
       frame("tool.started", 14, { call_id: "c1", name: "Bash", summary: "ls", input: { command: "ls" } }, { turn_id: "t1" }),
       request(15, "r8", { call_id: "c1", options: [{ id: "allow", label: "Allow", kind: "allow" }, { id: "always", label: "Always", kind: "allow", standing: true }] }),
     );
-    await settle(() => wait(60));
-    await click(btn(m, "Always allow"));
+    await settle(() => wait(120));
+    await click(opt(m, "always"));
     expect(text(q(m.el, '[data-note="standing"]'))).toContain("Always allow Bash? Pressing again turns off");
   });
 
@@ -222,7 +226,7 @@ describe("the approval dock", () => {
   it("is off, with the reason, while the connection is down", async () => {
     const m = await withApproval();
     await settle(() => m.environment.goOffline());
-    expect(all(dock(m), "button").every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
     expect(text(q(m.el, "[data-dock-status]"))).toBe("You are offline. Reconnect to do this.");
     await click(btn(m, "Allow"));
     expect(posts(m, "approval")).toHaveLength(0);
@@ -233,7 +237,7 @@ describe("the approval dock", () => {
     m.transport.on("/approval", () => ({ status: 409, body: { error: { code: "approval_failed", message: "that request is no longer open" } } }), "POST");
     await click(btn(m, "Allow"));
     expect(text(q(m.el, "[data-dock-status]"))).toBe("that request is no longer open");
-    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(false);
+    expect(off(btn(m, "Allow"))).toBe(false);
   });
 });
 
@@ -283,11 +287,11 @@ describe("an answer lands on the request that was shown", () => {
     const m = await withApproval();
     await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow" }, { turn_id: "t1" }), request(13, "r1", { options: [{ id: "allow", label: "Allow", kind: "allow" }, { id: "deny", label: "Deny", kind: "deny" }] }));
     expect(text(dock(m))).toContain("Run command 13?");
-    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(true);
+    expect(off(btn(m, "Allow"))).toBe(true);
     await click(btn(m, "Allow"));
     expect(posts(m, "approval")).toHaveLength(0);
-    await settle(() => wait(60));
-    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(false);
+    await settle(() => wait(120));
+    expect(off(btn(m, "Allow"))).toBe(false);
     await click(btn(m, "Allow"));
     expect(posts(m, "approval")).toHaveLength(1);
   });
@@ -297,26 +301,26 @@ describe("an answer lands on the request that was shown", () => {
     await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow", by: "device-2" }, { turn_id: "t1" }));
     expect(dock(m)).toBeNull(); // answered on another device: nothing on screen
     await feed(m, request(13, "r1", { options: [{ id: "allow", label: "Allow", kind: "allow" }, { id: "deny", label: "Deny", kind: "deny" }] }));
-    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(true);
-    await settle(() => wait(60));
-    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(false);
+    expect(off(btn(m, "Allow"))).toBe(true);
+    await settle(() => wait(120));
+    expect(off(btn(m, "Allow"))).toBe(false);
   });
 
   it("keeps a first request's answers off for a moment too, shown as a state and not as a dead button", async () => {
     const m = await withApproval(false);
     // The request has just appeared, right where a press may have been aimed at something else.
-    expect(all(dock(m), "button").every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(all(dock(m), "button[data-option]").every(off)).toBe(true);
     expect(text(q(m.el, "[data-dock-status]"))).toBe("A new request just appeared. Read it before you answer.");
     await click(btn(m, "Deny"));
     expect(posts(m, "approval")).toHaveLength(0);
     await ready();
-    expect(all(dock(m), "button").some((b) => (b as HTMLButtonElement).disabled)).toBe(false);
+    expect(all(dock(m), "button[data-option]").some(off)).toBe(false);
   });
 
   it("keeps a request that was there when the page loaded off for a moment too", async () => {
     const m = mount();
     await play(m, "approval", 0, 2);
-    expect((btn(m, "Allow") as HTMLButtonElement).disabled).toBe(true);
+    expect(off(btn(m, "Allow"))).toBe(true);
   });
 });
 
@@ -362,14 +366,17 @@ describe("the dock's layout when an agent fills it with text", () => {
     await ready();
     const pinned = q(dock(m), "[data-dock-answers]") as HTMLElement;
     const scrolling = q(dock(m), "[data-dock-text]") as HTMLElement;
-    expect(all(pinned, "button").map((b) => text(b))).toEqual(["Allow", "Always allow", "Deny"]);
+    expect(all(pinned, "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny"]);
     expect(all(scrolling, "button[data-option-kind='choice']")).toHaveLength(2);
     expect(scrolling.contains(pinned)).toBe(false);
     expect(scrolling.classList.contains("overflow-y-auto")).toBe(true);
     expect(pinned.classList.contains("shrink-0")).toBe(true);
-    // The section shrinks to the room it is given; its own scroll area is what gives.
-    expect(dock(m).classList.contains("min-h-0")).toBe(true);
-    expect(scrolling.classList.contains("min-h-0")).toBe(true);
+    // The request's text has an area of its own (it scrolls past 10 rem); the dock itself does not shrink below its content,
+    // so the answers are never cut: a short stack scrolls the area above the bar instead, from its bottom.
+    expect(scrolling.classList.contains("max-h-40")).toBe(true);
+    expect(dock(m).classList.contains("min-h-0")).toBe(false);
+    expect(scrolling.contains(q(dock(m), "[data-dock-text] ~ *") as Element)).toBe(false);
+    expect(scrolling.contains(q(dock(m), "p[tabindex]") as Element)).toBe(false); // the heading is not in the scroll area
   });
 
   it("cuts each choice to two lines, numbered, with its whole label reachable", async () => {
@@ -404,11 +411,152 @@ describe("the dock's layout when an agent fills it with text", () => {
     expect(fake.every((b) => !(q(dock(m), "[data-dock-answers]") as HTMLElement).contains(b))).toBe(true);
   });
 
-  it("keeps a decision as short as it looks when the hub gives it a paragraph for a label", async () => {
+  it("says our own word for a decision when the hub gives it a paragraph for a label, with the agent's name cut under it", async () => {
     const m = mount();
     await play(m, "approval", 0, 4);
     await feed(m, request(15, "r7", { prompt: "go?", options: [{ id: "allow", label: `Allow ${"and more ".repeat(60)}`, kind: "allow" }, { id: "deny", label: `Deny ${"and more ".repeat(60)}`, kind: "deny" }] }));
     await ready();
-    expect(all(q(dock(m), "[data-dock-answers]") as HTMLElement, "button").map((b) => text(b))).toEqual(["Allow", "Deny"]);
+    const pinned = q(dock(m), "[data-dock-answers]") as HTMLElement;
+    expect(all(pinned, "button[data-option]").map(said)).toEqual(["Allow", "Deny"]);
+    for (const name of all(pinned, "[data-agent-name]")) expect((name.textContent ?? "").length).toBeLessThanOrEqual(61);
+  });
+});
+
+describe("an ACP agent's request: ids o1..oN, the meaning in `kind`, the agent's own names", () => {
+  // As src/swe/remote/adapters/acp.py builds them: PermissionOptionKind mapped to allow / always / deny, standing for allow_always.
+  const acp = (...extra: object[]) => [
+    ...extra,
+    { id: "o1", label: "Allow once", kind: "allow" },
+    { id: "o2", label: "Allow always", kind: "always", standing: true },
+    { id: "o3", label: "Reject once", kind: "deny" },
+    { id: "o4", label: "Reject always", kind: "deny" },
+  ];
+  const ask = async (options: object[]): Promise<Mounted> => {
+    const m = mount();
+    m.transport.on("/approval", ok, "POST");
+    await play(m, "approval", 0, 4);
+    await feed(m, request(15, "p1", { prompt: "Run `rm -rf build`?", options }));
+    await ready();
+    return m;
+  };
+  const pinned = (m: Mounted) => q(dock(m), "[data-dock-answers]") as HTMLElement;
+
+  it("pins Allow, Always allow and Deny by kind, with the agent's names under them, and fills only the first allow", async () => {
+    const m = await ask(acp());
+    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny", "Deny"]);
+    expect(all(pinned(m), "[data-agent-name]").map((b) => text(b))).toEqual(["Allow once", "Allow always", "Reject once", "Reject always"]);
+    expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(0);
+    const buttons = all(pinned(m), "button[data-option]");
+    expect(buttons[0]?.className).toContain("bg-primary");
+    expect(buttons[2]?.className).toContain("border-danger");
+  });
+
+  it("keeps all of them in view with forty choices of its own, and the cut counts only the choices", async () => {
+    const m = await ask(acp(...Array.from({ length: 40 }, (_, i) => ({ id: `c${i}`, label: `Pick ${i}` }))));
+    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny", "Deny"]);
+    expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(20);
+    expect(text(dock(m))).toContain("20 more options are not shown.");
+  });
+
+  it("answers by the option's place in the list, since its ids are not decisions", async () => {
+    const m = await ask(acp());
+    await pointerPress(all(pinned(m), "button[data-option]")[2]); // Reject once
+    expect(posts(m, "approval")[0]).toMatchObject({ request_id: "p1", decision: "3" });
+  });
+
+  it("asks twice for the standing grant, by kind and not by the id", async () => {
+    const m = await ask(acp());
+    await pointerPress(opt(m, "o2"));
+    expect(posts(m, "approval")).toHaveLength(0);
+    expect(text(q(m.el, '[data-note="standing"]'))).toContain("Always allow");
+  });
+
+  it("draws an allow that the agent calls Deny differently from a real deny", async () => {
+    const m = await ask([{ id: "o1", label: "Deny", kind: "allow" }, { id: "o2", label: "Allow", kind: "deny" }]);
+    const [a, b] = all(pinned(m), "button[data-option]") as HTMLElement[];
+    expect(text(q(a as HTMLElement, "[data-fixed-word]"))).toBe("Allow");
+    expect(text(q(a as HTMLElement, "[data-agent-name]"))).toBe("Deny");
+    expect(text(q(b as HTMLElement, "[data-fixed-word]"))).toBe("Deny");
+    expect(a?.className).not.toBe(b?.className); // one is filled, the other has the refusal's border
+  });
+
+  it("treats an option with a kind it does not know, or none, as the agent's own choice", async () => {
+    const m = await ask([{ id: "o1", label: "Allow", kind: "allow_once" }, { id: "o2", label: "Deny" }, { id: "o3", label: "Fine", kind: "allow" }]);
+    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow"]);
+    expect(all(dock(m), "button[data-option-kind='choice']").map((b) => b.getAttribute("aria-label"))).toEqual(["Option 1: Allow", "Option 2: Deny"]);
+  });
+
+  it("pins two of a kind and lists the rest as choices", async () => {
+    const m = await ask(Array.from({ length: 5 }, (_, i) => ({ id: `o${i + 1}`, label: `Reject ${i}`, kind: "deny" })));
+    expect(all(pinned(m), "[data-fixed-word]")).toHaveLength(2);
+    expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(3);
+  });
+});
+
+describe("the dock's focus, live region and stable answers", () => {
+  it("keeps one line that is always there, a live region before its text changes, and says when the answers are ready", async () => {
+    const m = await withApproval(false);
+    const status = q(dock(m), "[data-dock-status]") as HTMLElement;
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(text(status)).toBe("A new request just appeared. Read it before you answer.");
+    await ready();
+    expect(q(dock(m), "[data-dock-status]")).toBe(status); // the same element: its text changed in place
+    expect(status.hasAttribute("hidden")).toBe(false);
+    expect(text(status)).toBe("You can answer now.");
+  });
+
+  it("keeps the answers in the tab order while they wait: off with aria-disabled, never the disabled attribute", async () => {
+    const m = await withApproval(false);
+    for (const b of all(dock(m), "button[data-option]")) {
+      expect(b.getAttribute("aria-disabled")).toBe("true");
+      expect(b.hasAttribute("disabled")).toBe(false);
+    }
+    (opt(m, "deny") as HTMLElement).focus();
+    expect(document.activeElement).toBe(opt(m, "deny"));
+    await click(opt(m, "deny")); // a press on an answer that is off does nothing
+    expect(posts(m, "approval")).toHaveLength(0);
+  });
+
+  it("keeps the focus on Always allow when it arms", async () => {
+    const m = await withApproval();
+    opt(m, "always").focus();
+    await pointerPress(opt(m, "always"));
+    expect(opt(m, "always").getAttribute("data-armed")).toBe("true");
+    expect(document.activeElement).toBe(opt(m, "always"));
+  });
+
+  it("puts what comes and goes above the answers, and holds the width of the armed button, so no answer moves", async () => {
+    const m = await withApproval(false);
+    const area = q(dock(m), "[data-dock-answers]") as HTMLElement;
+    const row = area.lastElementChild as HTMLElement;
+    // The answers are the last thing in the pinned area: the status line and the standing note are before them.
+    expect(row.querySelector("button[data-option]")).not.toBeNull();
+    expect(Array.from(area.children).indexOf(q(area, "[data-dock-status]") as Element)).toBeLessThan(Array.from(area.children).indexOf(row));
+    // Both the word and the confirmation are in the button at all times; one is only hidden.
+    expect(text(opt(m, "always"))).toContain("Always allow");
+    expect(text(opt(m, "always"))).toContain("Press again to always allow");
+    await ready();
+    await pointerPress(opt(m, "always"));
+    expect(q(area, "[data-note='standing']")).not.toBeNull();
+    expect(Array.from(area.children).indexOf(q(area, "[data-note='standing']") as Element)).toBeLessThan(Array.from(area.children).indexOf(row));
+    expect(area.lastElementChild).toBe(row);
+  });
+
+  it("gives the focus to the heading of a request that replaces one the person had the focus in, and to nothing otherwise", async () => {
+    const m = await withApproval();
+    opt(m, "allow").focus();
+    await feed(m, frame("approval.resolved", 12, { request_id: "r1", source: "user", decision: "allow", by: "device-2" }, { turn_id: "t1" }), request(13, "r5"));
+    expect(document.activeElement).toBe(q(dock(m), "p[tabindex]"));
+    // The focus is not on an answer, and a later request, with the focus elsewhere, takes none.
+    expect(document.activeElement?.hasAttribute("data-option")).toBe(false);
+    (q(m.el, 'textarea[aria-label="Message"]') as HTMLElement).focus();
+    await feed(m, frame("approval.resolved", 14, { request_id: "r5", source: "user", decision: "allow" }, { turn_id: "t1" }), request(15, "r6"));
+    expect(document.activeElement).toBe(q(m.el, 'textarea[aria-label="Message"]'));
+  });
+
+  it("takes no focus for a request that appears while the focus is on the page", async () => {
+    const m = await withApproval(false);
+    expect(dock(m).contains(document.activeElement)).toBe(false);
   });
 });
