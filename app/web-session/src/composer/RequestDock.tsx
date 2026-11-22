@@ -24,6 +24,8 @@ export const SETTLE_MS = 500;
  */
 type Fixed = "allow" | "always" | "deny";
 const FIXED_WORD: Record<Fixed, string> = { allow: "Allow", always: "Always allow", deny: "Deny" };
+/** A refusal that lasts beyond this request (ACP's `reject_always`: kind deny, standing) is its own word, never "Always allow". */
+const LASTING_DENY = "Always deny";
 /** How many options of one kind are pinned (so six at most); further ones are listed as the agent's choices. */
 const FIXED_PER_KIND = 2;
 /** How much of the agent's name for a fixed answer shows under our word. */
@@ -31,9 +33,19 @@ const FIXED_LABEL_SHOWN = 60;
 /** Past this many characters a choice's label is cut to two lines on screen, and listed in full under "Options in full". */
 const CHOICE_LONG = 80;
 
+/**
+ * What an option means, apart from how long it lasts: `kind` says allow or deny (or always, a grant that lasts), and `standing`
+ * says that it lasts beyond this request. A standing option that is not a refusal is a lasting grant; a standing refusal stays a refusal.
+ */
 function fixedKind(option: Option): Fixed | null {
+  if (option.kind === "deny") return "deny";
   if (option.standing === true) return "always";
-  return option.kind === "allow" || option.kind === "always" || option.kind === "deny" ? option.kind : null;
+  return option.kind === "allow" || option.kind === "always" ? option.kind : null;
+}
+
+/** Our word for a fixed answer. */
+function wordFor(meaning: Fixed, option: Option): string {
+  return meaning === "deny" && option.standing === true ? LASTING_DENY : FIXED_WORD[meaning];
 }
 
 /** What the agent called a fixed answer, unless that is just our word again. */
@@ -192,6 +204,7 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
   const kind = approval ? (KIND_WORD[event.data.kind] ?? "Request") : "";
   // One filled answer: the first that lets the agent go on. The others (a standing grant included) are plain.
   const firstAllow = fixed.find((entry) => entry.fixed === "allow")?.index;
+  const confirmingDeny = fixed.find(({ option }) => option.id === confirming)?.fixed === "deny";
   const longChoices = choices.some(({ option }) => option.label.trim().length > CHOICE_LONG);
 
   const pick = (click: MouseEvent<HTMLButtonElement>, option: Option, index: number): void => {
@@ -222,9 +235,10 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
     const confirm = confirming === option.id;
     const deny = meaning === "deny";
     const full = label(option.label);
-    const word = meaning === null ? full : FIXED_WORD[meaning];
+    const word = meaning === null ? full : wordFor(meaning, option);
+    const confirmText = meaning === "deny" ? "Press again to always deny" : "Press again to always allow";
     const name = kindOf === "fixed" ? agentName(option, word) : null;
-    const words = confirm ? "Press again to always allow" : word;
+    const words = confirm ? confirmText : word;
     return (
       <AnswerButton
         key={`${index}:${option.id}`}
@@ -237,7 +251,7 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
         onClick={(click) => pick(click, option, index)}
         onKeyDown={(key) => presses.key(key, option.id, !blocked && (confirming !== option.id || confirmReady))}
         onKeyUp={() => presses.keyUp()}
-        onPointerDown={() => presses.down(option.id, !blocked)}
+        onPointerDown={() => presses.down(option.id, !blocked && (confirming !== option.id || confirmReady))}
         title={kindOf === "choice" ? full : undefined}
         variant={kindOf === "choice" ? "plain" : deny ? "danger" : index === firstAllow ? "primary" : "plain"}
       >
@@ -251,8 +265,8 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
             {option.standing === true ? (
               // Both texts take the same place, so arming the button changes neither its size nor its row.
               <span className="grid" data-fixed-word>
-                <span className={cx("col-start-1 row-start-1", confirm && "invisible")}>{FIXED_WORD[meaning ?? "always"]}</span>
-                <span aria-hidden={!confirm} className={cx("col-start-1 row-start-1", !confirm && "invisible")}>Press again to always allow</span>
+                <span className={cx("col-start-1 row-start-1", confirm && "invisible")}>{word}</span>
+                <span aria-hidden={!confirm} className={cx("col-start-1 row-start-1", !confirm && "invisible")}>{confirmText}</span>
               </span>
             ) : (
               <span data-fixed-word>{words}</span>
@@ -308,7 +322,7 @@ function Panel({ store, event, waiting, settleMs, focusKept }: { store: SessionS
         </div>
         {confirming !== null ? (
           <p className="mt-1 text-xs text-secondary" data-note="standing">
-            {`Always allow ${tool?.name !== undefined && tool.name !== "" ? cut(tool.name, NAME_SHOWN).text : "this kind of call"}? Pressing again turns off later questions of the same kind for this session. `}
+            {`${confirmingDeny ? "Always deny" : "Always allow"} ${tool?.name !== undefined && tool.name !== "" ? cut(tool.name, NAME_SHOWN).text : "this kind of call"}? ${confirmingDeny ? "Pressing again refuses later requests of the same kind for this session. " : "Pressing again turns off later questions of the same kind for this session. "}`}
             <button className="underline focus-visible:outline-2 focus-visible:outline-interactive" onClick={() => setConfirming(null)} type="button">
               Cancel
             </button>

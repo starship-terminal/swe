@@ -413,7 +413,9 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
   return (
     <div ref={host} className="sv-composer-host pointer-events-none absolute inset-0 z-10 flex flex-col justify-end" data-composer="form" data-composer-host>
       <div ref={stack} className="sv-composer mx-auto flex max-h-1/2 w-full max-w-3xl flex-col gap-2">
-        <div ref={above} className="flex min-h-0 flex-col gap-2 overflow-y-auto" data-composer-above>
+        {/* While the send menu is open it and the bar can use the whole height limit: what is above keeps at least 5 rem (the request's answers),
+            the menu scrolls inside what is left of it, and the stack may stand a little over its limit rather than hide a waiting request. */}
+        <div ref={above} className={cx("flex flex-col gap-2 overflow-y-auto", menu === "send" ? "min-h-20 empty:min-h-0" : "min-h-0")} data-composer-above>
           {(!persistent && outboxNote !== "") || (kept === "memory" && text !== "") || reason !== null ? (
             <div className="flex shrink-0 flex-col gap-1.5">
               {!persistent && outboxNote !== "" ? (
@@ -453,7 +455,7 @@ function Form({ store, sessionKey, upload, settleMs, holdMs, chip }: Required<Om
         {/* In the stack, between what is above the bar and the bar: it does not cover a request that is waiting (the dock
             makes room and stays in view) or the draft (a draft of several lines has its first line level with the button). */}
         {menu === "send" ? (
-          <div className="flex shrink-0 justify-end" data-send-menu>
+          <div className="flex min-h-16 justify-end overflow-y-auto" data-send-menu>
             <Menu items={sendItems} label="Send options" onClose={closeMenu} placement="inline" />
           </div>
         ) : null}

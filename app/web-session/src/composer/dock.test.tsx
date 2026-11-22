@@ -147,6 +147,19 @@ describe("the approval dock", () => {
     expect(posts(m, "approval")).toHaveLength(1);
   });
 
+  it("does not confirm with a pointer that went down during the wait and is let go after it", async () => {
+    const m = await withApproval();
+    await pointerPress(opt(m, "always")); // arms; the confirmation is off for a moment
+    const again = opt(m, "always");
+    expect(off(again)).toBe(true);
+    act(() => void again.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }))); // goes down while it is off
+    await ready();
+    await settle(() => void again.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(posts(m, "approval")).toHaveLength(0);
+    await pointerPress(again); // a press of its own, after the wait
+    expect(posts(m, "approval")).toHaveLength(1);
+  });
+
   it("lets a screen reader or voice control confirm with a bare click, after the wait", async () => {
     const m = await withApproval();
     await pointerPress(opt(m, "always"));
@@ -429,7 +442,7 @@ describe("an ACP agent's request: ids o1..oN, the meaning in `kind`, the agent's
     { id: "o1", label: "Allow once", kind: "allow" },
     { id: "o2", label: "Allow always", kind: "always", standing: true },
     { id: "o3", label: "Reject once", kind: "deny" },
-    { id: "o4", label: "Reject always", kind: "deny" },
+    { id: "o4", label: "Reject always", kind: "deny", standing: true },
   ];
   const ask = async (options: object[]): Promise<Mounted> => {
     const m = mount();
@@ -443,7 +456,7 @@ describe("an ACP agent's request: ids o1..oN, the meaning in `kind`, the agent's
 
   it("pins Allow, Always allow and Deny by kind, with the agent's names under them, and fills only the first allow", async () => {
     const m = await ask(acp());
-    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny", "Deny"]);
+    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny", "Always deny"]);
     expect(all(pinned(m), "[data-agent-name]").map((b) => text(b))).toEqual(["Allow once", "Allow always", "Reject once", "Reject always"]);
     expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(0);
     const buttons = all(pinned(m), "button[data-option]");
@@ -451,9 +464,26 @@ describe("an ACP agent's request: ids o1..oN, the meaning in `kind`, the agent's
     expect(buttons[2]?.className).toContain("border-danger");
   });
 
+  it("says Always deny, filled as a refusal and asking twice, for a standing refusal: it is never Always allow", async () => {
+    const m = await ask(acp());
+    const refusal = opt(m, "o4");
+    expect(said(refusal)).toBe("Always deny");
+    expect(refusal.className).toContain("border-danger");
+    expect(text(q(refusal, "[data-agent-name]"))).toBe("Reject always");
+    await pointerPress(refusal);
+    expect(posts(m, "approval")).toHaveLength(0);
+    expect(said(refusal)).toBe("Press again to always deny");
+    expect(text(q(m.el, '[data-note="standing"]'))).toContain("Always deny");
+    expect(text(q(m.el, '[data-note="standing"]'))).toContain("refuses later requests");
+    expect(text(q(m.el, '[data-note="standing"]'))).not.toContain("Always allow");
+    await ready();
+    await pointerPress(refusal);
+    expect(posts(m, "approval")[0]).toMatchObject({ request_id: "p1", decision: "4" });
+  });
+
   it("keeps all of them in view with forty choices of its own, and the cut counts only the choices", async () => {
     const m = await ask(acp(...Array.from({ length: 40 }, (_, i) => ({ id: `c${i}`, label: `Pick ${i}` }))));
-    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny", "Deny"]);
+    expect(all(pinned(m), "button[data-option]").map(said)).toEqual(["Allow", "Always allow", "Deny", "Always deny"]);
     expect(all(dock(m), "button[data-option-kind='choice']")).toHaveLength(20);
     expect(text(dock(m))).toContain("20 more options are not shown.");
   });

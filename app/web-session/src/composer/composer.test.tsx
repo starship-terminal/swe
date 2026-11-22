@@ -524,6 +524,11 @@ describe("while a reply is in progress", () => {
     expect(dock.compareDocumentPosition(wrapper) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(wrapper.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(menu.className).not.toContain("absolute");
+    // With the menu and the bar taking the height limit, what is above keeps 5 rem and the menu scrolls inside what is left.
+    const above = q(m.el, "[data-composer-above]") as HTMLElement;
+    expect(above.className).toContain("min-h-20");
+    expect(wrapper.className).toContain("overflow-y-auto");
+    expect(wrapper.className).toContain("min-h-16");
   });
 
   it("does not open the menu on a short press", async () => {

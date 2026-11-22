@@ -309,7 +309,7 @@ export async function composerScene(scene: string, c: SceneContext): Promise<boo
             { id: "o1", label: "Allow once", kind: "allow" },
             { id: "o2", label: "Allow always", kind: "always", standing: true },
             { id: "o3", label: "Reject once", kind: "deny" },
-            { id: "o4", label: "Reject always", kind: "deny" },
+            { id: "o4", label: "Reject always", kind: "deny", standing: true },
           ],
         }),
         frame(k, "session.state", 16, { state: "waiting" }),
