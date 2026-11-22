@@ -329,6 +329,31 @@ describe("an edit the hub accepted but the queue has not shown", () => {
     expect(text(orphan)).toContain("then lint it twice");
   });
 
+  it("lets go of the words when the edit shows after the wait gave up (a connection that came back late), with no conflict", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    expect(q(tray(m), "textarea")).not.toBeNull(); // the editor is back, unconfirmed
+    await feed(m, queue(20, { id: "q1", text: "then lint it twice" }));
+    expect(q(tray(m), "textarea")).toBeNull();
+    expect(q(m.el, "[data-edit-conflict]")).toBeNull();
+    expect(q(m.el, "[data-orphan]")).toBeNull();
+    expect(text(q(m.el, '[data-queued="q1"]'))).toContain("then lint it twice");
+  });
+
+  it("keeps what was typed after the wait gave up when the late echo is of the earlier text", async () => {
+    const m = await saved(120);
+    await settle(() => wait(200));
+    const editor = q(tray(m), "textarea") as HTMLTextAreaElement;
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "then lint it three times");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await feed(m, queue(20, { id: "q1", text: "then lint it twice" }));
+    expect((q(tray(m), "textarea") as HTMLTextAreaElement).value).toBe("then lint it three times");
+    // It is the person's own earlier save arriving, not another device's change: no conflict is claimed.
+    expect(q(m.el, "[data-edit-conflict]")).toBeNull();
+  });
+
   it("puts the words back in the editor, saying so, when the edit never shows", async () => {
     const m = await saved(120);
     await settle(() => wait(200));

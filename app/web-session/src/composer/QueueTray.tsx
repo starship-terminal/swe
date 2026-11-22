@@ -24,6 +24,8 @@ interface Edit {
   pending?: boolean;
   /** The hub accepted the edit and it never showed within `confirmMs`: the words are back in the editor. */
   unconfirmed?: boolean;
+  /** The text this person last had the hub accept: when the queue shows it, it is their own save arriving, not another device's change. */
+  saved?: string;
 }
 
 type Action = "edit" | "cancel" | "steer";
@@ -92,11 +94,12 @@ function Item({
   }, [removing]);
   const id = item.command_id;
   // Another device changed this message while it is being edited here: Save would write over it unseen.
-  const changedUnder = edit !== undefined && edit.pending !== true && item.text !== edit.original;
+  // (A message that already says what the person typed is no change under them: a late echo of their own save.)
+  const changedUnder = edit !== undefined && edit.pending !== true && item.text !== edit.original && item.text !== edit.text && item.text !== edit.saved;
   // An accepted edit that has not shown in the queue: its words stay (here and in the tray's list of edits) until it does.
   useEffect(() => {
     if (edit === undefined || edit.pending !== true) return;
-    const timer = setTimeout(() => setEdit(id, { text: edit.text, original: edit.original, unconfirmed: true }), confirmMs);
+    const timer = setTimeout(() => setEdit(id, { text: edit.text, original: edit.original, unconfirmed: true, ...(edit.saved === undefined ? {} : { saved: edit.saved }) }), confirmMs);
     return () => clearTimeout(timer);
   }, [edit?.pending, confirmMs]);
   const shown = clip(item.text, TEXT_SHOWN, 60);
@@ -206,7 +209,7 @@ function Item({
           <textarea
             aria-label="Edit queued message"
             className="min-h-16 w-full resize-y rounded-field border border-border bg-card px-2 py-1.5 text-sm leading-6 focus:border-interactive focus:outline-none"
-            onChange={(event) => setEdit(id, { text: event.currentTarget.value, original: edit.original })}
+            onChange={(event) => setEdit(id, { ...edit, text: event.currentTarget.value })}
             readOnly={busy !== null}
             value={edit.text}
           />
@@ -240,7 +243,7 @@ function Item({
               onClick={() => {
                 void run("edit", edit.text).then((ok) => {
                   // Accepted is not applied: the words stay until the queue shows them.
-                  if (ok) setEdit(id, { text: edit.text, original: edit.original, pending: true });
+                  if (ok) setEdit(id, { text: edit.text, original: edit.original, pending: true, saved: edit.text });
                 });
               }}
             />
@@ -331,7 +334,8 @@ export function QueueTray({ store, onKeep, settleMs, confirmMs }: { store: Sessi
   useEffect(() => {
     for (const item of queue) {
       const kept = edits[item.command_id];
-      if (kept !== undefined && kept.pending === true && item.text === kept.text) setEdit(item.command_id, undefined);
+      // Also after the wait gave up on it (a connection that came back late): the text is the saved one, and nothing typed since is touched.
+      if (kept !== undefined && (kept.pending === true || kept.unconfirmed === true) && item.text === kept.text) setEdit(item.command_id, undefined);
     }
   }, [queue, edits]);
 
