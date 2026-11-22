@@ -294,11 +294,6 @@ class AcpState(SessionCore):
         # its current model id.
         self.model = ""
         self.model_choices: list[dict] = []
-        # The last mode this adapter set, until the agent reports it
-        # back or the turn ends: a ``current_mode_update`` naming any
-        # other mode in that time is the agent's late word on an earlier
-        # set, and showing it would undo the newer change.
-        self._set_mode_id = ""
         # the kind streaming now -> its stream id, and the agent's
         # messageId for it
         self._cur: dict[str, str] = {}
@@ -340,7 +335,6 @@ class AcpState(SessionCore):
     def mode_set(self, mode: str) -> list:
         """The agent took ``session/set_mode`` ``mode``."""
         self.mode = mode
-        self._set_mode_id = mode
         return self.options_events()
 
     def model_set(self, model_id: str) -> list:
@@ -552,14 +546,14 @@ class AcpState(SessionCore):
                 self.key, turn_id=self.tid(), ts=self.now(), **counts))
 
     def _on_mode(self, update: dict, out: list) -> None:
-        mode = text_of(update.get("currentModeId"))
-        if not mode:
-            return
-        if self._set_mode_id:
-            if mode != self._set_mode_id:
-                return  # an earlier set's late report
-            self._set_mode_id = ""
-        self.mode = mode
+        # Always the agent's word, with no guard against late reports
+        # (unlike opencode): updates and answers share one ordered
+        # stream, and the keeper sends the next set only after the last
+        # one's answer, so an update the agent writes while it handles a
+        # set lands before the next set is even sent. ACP has this update
+        # for the agent's own changes, and qwen sent none after a set.
+        if text_of(update.get("currentModeId")):
+            self.mode = update["currentModeId"]
 
     def permission(self, rpc_id: Any, params: Any) -> Fed:
         """A ``session/request_permission`` request. A request that
@@ -622,9 +616,6 @@ class AcpState(SessionCore):
         if self.done or turn is None or not isinstance(msg, dict):
             return out
         self._end_streams(out)
-        # By now the agent has reported every set it took; one it never
-        # reported no longer holds back its own later changes.
-        self._set_mode_id = ""
         if "error" in msg:
             reason = error_text(msg["error"])
             turn.error, turn.reason = True, reason

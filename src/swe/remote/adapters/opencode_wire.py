@@ -429,12 +429,14 @@ class ServeState(SessionCore):
         self.agent = ""
         # The server's models, as ``session.options`` choices (G32).
         self.model_choices: list[dict] = []
-        # The last model ref and agent this adapter posted, until the
-        # server reports them back (or the execution ends): a report of
-        # anything else in that time is the server's late word on an
-        # earlier post, and showing it would undo the newer change.
-        self._posted_model: dict | None = None
-        self._posted_agent = ""
+        # The model refs and agents this adapter posted that the server
+        # has not reported back yet, oldest first. The server reports
+        # each post on the event stream, which can lag the post's own
+        # answer: a report equal to a pending post is that post's echo
+        # and changes nothing (the newest post is shown already); any
+        # other report is the server's own change, shown at once.
+        self._posted_models: list[dict] = []
+        self._posted_agents: list[str] = []
         # our turn id -> the id of its user message, for a revert
         self.turn_messages: dict[str, str] = {}
         self._expected: dict[Any, _Expected] = {}
@@ -613,14 +615,14 @@ class ServeState(SessionCore):
         """The server took ``POST .../model`` ``ref``."""
         if isinstance(ref, dict):
             self.model = dict(ref)
-            self._posted_model = dict(ref)
+            self._posted_models.append(dict(ref))
         return self.options_events()
 
     def agent_selected(self, agent: Any) -> list:
         """The server took ``POST .../agent`` ``agent``."""
         if text_of(agent):
             self.agent = agent
-            self._posted_agent = agent
+            self._posted_agents.append(agent)
         return self.options_events()
 
     def _ensure_turn(self, out: list) -> None:
@@ -683,9 +685,10 @@ class ServeState(SessionCore):
         # A steer still in the inbox stays there: the server delivers it
         # to the execution it starts next (``_ensure_turn``).
         self.finish_turn(fed.events, status)
-        # By now the server has reported every post it took; a report it
-        # never sent no longer holds back its own later changes.
-        self._posted_model, self._posted_agent = None, ""
+        # By now the server has reported every post it took: an echo it
+        # never sent is not waited for any longer.
+        self._posted_models.clear()
+        self._posted_agents.clear()
 
     def _fail(self, out: list, failure: dict, fallback: str) -> None:
         turn = self.turn
@@ -893,20 +896,21 @@ class ServeState(SessionCore):
         model = data.get("model")
         if not isinstance(model, dict):
             return
-        if self._posted_model is not None:
-            if not _same_ref(model, self._posted_model):
-                return  # an earlier post's late report
-            self._posted_model = None
+        for i, posted in enumerate(self._posted_models):
+            if _same_ref(model, posted):
+                del self._posted_models[i]  # that post's echo
+                return
+        self._posted_models.clear()  # the server's own change
         self.model = dict(model)
 
     def _on_agent(self, data: dict, fed: Fed) -> None:
         agent = text_of(data.get("agent"))
         if not agent:
             return
-        if self._posted_agent:
-            if agent != self._posted_agent:
-                return  # an earlier post's late report
-            self._posted_agent = ""
+        if agent in self._posted_agents:
+            self._posted_agents.remove(agent)  # that post's echo
+            return
+        self._posted_agents.clear()  # the server's own change
         self.agent = agent
 
 

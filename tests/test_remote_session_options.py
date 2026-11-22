@@ -278,6 +278,43 @@ class TestOpencodeLateReports(unittest.TestCase):
         self.assertEqual(_values(said, "model"), ["p/a", "p/b"])
         self.assertEqual(_options(said)[-1]["model"]["value"], "p/b")
 
+    def agent_report(self, st, agent):
+        return st.feed({"type": "session.agent.selected", "data": {
+            "sessionID": "ses_1", "agent": agent}}).events
+
+    def test_the_server_leaving_plan_after_a_post_is_shown(self):
+        # The plan post is never echoed; mid-turn the server leaves plan
+        # by itself: that is shown, and stays after the turn.
+        st = self.state()
+        said = st.agent_selected("plan")
+        said += self.agent_report(st, "build")
+        self.assertEqual(_values(said, "plan_mode"), [True, False])
+        self.assertEqual(st.agent, "build")
+
+    def test_a_model_the_server_picks_while_a_post_is_pending_is_shown(self):
+        st = self.state()
+        said = st.model_selected({"providerID": "p", "id": "b"})
+        said += self.report(st, "fallback")
+        self.assertEqual(_values(said, "model"), ["p/b", "p/fallback"])
+
+    def test_a_b_a_posted_quickly_ends_on_a_whatever_the_echo_order(self):
+        import itertools
+        for order in sorted(set(itertools.permutations("aba"))):
+            with self.subTest(echoes="".join(order)):
+                st = self.state()
+                said = []
+                for model_id in "aba":
+                    said += st.model_selected({"providerID": "p",
+                                               "id": model_id})
+                for model_id in order:
+                    said += self.report(st, model_id)
+                self.assertEqual(_values(said, "model"),
+                                 ["p/a", "p/b", "p/a"], "echoes say nothing")
+                self.assertEqual(st.model["id"], "a")
+                # Every echo is used up: the server's next word shows.
+                self.assertEqual(_values(self.report(st, "b"), "model"),
+                                 ["p/b"])
+
     def test_a_late_agent_report_is_ignored(self):
         st = self.state()
         said = st.agent_selected("plan") + st.agent_selected("build")
@@ -286,28 +323,21 @@ class TestOpencodeLateReports(unittest.TestCase):
         self.assertEqual(_values(said, "plan_mode"), [True, False])
 
 
-class TestAcpLateModeReports(unittest.TestCase):
-    """The same for ACP's ``current_mode_update`` (G32)."""
+class TestAcpModeReports(unittest.TestCase):
+    """ACP's ``current_mode_update`` is always the agent's word (G32)."""
 
-    def test_a_late_mode_report_is_ignored_until_the_set_one_comes(self):
+    def test_the_agent_leaving_plan_mode_after_a_set_is_shown(self):
         st = acp.AcpState("acp:x", clock=lambda: 1.0, run_id="aaaa0001")
         st.session_id = "s1"
         st.modes = ["default", "plan"]
         st.mode = "default"
         st.start_events(ALL_CAPS.narrowed(acp.PROVEN), "s1")
-
-        def update(mode):
-            return st.update({"sessionId": "s1", "update": {
-                "sessionUpdate": "current_mode_update",
-                "currentModeId": mode}}).events
-
-        said = st.mode_set("plan") + st.mode_set("default")
-        said += update("plan")
+        said = st.mode_set("plan")  # the agent never echoes it
+        said += st.update({"sessionId": "s1", "update": {
+            "sessionUpdate": "current_mode_update",
+            "currentModeId": "default"}}).events  # a plan approved
         self.assertEqual(_values(said, "plan_mode"), [True, False])
         self.assertEqual(st.mode, "default")
-        update("default")
-        self.assertEqual(_values(update("plan"), "plan_mode"), [True],
-                         "the agent's own change shows once reported back")
 
 
 class TestKeeperCarriesTheModelList(unittest.TestCase):
